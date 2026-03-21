@@ -1,0 +1,59 @@
+# Quant Trading System Configuration
+
+symbols:
+  - NQ
+  - ES
+  - GC
+
+timeframes:
+  - 1D
+  - 4H
+  - 1H
+  - 15m
+
+analysis:
+  pivot:
+    lookback: 5
+
+  sr_horizontal:
+    cluster_atr_mult: 0.3
+    min_touches: 2
+    weight_touches: 0.4
+    weight_recency: 0.3
+    weight_volume: 0.2
+    weight_round_number: 0.1
+
+  sr_diagonal:
+    min_swing_points: 2
+    price_tolerance_atr_mult: 0.3
+    min_touches: 2
+
+  pin_bar:
+    min_wick_body_ratio: 2.0
+    max_body_pct: 0.30
+    wick_exceed_lookback: 5
+    sr_proximity_pct: 0.005
+
+signal:
+  scorer:
+    min_confidence: 0.5
+    weight_sr_strength: 0.30
+    weight_wick_ratio: 0.20
+    weight_volume_spike: 0.15
+    weight_trend_alignment: 0.20
+    weight_multi_tf_confluence: 0.15
+  default_rr_target: 2.0
+
+risk:
+  max_positions: 3
+  max_daily_loss: 1000.0
+  max_drawdown_pct: 0.05
+  position_size_risk_pct: 0.01
+
+alerts:
+  discord:
+    webhook_url: ""
+    enabled: false
+
+database:
+  url: "postgresql://postgres:quant@localhost:5432/quant"

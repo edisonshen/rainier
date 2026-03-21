@@ -1,0 +1,19 @@
+# Default futures watchlist
+instruments:
+  - symbol: NQ
+    name: "E-mini Nasdaq 100"
+    exchange: CME
+    tick_size: 0.25
+    point_value: 20.0
+
+  - symbol: ES
+    name: "E-mini S&P 500"
+    exchange: CME
+    tick_size: 0.25
+    point_value: 50.0
+
+  - symbol: GC
+    name: "Gold Futures"
+    exchange: COMEX
+    tick_size: 0.10
+    point_value: 100.0
