@@ -37,7 +37,7 @@ def generate_signals(
     if config is None:
         config = SignalConfig()
 
-    signals: list[Signal] = []
+    all_signals: list[Signal] = []
 
     for pin_bar in result.pin_bars:
         confidence = score_setup(pin_bar, df, result.bias, config.scorer)
@@ -49,7 +49,14 @@ def generate_signals(
         if entry is None:
             continue
 
-        signals.append(
+        # Check minimum R:R
+        risk = abs(entry - sl)
+        if risk > 0:
+            rr = abs(tp - entry) / risk
+            if rr < config.min_rr_ratio:
+                continue
+
+        all_signals.append(
             Signal(
                 symbol=result.symbol,
                 timeframe=result.timeframe,
@@ -65,7 +72,8 @@ def generate_signals(
             )
         )
 
-    return signals
+    # Deduplicate: at the same S/R level + direction, keep only the highest confidence signal
+    return _dedup_signals(all_signals)
 
 
 def _compute_levels(
@@ -141,3 +149,15 @@ def _find_next_sr(
         candidates.sort(key=lambda x: -x[0])
 
     return candidates[0][0]
+
+
+def _dedup_signals(signals: list[Signal]) -> list[Signal]:
+    """At the same entry price + direction, keep only the highest confidence signal."""
+    best: dict[tuple[float, str], Signal] = {}
+
+    for sig in signals:
+        key = (round(sig.entry_price, 2), sig.direction.value)
+        if key not in best or sig.confidence > best[key].confidence:
+            best[key] = sig
+
+    return sorted(best.values(), key=lambda s: s.confidence, reverse=True)

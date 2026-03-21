@@ -13,20 +13,20 @@ from quant.signals.generator import generate_signals
 def _make_analysis_with_pin_bar() -> tuple[AnalysisResult, pd.DataFrame]:
     sr_support = SRLevel(
         price=100.0, sr_type=SRType.HORIZONTAL,
-        role=SRRole.SUPPORT, strength=0.8, touches=3,
+        role=SRRole.SUPPORT, strength=0.95, touches=5,
     )
     sr_resistance = SRLevel(
         price=120.0, sr_type=SRType.HORIZONTAL,
-        role=SRRole.RESISTANCE, strength=0.7, touches=2,
+        role=SRRole.RESISTANCE, strength=0.9, touches=4,
     )
     candle = Candle(
         timestamp=datetime(2025, 1, 1, 10, 0),
         open=104.0, high=105.0, low=99.5, close=104.5,
-        volume=2000.0, symbol="NQ", timeframe=Timeframe.H1,
+        volume=3000.0, symbol="NQ", timeframe=Timeframe.H1,
     )
     pin_bar = PinBar(
         candle=candle, index=10, direction=Direction.LONG,
-        wick_ratio=3.0, nearest_sr=sr_support, sr_distance_pct=0.005,
+        wick_ratio=4.5, nearest_sr=sr_support, sr_distance_pct=0.005,
     )
 
     result = AnalysisResult(
@@ -36,7 +36,7 @@ def _make_analysis_with_pin_bar() -> tuple[AnalysisResult, pd.DataFrame]:
         bias=Direction.LONG,
     )
 
-    # DataFrame for scoring
+    # DataFrame with lower avg volume so pin bar volume spike scores high
     rows = [
         {"timestamp": datetime(2025, 1, 1, i), "open": 104, "high": 106,
          "low": 103, "close": 105, "volume": 1000}

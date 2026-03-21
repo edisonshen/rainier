@@ -102,6 +102,8 @@ class SRLevel:
     # Diagonal-specific
     slope: float = 0.0  # price change per bar
     anchor_index: int = 0  # bar index where the line starts
+    # Multi-TF source
+    source_tf: Timeframe | None = None  # which timeframe this level was derived from
 
     def price_at(self, bar_index: int) -> float:
         """Get the price of this level at a given bar index (for diagonals)."""

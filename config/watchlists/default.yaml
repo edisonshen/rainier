@@ -5,15 +5,32 @@ instruments:
     exchange: CME
     tick_size: 0.25
     point_value: 20.0
+    min_touches: 3
+
+  - symbol: MNQ
+    name: "Micro E-mini Nasdaq 100"
+    exchange: CME
+    tick_size: 0.25
+    point_value: 2.0
+    min_touches: 3
 
   - symbol: ES
     name: "E-mini S&P 500"
     exchange: CME
     tick_size: 0.25
     point_value: 50.0
+    min_touches: 5
+
+  - symbol: MES
+    name: "Micro E-mini S&P 500"
+    exchange: CME
+    tick_size: 0.25
+    point_value: 5.0
+    min_touches: 5
 
   - symbol: GC
     name: "Gold Futures"
     exchange: COMEX
     tick_size: 0.10
     point_value: 100.0
+    min_touches: 3

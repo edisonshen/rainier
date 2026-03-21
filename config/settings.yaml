@@ -29,20 +29,21 @@ analysis:
     min_touches: 2
 
   pin_bar:
-    min_wick_body_ratio: 2.0
-    max_body_pct: 0.30
+    min_wick_body_ratio: 1.5
+    max_body_pct: 0.50
     wick_exceed_lookback: 5
     sr_proximity_pct: 0.005
 
 signal:
   scorer:
-    min_confidence: 0.5
+    min_confidence: 0.85
     weight_sr_strength: 0.30
     weight_wick_ratio: 0.20
     weight_volume_spike: 0.15
     weight_trend_alignment: 0.20
     weight_multi_tf_confluence: 0.15
   default_rr_target: 2.0
+  min_rr_ratio: 2.0
 
 risk:
   max_positions: 3

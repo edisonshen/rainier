@@ -85,7 +85,7 @@ class CSVProvider:
         if "volume" not in df.columns:
             df["volume"] = 0.0
 
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_localize(None)
         df = df.sort_values("timestamp").reset_index(drop=True)
 
         # Filter date range

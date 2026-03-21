@@ -14,8 +14,8 @@ class PivotConfig(BaseModel):
 
 
 class SRHorizontalConfig(BaseModel):
-    cluster_atr_mult: float = 0.3  # cluster within this * ATR(14)
-    min_touches: int = 2
+    cluster_atr_mult: float = 0.5  # cluster within this * ATR(14)
+    min_touches: int = 3  # need 3+ pin bar wick tips to form a level
     # Strength weights (must sum to 1.0)
     weight_touches: float = 0.4
     weight_recency: float = 0.3
@@ -32,8 +32,8 @@ class SRDiagonalConfig(BaseModel):
 
 
 class PinBarConfig(BaseModel):
-    min_wick_body_ratio: float = 2.0
-    max_body_pct: float = 0.30  # body < 30% of range
+    min_wick_body_ratio: float = 1.5  # relaxed: any significant rejection wick
+    max_body_pct: float = 0.50  # body < 50% of range (relaxed)
     wick_exceed_lookback: int = 5  # wick must exceed N prior candles
     sr_proximity_pct: float = 0.005  # within 0.5% of S/R level
 
@@ -48,10 +48,12 @@ class AnalysisConfig(BaseModel):
     sr_diagonal: SRDiagonalConfig = SRDiagonalConfig()
     pin_bar: PinBarConfig = PinBarConfig()
     inside_bar: InsideBarConfig = InsideBarConfig()
+    max_sr_levels: int = 12  # cap horizontal S/R levels per timeframe
+    max_diagonal_levels: int = 3  # cap diagonal trendlines (less important for pin bars)
 
 
 class ScorerConfig(BaseModel):
-    min_confidence: float = 0.5  # minimum to generate signal
+    min_confidence: float = 0.85  # only very high confidence signals
     # Sub-score weights
     weight_sr_strength: float = 0.30
     weight_wick_ratio: float = 0.20
@@ -63,6 +65,7 @@ class ScorerConfig(BaseModel):
 class SignalConfig(BaseModel):
     scorer: ScorerConfig = ScorerConfig()
     default_rr_target: float = 2.0  # R:R when no next S/R for TP
+    min_rr_ratio: float = 2.0  # minimum R:R to generate signal
 
 
 class RiskConfig(BaseModel):
@@ -103,6 +106,15 @@ class Settings(BaseSettings):
     timeframes: list[str] = ["1D", "4H", "1H", "15m"]
 
 
+class InstrumentConfig(BaseModel):
+    symbol: str
+    name: str = ""
+    exchange: str = ""
+    tick_size: float = 0.25
+    point_value: float = 1.0
+    min_touches: int = 3  # per-symbol override for pin bar line min touches
+
+
 def load_settings(config_path: Path | None = None) -> Settings:
     """Load settings, optionally merging from a YAML config file."""
     if config_path and config_path.exists():
@@ -110,3 +122,15 @@ def load_settings(config_path: Path | None = None) -> Settings:
             yaml_data = yaml.safe_load(f) or {}
         return Settings(**yaml_data)
     return Settings()
+
+
+def load_watchlist(watchlist_path: Path | None = None) -> dict[str, InstrumentConfig]:
+    """Load watchlist, returning a symbol → InstrumentConfig mapping."""
+    if watchlist_path is None:
+        watchlist_path = Path("config/watchlists/default.yaml")
+    if not watchlist_path.exists():
+        return {}
+    with open(watchlist_path) as f:
+        data = yaml.safe_load(f) or {}
+    instruments = data.get("instruments", [])
+    return {inst["symbol"]: InstrumentConfig(**inst) for inst in instruments}

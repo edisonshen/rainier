@@ -45,7 +45,7 @@ class TestDetectHorizontalSR:
         assert strengths == sorted(strengths, reverse=True)
 
     def test_single_pivot_returns_empty(self, base_timestamp):
-        """Only 1 pivot — can't form a cluster."""
+        """Single pivot — not enough touches (need 3+), returns empty."""
         from datetime import timedelta
         from quant.core.types import Pivot
 

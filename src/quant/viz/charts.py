@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 
-from quant.core.types import AnalysisResult, Direction, Signal, SRType
+from quant.core.types import AnalysisResult, Direction, Signal, SRType, Timeframe
 
 
 def create_chart(
@@ -43,30 +43,41 @@ def create_chart(
         )
     )
 
-    # 2. Horizontal S/R lines
+    # 2. Horizontal S/R lines — primary, bold and clear
+    #    Higher TF lines are thicker (1D > 4H > 1H > current)
     for level in result.sr_levels:
         if level.sr_type != SRType.HORIZONTAL:
             continue
-        color = "#2196F3" if level.role.value == "support" else "#FF5722"
-        dash = "solid" if level.strength >= 0.6 else "dash"
+        color = "#FF6D00"  # orange for all pin bar lines (like the reference images)
+        # Width by source TF: daily=3, 4H=2, 1H=1.5, same TF=1
+        tf = level.source_tf
+        if tf in (Timeframe.D1, Timeframe.W1):
+            width = 3
+        elif tf == Timeframe.H4:
+            width = 2
+        elif tf == Timeframe.H1:
+            width = 1.5
+        else:
+            width = 1
+
+        tf_label = tf.value if tf else ""
         fig.add_hline(
             y=level.price,
-            line_dash=dash,
+            line_dash="solid",
             line_color=color,
-            line_width=1,
-            opacity=min(level.strength + 0.3, 1.0),
-            annotation_text=f"{'S' if level.role.value == 'support' else 'R'} {level.price:.2f} ({level.touches}t)",
+            line_width=width,
+            opacity=0.85,
+            annotation_text=f"{level.price:.2f} {tf_label}",
             annotation_position="right",
             annotation_font_size=9,
             annotation_font_color=color,
         )
 
-    # 3. Diagonal trendlines
+    # 3. Diagonal trendlines — secondary, thinner and dimmer
     for level in result.sr_levels:
         if level.sr_type != SRType.DIAGONAL:
             continue
-        color = "#4CAF50" if level.role.value == "support" else "#E91E63"
-        # Draw from first_seen to end of chart
+        color = "#66BB6A" if level.role.value == "support" else "#EF5350"
         start_idx = max(0, level.anchor_index - 50)
         end_idx = len(df) - 1
         if start_idx >= len(df) or end_idx < 0:
@@ -83,30 +94,11 @@ def create_chart(
                 line=dict(color=color, width=1, dash="dot"),
                 name=f"Trend {'S' if level.role.value == 'support' else 'R'}",
                 showlegend=False,
+                opacity=0.5,
             )
         )
 
-    # 4. Pin bar markers
-    for pb in result.pin_bars:
-        marker_color = "#00E676" if pb.direction == Direction.LONG else "#FF1744"
-        y_pos = pb.candle.low * 0.999 if pb.direction == Direction.LONG else pb.candle.high * 1.001
-        fig.add_trace(
-            go.Scatter(
-                x=[pb.candle.timestamp],
-                y=[y_pos],
-                mode="markers",
-                marker=dict(
-                    symbol="triangle-up" if pb.direction == Direction.LONG else "triangle-down",
-                    size=12,
-                    color=marker_color,
-                ),
-                name=f"Pin Bar {'Bull' if pb.direction == Direction.LONG else 'Bear'}",
-                showlegend=False,
-                hovertext=f"Wick ratio: {pb.wick_ratio:.1f}x | SR dist: {pb.sr_distance_pct:.3%}",
-            )
-        )
-
-    # 5. Signal markers
+    # 4. Signal markers only — no pin bar markers (too noisy on 5m charts)
     if signals:
         for sig in signals:
             color = "#00E676" if sig.direction == Direction.LONG else "#FF1744"
