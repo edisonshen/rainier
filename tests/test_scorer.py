@@ -2,9 +2,9 @@
 
 import pandas as pd
 
-from quant.core.config import ScorerConfig
-from quant.core.types import Candle, Direction, PinBar, SRLevel, SRRole, SRType, Timeframe
-from quant.signals.scorer import score_setup
+from rainier.core.config import ScorerConfig
+from rainier.core.types import Candle, Direction, PinBar, SRLevel, SRRole, SRType, Timeframe
+from rainier.signals.scorer import score_setup
 from datetime import datetime
 
 

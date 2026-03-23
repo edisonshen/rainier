@@ -1,0 +1,15 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: rainier
+      POSTGRES_USER: rainier
+      POSTGRES_PASSWORD: rainier_dev
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  timescaledb_data:

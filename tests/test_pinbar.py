@@ -3,13 +3,13 @@
 import pandas as pd
 from datetime import datetime, timedelta
 
-from quant.analysis.pinbar import (
+from rainier.analysis.pinbar import (
     derive_pin_bar_lines,
     detect_pin_bars_raw,
     match_pin_bars_to_levels,
 )
-from quant.core.config import PinBarConfig
-from quant.core.types import Direction, SRLevel, SRRole, SRType
+from rainier.core.config import PinBarConfig
+from rainier.core.types import Direction, SRLevel, SRRole, SRType
 
 
 class TestDetectPinBarsRaw:
@@ -64,7 +64,7 @@ class TestDerivePinBarLines:
 
     def test_strength_increases_with_touches(self):
         """More pin bars at same price → higher strength."""
-        from quant.core.types import Candle, PinBar, Timeframe
+        from rainier.core.types import Candle, PinBar, Timeframe
 
         pbs = []
         for i in range(5):

@@ -1,6 +1,6 @@
 """Tests for risk management (Phase 3 stubs, basic logic tests)."""
 
-from quant.core.config import RiskConfig
+from rainier.core.config import RiskConfig
 
 
 class TestRiskConfig:

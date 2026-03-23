@@ -2,10 +2,10 @@
 
 import pandas as pd
 
-from quant.analysis.pivots import compute_atr, detect_pivots
-from quant.analysis.sr_horizontal import detect_horizontal_sr
-from quant.core.config import PivotConfig, SRHorizontalConfig
-from quant.core.types import SRRole, SRType
+from rainier.analysis.pivots import compute_atr, detect_pivots
+from rainier.analysis.sr_horizontal import detect_horizontal_sr
+from rainier.core.config import PivotConfig, SRHorizontalConfig
+from rainier.core.types import SRRole, SRType
 
 
 class TestDetectHorizontalSR:
@@ -47,7 +47,7 @@ class TestDetectHorizontalSR:
     def test_single_pivot_returns_empty(self, base_timestamp):
         """Single pivot — not enough touches (need 3+), returns empty."""
         from datetime import timedelta
-        from quant.core.types import Pivot
+        from rainier.core.types import Pivot
 
         pivots = [Pivot(index=5, price=100.0, timestamp=base_timestamp, is_high=True)]
         df = pd.DataFrame([

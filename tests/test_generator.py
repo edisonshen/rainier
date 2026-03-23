@@ -3,11 +3,11 @@
 import pandas as pd
 from datetime import datetime
 
-from quant.core.config import SignalConfig
-from quant.core.types import (
+from rainier.core.config import SignalConfig
+from rainier.core.types import (
     AnalysisResult, Candle, Direction, PinBar, SRLevel, SRRole, SRType, Timeframe,
 )
-from quant.signals.generator import generate_signals
+from rainier.signals.generator import generate_signals
 
 
 def _make_analysis_with_pin_bar() -> tuple[AnalysisResult, pd.DataFrame]:

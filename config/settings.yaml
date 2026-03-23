@@ -1,4 +1,16 @@
-# Quant Trading System Configuration
+# Rainier Trading Analysis Platform — Configuration
+
+app:
+  name: rainier
+  data_dir: ./data
+  log_level: INFO
+  timezone: America/Los_Angeles
+
+database:
+  echo: false
+  pool_size: 5
+
+# --- Futures price action analysis ---
 
 symbols:
   - NQ
@@ -14,7 +26,6 @@ timeframes:
 analysis:
   pivot:
     lookback: 5
-
   sr_horizontal:
     cluster_atr_mult: 0.3
     min_touches: 2
@@ -22,12 +33,10 @@ analysis:
     weight_recency: 0.3
     weight_volume: 0.2
     weight_round_number: 0.1
-
   sr_diagonal:
     min_swing_points: 2
     price_tolerance_atr_mult: 0.3
     min_touches: 2
-
   pin_bar:
     min_dominant_wick_ratio: 0.667
     max_secondary_wick_ratio: 0.333
@@ -35,7 +44,6 @@ analysis:
     min_amplitude_lookback: 20
     wick_exceed_lookback: 5
     sr_proximity_pct: 0.005
-
   max_sr_levels: 10
 
 signal:
@@ -60,5 +68,40 @@ alerts:
     webhook_url: ""
     enabled: false
 
-database:
-  url: "postgresql://postgres:quant@localhost:5432/quant"
+# --- Stock scraping (QuantUnicorn) ---
+
+scraping:
+  quantunicorn:
+    url: "https://www.quantunicorn.com/products#qu100"
+    login_url: "https://www.quantunicorn.com/signin"
+    session_file: "./data/auth/qu_session.json"
+    session_ttl_hours: 12
+    headless: true
+    timeout_ms: 30000
+  tradingview:
+    base_url: "https://www.tradingview.com/chart/"
+    timeframe_days: 120
+    chart_width: 1280
+    chart_height: 720
+    headless: true
+    output_dir: "./data/charts"
+  schedule:
+    morning: "08:35"
+    midday: "10:35"
+    afternoon: "12:35"
+    close: "14:35"
+
+# --- LLM analysis ---
+
+llm:
+  default_model: "claude-cli"
+  fallback_models:
+    - "openai/gpt-4o"
+    - "gemini/gemini-2.0-flash"
+  local_model: "ollama/deepseek-r1:14b"
+
+# --- Notifications ---
+
+notify:
+  enabled: true
+  subject_prefix: "[Rainier]"

@@ -1,7 +1,7 @@
 """Tests for swing high/low detection."""
 
-from quant.analysis.pivots import compute_atr, detect_pivots
-from quant.core.config import PivotConfig
+from rainier.analysis.pivots import compute_atr, detect_pivots
+from rainier.core.config import PivotConfig
 
 
 class TestDetectPivots:

@@ -4,9 +4,9 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from quant.backtest.engine import BacktestResult, BacktestTrade, run_backtest
-from quant.core.config import AnalysisConfig, SignalConfig
-from quant.core.types import Direction, Signal, SignalStatus, Timeframe
+from rainier.backtest.engine import BacktestResult, BacktestTrade, run_backtest
+from rainier.core.config import AnalysisConfig, SignalConfig
+from rainier.core.types import Direction, Signal, SignalStatus, Timeframe
 
 
 def _make_long_dataset(n_bars: int = 200) -> pd.DataFrame:

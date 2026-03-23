@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from quant.analysis.inside_bar import detect_inside_bars
+from rainier.analysis.inside_bar import detect_inside_bars
 
 
 class TestDetectInsideBars:

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quant.core.types import (
+from rainier.core.types import (
     AnalysisResult,
     Candle,
     Direction,
@@ -18,7 +18,7 @@ from quant.core.types import (
     SRType,
     Timeframe,
 )
-from quant.features.extractor import FeatureExtractor
+from rainier.features.extractor import FeatureExtractor
 
 
 def _make_df(n: int = 50) -> pd.DataFrame:

@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-from quant.backtest.engine import BacktestTrade
-from quant.core.types import Direction, Signal, SignalStatus, Timeframe
-from quant.features.labels import LabelGenerator, LabelPolicy
+from rainier.backtest.engine import BacktestTrade
+from rainier.core.types import Direction, Signal, SignalStatus, Timeframe
+from rainier.features.labels import LabelGenerator, LabelPolicy
 
 
 def _make_signal(direction: Direction = Direction.LONG) -> Signal:
