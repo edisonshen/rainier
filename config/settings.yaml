@@ -65,8 +65,9 @@ risk:
 
 alerts:
   discord:
-    webhook_url: ""
-    enabled: false
+    webhook_url: ""              # Set via DISCORD_WEBHOOK_URL in .env
+    stock_webhook_url: ""        # Set via DISCORD_STOCK_WEBHOOK_URL in .env (falls back to webhook_url)
+    enabled: true
 
 # --- Stock scraping (QuantUnicorn) ---
 

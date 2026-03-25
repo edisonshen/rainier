@@ -92,6 +92,7 @@ class IBKRConfig(BaseModel):
 
 class DiscordConfig(BaseModel):
     webhook_url: str = ""
+    stock_webhook_url: str = ""  # Separate channel for stock alerts; falls back to webhook_url
     enabled: bool = False
 
 
@@ -195,6 +196,8 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     ollama_base_url: str = "http://localhost:11434"
     polygon_api_key: str = ""
+    discord_webhook_url: str = ""
+    discord_stock_webhook_url: str = ""
     notify_urls: str = ""  # Apprise URL(s), comma-separated
 
     # App config from YAML
@@ -275,7 +278,15 @@ def load_settings(config_path: Path | None = None) -> Settings:
     if "ibkr" in yaml_config:
         kwargs["ibkr"] = IBKRConfig(**yaml_config["ibkr"])
 
-    return Settings(**kwargs)
+    settings = Settings(**kwargs)
+
+    # Wire .env discord secrets into the nested DiscordConfig
+    if settings.discord_webhook_url and not settings.alerts.discord.webhook_url:
+        settings.alerts.discord.webhook_url = settings.discord_webhook_url
+    if settings.discord_stock_webhook_url and not settings.alerts.discord.stock_webhook_url:
+        settings.alerts.discord.stock_webhook_url = settings.discord_stock_webhook_url
+
+    return settings
 
 
 # Singleton

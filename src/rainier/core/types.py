@@ -153,6 +153,29 @@ class Signal:
             self.rr_ratio = abs(self.take_profit - self.entry_price) / risk
 
 
+@dataclass(frozen=True, slots=True)
+class StockCandidate:
+    """A screened QU100 stock candidate for notification."""
+    symbol: str
+    rank: int                       # QU100 rank (1-100)
+    rank_change: int                # Daily rank change
+    long_short: str                 # "Long in" / "Short in"
+    capital_flow_direction: str     # "+", "-", "N"
+    sector: str
+    signal_strength: float          # 0-1 composite from money flow screener
+
+    # Pattern data (from 蔡森 pattern detection)
+    pattern_type: str | None = None        # "w_bottom", "bull_flag", etc.
+    pattern_direction: str | None = None   # "bullish" / "bearish"
+    pattern_status: str | None = None      # "forming" / "confirmed"
+    pattern_confidence: float | None = None
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    target_price: float | None = None
+    rr_ratio: float | None = None
+    volume_confirmed: bool = False
+
+
 @dataclass(slots=True)
 class AnalysisResult:
     symbol: str

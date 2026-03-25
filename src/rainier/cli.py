@@ -332,6 +332,112 @@ def jobs_stop(name):
 
 
 # ---------------------------------------------------------------------------
+# Alert commands
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def alert():
+    """Send alerts manually (Discord, etc.)."""
+
+
+@alert.command(name="discord")
+@click.option("--dry-run", is_flag=True, default=False, help="Format and print without sending")
+@click.option("--top-n", default=20, help="Max candidates to include")
+@click.pass_context
+def alert_discord(ctx, dry_run, top_n):
+    """Send latest QU100 screening results to Discord."""
+    from rainier.alerts.discord import format_stock_candidates_json, send_stock_candidates
+
+    settings = ctx.obj["settings"]
+
+    # TODO: Replace with real screener call once stock_screener module is built
+    # from rainier.analysis.stock_screener import screen_stocks
+    # candidates = screen_stocks(settings)[:top_n]
+    sample_candidates = _make_sample_candidates(top_n)
+
+    if dry_run:
+        click.echo(format_stock_candidates_json(sample_candidates))
+        click.echo(f"\n({len(sample_candidates)} candidates formatted, not sent)")
+        return
+
+    discord_config = settings.alerts.discord
+    if not discord_config.enabled:
+        click.echo("Discord alerts are disabled. Set alerts.discord.enabled=true in settings.yaml")
+        return
+
+    send_stock_candidates(sample_candidates, discord_config)
+    click.echo(f"Sent {len(sample_candidates)} candidates to Discord.")
+
+
+def _make_sample_candidates(n: int = 20) -> list:
+    """Generate sample candidates for testing Discord formatting."""
+    from rainier.core.types import StockCandidate
+
+    # (sym, rank, chg, sector, pat, dir, status, conf,
+    #  entry, sl, tp, rr, vol)
+    samples = [
+        ("NVDA", 1, 3, "Technology", "w_bottom",
+         "bullish", "confirmed", 0.85,
+         142.50, 135.00, 165.00, 3.0, True),
+        ("TSLA", 5, -2, "Consumer Cyclical", "bull_flag",
+         "bullish", "forming", 0.72,
+         285.00, 270.00, 320.00, 2.3, False),
+        ("AAPL", 8, 1, "Technology", "hs_bottom",
+         "bullish", "confirmed", 0.90,
+         198.00, 190.00, 220.00, 2.75, True),
+        ("AMD", 12, 5, "Technology", "false_breakdown",
+         "bullish", "confirmed", 0.78,
+         165.00, 158.00, 185.00, 2.86, True),
+        ("AMZN", 15, 0, "Consumer Cyclical",
+         None, None, None, None,
+         None, None, None, None, False),
+        ("META", 18, -1, "Communication Services",
+         "bull_flag", "bullish", "forming", 0.65,
+         520.00, 500.00, 570.00, 2.5, False),
+        ("MSFT", 22, 2, "Technology", "w_bottom",
+         "bullish", "forming", 0.70,
+         430.00, 415.00, 465.00, 2.33, False),
+        ("GOOG", 25, -3, "Communication Services",
+         None, None, None, None,
+         None, None, None, None, False),
+        ("AVGO", 3, 7, "Technology", "hs_bottom",
+         "bullish", "confirmed", 0.88,
+         185.00, 175.00, 210.00, 2.5, True),
+        ("CRM", 30, 1, "Technology", "false_breakdown",
+         "bullish", "forming", 0.62,
+         310.00, 298.00, 340.00, 2.5, False),
+    ]
+
+    candidates = []
+    for i, s in enumerate(samples[:n]):
+        (sym, rank, chg, sector, pat,
+         pat_dir, pat_status, conf,
+         entry, sl, tp, rr, vol) = s
+        candidates.append(StockCandidate(
+            symbol=sym, rank=rank, rank_change=chg,
+            long_short="Long in",
+            capital_flow_direction="+", sector=sector,
+            signal_strength=0.9 - i * 0.03,
+            pattern_type=pat, pattern_direction=pat_dir,
+            pattern_status=pat_status,
+            pattern_confidence=conf, entry_price=entry,
+            stop_loss=sl, target_price=tp,
+            rr_ratio=rr, volume_confirmed=vol,
+        ))
+
+    # Pad with generic candidates if needed
+    while len(candidates) < n:
+        idx = len(candidates)
+        candidates.append(StockCandidate(
+            symbol=f"SYM{idx}", rank=30 + idx, rank_change=0, long_short="Long in",
+            capital_flow_direction="+", sector="Technology", signal_strength=0.5,
+        ))
+
+    return candidates
+
+
+# ---------------------------------------------------------------------------
 # Scraping commands (from rainier)
 # ---------------------------------------------------------------------------
 
