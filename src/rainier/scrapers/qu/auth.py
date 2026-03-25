@@ -49,10 +49,13 @@ async def login(page: Page) -> None:
     await page.fill(sel.LOGIN_PASSWORD_INPUT, settings.qu_password)
     await page.click(sel.LOGIN_SUBMIT_BUTTON)
 
-    # Wait for navigation or post-login indicator
-    await page.wait_for_selector(sel.LOGGED_IN_INDICATOR, timeout=qu.timeout_ms)
+    # Wait for navigation away from signin page
+    await page.wait_for_url(
+        lambda url: "signin" not in url, timeout=qu.timeout_ms
+    )
+    await page.wait_for_load_state("networkidle", timeout=10000)
 
-    log.info("qu_login_success")
+    log.info("qu_login_success", url=page.url)
 
     # Save session for reuse
     await BrowserManager.save_storage_state(page, qu.session_file)

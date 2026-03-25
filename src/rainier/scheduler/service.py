@@ -41,13 +41,12 @@ async def run_qu_scrape(session_name: str) -> None:
         from rainier.notifications.notifier import notify_scrape_result
         notify_scrape_result(session_name, result)
 
-        # Send stock candidates to Discord (once screener is wired up)
-        # TODO: Activate when stock_screener module is built
-        # from rainier.analysis.stock_screener import screen_stocks
-        # from rainier.alerts.discord import send_stock_candidates
-        # settings = get_settings()
-        # candidates = screen_stocks(settings)[:20]
-        # send_stock_candidates(candidates, settings.alerts.discord)
+        # Send stock candidates to Discord after scrape
+        from rainier.alerts.discord import send_stock_candidates
+        from rainier.analysis.stock_screener import screen_stocks
+        settings = get_settings()
+        candidates = screen_stocks(settings)[:20]
+        send_stock_candidates(candidates, settings.alerts.discord)
 
     except Exception as exc:
         log.error("scheduled_scrape_failed", session=session_name, error=str(exc))

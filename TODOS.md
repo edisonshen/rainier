@@ -5,49 +5,29 @@
 Design doc: `docs/stock_screener_design.md`
 Book: 蔡森 "多空转折一手抓" at `/Users/pinkbear/Downloads/多空转折一手抓(高清).pdf`
 
-### Phase 1 — Foundation (no blockers, start here)
+### Phase 1 — Foundation ✓
 
-- [ ] **#1 pattern_primitives.py** — Swing points, necklines, breakout detection, volume-price
-  - File: `src/rainier/analysis/pattern_primitives.py` (NEW)
-  - SwingPoint: local high/low using N-bar lookback (configurable `swing_lookback`)
-  - Neckline: iterative linear regression, >= 2 touch points
-  - Breakout: price crosses level + 带量突破 (vol > 1.5x avg)
-  - VolumePriceSignal: 价涨量增 vs 量价背离
+- [x] **#1 pattern_primitives.py** — Swing points, necklines, breakout detection, volume-price
+- [x] **#2 target_calculator.py** — 涨幅/跌幅满足 price target calculations (7 compute functions)
+- [x] **#4 core/types.py** — Added PatternSignal, MoneyFlowSignal, SectorTrend, StockScreenResult
+- [x] **#3 stock_patterns.py** — All 12 蔡森 pattern detectors (W底, M头, 破底翻, 假突破, 破底翻W底, 假突破头肩顶, 下飘旗形, 上飘旗形, 头肩底, 头肩顶, 收敛三角形底部, 收敛三角形头部)
+- [x] **#5 Tests** — 19 tests in test_pattern_primitives.py + test_stock_patterns.py
+- [ ] **#6 Visual validation gate** — Overlay swing points/necklines on Plotly charts, compare to TradingView on 10 stocks
 
-- [ ] **#2 target_calculator.py** — 涨幅/跌幅满足 price target calculations
-  - File: `src/rainier/analysis/target_calculator.py` (NEW)
-  - distance = |key_level - neckline|, target = neckline ± distance, wave2 = wave1 ± distance
+### Phase 2 — Money Flow + Sector ✓
 
-- [ ] **#4 core/types.py** — Add PatternSignal, MoneyFlowSignal, SectorTrend, DailyQUScore, StockScreenResult
+- [x] **#7 stock_screener.py** — 3-layer pipeline with screen_stocks() entry point
+- [x] **#8 sector_analyzer.py** — Sector trend analysis + 0.1 bullish sector boost
+- [x] **#StockScreenerConfig** — Added to config.py + settings.yaml
 
-- [ ] **#3 stock_patterns.py** — W bottom detector [blocked by #1, #2]
-  - File: `src/rainier/analysis/stock_patterns.py` (NEW)
-  - Two swing lows ~same level (3%), swing high between = neckline, breakout = confirmed
+### Phase 3 — Remaining Bullish Patterns ✓ (merged into Phase 1)
 
-- [ ] **#5 Tests** [blocked by #1, #2, #3]
-  - `tests/test_pattern_primitives.py` + `tests/test_stock_patterns.py`
+- [x] **#9 All 6 bullish patterns implemented** in stock_patterns.py
 
-- [ ] **#6 Visual validation gate** [blocked by #1, #3]
-  - Overlay swing points/necklines on Plotly charts, compare to TradingView on 10 stocks
+### Phase 4 — Bearish + Scoring ✓ (merged into Phase 1)
 
-### Phase 2 — Money Flow + Sector
-
-- [ ] **#7 stock_screener.py** — Layer 1 QU100 money flow screening [blocked by #4]
-  - Two-step query: MoneyFlowSnapshot + StockCapitalFlow
-  - Scoring: Long in=0.5, direction+=0.2, rank<=30=+0.15, improving=+0.1, 3+ days=+0.05
-
-- [ ] **#8 sector_analyzer.py** — Layer 2 sector trends [blocked by #7]
-  - Group by sector, net_sentiment, bullish/bearish/neutral, +0.1 boost
-
-### Phase 3 — Remaining Bullish Patterns
-
-- [ ] **#9 Five more bullish patterns** [blocked by #1, #2, #3]
-  - 破底翻 (Tier 1), 下飘旗形, 头肩底, 收敛三角形底部, 破底翻W底
-
-### Phase 4 — Bearish + Scoring
-
-- [ ] **#10 Six bearish mirrors + composite scoring** [blocked by #7, #8, #9]
-  - M头, 假突破, 上飘旗形, 头肩顶, 收敛三角形头部, 假突破头肩顶
+- [x] **#10 All 6 bearish mirrors + composite scoring** implemented
+- [x] **Scheduler wired up** — screen_stocks() called after every scrape, top 20 sent to Discord
   - Composite: 0.25 money_flow + 0.10 sector + 0.65 pattern
 
 ### Phase 5 — LLM Vision Validation

@@ -92,6 +92,36 @@ scraping:
     afternoon: "12:35"
     close: "14:35"
 
+# --- Stock screener (QU100 + 蔡森 patterns) ---
+
+stock_screener:
+  pattern_weights:
+    false_breakdown: 1.0
+    false_breakout: 1.0
+    false_breakdown_w_bottom: 0.95
+    w_bottom: 0.85
+    m_top: 0.85
+    hs_bottom: 0.80
+    hs_top: 0.80
+    bull_flag: 0.75
+    bear_flag: 0.75
+    false_breakout_hs: 0.75
+    sym_triangle_bottom: 0.65
+    sym_triangle_top: 0.65
+  layer_weight_money_flow: 0.25
+  layer_weight_sector: 0.10
+  layer_weight_pattern: 0.65
+  strong_buy_threshold: 0.80
+  buy_threshold: 0.65
+  watch_threshold: 0.50
+  volume_breakout_multiplier: 1.5
+  swing_lookback: 5
+  neckline_tolerance_pct: 0.03
+  min_pattern_bars: 10
+  max_pattern_bars: 120
+  stop_buffer_pct: 0.02
+  min_daily_bars: 60
+
 # --- IBKR data connection ---
 
 ibkr:

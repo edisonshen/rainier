@@ -96,6 +96,42 @@ class DiscordConfig(BaseModel):
     enabled: bool = False
 
 
+class StockScreenerConfig(BaseModel):
+    # Pattern weights (Tier 1-4)
+    pattern_weights: dict[str, float] = Field(default_factory=lambda: {
+        "false_breakdown": 1.0,
+        "false_breakout": 1.0,
+        "false_breakdown_w_bottom": 0.95,
+        "w_bottom": 0.85,
+        "m_top": 0.85,
+        "hs_bottom": 0.80,
+        "hs_top": 0.80,
+        "bull_flag": 0.75,
+        "bear_flag": 0.75,
+        "false_breakout_hs": 0.75,
+        "sym_triangle_bottom": 0.65,
+        "sym_triangle_top": 0.65,
+    })
+    # Layer weights for composite score
+    layer_weight_money_flow: float = 0.25
+    layer_weight_sector: float = 0.10
+    layer_weight_pattern: float = 0.65
+    # Thresholds
+    strong_buy_threshold: float = 0.80
+    buy_threshold: float = 0.65
+    watch_threshold: float = 0.50
+    # Volume
+    volume_breakout_multiplier: float = 1.5
+    # Pattern detection
+    swing_lookback: int = 5
+    neckline_tolerance_pct: float = 0.03
+    min_pattern_bars: int = 10
+    max_pattern_bars: int = 120
+    stop_buffer_pct: float = 0.02
+    # Data
+    min_daily_bars: int = 60
+
+
 class AlertsConfig(BaseModel):
     discord: DiscordConfig = DiscordConfig()
 
@@ -221,6 +257,9 @@ class Settings(BaseSettings):
     # Notifications
     notify: NotifyConfig = NotifyConfig()
 
+    # Stock screener (QU100 + 蔡森 patterns)
+    stock_screener: StockScreenerConfig = StockScreenerConfig()
+
     # IBKR (Interactive Brokers) data connection
     ibkr: IBKRConfig = IBKRConfig()
 
@@ -275,6 +314,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         kwargs["llm"] = LLMAnalysisConfig(**yaml_config["llm"])
     if "notify" in yaml_config:
         kwargs["notify"] = NotifyConfig(**yaml_config["notify"])
+    if "stock_screener" in yaml_config:
+        kwargs["stock_screener"] = StockScreenerConfig(**yaml_config["stock_screener"])
     if "ibkr" in yaml_config:
         kwargs["ibkr"] = IBKRConfig(**yaml_config["ibkr"])
 

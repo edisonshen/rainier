@@ -7,12 +7,13 @@ Site uses Ant Design (antd) React components.
 # ---------------------------------------------------------------------------
 # Login page (https://www.quantunicorn.com/signin)
 # ---------------------------------------------------------------------------
-LOGIN_EMAIL_INPUT = 'input[type="email"]'  # TODO: verify after login page inspection
-LOGIN_PASSWORD_INPUT = 'input[type="password"]'  # TODO: verify
-LOGIN_SUBMIT_BUTTON = 'button[type="submit"]'  # TODO: verify
+LOGIN_EMAIL_INPUT = '#signIn_email'
+LOGIN_PASSWORD_INPUT = '#signIn_password'
+LOGIN_SUBMIT_BUTTON = 'button[type="submit"]'
 
-# Post-login indicator — element that proves we are authenticated
-LOGGED_IN_INDICATOR = ".qu100"  # QU100 container only visible when logged in
+# Post-login indicator — not used as wait_for_selector anymore.
+# After login, we wait for navigation away from /signin instead.
+LOGGED_IN_INDICATOR = None
 
 # ---------------------------------------------------------------------------
 # QU100 page (https://www.quantunicorn.com/products#qu100)

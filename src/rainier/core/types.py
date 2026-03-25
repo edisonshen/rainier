@@ -176,6 +176,93 @@ class StockCandidate:
     volume_confirmed: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class PatternSignal:
+    """A detected chart pattern from 蔡森 methodology."""
+    symbol: str
+    pattern_type: str           # "w_bottom", "false_breakdown", "bull_flag", etc.
+    direction: str              # "bullish" or "bearish"
+    status: str                 # "forming", "confirmed", "target_reached"
+    confidence: float           # 0-1
+
+    # Key price levels
+    entry_price: float
+    stop_loss: float
+    target_wave1: float
+    target_wave2: float | None = None
+    risk_pct: float = 0.0      # (entry - SL) / entry as percentage
+    reward_pct: float = 0.0    # (target - entry) / entry as percentage
+    rr_ratio: float = 0.0      # reward / risk
+
+    # Pattern components
+    neckline: float = 0.0
+    key_points: dict | None = None
+    volume_confirmed: bool = False
+
+    # Timestamps
+    pattern_start_idx: int = 0
+    pattern_end_idx: int | None = None
+    breakout_idx: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MoneyFlowSignal:
+    """A QU100 stock with money flow scoring."""
+    symbol: str
+    stock_id: int
+    rank: int
+    rank_change: int
+    long_short: str
+    capital_flow_direction: str
+    days_in_top100: int
+    sector: str
+    industry: str
+    signal_strength: float      # 0-1 composite score
+
+
+@dataclass(frozen=True, slots=True)
+class SectorTrend:
+    """Sector-level trend from QU100 data."""
+    sector: str
+    long_in_count: int
+    short_in_count: int
+    net_sentiment: float        # (long - short) / total
+    top_stocks: list[str]
+    trend_direction: str        # "bullish", "bearish", "neutral"
+    sector_rank: int
+
+
+@dataclass(slots=True)
+class StockScreenResult:
+    """Full screening result for a single stock."""
+    symbol: str
+    name: str
+    sector: str
+
+    # Layer 1: Money flow
+    money_flow_score: float
+    long_short: str
+    qu100_rank: int
+
+    # Layer 2: Sector
+    sector_trend: str
+    sector_boost: float
+
+    # Layer 3: Technical
+    patterns: list[PatternSignal]
+    best_pattern: PatternSignal | None
+
+    # Composite
+    composite_score: float
+    recommendation: str         # "strong_buy", "buy", "watch", "avoid"
+
+    # Action
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    target: float | None = None
+    risk_pct: float | None = None
+
+
 @dataclass(slots=True)
 class AnalysisResult:
     symbol: str

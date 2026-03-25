@@ -46,10 +46,13 @@ class QUScraper(BaseScraper):
         In launch mode: opens a new page with saved session + auto-login.
         """
         if self.browser._is_cdp:
-            # CDP mode: user's real Chrome, already authenticated
+            # CDP mode: user's real Chrome — check if auth is needed
             self._page_cm = self.browser.existing_page()
             self._page = await self._page_cm.__aenter__()
             self.log.info("cdp_mode", url=self._page.url)
+
+            # Auto-login if not authenticated
+            await self._cdp_ensure_auth()
         else:
             # Launch mode: fresh Playwright browser, need auth
             storage = get_session_path() if is_session_valid() else None
@@ -104,6 +107,43 @@ class QUScraper(BaseScraper):
 
         result.finished_at = datetime.now(timezone.utc)
         return result
+
+    # ------------------------------------------------------------------
+    # CDP auto-auth
+    # ------------------------------------------------------------------
+
+    async def _cdp_ensure_auth(self) -> None:
+        """In CDP mode, navigate to QU100 and login if needed."""
+        page = self._page
+        url = page.url or ""
+
+        # Navigate to QU100 page if not already there
+        if "quantunicorn.com/products" not in url:
+            await goto_with_retry(page, self._qu_config.url)
+            await page.wait_for_load_state("networkidle", timeout=15000)
+
+        # Check if redirected to signin
+        if "signin" in (page.url or ""):
+            self.log.info("cdp_needs_login", url=page.url)
+            await ensure_authenticated(page)
+            await goto_with_retry(page, self._qu_config.url)
+            return
+
+        # Check if on QU100 page but behind login wall (no table)
+        table = await page.query_selector(sel.QU100_TABLE)
+        if table is None:
+            # Click the login/register button if present
+            login_btn = await page.query_selector("text=注册/登录")
+            if login_btn:
+                self.log.info("cdp_clicking_login_button")
+                await login_btn.click()
+                await page.wait_for_load_state(
+                    "networkidle", timeout=10000
+                )
+            if "signin" in (page.url or ""):
+                self.log.info("cdp_needs_login", url=page.url)
+                await ensure_authenticated(page)
+                await goto_with_retry(page, self._qu_config.url)
 
     # ------------------------------------------------------------------
     # Phase A: QU100 table
