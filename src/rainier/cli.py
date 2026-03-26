@@ -238,10 +238,13 @@ def chart(ctx, symbol, tf, csv_path, start, end, output_path):
               help="Walk-forward window mode")
 @click.option("--regime-filter", "regime_filter", default=None,
               help="Comma-separated regimes: trending_up,trending_down,range_bound,high_volatility")
+@click.option("--symbols", default=None, help="Comma-separated symbols for portfolio backtest")
+@click.option("--data-dir", "data_dir", default=None, type=click.Path(exists=True),
+              help="Directory with CSV files for portfolio mode")
 @click.pass_context
 def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
              slippage, commission, show_trades, walk_forward, wf_train_bars, wf_test_bars,
-             wf_step_bars, wf_mode, regime_filter):
+             wf_step_bars, wf_mode, regime_filter, symbols, data_dir):
     """Run a backtest on historical data."""
     from rainier.backtest.engine import run_backtest
     from rainier.backtest.report import format_report, format_trade_log, plot_equity_curve
@@ -289,6 +292,46 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
         return _wrap_with_regime(
             PinBarSignalEmitter(settings.analysis, sig_config)
         )
+
+    if symbols:
+        # Portfolio backtest mode
+        from rainier.backtest.portfolio import (
+            format_portfolio_report,
+            run_portfolio_backtest,
+        )
+        from rainier.data.csv_provider import CSVProvider as CSVProv
+
+        sym_list = [s.strip() for s in symbols.split(",")]
+        dir_path = Path(data_dir) if data_dir else Path(csv_path).parent
+
+        port_data: dict[str, pd.DataFrame] = {}
+        port_tfs: dict[str, Timeframe] = {}
+        prov = CSVProv(dir_path)
+        for sym in sym_list:
+            csv_file = dir_path / f"{sym}_{tf}.csv"
+            if not csv_file.exists():
+                click.echo(f"Warning: {csv_file} not found, skipping {sym}")
+                continue
+            port_data[sym] = prov._read_csv(csv_file, start_dt, end_dt)
+            port_tfs[sym] = timeframe
+
+        if not port_data:
+            click.echo("No data files found for portfolio backtest.")
+            return
+
+        emitter = _wrap_with_regime(
+            PinBarSignalEmitter(settings.analysis, settings.signal)
+        )
+        click.echo(
+            f"Running portfolio backtest: {list(port_data.keys())}, "
+            f"{tf}, {sum(len(d) for d in port_data.values())} total candles..."
+        )
+
+        port_result = run_portfolio_backtest(
+            port_data, port_tfs, emitter, bt_config,
+        )
+        click.echo(format_portfolio_report(port_result))
+        return
 
     if walk_forward:
         # Walk-forward cross-validation mode
