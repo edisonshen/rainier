@@ -74,7 +74,7 @@ class TestFormatSummaryEmbed:
     def test_shows_pattern_label(self):
         candidates = [_candidate(pattern_type="w_bottom")]
         embed = _format_summary_embed(candidates)
-        assert "W底" in embed["description"]
+        assert "W Bottom" in embed["description"]
 
     def test_no_pattern_shows_dash(self):
         candidates = [_candidate(pattern_type=None, pattern_confidence=None)]
@@ -105,7 +105,7 @@ class TestFormatCandidateEmbed:
     def test_has_pattern_label(self):
         embed = _format_candidate_embed(_candidate(pattern_type="bull_flag"))
         pattern_field = next(f for f in embed["fields"] if f["name"] == "Pattern")
-        assert pattern_field["value"] == "下飘旗形"
+        assert pattern_field["value"] == "Bull Flag"
 
     def test_volume_confirmed_shows_checkmark(self):
         embed = _format_candidate_embed(_candidate(volume_confirmed=True))

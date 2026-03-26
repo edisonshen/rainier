@@ -1,6 +1,6 @@
 """Pin bar detection and pin bar line (S/R) derivation.
 
-小酱 methodology:
+Xiaojiang methodology:
 1. Find candles with significant wicks showing rejection (relaxed criteria)
 2. Draw lines at EXACT wick tip prices (high or low)
 3. Cluster nearby wick tips — the price with the most touches wins
@@ -24,7 +24,7 @@ def detect_pin_bars_raw(
     symbol: str = "",
     timeframe: Timeframe = Timeframe.H1,
 ) -> list[PinBar]:
-    """Detect pin bars per 小酱 book methodology.
+    """Detect pin bars per Xiaojiang book methodology.
 
     Book rules (strict):
     1. Dominant wick > 2/3 of total range

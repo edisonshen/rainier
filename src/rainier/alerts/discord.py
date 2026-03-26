@@ -13,20 +13,20 @@ from rainier.core.types import Direction, Signal, StockCandidate
 
 log = logging.getLogger(__name__)
 
-# Pattern type → display label (Chinese reference names from 蔡森 methodology)
+# Pattern type → display label (Caisen methodology)
 PATTERN_LABELS: dict[str, str] = {
-    "w_bottom": "W底",
-    "m_top": "M头",
-    "false_breakdown": "破底翻",
-    "false_breakout": "破顶翻",
-    "false_breakdown_w": "破底翻W底",
-    "false_breakout_m": "破顶翻M头",
-    "bull_flag": "下飘旗形",
-    "bear_flag": "上飘旗形",
-    "hs_bottom": "头肩底",
-    "hs_top": "头肩顶",
-    "sym_triangle_bottom": "收敛三角形底",
-    "sym_triangle_top": "收敛三角形顶",
+    "w_bottom": "W Bottom",
+    "m_top": "M Top",
+    "false_breakdown": "False Breakdown",
+    "false_breakout": "False Breakout",
+    "false_breakdown_w": "False Breakdown W",
+    "false_breakout_m": "False Breakout M",
+    "bull_flag": "Bull Flag",
+    "bear_flag": "Bear Flag",
+    "hs_bottom": "H&S Bottom",
+    "hs_top": "H&S Top",
+    "sym_triangle_bottom": "Sym Tri Bottom",
+    "sym_triangle_top": "Sym Tri Top",
 }
 
 

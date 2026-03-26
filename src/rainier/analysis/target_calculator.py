@@ -1,6 +1,6 @@
-"""Price target calculator — 涨幅/跌幅满足 (measured move) for all patterns.
+"""Price target calculator — measured move for all patterns.
 
-Implements measured-move price targets from 蔡森's "多空转折一手抓" methodology.
+Implements measured-move price targets from Caisen's methodology.
 Used by all pattern detectors to compute entry, stop-loss, and target levels.
 """
 
@@ -223,7 +223,7 @@ def compute_false_breakdown_targets(
     neckline: float | None = None,
     stop_buffer_pct: float = 0.02,
 ) -> TargetLevels:
-    """False breakdown (假跌破) — bullish reversal.
+    """False breakdown — bullish reversal.
 
     Entry at support_level recovery, SL below false_low.
     If neckline provided: uses W-bottom measured move from neckline.
@@ -260,7 +260,7 @@ def compute_false_breakout_targets(
     neckline: float | None = None,
     stop_buffer_pct: float = 0.02,
 ) -> TargetLevels:
-    """False breakout (假突破) — bearish reversal (mirror of false breakdown).
+    """False breakout — bearish reversal (mirror of false breakdown).
 
     Entry at resistance_level rejection, SL above false_high.
     If neckline provided: uses M-top measured move from neckline.

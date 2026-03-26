@@ -171,7 +171,7 @@ class StockCandidate:
     sector: str
     signal_strength: float          # 0-1 composite from money flow screener
 
-    # Pattern data (from 蔡森 pattern detection)
+    # Pattern data (from Caisen pattern detection)
     pattern_type: str | None = None        # "w_bottom", "bull_flag", etc.
     pattern_direction: str | None = None   # "bullish" / "bearish"
     pattern_status: str | None = None      # "forming" / "confirmed"
@@ -190,7 +190,7 @@ class StockCandidate:
 
 @dataclass(frozen=True, slots=True)
 class PatternSignal:
-    """A detected chart pattern from 蔡森 methodology."""
+    """A detected chart pattern from Caisen methodology."""
     symbol: str
     pattern_type: str           # "w_bottom", "false_breakdown", "bull_flag", etc.
     direction: str              # "bullish" or "bearish"
@@ -221,7 +221,6 @@ class PatternSignal:
 class MoneyFlowSignal:
     """A QU100 stock with money flow scoring."""
     symbol: str
-    stock_id: int
     rank: int
     rank_change: int
     long_short: str

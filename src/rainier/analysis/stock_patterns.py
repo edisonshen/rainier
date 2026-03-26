@@ -1,7 +1,8 @@
-"""蔡森 pattern detectors — all 12 chart patterns from "多空转折一手抓".
+"""Caisen pattern detectors — all 12 chart patterns from "Erta Reversal" methodology.
 
-Detects W底, M头, 破底翻, 假突破, 破底翻W底, 假突破头肩顶,
-下飘旗形, 上飘旗形, 头肩底, 头肩顶, 收敛三角形底部, 收敛三角形头部.
+Detects W Bottom, M Top, False Breakdown, False Breakout, False Breakdown W Bottom,
+False Breakout H&S Top, Bull Flag, Bear Flag, H&S Bottom, H&S Top,
+Sym Triangle Bottom, Sym Triangle Top.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def detect_patterns(
     df: pd.DataFrame,
     config: StockScreenerConfig,
 ) -> list[PatternSignal]:
-    """Detect all 12 蔡森 patterns on daily OHLCV data.
+    """Detect all 12 Caisen patterns on daily OHLCV data.
 
     Args:
         symbol: Stock ticker
@@ -128,7 +129,7 @@ def score_pattern(
 
     Breakdown:
         35% — pattern weight (from config)
-        20% — volume confirmed (带量突破) + 5% no divergence
+        20% — volume confirmed (volume breakout) + 5% no divergence
         15% — pattern clarity (neckline defined, key_points present)
         15% — risk-reward ratio
         10% — status (confirmed vs forming)
@@ -235,7 +236,7 @@ def _find_swing_low_between(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 1: W Bottom (W底)
+# Pattern 1: W Bottom
 # ---------------------------------------------------------------------------
 
 
@@ -302,7 +303,7 @@ def _detect_w_bottom(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 2: M Top (M头)
+# Pattern 2: M Top
 # ---------------------------------------------------------------------------
 
 
@@ -367,7 +368,7 @@ def _detect_m_top(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 3: False Breakdown (破底翻)
+# Pattern 3: False Breakdown
 # ---------------------------------------------------------------------------
 
 
@@ -448,7 +449,7 @@ def _detect_false_breakdown(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 4: False Breakout (假突破)
+# Pattern 4: False Breakout
 # ---------------------------------------------------------------------------
 
 
@@ -526,7 +527,7 @@ def _detect_false_breakout(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 5: False Breakdown W Bottom (破底翻W底)
+# Pattern 5: False Breakdown W Bottom
 # ---------------------------------------------------------------------------
 
 
@@ -611,7 +612,7 @@ def _detect_false_breakdown_w(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 6: False Breakout H&S Top (假突破头肩顶)
+# Pattern 6: False Breakout H&S Top
 # ---------------------------------------------------------------------------
 
 
@@ -703,7 +704,7 @@ def _detect_false_breakout_hs(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 7: Bull Flag (下飘旗形)
+# Pattern 7: Bull Flag
 # ---------------------------------------------------------------------------
 
 
@@ -807,7 +808,7 @@ def _detect_bull_flag(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 8: Bear Flag (上飘旗形)
+# Pattern 8: Bear Flag
 # ---------------------------------------------------------------------------
 
 
@@ -909,7 +910,7 @@ def _detect_bear_flag(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 9: H&S Bottom (头肩底)
+# Pattern 9: H&S Bottom
 # ---------------------------------------------------------------------------
 
 
@@ -983,7 +984,7 @@ def _detect_hs_bottom(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 10: H&S Top (头肩顶)
+# Pattern 10: H&S Top
 # ---------------------------------------------------------------------------
 
 
@@ -1057,7 +1058,7 @@ def _detect_hs_top(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 11: Sym Triangle Bottom (收敛三角形底部)
+# Pattern 11: Sym Triangle Bottom
 # ---------------------------------------------------------------------------
 
 
@@ -1071,7 +1072,7 @@ def _detect_sym_triangle_bottom(
 
 
 # ---------------------------------------------------------------------------
-# Pattern 12: Sym Triangle Top (收敛三角形头部)
+# Pattern 12: Sym Triangle Top
 # ---------------------------------------------------------------------------
 
 

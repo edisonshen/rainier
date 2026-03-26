@@ -15,7 +15,7 @@ from rainier.signals.generator import generate_signals
 
 
 class PinBarSignalEmitter:
-    """Emits signals using the 小酱 pin bar methodology.
+    """Emits signals using the Xiaojiang pin bar methodology.
 
     Wraps analyze() + generate_signals() behind the SignalEmitter protocol.
     """

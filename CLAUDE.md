@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Rainier — trading analysis platform combining futures price action (小酱 pin bar methodology) with stock money flow data (QuantUnicorn QU100). Evolving from rule-based to AI-adaptive with a three-layer hybrid architecture.
+Rainier — trading analysis platform combining futures price action (Xiaojiang pin bar methodology) with stock money flow data (QuantUnicorn QU100). Evolving from rule-based to AI-adaptive with a three-layer hybrid architecture.
 
 ## Module Map
 
@@ -48,6 +48,13 @@ uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --
 uv run rainier chart --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
 uv run rainier report --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
 
+# QU100 backtesting
+uv run rainier backtest-qu100                              # default: rank 1-50, 5d hold
+uv run rainier backtest-qu100 --sweep                      # parameter sweep (rank x hold)
+uv run rainier backtest-qu100 --variations                 # all signal tuning variants
+uv run rainier backtest-qu100 --patterns                   # pattern-filtered (best 3 patterns, top 5)
+uv run rainier backtest-qu100 --patterns --pattern-top-n 10  # pattern-filtered, top 10
+
 # QuantUnicorn scraping
 uv run rainier scrape qu --session morning --headed
 uv run rainier scrape qu --session morning --cdp http://localhost:9222
@@ -59,6 +66,10 @@ uv run rainier run --once morning                     # single immediate scrape
 uv run rainier jobs list                              # show cron.yaml jobs
 uv run rainier jobs sync                              # sync to system crontab
 uv run rainier jobs stop --name fetch-mes
+
+# Recovery (after restart/power outage)
+uv run rainier recover                                # check services + re-run missed jobs
+uv run rainier recover --dry-run                      # show what would be done
 
 # Database
 uv run rainier db init                                # create tables + hypertables

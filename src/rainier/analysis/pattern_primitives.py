@@ -29,7 +29,7 @@ class Breakout:
     bar_index: int
     direction: str  # "up" or "down"
     level: float  # The neckline/level that was broken
-    with_volume: bool  # 带量突破 = higher confidence
+    with_volume: bool  # volume breakout = higher confidence
     false_breakout: bool  # Reverses back within 3 bars
 
 
@@ -45,12 +45,17 @@ def find_swing_points(df: pd.DataFrame, lookback: int = 5) -> list[SwingPoint]:
 
     A swing high at index i requires high[i] to be the strict unique maximum
     of highs[i-lookback : i+lookback+1]. Similarly for swing lows with the minimum.
+
+    For the trailing edge (last `lookback` bars), provisional swing points are
+    detected using only the left side of the window. These are marked with
+    reduced strength so pattern detectors can use them for live screening.
     """
     highs = df["high"].to_numpy(dtype=np.float64)
     lows = df["low"].to_numpy(dtype=np.float64)
     n = len(highs)
     points: list[SwingPoint] = []
 
+    # Confirmed swing points (full window on both sides)
     for i in range(lookback, n - lookback):
         window_start = i - lookback
         window_end = i + lookback + 1
@@ -67,6 +72,27 @@ def find_swing_points(df: pd.DataFrame, lookback: int = 5) -> list[SwingPoint]:
         if lows[i] == np.min(low_window) and np.sum(low_window == lows[i]) == 1:
             points.append(SwingPoint(
                 index=i, price=float(lows[i]), type="low", strength=lookback
+            ))
+
+    # Provisional swing points at trailing edge (left-side only)
+    # Requires at least `lookback` bars to the left, uses whatever bars exist to the right
+    min_right = 2  # need at least 2 bars after to avoid noise
+    for i in range(max(lookback, n - lookback), n - min_right):
+        window_start = i - lookback
+        window_end = min(i + lookback + 1, n)
+        window_highs = highs[window_start:window_end]
+        window_lows = lows[window_start:window_end]
+
+        if highs[i] == np.max(window_highs) and np.sum(window_highs == highs[i]) == 1:
+            points.append(SwingPoint(
+                index=i, price=float(highs[i]), type="high",
+                strength=lookback - 1,  # reduced strength = provisional
+            ))
+
+        if lows[i] == np.min(window_lows) and np.sum(window_lows == lows[i]) == 1:
+            points.append(SwingPoint(
+                index=i, price=float(lows[i]), type="low",
+                strength=lookback - 1,  # reduced strength = provisional
             ))
 
     points.sort(key=lambda sp: sp.index)
@@ -159,7 +185,7 @@ def detect_breakout(
         level: The price level to check for breakout.
         direction: "up" or "down".
         start_idx: Bar index to start scanning from.
-        vol_multiplier: Volume must exceed this multiple of average for 带量突破.
+        vol_multiplier: Volume must exceed this multiple of average for volume breakout.
         vol_window: Number of bars for computing average volume.
 
     Returns:

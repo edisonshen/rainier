@@ -1,6 +1,6 @@
 """Orchestrator: runs all detectors and produces an AnalysisResult.
 
-小酱 methodology flow:
+Xiaojiang methodology flow:
 1. Find pin bars on each timeframe (1D, 4H, 1H)
 2. Derive "pin bar lines" from wick tip clusters on each TF
 3. Merge all lines — 1D lines are major, 1H lines are minor
