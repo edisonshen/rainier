@@ -1,9 +1,11 @@
 """Label generation for ML training from backtest results.
 
-Converts BacktestTrade outcomes into binary labels:
+Converts TradeRecord outcomes into binary labels:
 - take_profit hit → 1 (profitable)
 - stop_loss hit → 0 (unprofitable)
 - end_of_data → excluded by default (ambiguous)
+
+Dependency: core/ only (uses TradeRecord from protocols).
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from rainier.backtest.engine import BacktestTrade
+from rainier.core.protocols import TradeRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +33,7 @@ class LabelGenerator:
     def __init__(self, policy: LabelPolicy | None = None):
         self.policy = policy or LabelPolicy()
 
-    def generate(self, trades: list[BacktestTrade]) -> pd.DataFrame:
+    def generate(self, trades: list[TradeRecord]) -> pd.DataFrame:
         """Convert backtest trades into a labeled DataFrame.
 
         Returns a DataFrame with columns:
@@ -40,7 +42,7 @@ class LabelGenerator:
         - direction: str — "LONG" or "SHORT"
         - entry_price: float
         - exit_price: float
-        - pnl: float
+        - net_pnl: float
         - exit_reason: str
         - label: int — 1 (profitable) or 0 (unprofitable)
         - is_soft_label: bool — True if label is derived from PnL sign
@@ -59,21 +61,22 @@ class LabelGenerator:
                 label = 0
                 is_soft = False
             elif trade.exit_reason == "end_of_data":
-                # Included (policy says don't exclude): label by PnL sign
-                label = 1 if trade.pnl > 0 else 0
+                label = 1 if trade.net_pnl > 0 else 0
                 is_soft = True
             else:
-                # Unknown exit reason — skip
                 continue
 
             rows.append({
                 "entry_bar": trade.entry_bar,
                 "exit_bar": trade.exit_bar,
-                "direction": trade.signal.direction.value,
-                "entry_price": trade.signal.entry_price,
+                "direction": trade.direction,
+                "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
-                "pnl": trade.pnl,
+                "net_pnl": trade.net_pnl,
                 "exit_reason": trade.exit_reason,
+                "confidence": trade.confidence,
+                "mae": trade.mae,
+                "mfe": trade.mfe,
                 "label": label,
                 "is_soft_label": is_soft,
             })

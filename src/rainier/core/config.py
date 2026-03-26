@@ -75,6 +75,21 @@ class SignalConfig(BaseModel):
     min_rr_ratio: float = 1.5
 
 
+class BacktestConfig(BaseModel):
+    initial_capital: float = 100_000.0
+    sr_recompute_interval: int = 50
+    slippage_pct: float = 0.0005  # 0.05% slippage per fill
+    commission_per_trade: float = 2.50  # per side (entry + exit = 2x)
+    max_open_positions: int = 3
+    # Parameter sweep ranges (used by sweep runner)
+    sweep_min_confidence: list[float] = Field(
+        default_factory=lambda: [0.50, 0.55, 0.60, 0.65, 0.70]
+    )
+    sweep_min_rr_ratio: list[float] = Field(
+        default_factory=lambda: [1.0, 1.5, 2.0, 2.5]
+    )
+
+
 class RiskConfig(BaseModel):
     max_positions: int = 3
     max_daily_loss: float = 1000.0
@@ -260,6 +275,9 @@ class Settings(BaseSettings):
     # Stock screener (QU100 + 蔡森 patterns)
     stock_screener: StockScreenerConfig = StockScreenerConfig()
 
+    # Backtesting
+    backtest: BacktestConfig = BacktestConfig()
+
     # IBKR (Interactive Brokers) data connection
     ibkr: IBKRConfig = IBKRConfig()
 
@@ -316,6 +334,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         kwargs["notify"] = NotifyConfig(**yaml_config["notify"])
     if "stock_screener" in yaml_config:
         kwargs["stock_screener"] = StockScreenerConfig(**yaml_config["stock_screener"])
+    if "backtest" in yaml_config:
+        kwargs["backtest"] = BacktestConfig(**yaml_config["backtest"])
     if "ibkr" in yaml_config:
         kwargs["ibkr"] = IBKRConfig(**yaml_config["ibkr"])
 

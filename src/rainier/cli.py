@@ -224,11 +224,18 @@ def chart(ctx, symbol, tf, csv_path, start, end, output_path):
 @click.option("--start", default=None)
 @click.option("--end", default=None)
 @click.option("--capital", default=100_000.0)
+@click.option("--export", "export_path", default=None, help="Export trades to CSV/Parquet (ext determines format)")
+@click.option("--sweep", is_flag=True, default=False, help="Run parameter sweep instead of single backtest")
+@click.option("--slippage", default=None, type=float, help="Override slippage pct (e.g. 0.0005)")
+@click.option("--commission", default=None, type=float, help="Override commission per side")
+@click.option("--trades", "show_trades", is_flag=True, default=False, help="Show per-trade log")
 @click.pass_context
-def backtest(ctx, symbol, tf, csv_path, start, end, capital):
+def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
+             slippage, commission, show_trades):
     """Run a backtest on historical data."""
     from rainier.backtest.engine import run_backtest
-    from rainier.backtest.report import format_report, plot_equity_curve
+    from rainier.backtest.report import format_report, format_trade_log, plot_equity_curve
+    from rainier.signals.emitter import PinBarSignalEmitter
 
     settings = ctx.obj["settings"]
     timeframe = Timeframe(tf)
@@ -240,20 +247,62 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital):
     provider = CSVProvider(Path(csv_path).parent)
     df = provider._read_csv(Path(csv_path), start_dt, end_dt)
 
-    click.echo(f"Running backtest: {symbol} {tf}, {len(df)} candles...")
+    # Build backtest config with optional overrides
+    bt_config = settings.backtest
+    if capital != 100_000.0:
+        bt_config.initial_capital = capital
+    if slippage is not None:
+        bt_config.slippage_pct = slippage
+    if commission is not None:
+        bt_config.commission_per_trade = commission
 
-    bt_result = run_backtest(
-        df, symbol, timeframe,
-        analysis_config=settings.analysis,
-        signal_config=settings.signal,
-        initial_capital=capital,
-    )
+    if sweep:
+        # Parameter sweep mode
+        from rainier.backtest.sweep import format_sweep_table, run_sweep
 
-    click.echo(format_report(bt_result))
+        click.echo(f"Running parameter sweep: {symbol} {tf}, {len(df)} candles...")
 
-    eq_path = Path(f"charts/{symbol}_{tf}_equity.html")
-    plot_equity_curve(bt_result, eq_path)
-    click.echo(f"\nEquity curve saved to {eq_path}")
+        def emitter_factory(min_conf: float, min_rr: float):
+            from rainier.core.config import ScorerConfig, SignalConfig
+            sig_config = SignalConfig(
+                scorer=ScorerConfig(min_confidence=min_conf),
+                min_rr_ratio=min_rr,
+            )
+            return PinBarSignalEmitter(settings.analysis, sig_config)
+
+        sweep_result = run_sweep(
+            df, symbol, timeframe, emitter_factory, bt_config,
+        )
+        click.echo(format_sweep_table(sweep_result))
+
+        if export_path:
+            out = Path(export_path)
+            sweep_result.to_dataframe().to_csv(out, index=False)
+            click.echo(f"\nSweep results saved to {out}")
+    else:
+        # Single backtest mode
+        emitter = PinBarSignalEmitter(settings.analysis, settings.signal)
+        click.echo(f"Running backtest: {symbol} {tf}, {len(df)} candles...")
+
+        metrics = run_backtest(df, symbol, timeframe, emitter, bt_config)
+        click.echo(format_report(metrics))
+
+        if show_trades:
+            click.echo()
+            click.echo(format_trade_log(metrics))
+
+        eq_path = Path(f"charts/{symbol}_{tf}_equity.html")
+        plot_equity_curve(metrics, eq_path)
+        click.echo(f"\nEquity curve saved to {eq_path}")
+
+        if export_path:
+            from rainier.backtest.export import export_trades_csv, export_trades_parquet
+            out = Path(export_path)
+            if out.suffix == ".parquet":
+                export_trades_parquet(metrics, out)
+            else:
+                export_trades_csv(metrics, out)
+            click.echo(f"Trades exported to {out}")
 
 
 @cli.command()
