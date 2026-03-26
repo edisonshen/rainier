@@ -167,10 +167,11 @@ class QUScraper(BaseScraper):
             await goto_with_retry(page, self._qu_config.url)
             await page.wait_for_load_state("networkidle", timeout=15000)
 
-        # Check if redirected to signin
+        # Check if redirected to signin — session is invalid regardless
+        # of file age (server may have expired it)
         if "signin" in (page.url or ""):
             self.log.info("cdp_needs_login", url=page.url)
-            await ensure_authenticated(page)
+            await login(page)
             await goto_with_retry(page, self._qu_config.url)
             return
 
@@ -187,7 +188,7 @@ class QUScraper(BaseScraper):
                 )
             if "signin" in (page.url or ""):
                 self.log.info("cdp_needs_login", url=page.url)
-                await ensure_authenticated(page)
+                await login(page)
                 await goto_with_retry(page, self._qu_config.url)
 
     # ------------------------------------------------------------------
@@ -210,6 +211,12 @@ class QUScraper(BaseScraper):
             if self.browser._is_cdp:
                 self.log.warning("cdp_wrong_page", url=current_url,
                                  hint="Navigate to QU100 page in Chrome first")
+            await goto_with_retry(page, self._qu_config.url)
+
+        # Safety net: if redirected to signin after navigation, force login
+        if "signin" in (page.url or ""):
+            self.log.info("scrape_forced_login", url=page.url)
+            await login(page)
             await goto_with_retry(page, self._qu_config.url)
 
         # Change date if requested (before initial search)

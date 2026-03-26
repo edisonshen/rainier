@@ -53,7 +53,7 @@ async def login(page: Page) -> None:
     await page.wait_for_url(
         lambda url: "signin" not in url, timeout=qu.timeout_ms
     )
-    await page.wait_for_load_state("networkidle", timeout=10000)
+    await page.wait_for_load_state("networkidle", timeout=30000)
 
     log.info("qu_login_success", url=page.url)
 
