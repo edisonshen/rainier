@@ -107,6 +107,15 @@ class RegimeConfig(BaseModel):
     adx_trend_threshold: float = 25.0  # ADX above this = trending
 
 
+class PatternEmitterConfig(BaseModel):
+    min_confidence: float = 0.50
+    min_rr_ratio: float = 1.5
+    status_filter: list[str] = Field(
+        default_factory=lambda: ["confirmed"]
+    )  # "confirmed", "forming", or both
+    wave_target: str = "wave1"  # "wave1" or "wave2" (falls back to wave1 if wave2 is None)
+
+
 class RiskConfig(BaseModel):
     max_positions: int = 3
     max_daily_loss: float = 1000.0

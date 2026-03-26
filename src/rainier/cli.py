@@ -398,6 +398,84 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
             click.echo(f"Trades exported to {out}")
 
 
+@cli.command(name="backtest-pattern")
+@click.option("--symbol", required=True, help="Stock ticker (AAPL, NVDA, etc.)")
+@click.option("--csv", "csv_path", default=None, type=click.Path(exists=True),
+              help="CSV file with daily OHLCV (fetches via yfinance if omitted)")
+@click.option("--start", default=None)
+@click.option("--end", default=None)
+@click.option("--capital", default=100_000.0)
+@click.option("--min-confidence", default=None, type=float)
+@click.option("--min-rr", default=None, type=float)
+@click.option("--wave-target", default="wave1",
+              type=click.Choice(["wave1", "wave2"]))
+@click.option("--export", "export_path", default=None)
+@click.option("--trades", "show_trades", is_flag=True, default=False)
+@click.pass_context
+def backtest_pattern(ctx, symbol, csv_path, start, end, capital,
+                     min_confidence, min_rr, wave_target,
+                     export_path, show_trades):
+    """Backtest 蔡森 chart patterns on daily stock data."""
+    from rainier.backtest.engine import run_backtest
+    from rainier.backtest.report import format_report, format_trade_log
+    from rainier.core.config import BacktestConfig, PatternEmitterConfig
+    from rainier.signals.pattern_emitter import PatternSignalEmitter
+
+    settings = ctx.obj["settings"]
+    timeframe = Timeframe.D1
+    start_dt = datetime.strptime(start, "%Y-%m-%d") if start else None
+    end_dt = datetime.strptime(end, "%Y-%m-%d") if end else None
+
+    # Load data
+    if csv_path:
+        from rainier.data.csv_provider import CSVProvider
+        provider = CSVProvider(Path(csv_path).parent)
+        df = provider._read_csv(Path(csv_path), start_dt, end_dt)
+    else:
+        from rainier.data.yfinance_provider import YFinanceProvider
+        provider = YFinanceProvider()
+        df = provider.fetch(symbol, timeframe)
+        if start_dt:
+            df = df[df["timestamp"] >= start_dt]
+        if end_dt:
+            df = df[df["timestamp"] <= end_dt]
+
+    # Build emitter config with overrides
+    emitter_cfg = PatternEmitterConfig(wave_target=wave_target)
+    if min_confidence is not None:
+        emitter_cfg.min_confidence = min_confidence
+    if min_rr is not None:
+        emitter_cfg.min_rr_ratio = min_rr
+
+    emitter = PatternSignalEmitter(settings.stock_screener, emitter_cfg)
+
+    # Daily bars: recompute every bar
+    bt_config = BacktestConfig(
+        initial_capital=capital,
+        sr_recompute_interval=1,
+        max_open_positions=3,
+    )
+
+    click.echo(
+        f"Running pattern backtest: {symbol} D1, {len(df)} candles..."
+    )
+    metrics = run_backtest(df, symbol, timeframe, emitter, bt_config)
+    click.echo(format_report(metrics))
+
+    if show_trades:
+        click.echo()
+        click.echo(format_trade_log(metrics))
+
+    if export_path:
+        from rainier.backtest.export import export_trades_csv, export_trades_parquet
+        out = Path(export_path)
+        if out.suffix == ".parquet":
+            export_trades_parquet(metrics, out)
+        else:
+            export_trades_csv(metrics, out)
+        click.echo(f"Trades exported to {out}")
+
+
 @cli.command()
 @click.option("--csv", "csv_path", required=True, type=click.Path(exists=True))
 @click.option("--symbol", required=True)

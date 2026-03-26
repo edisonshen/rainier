@@ -269,6 +269,12 @@ def _close_trade(
         sr_price = sig.sr_level.price
         sr_type = sig.sr_level.sr_type.value
 
+    # Parse pattern_type from notes (e.g. "pattern:w_bottom")
+    if sig.notes and sig.notes.startswith("pattern:"):
+        pattern_type = sig.notes.split("pattern:", 1)[1]
+        if not entry_reason:
+            entry_reason = f"pattern_breakout_{pattern_type}"
+
     return TradeRecord(
         trade_id=ot.trade_id,
         symbol=sig.symbol,
