@@ -11,10 +11,12 @@ import numpy as np
 import pandas as pd
 
 from rainier.analysis.pivots import compute_atr
+from rainier.analysis.regime import RegimeDetector, compute_adx
 from rainier.core.types import (
     AnalysisResult,
     Direction,
     InsideBar,
+    MarketRegime,
     PinBar,
     SRLevel,
     SRRole,
@@ -61,6 +63,9 @@ class FeatureExtractor:
 
         # --- Rolling statistics ---
         features = self._add_rolling_features(features, df)
+
+        # --- Regime features ---
+        features = self._add_regime_features(features, df)
 
         # NaN policy: fill with defaults, then assert clean
         features = self._fill_defaults(features)
@@ -326,6 +331,33 @@ class FeatureExtractor:
         features["rolling_volatility_20"] = returns.rolling(
             window=20, min_periods=1
         ).std().fillna(0.0)
+
+        return features
+
+    # ------------------------------------------------------------------
+    # Regime features
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _add_regime_features(
+        features: pd.DataFrame, df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        # Continuous features
+        atr = compute_atr(df, period=14)
+        atr_pct = atr.rolling(
+            window=min(100, len(df)), min_periods=1
+        ).apply(
+            lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
+        )
+        features["atr_percentile"] = atr_pct.fillna(0.5)
+        features["adx"] = compute_adx(df, period=14)
+
+        # One-hot regime classification
+        detector = RegimeDetector()
+        regimes = detector.detect(df)
+        for regime in MarketRegime:
+            col = f"regime_{regime.value}"
+            features[col] = (regimes == regime).astype(np.float64)
 
         return features
 

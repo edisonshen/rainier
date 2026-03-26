@@ -42,6 +42,13 @@ class SignalStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class MarketRegime(str, Enum):
+    TRENDING_UP = "trending_up"
+    TRENDING_DOWN = "trending_down"
+    RANGE_BOUND = "range_bound"
+    HIGH_VOLATILITY = "high_volatility"
+
+
 @dataclass(frozen=True, slots=True)
 class Candle:
     timestamp: datetime

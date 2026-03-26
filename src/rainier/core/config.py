@@ -98,6 +98,15 @@ class WalkForwardConfig(BaseModel):
     optimize_metric: str = "sharpe_ratio"  # metric to pick best params per fold
 
 
+class RegimeConfig(BaseModel):
+    sma_period: int = 50
+    atr_period: int = 14
+    atr_percentile_window: int = 100
+    high_vol_percentile: float = 80.0  # ATR above this = high_volatility
+    adx_period: int = 14
+    adx_trend_threshold: float = 25.0  # ADX above this = trending
+
+
 class RiskConfig(BaseModel):
     max_positions: int = 3
     max_daily_loss: float = 1000.0

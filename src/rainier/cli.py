@@ -236,10 +236,12 @@ def chart(ctx, symbol, tf, csv_path, start, end, output_path):
 @click.option("--wf-step-bars", default=100, type=int, help="Walk-forward step between folds")
 @click.option("--wf-mode", default="anchored", type=click.Choice(["anchored", "rolling"]),
               help="Walk-forward window mode")
+@click.option("--regime-filter", "regime_filter", default=None,
+              help="Comma-separated regimes: trending_up,trending_down,range_bound,high_volatility")
 @click.pass_context
 def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
              slippage, commission, show_trades, walk_forward, wf_train_bars, wf_test_bars,
-             wf_step_bars, wf_mode):
+             wf_step_bars, wf_mode, regime_filter):
     """Run a backtest on historical data."""
     from rainier.backtest.engine import run_backtest
     from rainier.backtest.report import format_report, format_trade_log, plot_equity_curve
@@ -264,13 +266,29 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
     if commission is not None:
         bt_config.commission_per_trade = commission
 
+    # Parse regime filter
+    regime_set = None
+    if regime_filter:
+        from rainier.core.types import MarketRegime
+        regime_set = {MarketRegime(r.strip()) for r in regime_filter.split(",")}
+        click.echo(f"Regime filter: {[r.value for r in regime_set]}")
+
+    def _wrap_with_regime(emitter):
+        if regime_set is None:
+            return emitter
+        from rainier.analysis.regime import RegimeDetector
+        from rainier.signals.regime_filter import RegimeFilter
+        return RegimeFilter(emitter, RegimeDetector(), regime_set)
+
     def emitter_factory(min_conf: float, min_rr: float):
         from rainier.core.config import ScorerConfig, SignalConfig
         sig_config = SignalConfig(
             scorer=ScorerConfig(min_confidence=min_conf),
             min_rr_ratio=min_rr,
         )
-        return PinBarSignalEmitter(settings.analysis, sig_config)
+        return _wrap_with_regime(
+            PinBarSignalEmitter(settings.analysis, sig_config)
+        )
 
     if walk_forward:
         # Walk-forward cross-validation mode
@@ -311,7 +329,9 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
             click.echo(f"\nSweep results saved to {out}")
     else:
         # Single backtest mode
-        emitter = PinBarSignalEmitter(settings.analysis, settings.signal)
+        emitter = _wrap_with_regime(
+            PinBarSignalEmitter(settings.analysis, settings.signal)
+        )
         click.echo(f"Running backtest: {symbol} {tf}, {len(df)} candles...")
 
         metrics = run_backtest(df, symbol, timeframe, emitter, bt_config)
