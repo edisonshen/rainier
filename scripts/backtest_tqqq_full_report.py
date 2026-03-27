@@ -24,8 +24,8 @@ from pathlib import Path
 
 INITIAL_CAPITAL = 100_000
 CASH_YIELD = 0.045
-ENTRY_EMAS = [5, 8, 10, 13, 15, 20, 25, 30]
-EXIT_SMAS = [5, 10, 15, 20, 25, 30, 40, 50]
+ENTRY_EMAS = sorted(set([5, 8, 10, 13, 15, 20, 25, 30] + [3, 7, 11, 17, 19, 23, 29]))
+EXIT_SMAS = sorted(set([5, 10, 15, 20, 25, 30, 40, 50] + [3, 7, 11, 17, 19, 23, 29]))
 REPORT_PATH = Path(__file__).parent.parent / "reports" / "tqqq_strategy_report.html"
 
 # Plotly CDN version must match installed version
@@ -58,17 +58,36 @@ def fetch_data(years: int = 10) -> pd.DataFrame:
 
 def run_backtest(
     df: pd.DataFrame,
-    ema_period: int,
-    sma_period: int,
+    entry_period: int,
+    exit_period: int,
+    entry_type: str = "ewm",
+    exit_type: str = "rolling",
+    strategy_name: str = "EMA/SMA",
     cash_yield: float = CASH_YIELD,
     initial_capital: float = INITIAL_CAPITAL,
 ) -> dict:
-    """Run a single backtest. Returns metrics + equity series + yearly returns."""
+    """Run a single backtest. Returns metrics + equity series + yearly returns.
+
+    entry_type/exit_type: 'ewm' for EMA, 'rolling' for SMA.
+    """
     data = df.copy()
 
-    data["ema"] = data["qqq_close"].ewm(span=ema_period, adjust=False).mean()
-    data["sma"] = data["qqq_close"].rolling(window=sma_period).mean()
-    warmup = max(ema_period, sma_period) + 5
+    if entry_type == "ewm":
+        data["entry_ma"] = data["qqq_close"].ewm(span=entry_period, adjust=False).mean()
+        entry_prefix = "EMA"
+    else:
+        data["entry_ma"] = data["qqq_close"].rolling(window=entry_period).mean()
+        entry_prefix = "SMA"
+
+    if exit_type == "ewm":
+        data["exit_ma"] = data["qqq_close"].ewm(span=exit_period, adjust=False).mean()
+        exit_prefix = "EMA"
+    else:
+        data["exit_ma"] = data["qqq_close"].rolling(window=exit_period).mean()
+        exit_prefix = "SMA"
+
+    warmup = max(entry_period, exit_period) + 5
+    data = data.dropna()
     data = data.iloc[warmup:].copy()
 
     # Generate positions: signal on close, execute next day
@@ -76,12 +95,12 @@ def run_backtest(
     positions = []
     for i in range(len(data)):
         close = data["qqq_close"].iloc[i]
-        ema = data["ema"].iloc[i]
-        sma = data["sma"].iloc[i]
+        entry_ma = data["entry_ma"].iloc[i]
+        exit_ma = data["exit_ma"].iloc[i]
 
-        if position == 0 and close >= ema:
+        if position == 0 and close >= entry_ma:
             position = 1
-        elif position == 1 and close < sma:
+        elif position == 1 and close < exit_ma:
             position = 0
         positions.append(position)
 
@@ -137,10 +156,13 @@ def run_backtest(
     data["year"] = data.index.year
     yearly = data.groupby("year")["strat_return"].apply(lambda x: (1 + x).prod() - 1)
 
+    label = f"{entry_prefix}{entry_period}/{exit_prefix}{exit_period}"
+
     return {
-        "label": f"EMA{ema_period}/SMA{sma_period}",
-        "ema": ema_period,
-        "sma": sma_period,
+        "label": label,
+        "strategy": strategy_name,
+        "entry": entry_period,
+        "exit": exit_period,
         "cagr": cagr,
         "total_return": final / initial_capital - 1,
         "max_dd": max_dd,
@@ -235,13 +257,15 @@ def build_summary_table_html(results: list, benchmarks: list) -> str:
         </tr>"""
 
     # Separator
-    rows_html += '<tr style="height:4px;background:#555;"><td colspan="11"></td></tr>'
+    rows_html += '<tr style="height:4px;background:#555;"><td colspan="12"></td></tr>'
 
     # Strategy rows sorted by Calmar
     sorted_results = sorted(results, key=lambda x: x["calmar"], reverse=True)
     for r in sorted_results:
+        strat = r.get('strategy', 'EMA/SMA')
+        strat_color = {"EMA/SMA": "#ff9800", "EMA/EMA": "#2196f3", "SMA/SMA": "#4caf50"}.get(strat, "#888")
         rows_html += f"""<tr>
-            <td>{r['label']}</td>
+            <td><span style="color:{strat_color}">{strat}</span> {r['label']}</td>
             <td data-sort="{r['cagr']:.6f}">{fmt_pct(r['cagr'])}</td>
             <td data-sort="{r['total_return']:.6f}">{fmt_pct(r['total_return'])}</td>
             <td data-sort="{r['max_dd']:.6f}">{fmt_pct(r['max_dd'])}</td>
@@ -424,21 +448,29 @@ def build_risk_return_scatter(results: list, benchmarks: list) -> str:
     sizes = [max(r["sharpe"] * 10, 5) for r in results]
     labels = [r["label"] for r in results]
 
-    fig.add_trace(go.Scatter(
-        x=x, y=y,
-        mode="markers+text",
-        text=labels,
-        textposition="top center",
-        textfont=dict(size=8, color="#aaa"),
-        marker=dict(
-            size=sizes,
-            color=[r["calmar"] for r in results],
-            colorscale="Viridis",
-            colorbar=dict(title="Calmar"),
-            line=dict(width=1, color="#fff"),
-        ),
-        name="Strategies",
-    ))
+    strat_colors = {"EMA/SMA": "#ff9800", "EMA/EMA": "#2196f3", "SMA/SMA": "#4caf50"}
+    for strat_name, color in strat_colors.items():
+        subset = [r for r in results if r.get("strategy", "EMA/SMA") == strat_name]
+        if not subset:
+            continue
+        sx = [abs(r["max_dd"]) * 100 for r in subset]
+        sy = [r["cagr"] * 100 for r in subset]
+        ss = [max(r["sharpe"] * 10, 5) for r in subset]
+        sl = [r["label"] for r in subset]
+        fig.add_trace(go.Scatter(
+            x=sx, y=sy,
+            mode="markers+text",
+            text=sl,
+            textposition="top center",
+            textfont=dict(size=8, color="#aaa"),
+            marker=dict(
+                size=ss,
+                color=color,
+                opacity=0.7,
+                line=dict(width=1, color="#fff"),
+            ),
+            name=strat_name,
+        ))
 
     # Benchmarks
     for b in benchmarks:
@@ -474,7 +506,7 @@ def build_risk_return_scatter(results: list, benchmarks: list) -> str:
 
 def build_yearly_bar_chart(results: list, benchmarks: list) -> str:
     """Section 6: Yearly bar chart for key combos."""
-    key_labels = ["EMA13/SMA20", "EMA30/SMA50", "EMA30/SMA5"]
+    key_labels = ["SMA23/SMA50", "SMA25/SMA50", "EMA17/EMA29", "EMA30/SMA50", "EMA13/SMA20", "EMA30/SMA5"]
     key_combos = []
     for label in key_labels:
         match = [r for r in results if r["label"] == label]
@@ -581,8 +613,9 @@ def build_consistency_analysis(results: list) -> str:
 def build_key_combo_comparison(results: list) -> str:
     """Section 8: Detailed comparison of key combos."""
     key_labels = [
-        "EMA13/SMA20", "EMA30/SMA50", "EMA30/SMA5",
-        "EMA15/SMA20", "EMA20/SMA40", "EMA20/SMA50",
+        "SMA23/SMA50", "SMA25/SMA50", "SMA20/SMA50",
+        "EMA17/EMA29", "EMA17/EMA30", "EMA30/SMA50",
+        "EMA17/SMA23", "EMA13/SMA20", "EMA30/SMA5",
     ]
 
     key_combos = []
@@ -796,14 +829,25 @@ def main():
     qqq_bh = compute_benchmark(df, "qqq_close", "QQQ Buy & Hold")
     benchmarks = [tqqq_bh, qqq_bh]
 
-    # Run all 64 combos
-    combos = list(product(ENTRY_EMAS, EXIT_SMAS))
-    print(f"Running {len(combos)} parameter combinations...")
+    # Run all 3 strategy types: EMA/SMA, EMA/EMA, SMA/SMA
+    PERIODS = sorted(set(ENTRY_EMAS + EXIT_SMAS))
+    strategy_types = [
+        ("EMA/SMA", "ewm", "rolling"),
+        ("EMA/EMA", "ewm", "ewm"),
+        ("SMA/SMA", "rolling", "rolling"),
+    ]
+
+    combos = list(product(PERIODS, PERIODS))
+    total = len(combos) * len(strategy_types)
+    print(f"Running {total} parameter combinations (3 strategies × {len(combos)} combos)...")
     results = []
-    for ema, sma in combos:
-        r = run_backtest(df, ema, sma)
-        results.append(r)
-        print(f"  {r['label']}: CAGR={r['cagr']:.1%} MaxDD={r['max_dd']:.1%} Calmar={r['calmar']:.2f}")
+    for strat_name, entry_type, exit_type in strategy_types:
+        print(f"\n  {strat_name}:")
+        for entry_p, exit_p in combos:
+            r = run_backtest(df, entry_p, exit_p, entry_type, exit_type, strat_name)
+            results.append(r)
+        best = max([r for r in results if r["strategy"] == strat_name], key=lambda x: x["calmar"])
+        print(f"    Best: {best['label']} Calmar={best['calmar']:.2f} CAGR={best['cagr']:.1%}")
 
     print(f"\nCompleted {len(results)} backtests. Building report...")
 
