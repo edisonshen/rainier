@@ -2,20 +2,11 @@
 # Each job runs as a system cron entry tagged with its name.
 # Future: migrate to a long-running scheduler service.
 #
-# IMPORTANT: QU scraper requires Chrome running with --remote-debugging-port=9222
-# to bypass bot detection. The chrome-cdp job ensures Chrome is always running.
-# Launch manually if needed:
-#   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-#     --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug-profile --no-first-run &
+# QU scraper requires Chrome with --remote-debugging-port=9222 to bypass bot
+# detection. Each scrape job starts Chrome headless before scraping and kills
+# it after, so Chrome only runs during the ~1-2 min each scrape takes.
 
 jobs:
-  - name: chrome-cdp
-    description: "Ensure Chrome is running with CDP for QU scraping"
-    schedule: "*/10 * * * *"    # every 10 minutes, check Chrome is alive
-    command: "curl -s http://127.0.0.1:9222/json/version >/dev/null 2>&1 || /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug-profile --no-first-run &"
-    log: "data/chrome-cdp.log"
-    enabled: true
-
   - name: fetch-mes
     description: "Fetch MES data from yfinance and regenerate daytrade chart"
     schedule: "*/5 * * * *"    # every 5 minutes
@@ -26,27 +17,27 @@ jobs:
   - name: qu-morning
     description: "Scrape QU100 morning session (ET 11:30 update → PT 08:45)"
     schedule: "45 8 * * 1-5"    # 08:45 PST Mon-Fri
-    command: "uv run rainier scrape qu --session morning --cdp http://127.0.0.1:9222"
+    command: "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug-profile --no-first-run --headless=new & sleep 3 && uv run rainier scrape qu --session morning --cdp http://127.0.0.1:9222; pkill -f 'remote-debugging-port=9222'"
     log: "data/qu-scrape.log"
     enabled: true
 
   - name: qu-midday
     description: "Scrape QU100 midday session (ET 13:30 update → PT 10:45)"
     schedule: "45 10 * * 1-5"   # 10:45 PST Mon-Fri
-    command: "uv run rainier scrape qu --session midday --cdp http://127.0.0.1:9222"
+    command: "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug-profile --no-first-run --headless=new & sleep 3 && uv run rainier scrape qu --session midday --cdp http://127.0.0.1:9222; pkill -f 'remote-debugging-port=9222'"
     log: "data/qu-scrape.log"
     enabled: true
 
   - name: qu-afternoon
     description: "Scrape QU100 afternoon session (ET 15:30 update → PT 12:45)"
     schedule: "45 12 * * 1-5"   # 12:45 PST Mon-Fri
-    command: "uv run rainier scrape qu --session afternoon --cdp http://127.0.0.1:9222"
+    command: "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug-profile --no-first-run --headless=new & sleep 3 && uv run rainier scrape qu --session afternoon --cdp http://127.0.0.1:9222; pkill -f 'remote-debugging-port=9222'"
     log: "data/qu-scrape.log"
     enabled: true
 
   - name: qu-close
     description: "Scrape QU100 close session (ET 17:30 update → PT 15:00)"
     schedule: "0 15 * * 1-5"    # 15:00 PST Mon-Fri
-    command: "uv run rainier scrape qu --session close --cdp http://127.0.0.1:9222"
+    command: "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug-profile --no-first-run --headless=new & sleep 3 && uv run rainier scrape qu --session close --cdp http://127.0.0.1:9222; pkill -f 'remote-debugging-port=9222'"
     log: "data/qu-scrape.log"
     enabled: true
