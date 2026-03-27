@@ -1,4 +1,4 @@
-# Scheduled jobs — managed by `quant jobs` CLI
+# Scheduled jobs — managed by `rainier jobs` CLI
 # Each job runs as a system cron entry tagged with its name.
 # Future: migrate to a long-running scheduler service.
 #

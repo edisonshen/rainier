@@ -87,10 +87,10 @@ Replaced placeholder `confluence_score = 0.5` in scorer with `_multi_tf_confluen
 All 10 eng review decisions incorporated into design doc.
 
 ### FeatureExtractor ✓
-Built `src/quant/features/extractor.py` — transforms AnalysisResult + OHLCV into ~30 ML-ready features. NaN policy: fill with meaningful defaults + assert clean.
+Built `src/rainier/features/extractor.py` — transforms AnalysisResult + OHLCV into ~30 ML-ready features. NaN policy: fill with meaningful defaults + assert clean.
 
 ### LabelGenerator ✓
-Built `src/quant/features/labels.py` — generates training labels from backtest trades. TP=1, SL=0, end-of-data excluded by default.
+Built `src/rainier/features/labels.py` — generates training labels from backtest trades. TP=1, SL=0, end-of-data excluded by default.
 
 ### Strict pin bar detection (book rules) ✓
 Updated `pinbar.py` to match 小酱 methodology: dominant wick > 2/3, no spinning tops (secondary wick < 1/3 of dominant), wick >= 2x body, visually prominent check. Reduced 5m pin bars from 1,673 to 178.
