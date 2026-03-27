@@ -20,7 +20,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> list[dict]:
 
 
 def list_active() -> list[dict[str, str]]:
-    """List quant-managed jobs currently in system crontab."""
+    """List rainier-managed jobs currently in system crontab."""
     crontab = _read_crontab()
     jobs = []
     for line in crontab.splitlines():
