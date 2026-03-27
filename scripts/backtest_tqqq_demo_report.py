@@ -278,7 +278,52 @@ def build_html(top5: list, benchmarks: list) -> str:
     <h2 id="equity">Equity Curves</h2>
     <div>{fig_eq.to_html(full_html=False, include_plotlyjs=False)}</div>"""
 
-    # --- Section 3: Drawdown chart ---
+    # --- Section 3: Yearly returns heatmap ---
+    all_items = benchmarks + top5
+    all_years = sorted(set(y for item in all_items for y in item["yearly"].keys()))
+    labels = [item["label"] for item in all_items]
+    z_data = []
+    text_data = []
+    for item in all_items:
+        row = []
+        text_row = []
+        for year in all_years:
+            val = item["yearly"].get(year, None)
+            if val is not None:
+                row.append(round(val * 100, 1))
+                text_row.append(f"{val:.1%}")
+            else:
+                row.append(None)
+                text_row.append("")
+            z_data.append(row)
+            text_data.append(text_row)
+
+    fig_hm = go.Figure(data=go.Heatmap(
+        z=z_data,
+        x=[str(y) for y in all_years],
+        y=labels,
+        text=text_data,
+        texttemplate="%{text}",
+        textfont={"size": 11},
+        colorscale=[
+            [0, "#d32f2f"], [0.35, "#ef5350"], [0.5, "#ffffff"],
+            [0.65, "#66bb6a"], [1.0, "#1b5e20"],
+        ],
+        zmid=0,
+        colorbar=dict(title="Return %", ticksuffix="%"),
+    ))
+    fig_hm.update_layout(
+        title="Yearly Returns by Strategy",
+        height=max(400, len(labels) * 40 + 100),
+        template="plotly_dark", paper_bgcolor="#1a1a2e", plot_bgcolor="#1a1a2e",
+        yaxis=dict(autorange="reversed"),
+        margin=dict(l=120),
+    )
+    heatmap_html = f"""
+    <h2 id="heatmap">Yearly Returns Heatmap</h2>
+    <div>{fig_hm.to_html(full_html=False, include_plotlyjs=False)}</div>"""
+
+    # --- Section 4: Drawdown chart ---
     fig_dd = go.Figure()
     for i, r in enumerate(top5):
         dd = _weekly(r["drawdown_series"]) * 100
@@ -352,7 +397,7 @@ def build_html(top5: list, benchmarks: list) -> str:
     nav = ' | '.join(
         f'<a href="#{id}">{label}</a>' for id, label in [
             ("summary", "Summary"), ("equity", "Equity Curves"),
-            ("drawdown", "Drawdowns"), ("comparison", "Comparison"),
+            ("heatmap", "Heatmap"), ("drawdown", "Drawdowns"), ("comparison", "Comparison"),
         ]
     )
 
@@ -397,6 +442,7 @@ def build_html(top5: list, benchmarks: list) -> str:
 
     {summary_html}
     {equity_html}
+    {heatmap_html}
     {drawdown_html}
     {comparison_html}
 
