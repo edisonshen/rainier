@@ -1,10 +1,14 @@
 # Scheduled jobs — managed by `rainier jobs` CLI
-# Each job runs as a system cron entry tagged with its name.
-# Future: migrate to a long-running scheduler service.
+# Each job runs via cron-wrapper.sh which provides:
+#   - Timestamped logging ([START], [OK], [FAIL])
+#   - Discord alert on failure (if discord_on_failure: true)
 #
 # QU scraper requires Chrome with --remote-debugging-port=9222 to bypass bot
 # detection. Each scrape job starts Chrome headless before scraping and kills
 # it after, so Chrome only runs during the ~1-2 min each scrape takes.
+
+# Discord webhook for ops alerts (loaded from .env DISCORD_WEBHOOK_URL)
+discord_on_failure: true
 
 jobs:
   - name: fetch-mes
