@@ -10,6 +10,7 @@ import yaml  # type: ignore[import-untyped]
 
 JOB_TAG = "# rainier:"
 DEFAULT_CONFIG = Path("config/cron.yaml")
+WRAPPER_SCRIPT = Path("scripts/cron-wrapper.sh")
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> list[dict]:
@@ -17,6 +18,25 @@ def load_config(path: Path = DEFAULT_CONFIG) -> list[dict]:
     with open(path) as f:
         data = yaml.safe_load(f)
     return data.get("jobs", [])
+
+
+def _load_discord_on_failure(path: Path = DEFAULT_CONFIG) -> bool:
+    """Check if discord_on_failure is enabled in cron.yaml."""
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    return bool(data.get("discord_on_failure", False))
+
+
+def _load_discord_webhook(project_dir: Path) -> str:
+    """Load DISCORD_WEBHOOK_URL from .env file."""
+    env_file = project_dir / ".env"
+    if not env_file.exists():
+        return ""
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("DISCORD_WEBHOOK_URL=") and not line.startswith("#"):
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
 
 
 def list_active() -> list[dict[str, str]]:
@@ -43,6 +63,11 @@ def sync(config_path: Path = DEFAULT_CONFIG, project_dir: Path | None = None) ->
     active = {j["name"]: j for j in list_active()}
     actions: dict[str, str] = {}
 
+    # Check if we should use the wrapper with Discord alerts
+    discord_on_failure = _load_discord_on_failure(config_path)
+    discord_webhook = _load_discord_webhook(project_dir) if discord_on_failure else ""
+    wrapper_path = project_dir / WRAPPER_SCRIPT
+
     # Remove jobs no longer in config (or disabled)
     config_names = {j["name"] for j in jobs if j.get("enabled", True)}
     for name in list(active):
@@ -61,12 +86,24 @@ def sync(config_path: Path = DEFAULT_CONFIG, project_dir: Path | None = None) ->
 
         log = job.get("log", "/dev/null")
         log_path = project_dir / log if not log.startswith("/") else Path(log)
+
         # Resolve bare "uv" to full path so cron (minimal PATH) can find it
         cmd = job["command"]
         uv_path = shutil.which("uv")
         if uv_path:
             cmd = cmd.replace("uv run", f"{uv_path} run")
-        command = f"cd {project_dir} && {cmd} >> {log_path} 2>&1"
+
+        # Build the cron command — use wrapper if available
+        inner_cmd = f"cd {project_dir} && {cmd}"
+        if wrapper_path.exists() and discord_webhook:
+            command = (
+                f"{wrapper_path} {name} {log_path} "
+                f"{discord_webhook} "
+                f'"{inner_cmd}"'
+            )
+        else:
+            command = f"{inner_cmd} >> {log_path} 2>&1"
+
         cron_line = f"{job['schedule']} {command} {JOB_TAG} {name}"
 
         existing_cmd = active[name]["command"] if name in active else ""
