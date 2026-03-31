@@ -282,6 +282,38 @@ class MonitorAlertRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# Backtest tables
+# ---------------------------------------------------------------------------
+
+
+class BacktestTradingLog(Base):
+    """Trading log for portfolio backtests — tracks each position with entry/exit reasoning."""
+
+    __tablename__ = "backtest_trading_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    backtest_run_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(
+        String(10), ForeignKey("stocks.symbol"), nullable=False, index=True
+    )
+    pattern_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    entry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_date: Mapped[date | None] = mapped_column(Date)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    shares: Mapped[float] = mapped_column(Float, nullable=False)
+    allocated_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    stop_loss: Mapped[float] = mapped_column(Float, nullable=False)
+    target_price: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_reason: Mapped[str | None] = mapped_column(String(30))
+    return_pct: Mapped[float | None] = mapped_column(Float)
+    pnl: Mapped[float | None] = mapped_column(Float)
+    qu100_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+# ---------------------------------------------------------------------------
 # LLM analysis tables
 # ---------------------------------------------------------------------------
 
