@@ -243,6 +243,49 @@ class ChartImage(Base):
     )
 
 
+# ---------------------------------------------------------------------------
+# Monitor tables
+# ---------------------------------------------------------------------------
+
+
+class MonitorReadingRecord(Base):
+    """Time-series readings from web monitors (TimescaleDB hypertable)."""
+
+    __tablename__ = "monitor_readings"
+    __table_args__ = (PrimaryKeyConstraint("id", "recorded_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, autoincrement=True)
+    monitor_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    field_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    raw_value: Mapped[str] = mapped_column(Text, nullable=False)
+    numeric_value: Mapped[float | None] = mapped_column(Float)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
+
+
+class MonitorAlertRecord(Base):
+    """Alert history from monitor checks."""
+
+    __tablename__ = "monitor_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    monitor_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    field_name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="")
+    triggered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    check_details: Mapped[dict | None] = mapped_column(JSONB)
+    reading_value: Mapped[str | None] = mapped_column(Text)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+
+# ---------------------------------------------------------------------------
+# LLM analysis tables
+# ---------------------------------------------------------------------------
+
+
 class LLMAnalysisRecord(Base):
     __tablename__ = "analysis_results"
 
@@ -271,4 +314,5 @@ HYPERTABLES = {
     "stock_capital_flow": "flow_date",
     "capital_flow_bars": "bar_time",
     "stock_prices": "date",
+    "monitor_readings": "recorded_at",
 }
