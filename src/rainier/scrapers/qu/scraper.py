@@ -8,7 +8,7 @@ from datetime import date as date_type
 from datetime import datetime, timezone
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from rainier.core.config import get_settings
 from rainier.core.database import get_session
@@ -223,13 +223,7 @@ class QUScraper(BaseScraper):
         if target_date:
             await self._set_date(target_date)
 
-        # Click search to load the table (table may not exist until queried)
-        search_btn = await page.query_selector(sel.SEARCH_BUTTON)
-        if search_btn:
-            await search_btn.click()
-            await asyncio.sleep(2)
-
-        # Wait for the table to appear
+        # Wait for the table to appear (date change or initial load triggers it)
         await page.wait_for_selector(sel.QU100_TABLE, timeout=15000)
 
         # Read the data date from the date picker (e.g., "2026-03-13")
@@ -245,13 +239,9 @@ class QUScraper(BaseScraper):
             ("bottom100", sel.BOTTOM100_BUTTON),
         ]:
             try:
-                # Click the ranking toggle, then Search button to trigger data load
+                # Click the ranking toggle — table auto-refreshes
                 await page.click(button_sel)
-                await asyncio.sleep(0.3)
-                await page.click(sel.SEARCH_BUTTON)
                 await page.wait_for_selector(sel.QU100_TABLE_ROW)
-                await page.wait_for_timeout(2000)
-
                 raw_rows = await page.evaluate(sel.QU100_EXTRACT_JS)
                 parsed = parse_qu100_rows(raw_rows)
                 count = self._persist_qu100(parsed, ranking_type, session_name, captured_at, data_date)
@@ -271,7 +261,6 @@ class QUScraper(BaseScraper):
         await date_input.click(click_count=3)
         await date_input.fill(date_str)
         await page.keyboard.press("Enter")
-        await asyncio.sleep(0.5)
         self.log.info("date_changed", date=date_str)
 
     def _persist_qu100(
@@ -282,68 +271,58 @@ class QUScraper(BaseScraper):
         captured_at: datetime,
         data_date=None,
     ) -> int:
-        """Save QU100 rows to the database. Returns count of records created."""
-        count = 0
+        """Save QU100 rows to the database using batch operations. Returns row count."""
+        effective_date = data_date or captured_at.date()
+
         with get_session() as db:
-            for row in rows:
-                # Get-or-create Stock
-                stock = db.execute(
-                    select(Stock).where(Stock.symbol == row.symbol)
-                ).scalar_one_or_none()
+            # Check if this (date, ranking_type) already exists — skip if so
+            existing_count = db.execute(
+                select(func.count()).where(
+                    MoneyFlowSnapshot.data_date == effective_date,
+                    MoneyFlowSnapshot.ranking_type == ranking_type,
+                )
+            ).scalar()
+            if existing_count and existing_count >= len(rows):
+                self.log.info("persist_skipped", date=str(effective_date),
+                              ranking_type=ranking_type, reason="already_exists")
+                return len(rows)
 
-                if stock is None:
-                    stock = Stock(
-                        symbol=row.symbol,
-                        sector=row.sector,
-                        industry=row.industry,
-                    )
-                    db.add(stock)
-                    db.flush()
-                else:
-                    if row.sector and stock.sector != row.sector:
-                        stock.sector = row.sector
-                    if row.industry and stock.industry != row.industry:
-                        stock.industry = row.industry
+            # Ensure stocks exist
+            symbols = {row.symbol for row in rows}
+            existing_stocks = {
+                s.symbol
+                for s in db.execute(
+                    select(Stock.symbol).where(Stock.symbol.in_(symbols))
+                ).all()
+            }
+            new_stocks = [
+                Stock(symbol=r.symbol, sector=r.sector, industry=r.industry)
+                for r in rows
+                if r.symbol not in existing_stocks
+            ]
+            if new_stocks:
+                db.add_all(new_stocks)
+                db.flush()
 
-                effective_date = data_date or captured_at.date()
+            # Bulk insert all snapshots
+            db.add_all([
+                MoneyFlowSnapshot(
+                    captured_at=captured_at,
+                    capture_session=session_name,
+                    data_date=effective_date,
+                    ranking_type=ranking_type,
+                    symbol=row.symbol,
+                    rank=row.rank,
+                    daily_change=row.daily_change,
+                    sector=row.sector,
+                    industry=row.industry,
+                    long_short=row.long_short,
+                    raw_data=row.raw,
+                )
+                for row in rows
+            ])
 
-                # Upsert: one row per (data_date, ranking_type, rank)
-                # e.g. 3/26 top100 rank #1 = exactly one stock, latest session wins
-                existing = db.execute(
-                    select(MoneyFlowSnapshot).where(
-                        MoneyFlowSnapshot.data_date == effective_date,
-                        MoneyFlowSnapshot.ranking_type == ranking_type,
-                        MoneyFlowSnapshot.rank == row.rank,
-                    )
-                ).scalar_one_or_none()
-
-                if existing:
-                    existing.symbol = row.symbol
-                    existing.captured_at = captured_at
-                    existing.capture_session = session_name
-                    existing.daily_change = row.daily_change
-                    existing.sector = row.sector
-                    existing.industry = row.industry
-                    existing.long_short = row.long_short
-                    existing.raw_data = row.raw
-                else:
-                    snapshot = MoneyFlowSnapshot(
-                        captured_at=captured_at,
-                        capture_session=session_name,
-                        data_date=effective_date,
-                        ranking_type=ranking_type,
-                        symbol=row.symbol,
-                        rank=row.rank,
-                        daily_change=row.daily_change,
-                        sector=row.sector,
-                        industry=row.industry,
-                        long_short=row.long_short,
-                        raw_data=row.raw,
-                    )
-                    db.add(snapshot)
-                count += 1
-
-        return count
+        return len(rows)
 
     # ------------------------------------------------------------------
     # Phase B: Detail pages

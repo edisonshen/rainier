@@ -1072,17 +1072,20 @@ CDP_OPTION = click.option(
 @click.option("--detail-top", default=0, help="Also scrape detail pages for top N stocks")
 @click.option("--dates", default=None, help="Comma-separated dates (e.g., 2026-03-10)")
 @click.option("--days-back", default=0, type=int, help="Scrape last N trading days")
+@click.option("--start-date", default=None, help="Start from this date (e.g., 2024-08-05), scrape to yesterday")
 @click.option("--delay", default=None, type=float, help="Seconds between fetches")
 @click.option("--headed", is_flag=True, default=False, help="Run browser in headed mode")
 @CDP_OPTION
 @click.pass_context
-def qu(ctx, session, detail_top, dates, days_back, delay, headed, cdp):
+def qu(ctx, session, detail_top, dates, days_back, start_date, delay, headed, cdp):
     """Scrape QuantUnicorn QU100 money flow rankings."""
     import asyncio
-    asyncio.run(_run_qu_scrape(session, detail_top, dates, days_back, delay, headed, cdp))
+    asyncio.run(_run_qu_scrape(
+        session, detail_top, dates, days_back, start_date, delay, headed, cdp,
+    ))
 
 
-async def _run_qu_scrape(session, detail_top, dates, days_back, delay, headed, cdp):
+async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, delay, headed, cdp):
     from datetime import date, datetime, timedelta
 
     from rainier.core.config import get_settings
@@ -1098,6 +1101,13 @@ async def _run_qu_scrape(session, detail_top, dates, days_back, delay, headed, c
     date_list = None
     if dates:
         date_list = [d.strip() for d in dates.split(",")]
+    elif start_date:
+        import exchange_calendars as xcals
+        nyse = xcals.get_calendar("XNYS")
+        start = date.fromisoformat(start_date)
+        end = date.today() - timedelta(days=1)
+        sessions = nyse.sessions_in_range(start.isoformat(), end.isoformat())
+        date_list = [s.date().isoformat() for s in sessions]
     elif days_back > 0:
         import exchange_calendars as xcals
         nyse = xcals.get_calendar("XNYS")
