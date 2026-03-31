@@ -8,6 +8,7 @@ Layer 3: Technical pattern detection (Caisen methodology)
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import pandas as pd
 import yfinance as yf
@@ -184,6 +185,18 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
     ).scalar()
     if latest_ts is None:
         log.warning("No money flow snapshots in database")
+        return []
+
+    # Staleness check: reject data older than 24 hours
+    now = datetime.now(timezone.utc)
+    ts = latest_ts if latest_ts.tzinfo else latest_ts.replace(tzinfo=timezone.utc)
+    age_hours = (now - ts).total_seconds() / 3600
+    if age_hours > 24:
+        log.warning(
+            "Stale QU100 data (%.1f hours old, captured_at=%s) — skipping report",
+            age_hours,
+            latest_ts,
+        )
         return []
 
     rows = (
