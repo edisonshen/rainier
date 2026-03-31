@@ -40,17 +40,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+_DETECTOR_MAP: dict[str, callable] = {}  # populated after functions are defined
+
+
 def detect_patterns(
     symbol: str,
     df: pd.DataFrame,
     config: StockScreenerConfig,
+    pattern_filter: list[str] | None = None,
 ) -> list[PatternSignal]:
-    """Detect all 12 Caisen patterns on daily OHLCV data.
+    """Detect Caisen patterns on daily OHLCV data.
 
     Args:
         symbol: Stock ticker
         df: DataFrame with columns: open, high, low, close, volume (daily bars)
         config: Screener configuration
+        pattern_filter: If provided, only run these pattern detectors (e.g.
+            ["false_breakdown", "false_breakdown_w_bottom"]). Runs all 12 if None.
 
     Returns:
         List of detected patterns, sorted by confidence descending.
@@ -63,20 +69,11 @@ def detect_patterns(
         return []
 
     vol_price = analyze_volume_price(df)
-    detectors = [
-        _detect_w_bottom,
-        _detect_m_top,
-        _detect_false_breakdown,
-        _detect_false_breakout,
-        _detect_false_breakdown_w,
-        _detect_false_breakout_hs,
-        _detect_bull_flag,
-        _detect_bear_flag,
-        _detect_hs_bottom,
-        _detect_hs_top,
-        _detect_sym_triangle_bottom,
-        _detect_sym_triangle_top,
-    ]
+
+    if pattern_filter is not None:
+        detectors = [_DETECTOR_MAP[name] for name in pattern_filter if name in _DETECTOR_MAP]
+    else:
+        detectors = list(_DETECTOR_MAP.values())
 
     results: list[PatternSignal] = []
     for detector in detectors:
@@ -1211,3 +1208,23 @@ def _detect_sym_triangle(
         ))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Detector registry — maps pattern_type name → detector function
+# ---------------------------------------------------------------------------
+
+_DETECTOR_MAP.update({
+    "w_bottom": _detect_w_bottom,
+    "m_top": _detect_m_top,
+    "false_breakdown": _detect_false_breakdown,
+    "false_breakout": _detect_false_breakout,
+    "false_breakdown_w_bottom": _detect_false_breakdown_w,
+    "false_breakout_hs": _detect_false_breakout_hs,
+    "bull_flag": _detect_bull_flag,
+    "bear_flag": _detect_bear_flag,
+    "hs_bottom": _detect_hs_bottom,
+    "hs_top": _detect_hs_top,
+    "sym_triangle_bottom": _detect_sym_triangle_bottom,
+    "sym_triangle_top": _detect_sym_triangle_top,
+})

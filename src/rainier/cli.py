@@ -522,6 +522,100 @@ def _send_discord_embeds(webhook: str, embeds: list[dict]) -> None:
         resp.raise_for_status()
 
 
+@cli.command(name="backtest-portfolio")
+@click.option("--capital", default=100.0, type=float, help="Starting capital in USD")
+@click.option("--max-positions", default=5, type=int, help="Max concurrent positions")
+@click.option("--top-n", default=2, type=int, help="Top N pattern matches to buy per day")
+@click.option("--max-hold", default=0, type=int, help="Max hold days (0=unlimited)")
+@click.option("--hard-stop", default=0.0, type=float,
+              help="Hard stop loss pct (e.g. 0.05 = 5%%)")
+@click.option("--close-price", is_flag=True, default=False,
+              help="Buy/sell at close price only")
+@click.option("--stop-limit", is_flag=True, default=False,
+              help="Stop-limit order (intraday trigger at stop price)")
+@click.option("--start-date", default=None, type=str,
+              help="Start date YYYY-MM-DD (default: earliest)")
+@click.option("--discord", is_flag=True, default=False, help="Send to Discord")
+@click.pass_context
+def backtest_portfolio(ctx, capital, max_positions, top_n, max_hold,
+                       hard_stop, close_price, stop_limit, start_date, discord):
+    """Portfolio backtest: QU100 + pattern entry, dynamic SL/TP/invalidation exit."""
+    from rainier.analysis.stock_patterns import detect_patterns
+    from rainier.backtest.qu100_portfolio import (
+        format_portfolio_report,
+        run_qu100_portfolio_backtest,
+        save_trade_log_csv,
+        save_trading_log,
+    )
+
+    hold_msg = f", max hold {max_hold}d" if max_hold > 0 else ""
+    stop_msg = f", hard stop {hard_stop:.0%}" if hard_stop > 0 else ""
+    close_msg = (
+        ", close+stop-limit" if close_price and stop_limit
+        else (", close-only" if close_price else "")
+    )
+    click.echo(
+        f"Running portfolio backtest: ${capital:.0f} capital, "
+        f"max {max_positions} positions, top {top_n} patterns"
+        f"{hold_msg}{stop_msg}{close_msg}..."
+    )
+
+    result = run_qu100_portfolio_backtest(
+        detect_patterns_fn=detect_patterns,
+        start_capital=capital,
+        max_positions=max_positions,
+        top_n=top_n,
+        start_date_str=start_date,
+        max_hold_days=max_hold,
+        hard_stop_pct=hard_stop,
+        use_close_price=close_price,
+        use_stop_limit=stop_limit,
+    )
+
+    report = format_portfolio_report(result)
+    click.echo(report)
+
+    # Save trading log to DB
+    run_id = save_trading_log(result)
+    click.echo(
+        f"\nTrading log saved to DB "
+        f"(run_id: {run_id}, {len(result.trades)} trades)"
+    )
+
+    # Build tag from strategy params
+    from datetime import datetime as dt
+    ds = dt.now().strftime("%Y%m%d")
+    tag_parts = []
+    if max_hold > 0:
+        tag_parts.append(f"hold{max_hold}d")
+    if hard_stop > 0:
+        tag_parts.append(f"stop{int(hard_stop * 100)}pct")
+    if close_price and stop_limit:
+        tag_parts.append("stoplimit")
+    elif close_price:
+        tag_parts.append("close")
+    if not tag_parts:
+        tag_parts.append("default")
+    tag = "_".join(tag_parts)
+
+    csv_path = f"reports/pf_btest_{ds}_{tag}_trades.csv"
+    save_trade_log_csv(result, csv_path)
+    click.echo(f"Trade log saved to {csv_path}")
+
+    report_path = f"reports/pf_btest_{ds}_{tag}.md"
+    with open(report_path, "w") as f:
+        f.write(report)
+    click.echo(f"Report saved to {report_path}")
+
+    if discord:
+        settings = ctx.obj["settings"]
+        webhook = _get_discord_backtest_webhook(settings)
+        if webhook:
+            from rainier.alerts.discord import send_discord_message
+            send_discord_message(webhook, report[:1900])
+            click.echo("Sent to Discord.")
+
+
 @cli.command(name="backtest-qu100")
 @click.option("--top-n", default=20, type=int, help="Top N stocks per day")
 @click.option("--hold", default=5, type=int, help="Holding period in days")
