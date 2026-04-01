@@ -215,13 +215,25 @@ class QUScraper(BaseScraper):
 
         # Wait briefly for the table to appear (React rendering)
         try:
-            await page.wait_for_selector(sel.QU100_TABLE, timeout=10000)
+            await page.wait_for_selector(sel.QU100_TABLE, timeout=5000)
             self.log.info("cdp_auth_ok")
             return
         except Exception:
             pass
 
-        # Table not found — try clicking login button if present
+        # Table not visible — click Search button to load data
+        search_btn = await page.query_selector(sel.SEARCH_BUTTON)
+        if search_btn:
+            self.log.info("cdp_clicking_search_button")
+            await search_btn.click()
+            try:
+                await page.wait_for_selector(sel.QU100_TABLE, timeout=10000)
+                self.log.info("cdp_auth_ok")
+                return
+            except Exception:
+                pass
+
+        # Still no table — try clicking login button if present
         login_btn = await page.query_selector("text=注册/登录")
         if login_btn:
             self.log.info("cdp_clicking_login_button")

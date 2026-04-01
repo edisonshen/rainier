@@ -16,12 +16,13 @@ fi
 # Clean up stale state if Chrome crashed
 rm -f "$PROFILE/SingletonLock" 2>/dev/null
 
-# Start Chrome in background (suppress stderr noise)
+# Start Chrome in background WITHOUT --headless.
+# Headed mode is required to pass Cloudflare bot challenges.
+# On macOS the window opens but stays in the background.
 "$CHROME" \
     --remote-debugging-port=$PORT \
     --user-data-dir="$PROFILE" \
     --no-first-run \
-    --headless=new \
     >/dev/null 2>&1 &
 
 # Wait for Chrome to be ready (up to 15 seconds)
