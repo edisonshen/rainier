@@ -278,7 +278,15 @@ class QUScraper(BaseScraper):
             await self._set_date(target_date)
 
         # Wait for the table to appear (date change or initial load triggers it)
-        await page.wait_for_selector(sel.QU100_TABLE, timeout=15000)
+        try:
+            await page.wait_for_selector(sel.QU100_TABLE, timeout=10000)
+        except Exception:
+            # Table not visible — try clicking Search button to load data
+            search_btn = await page.query_selector(sel.SEARCH_BUTTON)
+            if search_btn:
+                self.log.info("scrape_clicking_search_button")
+                await search_btn.click()
+            await page.wait_for_selector(sel.QU100_TABLE, timeout=15000)
 
         # Read the data date from the date picker (e.g., "2026-03-13")
         data_date_str = await page.get_attribute(sel.DATE_INPUT, "value")

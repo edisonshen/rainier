@@ -139,17 +139,35 @@ class BrowserManager:
 
         contexts = self._browser.contexts
         if not contexts:
-            raise RuntimeError("No browser contexts found in CDP browser.")
+            log.warning("cdp_no_contexts", msg="No contexts in CDP browser, creating new page")
+            context = await self._browser.new_context()
+            context.set_default_timeout(self._timeout_ms)
+            page = await context.new_page()
+            yield page
+            return
 
         pages = contexts[0].pages
         if not pages:
-            raise RuntimeError("No open tabs found in CDP browser.")
+            log.warning("cdp_no_pages", msg="No open tabs in CDP browser, creating new page")
+            page = await contexts[0].new_page()
+            page.set_default_timeout(self._timeout_ms)
+            yield page
+            return
 
-        if tab_index >= len(pages):
-            log.warning("tab_index_out_of_range", requested=tab_index, available=len(pages))
+        # Filter out internal Chrome pages (chrome://, devtools://, etc.)
+        real_pages = [p for p in pages if not (p.url or "").startswith("chrome")]
+        if not real_pages:
+            log.warning("cdp_no_real_pages", msg="Only internal Chrome tabs found, creating new page")
+            page = await contexts[0].new_page()
+            page.set_default_timeout(self._timeout_ms)
+            yield page
+            return
+
+        if tab_index >= len(real_pages):
+            log.warning("tab_index_out_of_range", requested=tab_index, available=len(real_pages))
             tab_index = 0
 
-        page = pages[tab_index]
+        page = real_pages[tab_index]
         page.set_default_timeout(self._timeout_ms)
         log.info("using_existing_page", url=page.url, tab=tab_index)
         yield page
