@@ -1080,9 +1080,14 @@ CDP_OPTION = click.option(
 def qu(ctx, session, detail_top, dates, days_back, start_date, delay, headed, cdp):
     """Scrape QuantUnicorn QU100 money flow rankings."""
     import asyncio
-    asyncio.run(_run_qu_scrape(
-        session, detail_top, dates, days_back, start_date, delay, headed, cdp,
-    ))
+    import sys
+
+    try:
+        asyncio.run(_run_qu_scrape(
+            session, detail_top, dates, days_back, start_date, delay, headed, cdp,
+        ))
+    except Exception:
+        sys.exit(1)
 
 
 async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, delay, headed, cdp):

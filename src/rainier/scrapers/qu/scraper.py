@@ -165,7 +165,7 @@ class QUScraper(BaseScraper):
         # Navigate to QU100 page if not already there
         if "quantunicorn.com/products" not in url:
             await goto_with_retry(page, self._qu_config.url)
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
 
         # Check if redirected to signin — session is invalid regardless
         # of file age (server may have expired it)
@@ -184,7 +184,7 @@ class QUScraper(BaseScraper):
                 self.log.info("cdp_clicking_login_button")
                 await login_btn.click()
                 await page.wait_for_load_state(
-                    "networkidle", timeout=10000
+                    "domcontentloaded", timeout=10000
                 )
             if "signin" in (page.url or ""):
                 self.log.info("cdp_needs_login", url=page.url)

@@ -98,10 +98,15 @@ class BaseScraper(abc.ABC):
 async def goto_with_retry(
     page: Page, url: str, retries: int = 2, delay: float = 2.0
 ) -> None:
-    """Navigate to URL with retries on timeout."""
+    """Navigate to URL with retries on timeout.
+
+    Uses 'domcontentloaded' instead of 'networkidle' because sites with
+    persistent connections (websockets, analytics, polling) can cause
+    networkidle to hang indefinitely.
+    """
     for attempt in range(retries + 1):
         try:
-            await page.goto(url, wait_until="networkidle")
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             return
         except PlaywrightTimeout:
             if attempt == retries:
