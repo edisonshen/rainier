@@ -1174,9 +1174,14 @@ CDP_OPTION = click.option(
 def qu(ctx, session, detail_top, dates, days_back, start_date, delay, headed, cdp):
     """Scrape QuantUnicorn QU100 money flow rankings."""
     import asyncio
-    asyncio.run(_run_qu_scrape(
-        session, detail_top, dates, days_back, start_date, delay, headed, cdp,
-    ))
+    import sys
+
+    try:
+        asyncio.run(_run_qu_scrape(
+            session, detail_top, dates, days_back, start_date, delay, headed, cdp,
+        ))
+    except Exception:
+        sys.exit(1)
 
 
 async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, delay, headed, cdp):
@@ -1337,7 +1342,7 @@ def _post_scrape_screener(settings, session: str) -> None:
     )
 
     try:
-        payloads = _build_payloads(candidates)
+        payloads = _build_payloads(candidates, session=session)
         for payload in payloads:
             resp = httpx.post(webhook, json=payload, timeout=10)
             resp.raise_for_status()

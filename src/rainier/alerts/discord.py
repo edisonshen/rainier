@@ -81,9 +81,21 @@ def _resolve_webhook_url(config: DiscordConfig) -> str | None:
     return config.stock_webhook_url or config.webhook_url or None
 
 
-def _format_summary_embed(candidates: list[StockCandidate]) -> dict:
+# Session → display label
+SESSION_LABELS: dict[str, str] = {
+    "morning": "Morning (ET 11:30)",
+    "midday": "Midday (ET 13:30)",
+    "afternoon": "Afternoon (ET 15:30)",
+    "close": "Close / After Hours (ET 17:30)",
+}
+
+
+def _format_summary_embed(
+    candidates: list[StockCandidate], session: str | None = None,
+) -> dict:
     """Format a summary table embed for all candidates."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    session_label = SESSION_LABELS.get(session or "", session or "")
     header = (
         f"{'#':>3} {'Sym':<6} {'Now':>8} "
         f"{'Pattern':<10} {'Status':<8} {'Entry':>8} {'Dist':>6}"
@@ -111,11 +123,12 @@ def _format_summary_embed(candidates: list[StockCandidate]) -> dict:
 
     table = "\n".join(lines)
 
+    title = f"\U0001f4ca QU100 Actionable Setups ({len(candidates)})"
+    if session_label:
+        title += f" — {session_label}"
+
     return {
-        "title": (
-            f"\U0001f4ca QU100 Actionable Setups "
-            f"({len(candidates)})"
-        ),
+        "title": title,
         "description": (
             f"**{now} PT** | Dist = current vs entry\n"
             f"```\n{table}\n```"
@@ -203,12 +216,14 @@ def _format_candidate_embed(candidate: StockCandidate) -> dict:
     }
 
 
-def _build_payloads(candidates: list[StockCandidate]) -> list[dict]:
+def _build_payloads(
+    candidates: list[StockCandidate], session: str | None = None,
+) -> list[dict]:
     """Build webhook payloads, splitting across messages to respect Discord limits.
 
     Discord limits: 10 embeds per message, 6000 chars total per message.
     """
-    summary = _format_summary_embed(candidates)
+    summary = _format_summary_embed(candidates, session=session)
     detail_embeds = [
         _format_candidate_embed(c)
         for c in candidates

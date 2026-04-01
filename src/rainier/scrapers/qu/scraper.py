@@ -158,38 +158,92 @@ class QUScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def _cdp_ensure_auth(self) -> None:
-        """In CDP mode, navigate to QU100 and login if needed."""
+        """In CDP mode, navigate to QU100 and login if needed.
+
+        Strategy: always try loading the saved session cookies first (even if
+        "stale" by file age — the cf_clearance cookie is valid for a year).
+        Only attempt programmatic login as a last resort.
+        """
         page = self._page
         url = page.url or ""
 
-        # Navigate to QU100 page if not already there
+        # Load saved session cookies into the CDP browser if available
+        session_path = get_session_path()
+        import json
+        from pathlib import Path
+
+        session_file = Path(session_path)
+        if session_file.exists():
+            try:
+                with open(session_file) as f:
+                    state = json.load(f)
+                cookies = state.get("cookies", [])
+                if cookies:
+                    context = page.context
+                    await context.add_cookies(cookies)
+                    self.log.info("cdp_cookies_loaded", count=len(cookies))
+            except Exception as exc:
+                self.log.warning("cdp_cookies_load_failed", error=str(exc))
+
+        # Navigate to QU100 page
         if "quantunicorn.com/products" not in url:
             await goto_with_retry(page, self._qu_config.url)
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
 
-        # Check if redirected to signin — session is invalid regardless
-        # of file age (server may have expired it)
+        # Check if redirected to signin — cookies didn't work
         if "signin" in (page.url or ""):
-            self.log.info("cdp_needs_login", url=page.url)
+            self.log.warning("cdp_session_expired", url=page.url)
             await login(page)
             await goto_with_retry(page, self._qu_config.url)
             return
 
-        # Check if on QU100 page but behind login wall (no table)
-        table = await page.query_selector(sel.QU100_TABLE)
-        if table is None:
-            # Click the login/register button if present
-            login_btn = await page.query_selector("text=注册/登录")
-            if login_btn:
-                self.log.info("cdp_clicking_login_button")
-                await login_btn.click()
-                await page.wait_for_load_state(
-                    "networkidle", timeout=10000
-                )
-            if "signin" in (page.url or ""):
-                self.log.info("cdp_needs_login", url=page.url)
-                await login(page)
-                await goto_with_retry(page, self._qu_config.url)
+        # Detect Cloudflare challenge page
+        title = await page.title()
+        if "just a moment" in title.lower():
+            raise RuntimeError(
+                "Cloudflare challenge detected — cf_clearance cookie expired. "
+                "Run `rainier scrape qu --session morning --headed` in a "
+                "terminal to pass the challenge manually, then retry."
+            )
+
+        # Check if redirected to signin — cookies didn't work
+        if "signin" in (page.url or ""):
+            self.log.warning("cdp_session_expired", url=page.url)
+            await login(page)
+            await goto_with_retry(page, self._qu_config.url)
+            return
+
+        # Wait briefly for the table to appear (React rendering)
+        try:
+            await page.wait_for_selector(sel.QU100_TABLE, timeout=5000)
+            self.log.info("cdp_auth_ok")
+            return
+        except Exception:
+            pass
+
+        # Table not visible — click Search button to load data
+        search_btn = await page.query_selector(sel.SEARCH_BUTTON)
+        if search_btn:
+            self.log.info("cdp_clicking_search_button")
+            await search_btn.click()
+            try:
+                await page.wait_for_selector(sel.QU100_TABLE, timeout=10000)
+                self.log.info("cdp_auth_ok")
+                return
+            except Exception:
+                pass
+
+        # Still no table — try clicking login button if present
+        login_btn = await page.query_selector("text=注册/登录")
+        if login_btn:
+            self.log.info("cdp_clicking_login_button")
+            await login_btn.click()
+            await page.wait_for_load_state("domcontentloaded", timeout=10000)
+
+        if "signin" in (page.url or ""):
+            self.log.warning("cdp_needs_login", url=page.url)
+            await login(page)
+            await goto_with_retry(page, self._qu_config.url)
 
     # ------------------------------------------------------------------
     # Phase A: QU100 table

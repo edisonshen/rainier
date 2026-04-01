@@ -42,8 +42,8 @@ async def login(page: Page) -> None:
 
     log.info("qu_login_starting", url=qu.login_url)
 
-    await page.goto(qu.login_url)
-    await page.wait_for_selector(sel.LOGIN_EMAIL_INPUT)
+    await page.goto(qu.login_url, wait_until="domcontentloaded", timeout=30000)
+    await page.wait_for_selector(sel.LOGIN_EMAIL_INPUT, timeout=15000)
 
     await page.fill(sel.LOGIN_EMAIL_INPUT, settings.qu_username)
     await page.fill(sel.LOGIN_PASSWORD_INPUT, settings.qu_password)
@@ -53,7 +53,7 @@ async def login(page: Page) -> None:
     await page.wait_for_url(
         lambda url: "signin" not in url, timeout=qu.timeout_ms
     )
-    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page.wait_for_load_state("domcontentloaded", timeout=30000)
 
     log.info("qu_login_success", url=page.url)
 
