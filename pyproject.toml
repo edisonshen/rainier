@@ -35,6 +35,11 @@ dependencies = [
     # Logging
     "structlog>=24.0",
     "exchange-calendars>=4.13.2",
+    "pyarrow>=23.0.1",
+    "xgboost>=3.2.0",
+    "shap>=0.51.0",
+    "hmmlearn>=0.3.3",
+    "scikit-learn>=1.8.0",
 ]
 
 [project.scripts]

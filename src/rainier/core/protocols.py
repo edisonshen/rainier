@@ -20,7 +20,7 @@ from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
-from rainier.core.types import AnalysisResult, Signal, Timeframe
+from rainier.core.types import AnalysisResult, PatternSignal, Signal, Timeframe
 
 # ---------------------------------------------------------------------------
 # Analysis boundary: DataFrame → AnalysisResult
@@ -59,6 +59,23 @@ class SignalEmitter(Protocol):
         symbol: str,
         timeframe: Timeframe,
     ) -> list[Signal]: ...
+
+
+# ---------------------------------------------------------------------------
+# Scoring boundary: PatternSignal + features → confidence score
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ScoringStrategy(Protocol):
+    """Scores a pattern setup, returning a confidence value in [0, 1].
+
+    Two implementations:
+    - BookScorer: rule-based weighted sum (production-ready now)
+    - MLScorer: XGBoost model (requires trained model + feature store)
+    """
+
+    def score(self, pattern: PatternSignal, features: pd.DataFrame) -> float: ...
 
 
 # ---------------------------------------------------------------------------

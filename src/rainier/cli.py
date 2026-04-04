@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import click
@@ -1692,3 +1692,329 @@ def db_init(ctx):
     click.echo("Initializing database...")
     init_db()
     click.echo("Database initialized successfully.")
+
+
+@db.command(name="backfill-prices")
+@click.option("--years", default=5, type=int, help="Years of history to fetch")
+@click.option("--batch-size", default=20, type=int, help="Symbols per yfinance batch")
+@click.option("--dry-run", is_flag=True, help="Show what would be fetched without fetching")
+def db_backfill_prices(years, batch_size, dry_run):
+    """Backfill historical daily OHLCV for all QU100 stocks via yfinance."""
+    import math
+    import time
+
+    import yfinance as yf
+    from sqlalchemy import func, select
+
+    from rainier.core.database import get_session
+    from rainier.core.models import MoneyFlowSnapshot, Stock, StockPrice
+
+    end = datetime.now()
+    start = datetime(end.year - years, end.month, end.day)
+
+    # Find QU100 symbols missing price data
+    with get_session() as session:
+        qu_symbols = set(
+            session.execute(
+                select(func.distinct(MoneyFlowSnapshot.symbol))
+            ).scalars().all()
+        )
+        symbols_with_prices = set(
+            session.execute(
+                select(func.distinct(StockPrice.symbol)).where(
+                    StockPrice.date >= start.isoformat()
+                )
+            ).scalars().all()
+        )
+
+    missing = sorted(qu_symbols - symbols_with_prices)
+    has_prices = sorted(qu_symbols & symbols_with_prices)
+
+    click.echo(f"QU100 symbols: {len(qu_symbols)}")
+    click.echo(f"Already have prices: {len(has_prices)}")
+    click.echo(f"Missing prices: {len(missing)}")
+    click.echo(f"Date range: {start.date()} to {end.date()} ({years} years)")
+
+    if dry_run:
+        if missing:
+            click.echo(f"\nWould fetch: {missing[:50]}{'...' if len(missing) > 50 else ''}")
+        return
+
+    if not missing:
+        click.echo("All QU100 symbols have price data. Nothing to do.")
+        return
+
+    total_batches = math.ceil(len(missing) / batch_size)
+    click.echo(f"\nFetching {len(missing)} symbols in {total_batches} batches...")
+
+    from rainier.backtest.qu100_portfolio import _save_prices_to_db
+
+    fetched = 0
+    failed = 0
+    for bi in range(0, len(missing), batch_size):
+        batch = missing[bi : bi + batch_size]
+        batch_num = bi // batch_size + 1
+        click.echo(
+            f"  Batch {batch_num}/{total_batches}: {batch[0]}..{batch[-1]} "
+            f"({len(batch)} symbols)"
+        )
+
+        if batch_num > 1:
+            time.sleep(2)
+
+        try:
+            yf_df = yf.download(
+                " ".join(batch),
+                start=str(start.date()),
+                end=str(end.date()),
+                auto_adjust=True,
+                progress=False,
+                threads=True,
+            )
+            if not yf_df.empty:
+                if not isinstance(yf_df.columns, pd.MultiIndex) and len(batch) == 1:
+                    yf_df.columns = pd.MultiIndex.from_product(
+                        [yf_df.columns, batch]
+                    )
+                _save_prices_to_db(yf_df, batch)
+                fetched += len(batch)
+            else:
+                failed += len(batch)
+                click.echo("    No data returned for batch")
+        except Exception as exc:
+            failed += len(batch)
+            click.echo(f"    Error: {exc}")
+
+    click.echo(f"\nDone. Fetched: {fetched}, Failed: {failed}")
+
+
+# ---------------------------------------------------------------------------
+# Feature store commands
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def features():
+    """ML feature store commands."""
+
+
+@features.command(name="export")
+@click.option("--start", "start_date", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--end", "end_date", default=None, help="End date (YYYY-MM-DD)")
+@click.option("--symbols", default=None, help="Comma-separated symbols (default: all with prices)")
+@click.option("--output-dir", default="data/features", help="Output directory for Parquet files")
+@click.option("--min-bars", default=100, type=int, help="Minimum bars per symbol")
+@click.option("--dry-run", is_flag=True, help="Show what would be exported")
+def features_export(start_date, end_date, symbols, output_dir, min_bars, dry_run):
+    """Export ML features + labels to Parquet for model training."""
+    from rainier.ml.feature_store import (
+        export_training_data,
+        get_symbols_with_prices,
+    )
+
+    end = (
+        datetime.strptime(end_date, "%Y-%m-%d").date()
+        if end_date
+        else datetime.now().date()
+    )
+    start = (
+        datetime.strptime(start_date, "%Y-%m-%d").date()
+        if start_date
+        else date(end.year - 5, end.month, end.day)
+    )
+
+    if symbols:
+        symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    else:
+        symbol_list = get_symbols_with_prices(start, end, min_bars=min_bars)
+
+    click.echo(f"Symbols: {len(symbol_list)}")
+    click.echo(f"Date range: {start} to {end}")
+    click.echo(f"Output: {output_dir}/")
+
+    if dry_run:
+        click.echo(f"\nWould export: {symbol_list[:30]}{'...' if len(symbol_list) > 30 else ''}")
+        return
+
+    if not symbol_list:
+        click.echo("No symbols with sufficient price data. Run `rainier db backfill-prices` first.")
+        return
+
+    output_path = export_training_data(
+        symbols=symbol_list,
+        start=start,
+        end=end,
+        output_dir=Path(output_dir),
+    )
+    click.echo(f"\nExported to: {output_path}")
+
+    # Validate
+    from rainier.ml.feature_store import validate_parquet
+
+    stats = validate_parquet(output_path)
+    click.echo(f"\nValidation:")
+    click.echo(f"  Rows: {stats['rows']:,}")
+    click.echo(f"  Symbols: {stats['symbols']}")
+    click.echo(f"  Features: {stats['features']}")
+    click.echo(f"  Date range: {stats['date_range']}")
+    click.echo(f"  Feature NaN count: {stats['feature_nan_total']}")
+    for col, rate in stats["label_positive_rate"].items():
+        click.echo(f"  {col} positive rate: {rate}")
+
+
+@features.command(name="validate")
+@click.argument("path", type=click.Path(exists=True))
+def features_validate(path):
+    """Validate an exported Parquet file."""
+    from rainier.ml.feature_store import validate_parquet
+
+    stats = validate_parquet(Path(path))
+    for key, val in stats.items():
+        if isinstance(val, dict):
+            click.echo(f"{key}:")
+            for k, v in val.items():
+                click.echo(f"  {k}: {v}")
+        else:
+            click.echo(f"{key}: {val}")
+
+
+# ---------------------------------------------------------------------------
+# ML commands
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def ml():
+    """Machine learning model commands."""
+
+
+@ml.command(name="train")
+@click.argument("features_path", type=click.Path(exists=True))
+@click.option("--output-dir", default="models", help="Directory to save model")
+@click.option("--label", default="label_5d", help="Label column to train on")
+@click.option("--folds", default=3, type=int, help="Walk-forward CV folds")
+def ml_train(features_path, output_dir, label, folds):
+    """Train XGBoost pattern scorer on feature store data."""
+    from rainier.ml.pattern_scorer import TrainConfig, train_model
+
+    config = TrainConfig(label_col=label, n_folds=folds)
+    click.echo(f"Training on: {features_path}")
+    click.echo(f"Label: {label}, Folds: {folds}")
+
+    model, result = train_model(
+        parquet_path=Path(features_path),
+        config=config,
+        output_dir=Path(output_dir),
+    )
+
+    click.echo(f"\n--- Evaluation ---")
+    click.echo(f"Accuracy:      {result.accuracy:.3f}")
+    click.echo(f"Precision:     {result.precision:.3f}")
+    click.echo(f"Recall:        {result.recall:.3f}")
+    click.echo(f"F1:            {result.f1:.3f}")
+    click.echo(f"Profit Factor: {result.profit_factor:.2f}")
+    click.echo(f"Test samples:  {result.n_test} ({result.n_positive} positive)")
+    click.echo(f"Fold scores:   {[f'{s:.3f}' for s in result.fold_scores]}")
+
+    click.echo(f"\n--- Top 10 Features ---")
+    for i, (feat, imp) in enumerate(list(result.feature_importance.items())[:10], 1):
+        click.echo(f"  {i:2d}. {feat:30s} {imp:.4f}")
+
+    click.echo(f"\nModel saved to: {output_dir}/pattern_scorer.json")
+
+
+@ml.command(name="evaluate")
+@click.argument("model_path", type=click.Path(exists=True))
+@click.argument("features_path", type=click.Path(exists=True))
+@click.option("--label", default="label_5d", help="Label column")
+def ml_evaluate(model_path, features_path, label):
+    """Evaluate a trained model on feature store data."""
+    import xgboost as xgb_lib
+    from sklearn.metrics import accuracy_score as acc_score, classification_report as cls_report
+
+    from rainier.ml.pattern_scorer import get_feature_columns
+
+    model = xgb_lib.XGBClassifier()
+    model.load_model(model_path)
+
+    df = pd.read_parquet(features_path)
+    df = df.dropna(subset=[label])
+    feature_cols = get_feature_columns(df)
+
+    X = df[feature_cols].values
+    y = df[label].values.astype(int)
+    y_pred = model.predict(X)
+
+    click.echo(cls_report(y, y_pred, target_names=["bearish", "bullish"]))
+    click.echo(f"Accuracy: {acc_score(y, y_pred):.3f}")
+
+
+@ml.command(name="explain")
+@click.argument("model_path", type=click.Path(exists=True))
+@click.argument("features_path", type=click.Path(exists=True))
+@click.option("--output", default=None, help="Save SHAP results to JSON")
+def ml_explain(model_path, features_path, output):
+    """Generate SHAP explanations for a trained model."""
+    import xgboost as xgb_lib
+
+    from rainier.ml.pattern_scorer import explain_model
+
+    model = xgb_lib.XGBClassifier()
+    model.load_model(model_path)
+
+    output_path = Path(output) if output else None
+    result = explain_model(model, Path(features_path), output_path)
+
+    click.echo("--- SHAP Feature Importance (Top 10) ---")
+    for feat in result["top_10"]:
+        click.echo(f"  {feat:30s} {result['mean_shap'][feat]:.4f}")
+
+    if output_path:
+        click.echo(f"\nSaved to: {output_path}")
+
+
+@ml.command(name="regime")
+@click.argument("features_path", type=click.Path(exists=True))
+@click.option("--symbols", default=None, help="Comma-separated symbols to analyze")
+@click.option("--save-model", default=None, help="Save HMM model to path")
+def ml_regime(features_path, symbols, save_model):
+    """Fit HMM regime detector and show regime distribution."""
+    from rainier.ml.regime import HMMRegimeDetector
+
+    df = pd.read_parquet(features_path)
+
+    if symbols:
+        sym_list = [s.strip().upper() for s in symbols.split(",")]
+        df = df[df["symbol"].isin(sym_list)]
+
+    if "close" not in df.columns:
+        click.echo("Error: Parquet file doesn't contain 'close' column")
+        return
+
+    # Use first symbol for fitting
+    sym = df["symbol"].iloc[0]
+    sym_df = df[df["symbol"] == sym].sort_values("date").reset_index(drop=True)
+
+    # Reconstruct minimal OHLCV from features
+    ohlcv = pd.DataFrame({
+        "open": sym_df["close"].shift(1).fillna(sym_df["close"]),
+        "high": sym_df["close"] * (1 + sym_df.get("range", 0.01).clip(lower=0.001)),
+        "low": sym_df["close"] * (1 - sym_df.get("range", 0.01).clip(lower=0.001)),
+        "close": sym_df["close"],
+        "volume": sym_df.get("volume", 1_000_000),
+    })
+
+    detector = HMMRegimeDetector(n_states=3)
+    regimes = detector.fit_predict(ohlcv)
+    summary = detector.regime_summary(regimes)
+
+    click.echo(f"\n--- HMM Regime Detection ({sym}, {len(ohlcv)} bars) ---")
+    click.echo("Distribution:")
+    for regime, pct in summary["pct"].items():
+        count = summary["distribution"][regime]
+        dur = summary["avg_duration"].get(regime, "N/A")
+        click.echo(f"  {regime:20s} {pct:>6s} ({count:>4d} bars, avg duration: {dur})")
+
+    if save_model:
+        detector.save(Path(save_model))
+        click.echo(f"\nModel saved to: {save_model}")
