@@ -234,7 +234,7 @@ class QUScraper(BaseScraper):
             login_btn = await page.query_selector("text=注册/登录")
             if login_btn:
                 self.log.info("cdp_clicking_login_button")
-                await page.evaluate("el => el.click()", login_btn)
+                await login_btn.click()
                 await page.wait_for_load_state(
                     "domcontentloaded", timeout=10000
                 )
