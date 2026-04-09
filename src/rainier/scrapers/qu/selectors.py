@@ -26,14 +26,13 @@ QU100_CONTAINER = ".qu100"
 QU100_TABLE = ".ant-table"
 QU100_TABLE_ROW = ".ant-table-tbody tr.ant-table-row"
 
-# Top100/Bottom100 toggle — <span> elements inside .select-button
-# The second .select-button contains Top100/Bottom100 (first has Daily/Weekly)
-TOP100_BUTTON = ".select-button:nth-child(3) span:first-child"
-BOTTOM100_BUTTON = ".select-button:nth-child(3) span:last-child"
+# Top100/Bottom100 toggle — use text selectors (stable across DOM changes)
+TOP100_BUTTON = ".select-button span:text-is('前100')"
+BOTTOM100_BUTTON = ".select-button span:text-is('后100')"
 
 # Daily/Weekly toggle
-DAILY_BUTTON = ".select-button:nth-child(2) span:first-child"
-WEEKLY_BUTTON = ".select-button:nth-child(2) span:last-child"
+DAILY_BUTTON = ".select-button span:text-is('日线')"
+WEEKLY_BUTTON = ".select-button span:text-is('周线')"
 
 # Date picker (Ant Design)
 DATE_INPUT = ".ant-picker-input input"
