@@ -243,8 +243,10 @@ class QUScraper(BaseScraper):
                 await login(page)
                 await goto_with_retry(page, self._qu_config.url)
 
-            # After login, click Search to load the table
-            search_btn = await page.query_selector(sel.SEARCH_BUTTON)
+            # After login, wait for React to render, then click Search
+            search_btn = await page.wait_for_selector(
+                sel.SEARCH_BUTTON, timeout=15000
+            )
             if search_btn:
                 await search_btn.click()
             await page.wait_for_selector(
@@ -283,7 +285,7 @@ class QUScraper(BaseScraper):
         # Change date if requested, then click Search to load data
         if target_date:
             await self._set_date(target_date)
-        search_btn = await page.query_selector(sel.SEARCH_BUTTON)
+        search_btn = await page.wait_for_selector(sel.SEARCH_BUTTON, timeout=15000)
         if search_btn:
             await search_btn.click()
 
