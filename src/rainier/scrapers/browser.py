@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
@@ -14,6 +15,8 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from rainier.core.config import get_settings
 
 log = structlog.get_logger()
+
+ENSURE_CHROME_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ensure-chrome.sh"
 
 
 class BrowserManager:
@@ -62,7 +65,14 @@ class BrowserManager:
         self._playwright = await async_playwright().start()
 
         if self._cdp_url:
-            self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+            try:
+                self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+            except Exception as e:
+                # Chrome can get into a bad CDP state after auto-updating in place
+                # or sitting idle for days. Force-restart it once and retry.
+                log.warning("cdp_connect_failed_restarting_chrome", error=str(e))
+                await self._force_restart_chrome()
+                self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
             self._is_cdp = True
             log.info("browser_connected_cdp", url=self._cdp_url)
         else:
@@ -71,6 +81,23 @@ class BrowserManager:
             )
             self._is_cdp = False
             log.info("browser_started", headless=self._headless)
+
+    @staticmethod
+    async def _force_restart_chrome() -> None:
+        """Kill and relaunch the local debug Chrome via ensure-chrome.sh --force."""
+        if not ENSURE_CHROME_SCRIPT.exists():
+            raise RuntimeError(f"ensure-chrome.sh not found at {ENSURE_CHROME_SCRIPT}")
+        proc = await asyncio.create_subprocess_exec(
+            str(ENSURE_CHROME_SCRIPT),
+            "--force",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode(errors="replace").strip()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Chrome force-restart failed: {output}")
+        log.info("chrome_force_restarted", output=output)
 
     async def stop(self) -> None:
         """Close/disconnect the browser and Playwright."""
