@@ -17,15 +17,27 @@ venv/
 *.swp
 *.swo
 
+# macOS
+.DS_Store
+
 # Environment
 .env
 
-# Data (user-specific, large files)
-data/csv/
-data/exports/
+# Runtime data (logs, cache, scraped, user CSVs, auth tokens)
+data/
+
+# Trained ML model artifacts
+models/
 
 # Charts output
 charts/
+
+# Untracked exploratory reports (committed reports follow pf_btest_* convention)
+reports/qu100_verification_*
+reports/tqqq_*
+
+# Demo HTML at project root (use reports/ instead)
+/index.html
 
 # Coverage
 htmlcov/
