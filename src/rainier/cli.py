@@ -1622,7 +1622,16 @@ async def _recover(settings, dry_run: bool):
             session_name = action.replace("scrape_", "")
             click.echo(f"  Running missed {session_name} scrape...")
             try:
-                await _run_qu_scrape(session_name, 0, None, 0, None, False, "http://127.0.0.1:9222")
+                await _run_qu_scrape(
+                    session=session_name,
+                    detail_top=0,
+                    dates=None,
+                    days_back=0,
+                    start_date=None,
+                    delay=None,
+                    headed=False,
+                    cdp="http://127.0.0.1:9222",
+                )
                 click.echo(f"  {session_name} scrape: done")
                 recovered_scrapes.append(session_name)
                 _notify_recover(
