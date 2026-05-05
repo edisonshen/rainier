@@ -314,6 +314,11 @@ class QUScraper(BaseScraper):
                 except Exception:
                     pass
 
+                # The previous Search click leaves an antd loading spinner
+                # overlaying the toggle buttons. Clicking through it makes
+                # Playwright stall on actionability checks until 30s timeout.
+                await self._wait_for_no_spinner()
+
                 # Click toggle, then Search button (required per QU100 UI)
                 await page.click(button_sel)
                 search_btn = await page.query_selector(sel.SEARCH_BUTTON)
@@ -356,6 +361,19 @@ class QUScraper(BaseScraper):
                 error_msg = f"Failed to scrape {ranking_type}: {exc}"
                 self.log.warning("qu100_failed", ranking_type=ranking_type, error=str(exc))
                 result.errors.append(error_msg)
+
+    async def _wait_for_no_spinner(self, timeout_ms: int = 10000) -> None:
+        """Wait for any antd loading spinner to disappear.
+
+        Best-effort: a stuck spinner shouldn't kill the scrape — log and continue,
+        and let the actual click surface a clearer error if the page is truly broken.
+        """
+        try:
+            await self._page.wait_for_selector(
+                ".ant-spin-spinning", state="hidden", timeout=timeout_ms
+            )
+        except Exception as exc:
+            self.log.warning("spinner_wait_timeout", error=str(exc))
 
     async def _set_date(self, date_str: str) -> None:
         """Change the date picker to the given date and trigger search."""
