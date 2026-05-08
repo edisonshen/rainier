@@ -318,7 +318,6 @@ def create_tabbed_chart(
         chart_data[tf] = (fig_json, pb_idx, sig_idx, sig_shapes)
 
     tab_labels = {Timeframe.M5: "5m", Timeframe.H1: "1H", Timeframe.H4: "4H", Timeframe.D1: "1D"}
-    active_tf = trading_tf.value
 
     tabs_html = ""
     for tf in available_tfs:

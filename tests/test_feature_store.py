@@ -1,6 +1,6 @@
 """Tests for ML feature store."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
@@ -8,7 +8,6 @@ import pytest
 
 from rainier.ml.feature_store import (
     LABEL_HORIZONS,
-    LABEL_THRESHOLD,
     compute_forward_labels,
     export_symbol_features,
     validate_parquet,

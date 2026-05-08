@@ -2,7 +2,7 @@
 
 from rainier.analysis.pivots import compute_atr, detect_pivots
 from rainier.analysis.sr_diagonal import detect_diagonal_sr
-from rainier.core.config import PivotConfig, SRDiagonalConfig
+from rainier.core.config import PivotConfig
 from rainier.core.types import SRType
 
 
@@ -40,6 +40,7 @@ class TestDetectDiagonalSR:
     def test_only_one_swing_point_returns_empty(self, base_timestamp):
         """Need at least 2 swing points to fit a line."""
         from datetime import timedelta
+
         from rainier.core.types import Pivot
 
         pivots = [Pivot(index=5, price=100.0, timestamp=base_timestamp, is_high=True)]

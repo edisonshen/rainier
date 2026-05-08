@@ -23,7 +23,6 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import (
     accuracy_score,
-    classification_report,
     f1_score,
     precision_score,
     recall_score,
@@ -156,7 +155,7 @@ def train_model(
     logger.info("Features: %d columns", len(feature_cols))
 
     X = df[feature_cols].values
-    y = df[config.label_col].values.astype(int)
+    df[config.label_col].values.astype(int)
 
     # Assert no NaN in features
     nan_mask = np.isnan(X)
@@ -206,7 +205,7 @@ def train_model(
 
     # Evaluate final model
     y_pred_final = final_model.predict(X_test_final)
-    y_proba_final = final_model.predict_proba(X_test_final)
+    final_model.predict_proba(X_test_final)
 
     # Profit factor: sum of predicted-positive returns / sum of predicted-positive losses
     test_df_final = df.iloc[split_idx:].copy()
