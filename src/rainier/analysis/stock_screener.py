@@ -564,6 +564,7 @@ def _to_candidate(
         capital_flow_direction=capital_flow_direction,
         sector=result.sector,
         signal_strength=result.composite_score,
+        money_flow_score=float(result.money_flow_score),
         pattern_type=bp.pattern_type if bp else None,
         pattern_direction=bp.direction if bp else None,
         pattern_status=bp.status if bp else None,

@@ -23,13 +23,23 @@ def _candidate_row(
     scan_date: date,
     session_name: str,
 ) -> dict[str, Any]:
+    # Codex P1: composite_score holds the post-boost composite from
+    # `_to_candidate` (i.e. `StockCandidate.signal_strength`); money_flow_score
+    # holds the RAW Layer-1 money-flow value from `MoneyFlowSignal` so SQL
+    # backfills can compare each layer independently. Falling back to
+    # signal_strength would silently duplicate the column, which biases the
+    # shadow-validation analysis PR2 will run on top of these rows.
     return {
         "scan_date": scan_date,
         "session_name": session_name,
         "symbol": candidate.symbol,
         "rule_rank": rule_rank,
         "composite_score": float(candidate.signal_strength or 0.0),
-        "money_flow_score": float(candidate.signal_strength) if candidate.signal_strength else None,
+        "money_flow_score": (
+            float(candidate.money_flow_score)
+            if candidate.money_flow_score is not None
+            else None
+        ),
         "sector": candidate.sector,
         "pattern_type": candidate.pattern_type,
         "pattern_confidence": (
