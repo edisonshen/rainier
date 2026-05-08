@@ -136,9 +136,23 @@ async def assemble_evidence(
 
 
 def _tier1_lookup(
-    symbol: str, scan_date: date, prompt_version: str,
+    symbol: str,
+    scan_date: date,
+    prompt_version: str,
+    *,
+    session_name: str,
+    llm_model: str,
 ) -> tuple[int, dict[str, Any]] | None:
-    """Cheap cache lookup — does any thesis exist for (today, symbol, prompt)?"""
+    """Cheap cache lookup — match (date, symbol, prompt, session, model).
+
+    We narrow the key on session_name + llm_model so the close-of-day rerun
+    does NOT reuse the afternoon thesis (P1 from codex review): the close
+    scan should reflect newer chart + signal data, and a v2 multi-model A/B
+    needs each model's row to be independent. The matching INSERT path
+    (idx_llm_analysis_idempotent) already keys on (day, symbols, model,
+    prompt, input_hash) so true duplicates still collapse to one row via
+    Tier 2's input_hash equality.
+    """
     start = datetime.combine(scan_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     with get_session() as session:
@@ -151,6 +165,7 @@ def _tier1_lookup(
                 LLMAnalysisRecord.created_at < end,
                 LLMAnalysisRecord.target_symbols == [symbol],
                 LLMAnalysisRecord.prompt_template == prompt_version,
+                LLMAnalysisRecord.llm_model == llm_model,
             )
             .order_by(LLMAnalysisRecord.id.desc())
             .first()
@@ -160,6 +175,11 @@ def _tier1_lookup(
         rec_id, output = row
         if output is None:
             return None
+        # Reuse only when this row was produced for the SAME session.
+        if isinstance(output, dict):
+            recorded_session = output.get("_session_name")
+            if recorded_session is not None and recorded_session != session_name:
+                return None
         return int(rec_id), dict(output)
 
 
@@ -254,8 +274,14 @@ async def generate_thesis(
     thesis_cfg = settings.llm_thesis
     prompt_version = thesis_cfg.prompt_version
 
-    # Tier 1: cache hit on same (date, symbol, prompt_template)?
-    cached = _tier1_lookup(symbol, scan_date, prompt_version)
+    # Tier 1: cache hit on same (date, symbol, prompt_template, session, model)?
+    cached = _tier1_lookup(
+        symbol,
+        scan_date,
+        prompt_version,
+        session_name=session_name,
+        llm_model=thesis_cfg.model,
+    )
     if cached is not None:
         record_id, raw_output = cached
         try:
@@ -352,6 +378,7 @@ async def generate_thesis(
             prompt_tokens=p_tok,
             completion_tokens=c_tok,
             cost_usd=attempt_cost,
+            session_name=session_name,
         )
         return thesis, cost_charged, record_id
 
@@ -372,6 +399,7 @@ def _persist_thesis(
     prompt_tokens: int,
     completion_tokens: int,
     cost_usd: float,
+    session_name: str,
 ) -> int | None:
     """Insert one LLMAnalysisRecord row; return its id, or None on conflict.
 
@@ -380,6 +408,9 @@ def _persist_thesis(
     — Tier-2 races and re-runs collapse to a single row.
     """
     payload = thesis.model_dump()
+    # Stash the originating session inside structured_output so Tier-1
+    # can refuse cross-session reuse on later same-day scans.
+    payload["_session_name"] = session_name
     with get_session() as session:
         rec = LLMAnalysisRecord(
             llm_provider="anthropic",
