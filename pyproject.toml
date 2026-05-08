@@ -79,7 +79,7 @@ select = ["E", "F", "I", "N", "W"]
 ignore = ["E501", "E741", "N806"]
 
 [project.optional-dependencies]
-dashboard = ["streamlit>=1.30"]
+dashboard = ["streamlit>=1.30,<2"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

@@ -50,6 +50,28 @@ uv run rainier jobs sync
 uv run rainier jobs stop --name fetch-mes
 ```
 
+## LLM Thesis Dashboard
+
+Streamlit dashboard for the LLM thesis layer (signals config, per-signal
+contribution stats, recent theses with their forward returns, and the
+research-insight accept/reject UI).
+
+```bash
+uv sync --extra dashboard
+uv run streamlit run src/rainier/dashboard/app.py
+```
+
+Then open http://localhost:8501. Four tabs:
+
+- **Signals** — toggle signals on/off (writes to `config/settings.yaml`
+  via ruamel; comments preserved). Includes a "test signal" runner.
+- **Performance** — per-signal lift (Mann-Whitney U) and per-verdict
+  hit rate over a rolling window.
+- **Recent theses** — last 50 theses with `return_1d` / `return_5d` /
+  `return_10d` and the chart PNG that was sent to the LLM.
+- **Insights** — accept/reject pending `ResearchInsight` rows; accept
+  applies the structured action via `ACTION_EXECUTORS`.
+
 ## Project Structure
 
 ```
