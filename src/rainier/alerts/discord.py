@@ -464,6 +464,111 @@ def send_eval_report(
         log.exception("discord_eval_send_failed")
 
 
+# ---------------------------------------------------------------------------
+# Weekly research report (PR3) — auto-research insight summary
+# ---------------------------------------------------------------------------
+
+
+_INSIGHT_SEVERITY_TAGS: dict[str, str] = {
+    "info": "[info]",
+    "warn": "[WARN]",
+    "critical": "[CRIT]",
+}
+
+
+def _format_research_message(
+    *,
+    eval_date: date_cls,
+    insights: list,           # [ResearchInsight]
+    severity_filter: tuple[str, ...] = ("warn", "critical"),
+) -> str:
+    """Render the weekly research report. <=1800 chars per message.
+
+    Lists pending `warn`/`critical` insights with the structured action and
+    rationale. `info` severities are excluded by default (they're suggestions,
+    not alerts) but can be opted in via the filter.
+
+    Each line includes the insight id so the operator can quickly run
+    `rainier thesis research insights accept ID` from the CLI.
+    """
+    lines: list[str] = []
+    lines.append(f"**Research report — {eval_date.isoformat()}**")
+    if not insights:
+        lines.append("No new pending warn/critical insights this week.")
+        body = "\n".join(lines)
+        return _truncate(body, 1800)
+
+    bucket: list = [
+        ins for ins in insights
+        if getattr(ins, "severity", None) in severity_filter
+        and getattr(ins, "status", "pending") == "pending"
+    ]
+    if not bucket:
+        lines.append(
+            "No new pending warn/critical insights this week."
+        )
+        body = "\n".join(lines)
+        return _truncate(body, 1800)
+
+    # Sort: critical first, then warn; within each, by recurrence_count desc
+    # so the loudest signals show first.
+    severity_order = {"critical": 0, "warn": 1, "info": 2}
+    bucket.sort(
+        key=lambda i: (
+            severity_order.get(i.severity, 99),
+            -(getattr(i, "recurrence_count", 1) or 1),
+        )
+    )
+
+    lines.append(f"{len(bucket)} pending insight(s) this week:")
+    for ins in bucket:
+        tag = _INSIGHT_SEVERITY_TAGS.get(ins.severity, ins.severity)
+        kind = ins.kind
+        subj = (ins.subject or "")[:30]
+        recur = getattr(ins, "recurrence_count", 1) or 1
+        action_kind = "noop"
+        if isinstance(ins.action, dict):
+            action_kind = str(ins.action.get("kind", "?"))
+        rationale = (ins.rationale or "").strip().replace("\n", " ")
+        if len(rationale) > 200:
+            rationale = rationale[:197] + "..."
+        recur_part = f" (x{recur})" if recur > 1 else ""
+        lines.append(
+            f"  {tag} #{ins.id} {kind} <{subj}>{recur_part} -> action={action_kind}"
+        )
+        lines.append(f"      {rationale}")
+
+    lines.append("")
+    lines.append("Review with `rainier thesis research insights list`")
+    body = "\n".join(lines)
+    return _truncate(body, 1800)
+
+
+def send_research_report(
+    *,
+    eval_date: date_cls,
+    insights: list,
+    config: DiscordConfig,
+) -> None:
+    """Post the weekly research report to Discord (stock channel, then webhook)."""
+    if not config.enabled:
+        log.debug("discord_alerts_disabled")
+        return
+    webhook_url = _resolve_webhook_url(config)
+    if not webhook_url:
+        log.warning("discord_no_webhook_url_research")
+        return
+
+    message = _format_research_message(
+        eval_date=eval_date, insights=insights,
+    )
+    try:
+        response = httpx.post(webhook_url, json={"content": message}, timeout=10)
+        response.raise_for_status()
+    except Exception:
+        log.exception("discord_research_send_failed")
+
+
 def format_stock_candidates_json(candidates: list[StockCandidate]) -> str:
     """Format candidates as JSON string for dry-run / debugging."""
     if not candidates:

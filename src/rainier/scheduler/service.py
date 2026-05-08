@@ -253,6 +253,57 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
         log.error("daily_eval_discord_failed", error=str(exc))
 
 
+async def run_research_job(eval_date_iso: str | None = None) -> None:
+    """Weekly auto-research entry — emits ResearchInsight rows + posts the
+    Discord research-report.
+
+    Triggered Friday 09:00 PT. The job:
+      1. mark_stale() — flips pending insights >30 days old to status=stale.
+      2. run_research(eval_date=today, days=30) — runs all 6 check classes.
+      3. send_research_report() — posts a Discord summary of pending
+         warn/critical insights.
+
+    eval_date_iso lets CLI / replay callers override "today".
+    """
+    from datetime import date as _date
+
+    from rainier.alerts.discord import send_research_report
+    from rainier.llm_thesis.research import mark_stale, run_research
+
+    eval_date = (
+        _date.fromisoformat(eval_date_iso) if eval_date_iso else _date.today()
+    )
+
+    log.info("research_job_starting", eval_date=eval_date.isoformat())
+
+    try:
+        stale_count = await asyncio.to_thread(mark_stale, 30)
+        log.info("research_marked_stale", count=stale_count)
+    except Exception as exc:
+        log.error("research_mark_stale_failed", error=str(exc))
+
+    try:
+        insights = await asyncio.to_thread(
+            lambda: run_research(eval_date=eval_date, days=30)
+        )
+    except Exception as exc:
+        log.error("research_run_failed", error=str(exc))
+        insights = []
+
+    log.info("research_job_emitted", count=len(insights))
+
+    try:
+        settings = await asyncio.to_thread(load_settings_fresh)
+        await asyncio.to_thread(
+            send_research_report,
+            eval_date=eval_date,
+            insights=insights,
+            config=settings.alerts.discord,
+        )
+    except Exception as exc:
+        log.error("research_discord_failed", error=str(exc))
+
+
 def build_scheduler() -> AsyncIOScheduler:
     """
     Build an AsyncIOScheduler with cron jobs for each QU100 session.
@@ -311,6 +362,24 @@ def build_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=900,  # 15 min grace
     )
     log.info("job_registered", session="daily_eval", time="17:00", days="Mon-Fri")
+
+    # PR3: weekly auto-research at Friday 09:00 PT (eng review D5). Analyzes
+    # the rolling 30d window and emits ResearchInsight rows. The schedule is
+    # Friday so the eval data has had a full work-week to accumulate.
+    research_trigger = CronTrigger(
+        day_of_week="fri",
+        hour=9,
+        minute=0,
+        timezone=tz,
+    )
+    scheduler.add_job(
+        run_research_job,
+        trigger=research_trigger,
+        id="weekly_research",
+        name="Weekly auto-research + Discord report",
+        misfire_grace_time=1800,  # 30 min grace — research is non-urgent
+    )
+    log.info("job_registered", session="weekly_research", time="09:00", days="Fri")
 
     return scheduler
 
