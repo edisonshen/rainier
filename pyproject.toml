@@ -42,6 +42,9 @@ dependencies = [
     "scikit-learn>=1.8.0",
     # Stats — Mann-Whitney U for per-signal contribution test in eval.py
     "scipy>=1.11",
+    # Round-trip YAML for the auto-research accept handler — preserves
+    # comments + key order when ACTION_EXECUTORS mutate config/settings.yaml.
+    "ruamel.yaml>=0.18",
 ]
 
 [project.scripts]

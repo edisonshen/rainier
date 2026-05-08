@@ -27,7 +27,6 @@ from rainier.llm_thesis.eval import (
     compute_verdict_hit_rate,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fix 1 — _fetch_yesterday uses trading-day rollback
 # ---------------------------------------------------------------------------

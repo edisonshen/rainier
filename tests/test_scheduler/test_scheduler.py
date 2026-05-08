@@ -30,15 +30,15 @@ def _make_settings(**overrides) -> Settings:
 class TestBuildScheduler:
     """Test that build_scheduler creates the correct jobs."""
 
-    def test_creates_five_jobs(self):
-        """4 QU scrape jobs + 1 daily eval job (PR2)."""
+    def test_creates_six_jobs(self):
+        """4 QU scrape jobs + 1 daily eval job (PR2) + 1 weekly research (PR3)."""
         settings = _make_settings()
         with patch("rainier.scheduler.service.get_settings", return_value=settings):
             from rainier.scheduler.service import build_scheduler
             scheduler = build_scheduler()
 
         jobs = scheduler.get_jobs()
-        assert len(jobs) == 5
+        assert len(jobs) == 6
 
     def test_job_ids(self):
         settings = _make_settings()
@@ -53,6 +53,7 @@ class TestBuildScheduler:
             "qu_scrape_afternoon",
             "qu_scrape_close",
             "daily_eval",
+            "weekly_research",
         }
 
     def test_job_names(self):
@@ -66,6 +67,7 @@ class TestBuildScheduler:
         assert "QU100 scrape (close)" in names
 
     def test_cron_triggers_weekdays_only(self):
+        """All scrape + daily_eval jobs run mon-fri; weekly_research runs Friday only."""
         settings = _make_settings()
         with patch("rainier.scheduler.service.get_settings", return_value=settings):
             from rainier.scheduler.service import build_scheduler
@@ -73,9 +75,11 @@ class TestBuildScheduler:
 
         for job in scheduler.get_jobs():
             trigger = job.trigger
-            # CronTrigger fields: day_of_week should be mon-fri
-            dow_field = trigger.fields[4]  # day_of_week is index 4
-            assert str(dow_field) == "mon-fri"
+            dow_field = trigger.fields[4]
+            if job.id == "weekly_research":
+                assert str(dow_field) == "fri"
+            else:
+                assert str(dow_field) == "mon-fri"
 
     def test_morning_job_time(self):
         settings = _make_settings()
@@ -134,7 +138,7 @@ class TestBuildScheduler:
         assert str(scheduler.timezone) == "US/Eastern"
 
     def test_misfire_grace_time(self):
-        """QU scrape jobs use 5-min grace; daily eval uses 15-min grace."""
+        """QU scrape jobs use 5-min grace; daily_eval 15-min; weekly_research 30-min."""
         settings = _make_settings()
         with patch("rainier.scheduler.service.get_settings", return_value=settings):
             from rainier.scheduler.service import build_scheduler
@@ -143,6 +147,8 @@ class TestBuildScheduler:
         for job in scheduler.get_jobs():
             if job.id == "daily_eval":
                 assert job.misfire_grace_time == 900
+            elif job.id == "weekly_research":
+                assert job.misfire_grace_time == 1800
             else:
                 assert job.misfire_grace_time == 300
 

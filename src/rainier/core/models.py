@@ -458,6 +458,75 @@ class ThesisEvaluation(Base):
     )
 
 
+class ResearchInsight(Base):
+    """One row per finding emitted by the weekly auto-research job (PR3).
+
+    Schema (design Section F item 22 + eng review D3 + D6):
+      * `kind`            — one of signal_underperform / signal_overperform /
+                            verdict_drift / calibration_off / prompt_regression /
+                            new_pattern_discovered.
+      * `severity`        — info / warn / critical.
+      * `subject`         — the entity the insight is about (signal name,
+                            verdict label, prompt_version, pattern text).
+      * `evidence` JSONB  — raw stats (sample size, lift, p-value, etc.).
+      * `action` JSONB    — STRUCTURED `{kind, target, params}` shape so the
+                            accept handler dispatches via ACTION_EXECUTORS.
+                            NOT free-text. See research.py for executor map.
+      * `rationale`       — human-readable narrative for Discord/UI rendering,
+                            separate from the executable action.
+      * `recurrence_count`— D6 dedupe: when the same (kind, subject) fires
+                            again while still pending, the existing row's
+                            evidence/rationale are refreshed and this counter
+                            increments instead of inserting a duplicate.
+      * `status`          — pending / accepted / rejected / auto_applied / stale.
+      * `applied_change`  — JSONB diff written when accepted/auto_applied.
+
+    Plain Postgres (NOT a hypertable) — small row count.
+
+    The partial unique index `idx_research_insight_pending_kind_subject` on
+    (kind, subject) WHERE status='pending' makes UPSERT a single statement.
+    Created in migrations/0003_llm_thesis_pr3.sql; the Index() declaration
+    here marks intent for `db init` on fresh databases.
+    """
+
+    __tablename__ = "research_insights"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False)
+    subject: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    evidence: Mapped[dict | None] = mapped_column(JSONB)
+    action: Mapped[dict | None] = mapped_column(JSONB)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    recurrence_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(200))
+    applied_change: Mapped[dict | None] = mapped_column(JSONB)
+
+    __table_args__ = (
+        # Partial unique index — only ONE pending row per (kind, subject) at
+        # a time so emit_insight() can UPSERT in a single statement.
+        Index(
+            "idx_research_insight_pending_kind_subject",
+            "kind",
+            "subject",
+            unique=True,
+            postgresql_where="status = 'pending'",
+        ),
+    )
+
+
 # Tables to convert to TimescaleDB hypertables
 HYPERTABLES = {
     "money_flow_snapshots": "captured_at",

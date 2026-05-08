@@ -2468,3 +2468,207 @@ def thesis_eval(ctx, eval_date_s, horizon):
         f"Evaluated horizon={horizon} on {eval_date.isoformat()}: {n} rows inserted."
     )
     _ = ctx  # ctx unused for single-horizon path; kept for API symmetry
+
+
+# ---------------------------------------------------------------------------
+# `rainier thesis research` — auto-research loop (PR3)
+# ---------------------------------------------------------------------------
+
+
+@thesis.group("research")
+def thesis_research():
+    """Weekly auto-research loop — produce, browse, accept, reject insights."""
+
+
+@thesis_research.command("run")
+@click.option(
+    "--eval-date", "eval_date_s", default=None,
+    help="Logical 'today' for the rolling window, YYYY-MM-DD; defaults to today.",
+)
+@click.option("--days", "days", default=30, type=int)
+def thesis_research_run(eval_date_s, days):
+    """Manually trigger the weekly research job.
+
+    Same code path the Friday 09:00 PT scheduler entry uses — runs all 6
+    check classes, posts the Discord report, idempotent re-runs UPSERT
+    pending insights instead of duplicating.
+    """
+    import asyncio as _asyncio
+
+    from rainier.scheduler.service import run_research_job
+
+    _ = days  # currently fixed at 30 in run_research_job; param kept for symmetry
+    _asyncio.run(run_research_job(eval_date_iso=eval_date_s))
+    click.echo("Research job finished.")
+
+
+@thesis_research.group("insights")
+def thesis_research_insights():
+    """Browse / accept / reject ResearchInsight rows."""
+
+
+@thesis_research_insights.command("list")
+@click.option(
+    "--status",
+    "status_filter",
+    default="pending",
+    type=click.Choice(["pending", "accepted", "rejected", "stale", "auto_applied", "all"]),
+    help="Filter rows by status; default 'pending'.",
+)
+def thesis_research_insights_list(status_filter):
+    """Print the ResearchInsight queue."""
+    from sqlalchemy import select as _select
+
+    from rainier.core.database import get_session
+    from rainier.core.models import ResearchInsight
+
+    with get_session() as session:
+        stmt = _select(ResearchInsight).order_by(ResearchInsight.id.desc())
+        if status_filter != "all":
+            stmt = stmt.where(ResearchInsight.status == status_filter)
+        rows = session.execute(stmt).scalars().all()
+
+    if not rows:
+        click.echo(f"No {status_filter} insights.")
+        return
+
+    click.echo(
+        f"{'ID':<6} {'Severity':<10} {'Kind':<24} {'Subject':<24} "
+        f"{'Recur':<6} {'Action':<22} Status"
+    )
+    click.echo("-" * 110)
+    for r in rows:
+        action_kind = "?"
+        if isinstance(r.action, dict):
+            action_kind = str(r.action.get("kind", "?"))
+        click.echo(
+            f"{r.id:<6} {r.severity:<10} {r.kind:<24} {(r.subject or '')[:23]:<24} "
+            f"{r.recurrence_count:<6} {action_kind:<22} {r.status}"
+        )
+        rationale = (r.rationale or "").strip().replace("\n", " ")
+        if rationale:
+            if len(rationale) > 100:
+                rationale = rationale[:97] + "..."
+            click.echo(f"       -> {rationale}")
+
+
+@thesis_research_insights.command("accept")
+@click.argument("insight_id", type=int)
+@click.pass_context
+def thesis_research_insights_accept(ctx, insight_id):
+    """Apply the suggested action and mark the insight accepted.
+
+    Looks up the row, dispatches `insight.action.kind` through
+    `research.ACTION_EXECUTORS`, mutates `config/settings.yaml` via ruamel.yaml,
+    then UPDATEs the DB row to `status='accepted'` with the diff stored in
+    `applied_change`. Errors out cleanly if the row is non-pending or the
+    action kind is unknown.
+    """
+    from datetime import datetime as _datetime
+    from datetime import timezone as _tz
+
+    from rainier.core.database import get_session
+    from rainier.core.models import ResearchInsight
+    from rainier.llm_thesis.research import apply_action
+
+    settings_path = Path(_settings_path(ctx))
+
+    with get_session() as session:
+        row = session.get(ResearchInsight, insight_id)
+        if row is None:
+            raise click.ClickException(f"No ResearchInsight with id={insight_id}")
+        if row.status != "pending":
+            raise click.ClickException(
+                f"Insight {insight_id} has status={row.status!r}, not pending. "
+                "Only pending insights can be accepted."
+            )
+        action = row.action or {}
+        try:
+            diff = apply_action(action, settings_path)
+        except ValueError as exc:
+            raise click.ClickException(f"Could not apply action: {exc}") from exc
+
+        row.status = "accepted"
+        row.decided_at = _datetime.now(_tz.utc)
+        row.applied_change = diff
+        session.flush()
+
+    click.echo(
+        f"Accepted insight #{insight_id}: action={action.get('kind')} "
+        f"target={action.get('target')!r}"
+    )
+    click.echo(f"Applied change: {diff}")
+
+
+@thesis_research_insights.command("reject")
+@click.argument("insight_id", type=int)
+@click.option("--reason", required=True, help="Free-text reason stored on the row.")
+def thesis_research_insights_reject(insight_id, reason):
+    """Dismiss the insight without applying its action.
+
+    Sets status='rejected' and stores the reason in `decided_by`. The
+    settings.yaml is not touched.
+    """
+    from datetime import datetime as _datetime
+    from datetime import timezone as _tz
+
+    from rainier.core.database import get_session
+    from rainier.core.models import ResearchInsight
+
+    with get_session() as session:
+        row = session.get(ResearchInsight, insight_id)
+        if row is None:
+            raise click.ClickException(f"No ResearchInsight with id={insight_id}")
+        if row.status != "pending":
+            raise click.ClickException(
+                f"Insight {insight_id} has status={row.status!r}, not pending."
+            )
+        row.status = "rejected"
+        row.decided_at = _datetime.now(_tz.utc)
+        row.decided_by = reason[:200]
+        session.flush()
+
+    click.echo(f"Rejected insight #{insight_id} with reason: {reason}")
+
+
+@thesis_research.command("signals")
+@click.option("--signal", "signal_name", default=None,
+              help="Filter to a single signal name; default lists all.")
+@click.option("--days", "days", default=30, type=int)
+@click.option("--horizon", "horizon", default="5d",
+              type=click.Choice(["1d", "5d", "10d"]))
+def thesis_research_signals(signal_name, days, horizon):
+    """Ad-hoc per-signal contribution dump (Mann-Whitney U on used vs absent)."""
+    from rainier.llm_thesis.eval import compute_signal_contribution
+
+    contribs = compute_signal_contribution(days=days, horizon=horizon)
+    if signal_name:
+        contribs = [c for c in contribs if c.name == signal_name]
+    if not contribs:
+        click.echo("No signal contribution rows found.")
+        return
+
+    click.echo(f"{'Signal':<24} {'lift':<10} {'p-value':<10} {'n_used':<8} {'n_absent':<10}")
+    click.echo("-" * 72)
+    for c in contribs:
+        p = f"{c.p_value:.3f}" if c.p_value is not None else "n/a"
+        click.echo(
+            f"{c.name:<24} {c.lift:+.4f}   {p:<10} {c.n_used:<8} {c.n_absent:<10}"
+        )
+
+
+@thesis_research.command("verdicts")
+@click.option("--days", "days", default=30, type=int)
+def thesis_research_verdicts(days):
+    """Ad-hoc per-verdict hit-rate dump."""
+    from rainier.llm_thesis.eval import compute_verdict_hit_rate
+
+    rates = compute_verdict_hit_rate(days=days)
+    click.echo(f"{'Verdict':<12} {'Horizon':<8} {'n':<6} {'win-rate':<10} avg-return")
+    click.echo("-" * 56)
+    for verdict, hits in rates.items():
+        for hr in hits:
+            click.echo(
+                f"{verdict:<12} {hr.horizon:<8} {hr.n:<6} {hr.win_rate:<10.2%} "
+                f"{hr.avg_return_pct:+.4f}"
+            )
