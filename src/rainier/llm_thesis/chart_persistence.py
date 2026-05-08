@@ -98,8 +98,34 @@ def persist_chart_image(
                 return int(refetch[0]) if refetch else None
             return int(row[0])
         except Exception:
+            # PR5 review iter-1: race-loser path. The probe missed the row
+            # (no concurrent insert visible yet), our INSERT lost the unique
+            # constraint, so the row DOES exist now under the other call's
+            # transaction. Re-probe in a fresh session so we surface the id
+            # instead of silently returning None and missing the chart
+            # attachment downstream.
+            log.warning(
+                "persist_chart_image_conflict_refetch symbol=%s scan_date=%s sha=%s",
+                symbol,
+                scan_date,
+                sha256[:8] if sha256 else None,
+            )
+
+    # Fresh session to refetch — the original session was rolled back by the
+    # context-manager exit when the INSERT raised.
+    with get_session() as session:
+        try:
+            row = session.execute(
+                select(ChartImage.id).where(
+                    ChartImage.symbol == symbol,
+                    ChartImage.scan_date == scan_date,
+                    ChartImage.sha256 == sha256,
+                )
+            ).first()
+            return int(row[0]) if row else None
+        except Exception:
             log.exception(
-                "persist_chart_image_failed symbol=%s scan_date=%s sha=%s",
+                "persist_chart_image_refetch_failed symbol=%s scan_date=%s sha=%s",
                 symbol,
                 scan_date,
                 sha256[:8] if sha256 else None,
