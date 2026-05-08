@@ -40,6 +40,8 @@ dependencies = [
     "shap>=0.51.0",
     "hmmlearn>=0.3.3",
     "scikit-learn>=1.8.0",
+    # Stats — Mann-Whitney U for per-signal contribution test in eval.py
+    "scipy>=1.11",
 ]
 
 [project.scripts]

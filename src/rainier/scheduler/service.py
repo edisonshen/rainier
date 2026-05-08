@@ -124,6 +124,122 @@ async def run_qu_scrape(session_name: str) -> None:
         notify_scrape_failure(session_name, str(exc))
 
 
+async def run_daily_eval(eval_date_iso: str | None = None) -> None:
+    """Backfill ThesisEvaluation rows + post the Discord eval report.
+
+    Triggered nightly at 17:00 PT (Mon-Fri). Idempotent: re-runs against the
+    same eval_date insert nothing new and re-render the same Discord message.
+
+    eval_date_iso lets callers (CLI, manual replay) override "today".
+    """
+    from datetime import date as _date
+
+    from rainier.alerts.discord import send_eval_report
+    from rainier.core.database import get_session
+    from rainier.core.models import ScreenedStockRecord, ThesisEvaluation
+    from rainier.llm_thesis.eval import (
+        HORIZONS,
+        compute_signal_contribution,
+        compute_verdict_hit_rate,
+        evaluate_horizon,
+    )
+
+    eval_date = (
+        _date.fromisoformat(eval_date_iso) if eval_date_iso else _date.today()
+    )
+
+    log.info("daily_eval_starting", eval_date=eval_date.isoformat())
+
+    inserted_total = 0
+    for horizon in HORIZONS:
+        try:
+            n = await asyncio.to_thread(evaluate_horizon, eval_date, horizon)
+            inserted_total += n
+        except Exception as exc:
+            log.error(
+                "daily_eval_horizon_failed",
+                horizon=horizon,
+                error=str(exc),
+            )
+
+    log.info("daily_eval_inserts_done", inserts=inserted_total)
+
+    settings = await asyncio.to_thread(load_settings_fresh)
+
+    # Pull "yesterday's afternoon scan" rows for the report block. We use the
+    # 1d horizon since that captures the freshest readout the operator cares
+    # about each morning.
+    def _fetch_yesterday():
+        from datetime import timedelta as _td
+
+        prior = eval_date - _td(days=1)
+        with get_session() as session:
+            rows = (
+                session.query(
+                    ThesisEvaluation.scan_date,
+                    ThesisEvaluation.symbol,
+                    ThesisEvaluation.verdict,
+                    ThesisEvaluation.llm_confidence,
+                    ThesisEvaluation.return_pct,
+                    ThesisEvaluation.hit,
+                    ScreenedStockRecord.session_name,
+                )
+                .join(
+                    ScreenedStockRecord,
+                    ScreenedStockRecord.id
+                    == ThesisEvaluation.screened_record_id,
+                )
+                .filter(
+                    ThesisEvaluation.scan_date == prior,
+                    ThesisEvaluation.horizon == "1d",
+                )
+                .order_by(ThesisEvaluation.symbol)
+                .all()
+            )
+        return [
+            {
+                "scan_date": r.scan_date,
+                "session_name": r.session_name,
+                "symbol": r.symbol,
+                "verdict": r.verdict,
+                "llm_confidence": r.llm_confidence,
+                "return_pct": r.return_pct,
+                "hit": r.hit,
+            }
+            for r in rows
+        ]
+
+    try:
+        yesterday_rows = await asyncio.to_thread(_fetch_yesterday)
+    except Exception as exc:
+        log.error("daily_eval_fetch_yesterday_failed", error=str(exc))
+        yesterday_rows = []
+
+    try:
+        base_rates = await asyncio.to_thread(compute_verdict_hit_rate, 30)
+    except Exception as exc:
+        log.error("daily_eval_base_rates_failed", error=str(exc))
+        base_rates = {}
+
+    try:
+        contribs = await asyncio.to_thread(compute_signal_contribution, 30, "5d")
+    except Exception as exc:
+        log.error("daily_eval_contribs_failed", error=str(exc))
+        contribs = []
+
+    try:
+        await asyncio.to_thread(
+            send_eval_report,
+            eval_date=eval_date,
+            yesterday_rows=yesterday_rows,
+            base_rates=base_rates,
+            signal_contribs=contribs,
+            config=settings.alerts.discord,
+        )
+    except Exception as exc:
+        log.error("daily_eval_discord_failed", error=str(exc))
+
+
 def build_scheduler() -> AsyncIOScheduler:
     """
     Build an AsyncIOScheduler with cron jobs for each QU100 session.
@@ -164,6 +280,24 @@ def build_scheduler() -> AsyncIOScheduler:
             misfire_grace_time=300,  # 5 min grace if system was asleep
         )
         log.info("job_registered", session=session_name, time=time_str, days="Mon-Fri")
+
+    # PR2: daily eval at 17:00 PT Mon-Fri (~2h after market close). Backfills
+    # ThesisEvaluation rows for 1d/5d/10d horizons and posts the eval Discord
+    # report. Idempotent — only fills missing rows on each fire.
+    eval_trigger = CronTrigger(
+        day_of_week="mon-fri",
+        hour=17,
+        minute=0,
+        timezone=tz,
+    )
+    scheduler.add_job(
+        run_daily_eval,
+        trigger=eval_trigger,
+        id="daily_eval",
+        name="Daily thesis evaluation + Discord report",
+        misfire_grace_time=900,  # 15 min grace
+    )
+    log.info("job_registered", session="daily_eval", time="17:00", days="Mon-Fri")
 
     return scheduler
 
