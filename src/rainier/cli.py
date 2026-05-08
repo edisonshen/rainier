@@ -2229,7 +2229,7 @@ def thesis_ticker(ctx, symbol, session_name, max_usd):
     "--session",
     "session_name",
     required=True,
-    type=click.Choice(["morning", "afternoon", "close"]),
+    type=click.Choice(["morning", "midday", "afternoon", "close"]),
     help="Which scan session row to log against (afternoon, close, etc.).",
 )
 @click.option(
