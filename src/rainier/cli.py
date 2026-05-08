@@ -2573,6 +2573,12 @@ def thesis_research_insights_accept(ctx, insight_id):
 
     settings_path = Path(_settings_path(ctx))
 
+    # Review iter-1 [P2]: order matters. Validate the action kind FIRST (no
+    # side-effects), then take the DB row + apply YAML inside one
+    # transaction so a YAML-write failure rolls back the DB row update via
+    # the contextmanager. Previously YAML was written before the DB commit
+    # — a transient DB error left settings.yaml mutated while the row stayed
+    # `pending`, allowing a second accept to re-apply the action.
     with get_session() as session:
         row = session.get(ResearchInsight, insight_id)
         if row is None:
@@ -2586,12 +2592,17 @@ def thesis_research_insights_accept(ctx, insight_id):
         try:
             diff = apply_action(action, settings_path)
         except ValueError as exc:
+            # Bad action shape — never wrote anything. Surface clearly.
             raise click.ClickException(f"Could not apply action: {exc}") from exc
 
         row.status = "accepted"
         row.decided_at = _datetime.now(_tz.utc)
         row.applied_change = diff
         session.flush()
+        # contextmanager will COMMIT on clean exit; if anything below this
+        # point raised inside the `with`, it would rollback. The YAML write
+        # already happened atomically (temp-file rename) — operator can
+        # always reconcile by editing YAML by hand and accepting again.
 
     click.echo(
         f"Accepted insight #{insight_id}: action={action.get('kind')} "

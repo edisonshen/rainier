@@ -149,6 +149,42 @@ def test_send_research_report_skips_when_no_webhook():
     mock_post.assert_not_called()
 
 
+def test_format_research_message_scrubs_at_mentions_in_subject():
+    """[P2 from review] Adversarial LLM-generated `subject` text containing
+    `@everyone` or `@here` must NOT pass through to Discord — the rendered
+    message must replace `@` with a non-mention variant.
+    """
+    insights = [
+        _ins(
+            id=1, severity="warn",
+            subject="@everyone bad",
+            rationale="@here please review",
+        ),
+    ]
+    msg = _format_research_message(
+        eval_date=date(2026, 5, 7), insights=insights
+    )
+    assert "@everyone" not in msg
+    assert "@here" not in msg
+    # The fullwidth-at variant survives so the operator can still read it.
+    assert "＠" in msg
+
+
+def test_format_research_message_scrubs_backticks():
+    """Backticks in rationale could break the surrounding code-block block
+    formatting; they must be replaced (or stripped)."""
+    insights = [
+        _ins(
+            id=1, severity="warn",
+            rationale="bad `code injection` attempt",
+        ),
+    ]
+    msg = _format_research_message(
+        eval_date=date(2026, 5, 7), insights=insights
+    )
+    assert "`code" not in msg
+
+
 def test_send_research_report_posts_when_enabled():
     cfg = DiscordConfig(enabled=True, webhook_url="https://example/test")
     with patch("rainier.alerts.discord.httpx.post") as mock_post:

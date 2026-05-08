@@ -807,3 +807,118 @@ def test_run_research_isolates_failures():
 def test_apply_action_is_callable():
     """Sanity: the dispatcher is exported from research.py."""
     assert callable(apply_action)
+
+
+# ---------------------------------------------------------------------------
+# /review iter-1 fixes
+# ---------------------------------------------------------------------------
+
+
+def test_emit_insight_owns_session_via_contextmanager():
+    """[P0 from review] When the caller does NOT pass `db_session`, the helper
+    must drive the session through `get_session()`'s contextmanager so a
+    SQL-level exception triggers rollback() + close() instead of leaking an
+    open transaction. Previously the code called `get_session().__enter__()`
+    directly, which bypassed the @contextmanager exception handling.
+    """
+    cm_calls: dict[str, int] = {"enter": 0, "exit": 0, "rollback": 0, "commit": 0}
+
+    class _SpySession:
+        def __init__(self):
+            self.committed = False
+            self.rolled_back = False
+
+        def query(self, *_a, **_kw):
+            return _Query([])
+
+        def add(self, _r):
+            pass
+
+        def flush(self):
+            return None
+
+        def commit(self):
+            cm_calls["commit"] += 1
+            self.committed = True
+
+        def rollback(self):
+            cm_calls["rollback"] += 1
+            self.rolled_back = True
+
+        def close(self):
+            pass
+
+    spy = _SpySession()
+
+    class _CM:
+        def __enter__(self):
+            cm_calls["enter"] += 1
+            return spy
+
+        def __exit__(self, exc_type, exc, tb):
+            cm_calls["exit"] += 1
+            if exc_type is not None:
+                spy.rollback()
+            else:
+                spy.commit()
+            return False
+
+    with patch("rainier.llm_thesis.research.get_session", return_value=_CM()):
+        emit_insight(
+            kind="signal_underperform",
+            subject="rank_trajectory",
+            severity="warn",
+            evidence={},
+            action={"kind": "disable_signal", "target": "x", "params": {}},
+            rationale="r",
+        )
+
+    # The helper must have entered AND exited the contextmanager exactly once.
+    assert cm_calls["enter"] == 1
+    assert cm_calls["exit"] == 1
+    assert cm_calls["commit"] == 1
+    assert cm_calls["rollback"] == 0
+
+
+def test_check_prompt_regression_emits_at_most_one_per_newer_prompt():
+    """[P2 from review] When three prompts exist (v1 older, v2 mid, v3
+    newest) and v3 is statistically worse than BOTH v1 and v2, the previous
+    implementation called emit_insight twice (once per pair), each UPSERT-ing
+    the same `subject=v3` row. That silently dropped earlier evidence and
+    inflated recurrence_count. The fix picks the strongest pair (lowest p)
+    and calls emit_insight exactly once per `newer`.
+    """
+    sess = _MemSession()
+    today = date(2026, 5, 7)
+
+    v1_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    v2_at = datetime(2026, 4, 15, tzinfo=timezone.utc)
+    v3_at = datetime(2026, 4, 25, tzinfo=timezone.utc)
+
+    # v1 returns +0.05; v2 returns +0.04 (slightly worse); v3 returns -0.03
+    # (much worse). v3 is significantly worse than BOTH older prompts.
+    fake_rows = (
+        [("v1", v1_at, 0.05)] * 12
+        + [("v2", v2_at, 0.04)] * 12
+        + [("v3", v3_at, -0.03)] * 12
+    )
+
+    cm = MagicMock()
+    cm.__enter__.return_value.execute.return_value.all.return_value = fake_rows
+    cm.__exit__.return_value = False
+
+    with patch(
+        "rainier.llm_thesis.research.get_session", return_value=cm
+    ):
+        out = check_prompt_regression(
+            eval_date=today, days=30, db_session=sess
+        )
+
+    # v2 is barely worse than v1 (likely no significant p), v3 is much worse
+    # than both. So we expect at most one emission for v3 — never one for v2
+    # AND v3 from the same `newer=v3` group.
+    v3_emissions = [r for r in out if r.subject == "v3"]
+    assert len(v3_emissions) == 1, (
+        "v3 must produce a single insight (best-pair semantics), "
+        "not one per older predecessor"
+    )

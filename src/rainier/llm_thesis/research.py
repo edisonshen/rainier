@@ -121,9 +121,7 @@ def emit_insight(
             f"got {action!r}"
         )
 
-    own_session = db_session is None
-    session = db_session or get_session().__enter__()
-    try:
+    def _do(session) -> ResearchInsight:
         existing = (
             session.query(ResearchInsight)
             .filter(
@@ -141,26 +139,32 @@ def emit_insight(
             existing.recurrence_count = (existing.recurrence_count or 1) + 1
             existing.updated_at = datetime.now(timezone.utc)
             session.flush()
-            row = existing
-        else:
-            row = ResearchInsight(
-                kind=kind,
-                subject=subject,
-                severity=severity,
-                evidence=evidence,
-                action=action,
-                rationale=rationale,
-                recurrence_count=1,
-                status="pending",
-            )
-            session.add(row)
-            session.flush()
-        if own_session:
-            session.commit()
+            return existing
+        row = ResearchInsight(
+            kind=kind,
+            subject=subject,
+            severity=severity,
+            evidence=evidence,
+            action=action,
+            rationale=rationale,
+            recurrence_count=1,
+            status="pending",
+        )
+        session.add(row)
+        session.flush()
         return row
-    finally:
-        if own_session:
-            session.close()
+
+    if db_session is not None:
+        # Caller owns the session — they're responsible for commit/rollback.
+        return _do(db_session)
+    # We own the session — go through the contextmanager so a downstream
+    # exception triggers rollback() + close() instead of leaking an open
+    # transaction. Review iter-1 [P0]: the previous implementation called
+    # `get_session().__enter__()` directly, which bypasses the @contextmanager
+    # exception handling — a SQL error mid-flush would leave the connection
+    # dirty.
+    with get_session() as session:
+        return _do(session)
 
 
 # ---------------------------------------------------------------------------
@@ -720,53 +724,70 @@ def check_prompt_regression(
         return []
 
     # Sort prompt templates by first-seen timestamp; older first.
+    # Review iter-1 [P2]: emit at most ONE insight per `newer` prompt — pick
+    # the strongest evidence (lowest p-value) among all (older, newer) pairs.
+    # The prior implementation looped (older, newer) and called emit_insight
+    # for each pair; because `subject=newer` is the same key, every later
+    # call UPSERT-ed onto the same row, silently dropping earlier evidence
+    # AND artificially inflating recurrence_count to N*(N-1)/2 in one job.
     ordered = sorted(by_prompt.keys(), key=lambda k: earliest[k])
     out: list[ResearchInsight] = []
     for newer in ordered[1:]:
+        new_returns = by_prompt[newer]
+        if not new_returns:
+            continue
+        mean_new = sum(new_returns) / len(new_returns)
+        # Among all older prompts, pick the strongest evidence pair (lowest
+        # p) where `newer` is statistically worse.
+        # Tuple shape: (p, older, old_returns, mean_old).
+        best: tuple[float, str, list[float], float] | None = None
         for older in ordered[: ordered.index(newer)]:
-            new_returns = by_prompt[newer]
             old_returns = by_prompt[older]
-            if not new_returns or not old_returns:
+            if not old_returns:
                 continue
-            mean_new = sum(new_returns) / len(new_returns)
             mean_old = sum(old_returns) / len(old_returns)
             if mean_new >= mean_old:
                 continue
             p = _mannwhitney_p(new_returns, old_returns)
             if p is None or p >= p_threshold:
                 continue
-            evidence = {
-                "older_prompt": older,
-                "newer_prompt": newer,
-                "n_old": len(old_returns),
-                "n_new": len(new_returns),
-                "mean_old": mean_old,
-                "mean_new": mean_new,
-                "p_value": p,
-                "horizon": horizon,
-                "days": days,
-            }
-            action = {
-                "kind": "bump_prompt_version",
-                "target": older,
-                "params": {},
-            }
-            rationale = (
-                f"Prompt {newer!r} shows mean {horizon} return {mean_new:+.2%} "
-                f"vs older {older!r} {mean_old:+.2%} (p={p:.3f}). "
-                f"Statistically worse — recommend rollback to {older!r}."
+            if best is None or p < best[0]:
+                best = (p, older, old_returns, mean_old)
+        if best is None:
+            continue
+        p, older, old_returns, mean_old = best
+        evidence = {
+            "older_prompt": older,
+            "newer_prompt": newer,
+            "n_old": len(old_returns),
+            "n_new": len(new_returns),
+            "mean_old": mean_old,
+            "mean_new": mean_new,
+            "p_value": p,
+            "horizon": horizon,
+            "days": days,
+        }
+        action = {
+            "kind": "bump_prompt_version",
+            "target": older,
+            "params": {},
+        }
+        rationale = (
+            f"Prompt {newer!r} shows mean {horizon} return {mean_new:+.2%} "
+            f"vs older {older!r} {mean_old:+.2%} (p={p:.3f}). "
+            f"Statistically worse — recommend rollback to {older!r}."
+        )
+        out.append(
+            emit_insight(
+                kind="prompt_regression",
+                subject=newer,
+                severity="critical",
+                evidence=evidence,
+                action=action,
+                rationale=rationale,
+                db_session=db_session,
             )
-            out.append(
-                emit_insight(
-                    kind="prompt_regression",
-                    subject=newer,
-                    severity="critical",
-                    evidence=evidence,
-                    action=action,
-                    rationale=rationale,
-                    db_session=db_session,
-                )
-            )
+        )
     return out
 
 
