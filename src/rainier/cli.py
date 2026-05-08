@@ -21,6 +21,21 @@ def cli(ctx, config_path):
     ctx.ensure_object(dict)
     path = Path(config_path) if config_path else Path("config/settings.yaml")
     ctx.obj["settings"] = load_settings(path)
+    # Codex P1: thesis subcommands need to honor `--config staging.yaml` so
+    # they don't silently fall back to config/settings.yaml in non-default
+    # environments. We stash the resolved path here; load_settings_fresh()
+    # call sites pull it from ctx.obj via _settings_path(ctx).
+    ctx.obj["settings_path"] = str(path)
+
+
+def _settings_path(ctx) -> str:
+    """Return the YAML path the user selected at the CLI root.
+
+    Defaults to `config/settings.yaml` when ctx.obj is missing or empty
+    (callsites that build a click.Context just for unit tests).
+    """
+    obj = getattr(ctx, "obj", None) or {}
+    return obj.get("settings_path") or "config/settings.yaml"
 
 
 @cli.command()
@@ -2145,7 +2160,7 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     from rainier.llm_thesis.persistence import persist_screened_stocks
     from rainier.llm_thesis.service import compute_theses_and_persist
 
-    settings = load_settings_fresh()
+    settings = load_settings_fresh(_settings_path(ctx))
     # Override the kill switch via CLI.
     settings.llm_thesis.max_usd_per_scan = float(max_usd)
 
@@ -2196,7 +2211,7 @@ def thesis_ticker(ctx, symbol, session_name, max_usd):
     from rainier.core.config import load_settings_fresh
     from rainier.llm_thesis.service import compute_theses_and_persist
 
-    settings = load_settings_fresh()
+    settings = load_settings_fresh(_settings_path(ctx))
     settings.llm_thesis.max_usd_per_scan = float(max_usd)
 
     click.echo(f"Running screener (will filter to {symbol})...")
@@ -2289,12 +2304,13 @@ def thesis_signals():
 
 
 @thesis_signals.command("list")
-def thesis_signals_list():
+@click.pass_context
+def thesis_signals_list(ctx):
     """Print every signal in the registry + its enabled flag from settings.yaml."""
     from rainier.core.config import load_settings_fresh
     from rainier.llm_thesis.signals import REGISTRY
 
-    settings = load_settings_fresh()
+    settings = load_settings_fresh(_settings_path(ctx))
     cfg_map = settings.llm_thesis.signals
     click.echo(f"{'Name':<24} {'Enabled':<8} {'Version':<8} {'Cost(ms)':<10} Weight")
     click.echo("-" * 64)
@@ -2309,15 +2325,19 @@ def thesis_signals_list():
         )
 
 
-def _set_signal_enabled_yaml(name: str, enabled: bool) -> None:
-    """Toggle a signal in `config/settings.yaml` via plain PyYAML.
+def _set_signal_enabled_yaml(name: str, enabled: bool, config_path: str) -> None:
+    """Toggle a signal in `config_path` via plain PyYAML.
 
     PR1 uses PyYAML which does not preserve comments/order — that's intentional
     for PR1 minimality. PR3 will swap in ruamel.yaml when the auto-research
     accept flow needs to mutate config without nuking layout.
+
+    Codex P1: targets the same YAML the caller's `--config` selected so that
+    `rainier --config staging.yaml thesis signals enable X` doesn't surprise-
+    edit the production `config/settings.yaml`.
     """
     import yaml as _yaml
-    path = Path("config/settings.yaml")
+    path = Path(config_path)
     if not path.exists():
         raise click.ClickException(f"Missing {path}")
     with path.open("r") as f:
@@ -2333,34 +2353,37 @@ def _set_signal_enabled_yaml(name: str, enabled: bool) -> None:
 
 @thesis_signals.command("enable")
 @click.argument("name")
-def thesis_signals_enable(name):
+@click.pass_context
+def thesis_signals_enable(ctx, name):
     """Flip the signal to enabled=true in settings.yaml."""
     from rainier.llm_thesis.signals import REGISTRY
     if name not in REGISTRY:
         raise click.ClickException(
             f"Unknown signal {name!r}. Known: {', '.join(REGISTRY)}"
         )
-    _set_signal_enabled_yaml(name, True)
+    _set_signal_enabled_yaml(name, True, _settings_path(ctx))
     click.echo(f"Enabled signal: {name}")
 
 
 @thesis_signals.command("disable")
 @click.argument("name")
-def thesis_signals_disable(name):
+@click.pass_context
+def thesis_signals_disable(ctx, name):
     """Flip the signal to enabled=false in settings.yaml."""
     from rainier.llm_thesis.signals import REGISTRY
     if name not in REGISTRY:
         raise click.ClickException(
             f"Unknown signal {name!r}. Known: {', '.join(REGISTRY)}"
         )
-    _set_signal_enabled_yaml(name, False)
+    _set_signal_enabled_yaml(name, False, _settings_path(ctx))
     click.echo(f"Disabled signal: {name}")
 
 
 @thesis_signals.command("test")
 @click.argument("name")
 @click.option("--symbol", required=True, help="Symbol to dry-run the signal against.")
-def thesis_signals_test(name, symbol):
+@click.pass_context
+def thesis_signals_test(ctx, name, symbol):
     """Dry-run a single signal's compute() against the latest QU100 snapshot."""
     from datetime import date as _date
 
@@ -2375,7 +2398,7 @@ def thesis_signals_test(name, symbol):
             f"Unknown signal {name!r}. Known: {', '.join(REGISTRY)}"
         )
 
-    settings = load_settings_fresh()
+    settings = load_settings_fresh(_settings_path(ctx))
     candidates, ohlcv = screen_stocks(settings)
     target: StockCandidate | None = next(
         (c for c in candidates if c.symbol.upper() == symbol.upper()), None
