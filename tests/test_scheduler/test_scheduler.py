@@ -30,14 +30,15 @@ def _make_settings(**overrides) -> Settings:
 class TestBuildScheduler:
     """Test that build_scheduler creates the correct jobs."""
 
-    def test_creates_four_jobs(self):
+    def test_creates_five_jobs(self):
+        """4 QU scrape jobs + 1 daily eval job (PR2)."""
         settings = _make_settings()
         with patch("rainier.scheduler.service.get_settings", return_value=settings):
             from rainier.scheduler.service import build_scheduler
             scheduler = build_scheduler()
 
         jobs = scheduler.get_jobs()
-        assert len(jobs) == 4
+        assert len(jobs) == 5
 
     def test_job_ids(self):
         settings = _make_settings()
@@ -51,6 +52,7 @@ class TestBuildScheduler:
             "qu_scrape_midday",
             "qu_scrape_afternoon",
             "qu_scrape_close",
+            "daily_eval",
         }
 
     def test_job_names(self):
@@ -132,13 +134,31 @@ class TestBuildScheduler:
         assert str(scheduler.timezone) == "US/Eastern"
 
     def test_misfire_grace_time(self):
+        """QU scrape jobs use 5-min grace; daily eval uses 15-min grace."""
         settings = _make_settings()
         with patch("rainier.scheduler.service.get_settings", return_value=settings):
             from rainier.scheduler.service import build_scheduler
             scheduler = build_scheduler()
 
         for job in scheduler.get_jobs():
-            assert job.misfire_grace_time == 300
+            if job.id == "daily_eval":
+                assert job.misfire_grace_time == 900
+            else:
+                assert job.misfire_grace_time == 300
+
+    def test_daily_eval_runs_at_1700_pt_weekdays(self):
+        settings = _make_settings()
+        with patch("rainier.scheduler.service.get_settings", return_value=settings):
+            from rainier.scheduler.service import build_scheduler
+            scheduler = build_scheduler()
+
+        eval_job = scheduler.get_job("daily_eval")
+        assert eval_job is not None
+        trigger = eval_job.trigger
+        # day_of_week is index 4, hour 5, minute 6.
+        assert str(trigger.fields[4]) == "mon-fri"
+        assert str(trigger.fields[5]) == "17"
+        assert str(trigger.fields[6]) == "0"
 
 
 class TestRunQuScrape:

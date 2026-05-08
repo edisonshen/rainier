@@ -2425,3 +2425,46 @@ def thesis_signals_test(ctx, name, symbol):
     click.echo(f"value: {value}")
     if value is not None:
         click.echo(f"render_for_prompt: {sig.render_for_prompt(value)}")
+
+
+@thesis.command("eval")
+@click.option(
+    "--date", "eval_date_s", default=None,
+    help="Evaluation date YYYY-MM-DD; defaults to today.",
+)
+@click.option(
+    "--horizon", "horizon", default=None,
+    type=click.Choice(["1d", "5d", "10d"]),
+    help="Single horizon to evaluate; default runs all three.",
+)
+@click.pass_context
+def thesis_eval(ctx, eval_date_s, horizon):
+    """Run the daily-eval job manually.
+
+    Backfills ThesisEvaluation rows + posts the Discord eval report.
+    Idempotent: only inserts missing rows.
+    """
+    import asyncio as _asyncio
+    from datetime import date as _date
+
+    from rainier.scheduler.service import run_daily_eval
+
+    if horizon is None:
+        # Full pass — invoke the scheduler entry which runs all three plus
+        # composes the Discord report.
+        _asyncio.run(run_daily_eval(eval_date_iso=eval_date_s))
+        click.echo("Daily eval finished.")
+        return
+
+    # Single-horizon: skip the Discord report, just run the backfill so the
+    # operator can see the insert count for one horizon at a time.
+    from rainier.llm_thesis.eval import evaluate_horizon
+
+    eval_date = (
+        _date.fromisoformat(eval_date_s) if eval_date_s else _date.today()
+    )
+    n = evaluate_horizon(eval_date, horizon)  # type: ignore[arg-type]
+    click.echo(
+        f"Evaluated horizon={horizon} on {eval_date.isoformat()}: {n} rows inserted."
+    )
+    _ = ctx  # ctx unused for single-horizon path; kept for API symmetry

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date as date_cls
 from datetime import datetime
 
 import httpx
@@ -337,6 +338,109 @@ def send_stock_candidates(
             response.raise_for_status()
         except Exception:
             log.exception("discord_thesis_send_failed symbol=%s", candidate.symbol)
+
+
+# ---------------------------------------------------------------------------
+# Daily eval report (PR2)
+# ---------------------------------------------------------------------------
+
+
+def _format_eval_message(
+    *,
+    eval_date: date_cls,
+    yesterday_rows: list[dict],
+    base_rates: dict[str, list],   # {verdict: [HitRate per horizon]}
+    signal_contribs: list,         # [SignalContribution]
+    p_threshold: float = 0.05,
+) -> str:
+    """Render the Discord eval-report body. <=1800 chars per message."""
+    lines: list[str] = []
+    lines.append(f"**Eval report — {eval_date.isoformat()}**")
+    if yesterday_rows:
+        scan_date = yesterday_rows[0].get("scan_date") or "(prior scan)"
+        session = yesterday_rows[0].get("session_name") or "afternoon"
+        lines.append(
+            f"Yesterday's {session} scan ({scan_date}):"
+        )
+        for row in yesterday_rows:
+            mark = "[HIT]" if row.get("hit") else "[miss]"
+            verdict = row.get("verdict") or "?"
+            confidence = row.get("llm_confidence")
+            sym = row.get("symbol") or "?"
+            ret = float(row.get("return_pct") or 0.0)
+            conf_part = f"({confidence}/10)" if confidence is not None else ""
+            lines.append(
+                f"  {mark} {sym:<6} {verdict:<10} {conf_part:<7} -> {ret:+.2%}"
+            )
+    else:
+        lines.append("Yesterday's scan: no graded picks.")
+
+    lines.append("")
+    lines.append("30-day base rates (rolling, 5d horizon):")
+    for verdict in ("setup_long", "watch", "no_setup"):
+        rates = base_rates.get(verdict, [])
+        five = next((r for r in rates if getattr(r, "horizon", None) == "5d"), None)
+        if five is None or five.n == 0:
+            lines.append(f"  {verdict:<12} (no data)")
+            continue
+        lines.append(
+            f"  {verdict:<12} win-rate {five.win_rate:.0%}   "
+            f"avg {five.avg_return_pct:+.2%}  n={five.n}"
+        )
+
+    lines.append("")
+    sigs_with_p = [c for c in signal_contribs if c.p_value is not None]
+    if sigs_with_p:
+        lines.append(
+            f"Signal contribution (rolling 30d, p<{p_threshold:.2f} only):"
+        )
+        any_significant = False
+        for c in sigs_with_p:
+            if c.p_value is None or c.p_value > p_threshold:
+                continue
+            any_significant = True
+            tag = "[+]" if c.lift > 0 else "[-]"
+            lines.append(
+                f"  {tag} {c.name:<22} {c.lift:+.2%} lift   "
+                f"n={c.n_used}   p={c.p_value:.3f}"
+            )
+        if not any_significant:
+            lines.append("  (no signals with p<%.2f this window)" % p_threshold)
+    else:
+        lines.append("Signal contribution: insufficient data.")
+
+    body = "\n".join(lines)
+    return _truncate(body, 1800)
+
+
+def send_eval_report(
+    *,
+    eval_date: date_cls,
+    yesterday_rows: list[dict],
+    base_rates: dict[str, list],
+    signal_contribs: list,
+    config: DiscordConfig,
+) -> None:
+    """Post the daily eval report to Discord (stock channel, then webhook)."""
+    if not config.enabled:
+        log.debug("discord_alerts_disabled")
+        return
+    webhook_url = _resolve_webhook_url(config)
+    if not webhook_url:
+        log.warning("discord_no_webhook_url_eval")
+        return
+
+    message = _format_eval_message(
+        eval_date=eval_date,
+        yesterday_rows=yesterday_rows,
+        base_rates=base_rates,
+        signal_contribs=signal_contribs,
+    )
+    try:
+        response = httpx.post(webhook_url, json={"content": message}, timeout=10)
+        response.raise_for_status()
+    except Exception:
+        log.exception("discord_eval_send_failed")
 
 
 def format_stock_candidates_json(candidates: list[StockCandidate]) -> str:
