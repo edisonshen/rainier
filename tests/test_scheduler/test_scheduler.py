@@ -367,6 +367,138 @@ class TestRunQuScrapeLLMGating:
         assert mock_reload.call_count == 2
 
 
+class TestPersistScreenedTop50:
+    """PR2 carry-over P2 #3: persist top-50 candidates (not top-20) so the
+    shadow-validation dataset isn't biased toward the upper tail.
+    """
+
+    def _settings(self, enabled_sessions=("afternoon", "close")):
+        from rainier.core.config import LLMThesisConfig
+
+        s = _make_settings()
+        s.llm_thesis = LLMThesisConfig(
+            enabled=True,
+            model="test",
+            max_usd_per_scan=1.0,
+            enabled_sessions=list(enabled_sessions),
+        )
+        return s
+
+    @pytest.mark.asyncio
+    async def test_persist_called_with_top_50_candidates(self):
+        """When the screener returns >50 candidates, scheduler hands the first
+        50 to persist_screened_stocks. Discord still gets top-20."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from rainier.core.types import StockCandidate
+
+        cands = [
+            StockCandidate(
+                symbol=f"S{i:03d}", rank=i + 1, rank_change=0,
+                long_short="Long in", capital_flow_direction="+",
+                sector="Technology", signal_strength=1.0 - i * 0.001,
+            )
+            for i in range(80)
+        ]
+
+        mock_result = MagicMock(records_created=80, errors=[], duration_seconds=1.0)
+        mock_scraper = AsyncMock()
+        mock_scraper.execute = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
+            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
+            patch(
+                "rainier.scheduler.service.load_settings_fresh",
+                return_value=self._settings(),
+            ),
+            patch(
+                "rainier.analysis.stock_screener.screen_stocks",
+                return_value=(cands, {}),
+            ),
+            patch(
+                "rainier.llm_thesis.persistence.persist_screened_stocks"
+            ) as mock_persist,
+            patch(
+                "rainier.llm_thesis.service.compute_theses_and_persist",
+                return_value={},
+            ),
+            patch(
+                "rainier.alerts.discord.send_stock_candidates"
+            ) as mock_discord,
+            patch("rainier.notifications.notifier.notify_scrape_result"),
+        ):
+            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
+            from rainier.scheduler.service import run_qu_scrape
+
+            await run_qu_scrape("afternoon")
+
+        mock_persist.assert_called_once()
+        persist_args, persist_kwargs = mock_persist.call_args
+        # First positional arg is the candidate list.
+        persisted = persist_args[0]
+        assert len(persisted) == 50, (
+            f"expected 50 persisted candidates, got {len(persisted)} — "
+            "P2 #3 regression: scheduler is truncating before persistence."
+        )
+        # Discord display set is still top-20.
+        mock_discord.assert_called_once()
+        discord_args = mock_discord.call_args.args
+        displayed = discord_args[0]
+        assert len(displayed) == 20
+
+    @pytest.mark.asyncio
+    async def test_persist_under_50_uses_actual_count(self):
+        """When the screener returns <50 candidates, persistence gets all of them."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from rainier.core.types import StockCandidate
+
+        cands = [
+            StockCandidate(
+                symbol=f"S{i:03d}", rank=i + 1, rank_change=0,
+                long_short="Long in", capital_flow_direction="+",
+                sector="Technology", signal_strength=1.0 - i * 0.001,
+            )
+            for i in range(7)
+        ]
+
+        mock_result = MagicMock(records_created=7, errors=[], duration_seconds=1.0)
+        mock_scraper = AsyncMock()
+        mock_scraper.execute = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
+            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
+            patch(
+                "rainier.scheduler.service.load_settings_fresh",
+                return_value=self._settings(),
+            ),
+            patch(
+                "rainier.analysis.stock_screener.screen_stocks",
+                return_value=(cands, {}),
+            ),
+            patch(
+                "rainier.llm_thesis.persistence.persist_screened_stocks"
+            ) as mock_persist,
+            patch(
+                "rainier.llm_thesis.service.compute_theses_and_persist",
+                return_value={},
+            ),
+            patch("rainier.alerts.discord.send_stock_candidates"),
+            patch("rainier.notifications.notifier.notify_scrape_result"),
+        ):
+            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
+            from rainier.scheduler.service import run_qu_scrape
+
+            await run_qu_scrape("afternoon")
+
+        persist_args, _ = mock_persist.call_args
+        assert len(persist_args[0]) == 7
+
+
 class TestAppConfig:
     """Test the new AppConfig model."""
 

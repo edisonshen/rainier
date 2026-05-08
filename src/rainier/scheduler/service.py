@@ -58,17 +58,25 @@ async def run_qu_scrape(session_name: str) -> None:
         from rainier.alerts.discord import send_stock_candidates
         from rainier.analysis.stock_screener import screen_stocks
 
-        candidates, ohlcv_by_symbol = await asyncio.to_thread(screen_stocks, settings)
-        candidates = candidates[:20]
+        all_candidates, ohlcv_by_symbol = await asyncio.to_thread(
+            screen_stocks, settings
+        )
+        # PR2 carry-over P2 #3: persist top-50 (or all if fewer) to give the
+        # 30-day shadow validation an unbiased dataset. Top-20 alone biases
+        # the per-rank correlation toward the upper tail. Discord still gets
+        # top-20 (display rule), and the LLM still only runs on top-5.
+        scan_candidates = all_candidates[:50]
+        candidates = all_candidates[:20]  # Discord display set
 
         scan_date = date.today()
 
-        # 3. Always persist screener output for every scan.
+        # 3. Always persist screener output for every scan — full top-50, not
+        #    only the Discord set.
         try:
             from rainier.llm_thesis.persistence import persist_screened_stocks
             await asyncio.to_thread(
                 persist_screened_stocks,
-                candidates,
+                scan_candidates,
                 scan_date=scan_date,
                 session_name=session_name,
             )

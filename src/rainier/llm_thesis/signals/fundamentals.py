@@ -39,6 +39,67 @@ def _coerce_int(val: Any) -> int | None:
         return None
 
 
+def _extract_last_surprise_pct(ticker: Any) -> float | None:
+    """Pull the most recent quarter's earnings-surprise percent from yfinance.
+
+    PR2 carry-over P2 #5: previously we used ``earningsQuarterlyGrowth`` which
+    is YoY revenue/EPS growth, NOT the beat-vs-estimate that the design
+    document specifies. yfinance exposes the actual surprise via the
+    ``earnings_history`` DataFrame (one row per recent quarter, columns
+    ``epsActual``, ``epsEstimate``, ``epsDifference``, ``surprisePercent``).
+
+    We pick the most recent row and return its ``surprisePercent`` as a
+    decimal fraction (e.g. ``0.054`` for a +5.4% beat). Returns ``None`` when
+    the field is missing, malformed, or yfinance fails outright. Falls back
+    to the legacy ``info.lastEarningsSurprise`` for tickers where
+    ``earnings_history`` is unavailable so we degrade gracefully rather than
+    losing the signal entirely.
+    """
+    try:
+        history = ticker.earnings_history
+    except Exception:
+        log.warning("fundamentals_earnings_history_error", exc_info=True)
+        history = None
+
+    if history is None:
+        return None
+
+    # earnings_history is a DataFrame. Some yfinance versions return None or
+    # an empty frame; both are valid no-data outcomes.
+    try:
+        if hasattr(history, "empty") and history.empty:
+            return None
+    except Exception:
+        return None
+
+    # Most recent quarter is typically the last row (chronological asc).
+    surprise_col_candidates = ("surprisePercent", "surprise_percent", "Surprise(%)")
+    try:
+        col_name = next(
+            (c for c in surprise_col_candidates if c in getattr(history, "columns", [])),
+            None,
+        )
+        if col_name is None:
+            return None
+        # Use .iloc[-1] for last row; fall back if not a DataFrame-like.
+        last_val = history[col_name].dropna().iloc[-1]
+    except (IndexError, KeyError, AttributeError):
+        return None
+    except Exception:
+        log.warning("fundamentals_earnings_history_parse_error", exc_info=True)
+        return None
+
+    pct = _coerce_float(last_val)
+    if pct is None:
+        return None
+    # yfinance reports surprise as a percentage value (e.g. 5.4 for +5.4%).
+    # Normalize to a decimal fraction so the LLM and downstream callers see
+    # the same units as the design table specifies (`+0.094` = +9.4%).
+    if abs(pct) > 1.0:
+        pct = pct / 100.0
+    return pct
+
+
 @lru_cache(maxsize=512)
 def _fetch_fundamentals_cached(
     symbol: str, scan_date_iso: str,
@@ -85,9 +146,14 @@ def _fetch_fundamentals_cached(
             except Exception:
                 next_earnings = None
 
-    surprise = _coerce_float(
-        info.get("earningsQuarterlyGrowth") or info.get("lastEarningsSurprise")
-    )
+    # PR2 carry-over P2 #5: the previous code read `earningsQuarterlyGrowth`
+    # (YoY growth) and labeled it `last_surprise_pct`. The design specifies
+    # the most recent quarter's beat-vs-estimate surprise, which lives in
+    # `Ticker.earnings_history`. Fall back to legacy info keys when
+    # earnings_history is empty so partial degradation is graceful.
+    surprise = _extract_last_surprise_pct(ticker)
+    if surprise is None:
+        surprise = _coerce_float(info.get("lastEarningsSurprise"))
 
     return (pe_trailing, pe_forward, market_cap, next_earnings, surprise)
 

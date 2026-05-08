@@ -2165,15 +2165,18 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     settings.llm_thesis.max_usd_per_scan = float(max_usd)
 
     click.echo(f"Running screener for session={session_name}...")
-    candidates, ohlcv_by_symbol = screen_stocks(settings)
-    candidates = candidates[:20]
+    all_candidates, ohlcv_by_symbol = screen_stocks(settings)
+    # PR2 carry-over P2 #3: persist top-50 for unbiased shadow validation;
+    # display set capped at top-20; LLM thesis on top-N (default 5).
+    scan_candidates = all_candidates[:50]
+    candidates = all_candidates[:20]
     if not candidates:
         click.echo("No candidates from screener.")
         return
 
     scan_date = _date.today()
     persist_screened_stocks(
-        candidates, scan_date=scan_date, session_name=session_name
+        scan_candidates, scan_date=scan_date, session_name=session_name
     )
 
     click.echo(f"Running LLM thesis on top {top_n} (max_usd={max_usd:.2f})...")

@@ -32,7 +32,7 @@ from sqlalchemy import func
 from rainier.core.config import LLMThesisConfig, Settings
 from rainier.core.database import get_session
 from rainier.core.models import LLMAnalysisRecord
-from rainier.core.types import StockCandidate
+from rainier.core.types import PatternSignal, StockCandidate
 
 from .persistence import update_with_thesis
 from .prompt import SYSTEM_PROMPT, build_user_message
@@ -142,6 +142,7 @@ def _tier1_lookup(
     *,
     session_name: str,
     llm_model: str,
+    enabled_signals: list[str] | None = None,
 ) -> tuple[int, dict[str, Any]] | None:
     """Cheap cache lookup — match (date, symbol, prompt, session, model).
 
@@ -152,13 +153,35 @@ def _tier1_lookup(
     (idx_llm_analysis_idempotent) already keys on (day, symbols, model,
     prompt, input_hash) so true duplicates still collapse to one row via
     Tier 2's input_hash equality.
+
+    PR2 carry-over P2 #2: when ``enabled_signals`` is provided, reject any
+    cached row whose ``signals_used`` (as recorded in structured_output) does
+    not match the current set. This guarantees that toggling a signal off in
+    settings.yaml causes the next scan to compute a fresh thesis instead of
+    serving a stale one built with the old signal set.
+
+    PR2 carry-over P3 #6: filter on the dedicated ``session_name`` column so
+    the SQL WHERE clause (not post-Python on a JSONB key) discriminates rows.
+    The previous post-filter dropped a same-session lookup to None whenever a
+    cross-session row landed earlier in the partition (order_by id desc).
+    Falling back to the legacy ``_session_name`` JSONB key keeps pre-PR2 rows
+    reusable.
     """
     start = datetime.combine(scan_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
+    enabled_set = (
+        frozenset(enabled_signals) if enabled_signals is not None else None
+    )
     with get_session() as session:
-        row = (
+        # Strict path: filter on session_name column. Legacy rows (PR1) have
+        # session_name NULL, so include those in the candidate set as well —
+        # the post-filter on _session_name JSONB key handles per-session reuse
+        # for those legacy rows.
+        candidates = (
             session.query(
-                LLMAnalysisRecord.id, LLMAnalysisRecord.structured_output
+                LLMAnalysisRecord.id,
+                LLMAnalysisRecord.structured_output,
+                LLMAnalysisRecord.session_name,
             )
             .filter(
                 LLMAnalysisRecord.created_at >= start,
@@ -168,19 +191,32 @@ def _tier1_lookup(
                 LLMAnalysisRecord.llm_model == llm_model,
             )
             .order_by(LLMAnalysisRecord.id.desc())
-            .first()
+            .all()
         )
-        if row is None:
-            return None
-        rec_id, output = row
-        if output is None:
-            return None
-        # Reuse only when this row was produced for the SAME session.
-        if isinstance(output, dict):
-            recorded_session = output.get("_session_name")
-            if recorded_session is not None and recorded_session != session_name:
-                return None
-        return int(rec_id), dict(output)
+        for rec_id, output, row_session in candidates:
+            if output is None:
+                continue
+            # Session match: prefer the dedicated column; fall back to the
+            # legacy JSONB stamp on rows persisted before this column landed.
+            if row_session is not None:
+                if row_session != session_name:
+                    continue
+            elif isinstance(output, dict):
+                recorded = output.get("_session_name")
+                if recorded is not None and recorded != session_name:
+                    continue
+            # Signal-set drift check (PR2 carry-over P2 #2). When the caller
+            # specifies the current enabled-signals list, only reuse a cached
+            # thesis whose own signals_used set matches; otherwise the user
+            # toggled a signal between scans and the LLM was reasoning over
+            # a stale evidence pack.
+            if enabled_set is not None and isinstance(output, dict):
+                cached_signals = output.get("signals_used")
+                if isinstance(cached_signals, list):
+                    if frozenset(cached_signals) != enabled_set:
+                        continue
+            return int(rec_id), dict(output)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +310,12 @@ async def generate_thesis(
     thesis_cfg = settings.llm_thesis
     prompt_version = thesis_cfg.prompt_version
 
+    # PR2 carry-over P2 #2: include the current enabled-signals set so a
+    # YAML toggle invalidates the cache for the next scan.
+    enabled_signal_names = sorted(
+        name for name, cfg in thesis_cfg.signals.items() if cfg.enabled
+    )
+
     # Tier 1: cache hit on same (date, symbol, prompt_template, session, model)?
     cached = _tier1_lookup(
         symbol,
@@ -281,6 +323,7 @@ async def generate_thesis(
         prompt_version,
         session_name=session_name,
         llm_model=thesis_cfg.model,
+        enabled_signals=enabled_signal_names,
     )
     if cached is not None:
         record_id, raw_output = cached
@@ -426,6 +469,7 @@ def _persist_thesis(
             total_cost_usd=cost_usd,
             input_hash=input_hash,
             signals_used=list(thesis.signals_used or []),
+            session_name=session_name,
         )
         session.add(rec)
         try:
@@ -486,6 +530,40 @@ def compute_theses_and_persist(
     )
 
 
+def _candidate_to_pattern_signal(
+    candidate: StockCandidate,
+) -> PatternSignal | None:
+    """Reconstruct the PatternSignal that fired during screening (PR2 fix #4).
+
+    The screener's :class:`PatternSignal` is collapsed onto the frozen
+    :class:`StockCandidate` as a handful of flat fields (``pattern_type``,
+    ``entry_price``, ``stop_loss``, ``target_price``, etc.). We rebuild the
+    minimal PatternSignal needed by ``viz.charts.create_static_stock_chart``
+    so the chart sent to the LLM gets the entry / SL / target overlays. If
+    the candidate had no pattern, return ``None`` and the chart renders as a
+    plain candle plot.
+    """
+    if (
+        candidate.pattern_type is None
+        or candidate.entry_price is None
+        or candidate.stop_loss is None
+        or candidate.target_price is None
+    ):
+        return None
+    return PatternSignal(
+        symbol=candidate.symbol,
+        pattern_type=candidate.pattern_type,
+        direction=candidate.pattern_direction or "bullish",
+        status=candidate.pattern_status or "forming",
+        confidence=float(candidate.pattern_confidence or 0.0),
+        entry_price=float(candidate.entry_price),
+        stop_loss=float(candidate.stop_loss),
+        target_wave1=float(candidate.target_price),
+        rr_ratio=float(candidate.rr_ratio or 0.0),
+        volume_confirmed=bool(candidate.volume_confirmed),
+    )
+
+
 async def _compute_theses_async(
     candidates: list[StockCandidate],
     ohlcv_by_symbol: dict[str, Any],
@@ -516,31 +594,38 @@ async def _compute_theses_async(
 
         symbol = candidate.symbol
 
-        async def _provider_factory(c=candidate, s=symbol):
-            df = ohlcv_by_symbol.get(s)
-            pattern = None  # PatternSignal would be reconstructed if needed
+        # PR1 carry-over P2 #1: Build the evidence provider as a deferred
+        # closure. We DO NOT pre-resolve evidence here — generate_thesis runs
+        # the Tier-1 cache lookup first and only invokes this provider on
+        # cache miss. Without this deferral every "free rerun" still pays for
+        # chart export + signal compute + (possibly) yfinance, defeating the
+        # idempotency promise.
+        df = ohlcv_by_symbol.get(symbol)
+        pattern = _candidate_to_pattern_signal(candidate)
+
+        async def _async_provider(c=candidate, s=symbol, _df=df, _pattern=pattern):
             try:
                 image_bytes, _digest = (
-                    render_chart_png(s, df, pattern=pattern) if df is not None else (None, None)
+                    render_chart_png(s, _df, pattern=_pattern)
+                    if _df is not None
+                    else (None, None)
                 )
             except Exception:
                 log.exception("chart_export_failed symbol=%s", s)
                 image_bytes = None
             pack, renders = await assemble_evidence(
-                c, df, scan_date, session_name, thesis_cfg
+                c, _df, scan_date, session_name, thesis_cfg
             )
             return pack, renders, image_bytes
 
-        # The provider must be sync from generate_thesis's POV (called via to_thread).
-        # Resolve the async assembly here and hand a thunk that just returns the result.
-        try:
-            pack, renders, image_bytes = await _provider_factory()
-        except Exception as exc:
-            log.exception("evidence_assembly_failed symbol=%s error=%s", symbol, exc)
-            continue
-
-        def _sync_provider(_pack=pack, _renders=renders, _image=image_bytes):
-            return _pack, _renders, _image
+        def _sync_provider(_async_provider=_async_provider):
+            # generate_thesis calls this via asyncio.to_thread, so we must
+            # synchronously drive the async assembly. asyncio.run is safe here
+            # because we're running inside a worker thread (not the event
+            # loop). Failure bubbles up — generate_thesis catches LLM call
+            # failures, but evidence_provider failures are caller-fatal so we
+            # let the per-ticker try/except below handle them.
+            return asyncio.run(_async_provider())
 
         try:
             thesis, cost_charged, record_id = await generate_thesis(
