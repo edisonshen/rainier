@@ -170,6 +170,11 @@ class StockCandidate:
     capital_flow_direction: str     # "+", "-", "N"
     sector: str
     signal_strength: float          # 0-1 composite from money flow screener
+    # Raw Layer-1 money-flow score, BEFORE pattern boost / sector tilt.
+    # Optional only because legacy callsites haven't been migrated; the
+    # screener pipeline always populates it. ScreenedStockRecord stores
+    # the raw money-flow side-by-side with composite for shadow validation.
+    money_flow_score: float | None = None
 
     # Pattern data (from Caisen pattern detection)
     pattern_type: str | None = None        # "w_bottom", "bull_flag", etc.

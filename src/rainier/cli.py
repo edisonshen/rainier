@@ -2220,12 +2220,25 @@ def thesis_ticker(ctx, symbol, session_name, max_usd):
 @click.option("--ticker", required=True)
 @click.option("--date", "scan_date_s", required=True, help="Scan date YYYY-MM-DD.")
 @click.option(
+    "--session",
+    "session_name",
+    required=True,
+    type=click.Choice(["morning", "afternoon", "close"]),
+    help="Which scan session row to log against (afternoon, close, etc.).",
+)
+@click.option(
     "--action", required=True, type=click.Choice(["took", "skipped", "watched"])
 )
 @click.option("--outcome", "outcome", default=None, help="e.g. +2.3% or -1.1%.")
 @click.option("--notes", default=None)
-def thesis_log(ticker, scan_date_s, action, outcome, notes):
-    """Manually record action_taken + outcome on a ScreenedStockRecord."""
+def thesis_log(ticker, scan_date_s, session_name, action, outcome, notes):
+    """Manually record action_taken + outcome on a ScreenedStockRecord.
+
+    Codex P1: scoped to a single (scan_date, session_name, symbol) row.
+    Without the session filter, the same ticker showing up in morning and
+    afternoon scans would have its outcome stamped onto every row, which
+    corrupts the per-scan history PR2's outcome backfill consumes.
+    """
     from datetime import date as _date
     from datetime import datetime as _datetime
     from datetime import timezone as _tz
@@ -2249,6 +2262,7 @@ def thesis_log(ticker, scan_date_s, action, outcome, notes):
             update(ScreenedStockRecord)
             .where(
                 ScreenedStockRecord.scan_date == scan_date,
+                ScreenedStockRecord.session_name == session_name,
                 ScreenedStockRecord.symbol == ticker.upper(),
             )
             .values(
@@ -2261,9 +2275,12 @@ def thesis_log(ticker, scan_date_s, action, outcome, notes):
     affected = int(result.rowcount or 0)
     if affected == 0:
         raise click.ClickException(
-            f"No ScreenedStockRecord row found for symbol={ticker} scan_date={scan_date_s}"
+            "No ScreenedStockRecord row found for "
+            f"symbol={ticker} scan_date={scan_date_s} session={session_name}"
         )
-    click.echo(f"Updated {affected} row(s) for {ticker} on {scan_date_s}.")
+    click.echo(
+        f"Updated {affected} row(s) for {ticker} on {scan_date_s} ({session_name})."
+    )
 
 
 @thesis.group("signals")

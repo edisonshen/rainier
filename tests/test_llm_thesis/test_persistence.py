@@ -11,11 +11,16 @@ from rainier.core.types import StockCandidate
 from rainier.llm_thesis import persistence as persist_mod
 
 
-def _candidate(symbol: str = "NVDA", strength: float = 0.85) -> StockCandidate:
+def _candidate(
+    symbol: str = "NVDA",
+    strength: float = 0.85,
+    money_flow: float | None = 0.42,
+) -> StockCandidate:
     return StockCandidate(
         symbol=symbol, rank=5, rank_change=0, long_short="Long in",
         capital_flow_direction="+", sector="Technology",
         signal_strength=strength,
+        money_flow_score=money_flow,
         pattern_type="w_bottom", pattern_confidence=0.8,
     )
 
@@ -38,6 +43,28 @@ def test_persist_screened_stocks_bulk_insert():
         )
     assert n == 2
     fake_session.execute.assert_called_once()
+
+
+def test_candidate_row_separates_composite_from_money_flow():
+    """Codex P1 regression: composite_score must hold the post-boost composite
+    (signal_strength) while money_flow_score holds the raw Layer-1 value;
+    the two columns must NOT be a duplicate of each other."""
+    cand = _candidate(symbol="NVDA", strength=0.85, money_flow=0.42)
+    row = persist_mod._candidate_row(cand, rule_rank=1, scan_date=date(2026, 5, 7),
+                                     session_name="afternoon")
+    assert row["composite_score"] == 0.85
+    assert row["money_flow_score"] == 0.42
+    assert row["composite_score"] != row["money_flow_score"]
+
+
+def test_candidate_row_money_flow_none_when_missing():
+    """Legacy candidates without a money_flow_score map to NULL — a known
+    absence is honest. We must NOT fall back to signal_strength."""
+    cand = _candidate(symbol="NVDA", strength=0.85, money_flow=None)
+    row = persist_mod._candidate_row(cand, rule_rank=1, scan_date=date(2026, 5, 7),
+                                     session_name="afternoon")
+    assert row["composite_score"] == 0.85
+    assert row["money_flow_score"] is None
 
 
 def test_persist_screened_stocks_empty_returns_zero():
