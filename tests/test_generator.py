@@ -1,11 +1,19 @@
 """Tests for signal generation."""
 
-import pandas as pd
 from datetime import datetime
+
+import pandas as pd
 
 from rainier.core.config import SignalConfig
 from rainier.core.types import (
-    AnalysisResult, Candle, Direction, PinBar, SRLevel, SRRole, SRType, Timeframe,
+    AnalysisResult,
+    Candle,
+    Direction,
+    PinBar,
+    SRLevel,
+    SRRole,
+    SRType,
+    Timeframe,
 )
 from rainier.signals.generator import generate_signals
 

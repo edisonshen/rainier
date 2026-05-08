@@ -97,7 +97,6 @@ def pin_bar_candles(base_timestamp):
     touching 100 (the support level), followed by more ranging.
     """
     rows = []
-    price = 105.0
     for i in range(20):
         if i == 10:
             # Bullish pin bar: long lower wick, small body at top

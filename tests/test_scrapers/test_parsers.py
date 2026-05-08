@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from rainier.scrapers.qu.parsers import (
     parse_capital_flow_rows,
     parse_daily_change,
     parse_qu100_rows,
     parse_rank_fraction,
 )
-
 
 # ---------------------------------------------------------------------------
 # parse_daily_change

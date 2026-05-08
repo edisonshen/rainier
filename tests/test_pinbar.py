@@ -1,14 +1,14 @@
 """Tests for pin bar detection and pin bar line derivation."""
 
-import pandas as pd
 from datetime import datetime, timedelta
+
+import pandas as pd
 
 from rainier.analysis.pinbar import (
     derive_pin_bar_lines,
     detect_pin_bars_raw,
     match_pin_bars_to_levels,
 )
-from rainier.core.config import PinBarConfig
 from rainier.core.types import Direction, SRLevel, SRRole, SRType
 
 

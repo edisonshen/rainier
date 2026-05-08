@@ -174,6 +174,7 @@ def daytrade(ctx, symbol, data_dir, output_path):
 
     # Chart — tabbed view with TF switcher (5m / 1H / 4H / 1D)
     from rainier.analysis.analyzer import analyze
+    from rainier.core.types import AnalysisResult
     from rainier.viz.charts import create_tabbed_chart
 
     htf_results: dict[Timeframe, AnalysisResult] = {Timeframe.M5: result}
@@ -856,6 +857,8 @@ def _run_qu100_pattern_backtest(
     top_n: int, hold: int, webhook: str | None,
 ) -> None:
     """Run pattern-filtered QU100 backtest (composition root wiring)."""
+    import yfinance as yf
+
     from rainier.analysis.stock_patterns import detect_patterns
     from rainier.backtest.qu100_backtest import (
         BEST_PATTERNS,
@@ -866,8 +869,6 @@ def _run_qu100_pattern_backtest(
         run_qu100_pattern_backtest,
     )
     from rainier.core.config import StockScreenerConfig
-
-    import yfinance as yf
 
     click.echo(
         f"Running pattern-filtered QU100 backtest: "
@@ -1309,10 +1310,10 @@ def _notify_scrape_discord(
 
 def _post_scrape_screener(settings, session: str) -> None:
     """Run stock screener after successful scrape and send results to Discord."""
+    import httpx
+
     from rainier.alerts.discord import _build_payloads
     from rainier.analysis.stock_screener import screen_stocks
-
-    import httpx
 
     webhook = _get_discord_webhook(settings)
     if not webhook:
@@ -1453,9 +1454,9 @@ async def _recover(settings, dry_run: bool):
     """Check Chrome CDP, scheduler, and missed scrape sessions."""
     import subprocess
     from datetime import datetime
+    from zoneinfo import ZoneInfo
 
     import httpx
-    from zoneinfo import ZoneInfo
 
     tz = ZoneInfo(settings.app.timezone)
     now = datetime.now(tz)
@@ -1708,7 +1709,7 @@ def db_backfill_prices(years, batch_size, dry_run):
     from sqlalchemy import func, select
 
     from rainier.core.database import get_session
-    from rainier.core.models import MoneyFlowSnapshot, Stock, StockPrice
+    from rainier.core.models import MoneyFlowSnapshot, StockPrice
 
     end = datetime.now()
     start = datetime(end.year - years, end.month, end.day)
@@ -1853,7 +1854,7 @@ def features_export(start_date, end_date, symbols, output_dir, min_bars, dry_run
     from rainier.ml.feature_store import validate_parquet
 
     stats = validate_parquet(output_path)
-    click.echo(f"\nValidation:")
+    click.echo("\nValidation:")
     click.echo(f"  Rows: {stats['rows']:,}")
     click.echo(f"  Symbols: {stats['symbols']}")
     click.echo(f"  Features: {stats['features']}")
@@ -1908,7 +1909,7 @@ def ml_train(features_path, output_dir, label, folds):
         output_dir=Path(output_dir),
     )
 
-    click.echo(f"\n--- Evaluation ---")
+    click.echo("\n--- Evaluation ---")
     click.echo(f"Accuracy:      {result.accuracy:.3f}")
     click.echo(f"Precision:     {result.precision:.3f}")
     click.echo(f"Recall:        {result.recall:.3f}")
@@ -1917,7 +1918,7 @@ def ml_train(features_path, output_dir, label, folds):
     click.echo(f"Test samples:  {result.n_test} ({result.n_positive} positive)")
     click.echo(f"Fold scores:   {[f'{s:.3f}' for s in result.fold_scores]}")
 
-    click.echo(f"\n--- Top 10 Features ---")
+    click.echo("\n--- Top 10 Features ---")
     for i, (feat, imp) in enumerate(list(result.feature_importance.items())[:10], 1):
         click.echo(f"  {i:2d}. {feat:30s} {imp:.4f}")
 
@@ -1931,7 +1932,8 @@ def ml_train(features_path, output_dir, label, folds):
 def ml_evaluate(model_path, features_path, label):
     """Evaluate a trained model on feature store data."""
     import xgboost as xgb_lib
-    from sklearn.metrics import accuracy_score as acc_score, classification_report as cls_report
+    from sklearn.metrics import accuracy_score as acc_score
+    from sklearn.metrics import classification_report as cls_report
 
     from rainier.ml.pattern_scorer import get_feature_columns
 

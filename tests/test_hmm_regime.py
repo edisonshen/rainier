@@ -4,7 +4,6 @@ from datetime import timedelta
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from rainier.core.types import MarketRegime
 from rainier.ml.regime import HMMRegimeDetector

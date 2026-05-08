@@ -8,13 +8,12 @@ are mocked — no real browser needed.
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
-from rainier.scrapers.qu.scraper import QUScraper
 from rainier.scrapers.qu import selectors as sel
-
+from rainier.scrapers.qu.scraper import QUScraper
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -523,8 +522,9 @@ class TestScrapeQU100PostLogin:
         scraper = _make_scraper()
         scraper._page = page
 
-        from rainier.scrapers.base import ScrapeResult
         from datetime import datetime, timezone
+
+        from rainier.scrapers.base import ScrapeResult
         result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
 
         with (
@@ -563,8 +563,9 @@ class TestScrapeQU100PostLogin:
         scraper = _make_scraper()
         scraper._page = page
 
-        from rainier.scrapers.base import ScrapeResult
         from datetime import datetime, timezone
+
+        from rainier.scrapers.base import ScrapeResult
         result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
 
         with (
