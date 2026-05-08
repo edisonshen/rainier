@@ -13,7 +13,7 @@ exercise the full pipeline; those run on demand against a real DB.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +23,7 @@ from rainier.llm_thesis.eval import (
     HORIZONS,
     HitRate,
     SignalContribution,
+    _trading_days_back,
     compute_signal_contribution,
     compute_verdict_hit_rate,
     evaluate_horizon,
@@ -127,7 +128,7 @@ def _candidate_row(
 
 def test_evaluate_horizon_inserts_one_row_per_thesis():
     today = date(2026, 5, 7)
-    scan = today - timedelta(days=5)
+    scan = _trading_days_back(today, 5)
     candidate_session = _FakeSession(
         select_rows=[
             _candidate_row(rec_id=42, symbol="NVDA", scan_date=scan),
@@ -162,7 +163,7 @@ def test_evaluate_horizon_idempotent():
     stays at 0. The second pass over the same theses produces no new rows.
     """
     today = date(2026, 5, 7)
-    scan = today - timedelta(days=5)
+    scan = _trading_days_back(today, 5)
 
     # Session 1: candidate SELECT returns one row. Subsequent INSERT reports
     # rowcount=0 (conflict). evaluate_horizon should count it as 0.
@@ -196,7 +197,7 @@ def test_evaluate_horizon_idempotent():
 def test_evaluate_horizon_skips_when_prices_missing(caplog):
     """No StockPrice rows → log a warning and skip; no eval row inserted."""
     today = date(2026, 5, 7)
-    scan = today - timedelta(days=5)
+    scan = _trading_days_back(today, 5)
 
     candidate_session = _FakeSession(
         select_rows=[_candidate_row(rec_id=1, symbol="ZZZ", scan_date=scan)]
@@ -222,7 +223,7 @@ def test_evaluate_horizon_skips_when_prices_missing(caplog):
 
 def test_evaluate_horizon_setup_long_loss_is_miss():
     today = date(2026, 5, 7)
-    scan = today - timedelta(days=1)
+    scan = _trading_days_back(today, 1)
     cand_sess = _FakeSession(
         select_rows=[
             _candidate_row(
@@ -248,7 +249,7 @@ def test_evaluate_horizon_setup_long_loss_is_miss():
 def test_evaluate_horizon_no_setup_decline_is_hit():
     """no_setup verdict + price decline → hit (LLM was right not to buy)."""
     today = date(2026, 5, 7)
-    scan = today - timedelta(days=1)
+    scan = _trading_days_back(today, 1)
     cand_sess = _FakeSession(
         select_rows=[
             _candidate_row(
@@ -279,7 +280,7 @@ def test_evaluate_horizon_rejects_unknown_horizon():
 def test_evaluate_horizon_zero_entry_price_skips():
     """Defensive: a 0 entry price would divide-by-zero — the helper bails."""
     today = date(2026, 5, 7)
-    scan = today - timedelta(days=1)
+    scan = _trading_days_back(today, 1)
     cand_sess = _FakeSession(
         select_rows=[
             _candidate_row(rec_id=3, symbol="BAD", scan_date=scan)
@@ -437,3 +438,63 @@ def test_hit_rate_dataclass_shape():
     )
     assert hr.n == 10
     assert hr.win_rate == 0.6
+
+
+# ---------------------------------------------------------------------------
+# Codex iter-1 [P1] regression — trading-day offsets in evaluate_horizon
+# ---------------------------------------------------------------------------
+
+
+def test_trading_days_back_skips_weekend():
+    """1 trading day before Monday is the prior Friday — not Sunday."""
+    monday = date(2026, 5, 4)  # Monday
+    assert _trading_days_back(monday, 1) == date(2026, 5, 1)  # Fri
+
+
+def test_trading_days_back_5_business_days():
+    """5 trading days before Thursday 2026-05-07 is Thursday 2026-04-30."""
+    thursday = date(2026, 5, 7)
+    assert _trading_days_back(thursday, 5) == date(2026, 4, 30)
+
+
+def test_trading_days_back_zero_returns_input_when_weekday():
+    weekday = date(2026, 5, 5)  # Tuesday
+    assert _trading_days_back(weekday, 0) == weekday
+
+
+def test_evaluate_horizon_uses_trading_day_target_not_calendar():
+    """[P1] On a Monday eval, the 1d target_scan_date must be the prior
+    Friday — not Sunday — so Friday picks get graded.
+    """
+    today = date(2026, 5, 4)  # Monday
+    expected_target = date(2026, 5, 1)  # Friday — 1 trading day back
+
+    captured: dict[str, date] = {}
+
+    def _close(sym: str, d: date):
+        # Track which dates the evaluator asks for so we can assert the
+        # entry lookup hits Friday, not Sunday.
+        captured.setdefault("first_lookup", d)
+        return (d, 100.0) if d == expected_target else (d, 105.0)
+
+    cand_sess = _FakeSession(
+        select_rows=[
+            _candidate_row(rec_id=99, symbol="MON", scan_date=expected_target)
+        ]
+    )
+    ins_sess = _FakeSession()
+    sessions = iter([cand_sess, ins_sess])
+
+    with patch(
+        "rainier.llm_thesis.eval.get_session",
+        side_effect=lambda: _CMSession(next(sessions)),
+    ), patch(
+        "rainier.llm_thesis.eval._close_on_or_before",
+        side_effect=_close,
+    ):
+        n = evaluate_horizon(today, "1d")
+
+    assert n == 1
+    # Entry-price lookup must have been the prior Friday — proving the
+    # trading-day-back offset (not the calendar-day Sunday).
+    assert captured["first_lookup"] == expected_target
