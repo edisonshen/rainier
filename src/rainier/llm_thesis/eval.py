@@ -319,7 +319,10 @@ def _mannwhitneyu_p(
 
 
 def compute_signal_contribution(
-    days: int = 30, horizon: str = "5d"
+    days: int = 30,
+    horizon: str = "5d",
+    *,
+    eval_date: date | None = None,
 ) -> list[SignalContribution]:
     """For each signal seen in ThesisEvaluation rows over the last ``days``
     at ``horizon``, partition rows into used-vs-absent buckets, compute mean
@@ -327,11 +330,17 @@ def compute_signal_contribution(
 
     Returns one SignalContribution per signal name, sorted by descending lift.
     Signals that never appear in the window are not returned.
+
+    PR3 carry-over [P3]: ``eval_date`` anchors the rolling window so research
+    jobs can re-run "as of" a historical date without seeing leakage from
+    rows scanned after that date. When omitted (default), today's date is
+    used (legacy behavior).
     """
     if horizon not in HORIZONS:
         raise ValueError(f"Unsupported horizon: {horizon!r}; choose from {HORIZONS}")
 
-    cutoff = date.today() - timedelta(days=days)
+    anchor = eval_date if eval_date is not None else date.today()
+    cutoff = anchor - timedelta(days=days)
     with get_session() as session:
         rows = session.execute(
             select(
@@ -387,12 +396,18 @@ def compute_signal_contribution(
 # ---------------------------------------------------------------------------
 
 
-def compute_verdict_hit_rate(days: int = 30) -> dict[str, list[HitRate]]:
+def compute_verdict_hit_rate(
+    days: int = 30, *, eval_date: date | None = None
+) -> dict[str, list[HitRate]]:
     """Return ``{verdict: [HitRate per horizon]}`` for the last ``days`` of
     ThesisEvaluation rows. Verdicts and horizons follow the design's fixed
     set; missing combinations are present in the result with ``n=0``.
+
+    PR3 carry-over [P3]: ``eval_date`` anchors the rolling window so historical
+    research runs see only data that existed at that date.
     """
-    cutoff = date.today() - timedelta(days=days)
+    anchor = eval_date if eval_date is not None else date.today()
+    cutoff = anchor - timedelta(days=days)
     out: dict[str, list[HitRate]] = {v: [] for v in VERDICTS}
 
     with get_session() as session:
