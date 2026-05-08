@@ -7,7 +7,14 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 
-from rainier.core.types import AnalysisResult, Direction, Signal, SRType, Timeframe
+from rainier.core.types import (
+    AnalysisResult,
+    Direction,
+    PatternSignal,
+    Signal,
+    SRType,
+    Timeframe,
+)
 from rainier.signals.scorer import (
     _multi_tf_confluence_score,
     _sr_strength_score,
@@ -629,3 +636,101 @@ document.getElementById('theme-toggle').addEventListener('click', function() {{
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as f:
             f.write(html)
+
+
+# ---------------------------------------------------------------------------
+# Static stock chart for LLM consumption (PR1)
+# ---------------------------------------------------------------------------
+
+def create_static_stock_chart(
+    symbol: str,
+    df: pd.DataFrame,
+    pattern: PatternSignal | None = None,
+    bars: int = 60,
+) -> go.Figure:
+    """Render a static daily candlestick chart for LLM multimodal input.
+
+    60 daily candles + horizontal lines for entry/stop_loss/target if a 蔡森
+    pattern fired + pattern label annotation. No tabs, no interactivity. Stock
+    side; the existing `create_chart()` is futures-only.
+    """
+    if df is None or df.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"{symbol} — no data",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=20, color="#888"),
+        )
+        fig.update_layout(
+            template="plotly_dark", height=800, width=1280,
+            paper_bgcolor="#000000", plot_bgcolor="#000000",
+        )
+        return fig
+
+    # Tail to last `bars` (default 60); columns may be lower or upper case.
+    tail = df.tail(bars).copy()
+    cols = {c.lower(): c for c in tail.columns}
+    o_col = cols.get("open", "open")
+    h_col = cols.get("high", "high")
+    l_col = cols.get("low", "low")
+    c_col = cols.get("close", "close")
+    x_idx = list(range(len(tail)))
+
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=x_idx,
+                open=tail[o_col],
+                high=tail[h_col],
+                low=tail[l_col],
+                close=tail[c_col],
+                increasing_line_color="#26a69a",
+                increasing_fillcolor="#26a69a",
+                decreasing_line_color="#ef5350",
+                decreasing_fillcolor="#ef5350",
+                showlegend=False,
+                name=symbol,
+            )
+        ]
+    )
+
+    if pattern is not None:
+        x0, x1 = 0, len(tail) - 1
+        # Entry = green, SL = red, target = blue (deterministic, easy to OCR).
+        levels = [
+            (pattern.entry_price, "#26a69a", "Entry"),
+            (pattern.stop_loss, "#ef5350", "SL"),
+            (pattern.target_wave1, "#42A5F5", "Target"),
+        ]
+        for price, color, label in levels:
+            if price is None or price <= 0:
+                continue
+            fig.add_shape(
+                type="line",
+                x0=x0, x1=x1, y0=price, y1=price,
+                line=dict(color=color, width=1.5, dash="dot"),
+            )
+            fig.add_annotation(
+                x=x1, y=price, text=f"{label} {price:.2f}",
+                showarrow=False, xanchor="right", xshift=-4,
+                font=dict(size=10, color=color),
+            )
+        fig.add_annotation(
+            x=0, y=1.04, xref="x", yref="paper",
+            text=f"Pattern: {pattern.pattern_type} ({pattern.direction})",
+            showarrow=False, xanchor="left",
+            font=dict(size=12, color="#FFD54F"),
+        )
+
+    fig.update_layout(
+        title=dict(text=symbol, x=0.02, y=0.98, xanchor="left",
+                   font=dict(size=18, color="#fff")),
+        template="plotly_dark",
+        xaxis=dict(rangeslider=dict(visible=False), showgrid=False),
+        yaxis=dict(side="right", gridcolor="rgba(255,255,255,0.1)"),
+        margin=dict(l=10, r=70, t=60, b=30),
+        height=800, width=1280,
+        paper_bgcolor="#000000", plot_bgcolor="#000000",
+        showlegend=False,
+    )
+    return fig

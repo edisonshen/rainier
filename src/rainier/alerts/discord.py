@@ -240,12 +240,66 @@ def _build_payloads(
     return payloads
 
 
-def send_stock_candidates(candidates: list[StockCandidate], config: DiscordConfig) -> None:
+def _truncate(text: str, limit: int) -> str:
+    """Single-place truncation with an ellipsis to respect Discord caps."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _format_thesis_message(
+    candidate: StockCandidate,
+    thesis: dict,
+) -> str:
+    """Render one rich thesis message for Discord.
+
+    Each message is capped at <=1800 chars (Discord 2000-char limit, 200 buffer).
+    """
+    verdict = thesis.get("verdict", "?")
+    setup_q = thesis.get("setup_quality")
+    confidence = thesis.get("llm_confidence")
+    radar = thesis.get("paragraph_radar") or ""
+    evidence = thesis.get("paragraph_evidence") or ""
+    invalidation = thesis.get("paragraph_invalidation") or ""
+    risks = thesis.get("risks") or []
+    watch = thesis.get("watch_items") or []
+    patterns = thesis.get("patterns_in_chart_not_in_indicators") or []
+
+    header = f"**{candidate.symbol}** — verdict: `{verdict}`"
+    if setup_q is not None and confidence is not None:
+        header += f" · quality {setup_q}/10 · confidence {confidence}/10"
+
+    parts = [header]
+    parts.append(f"*Radar:* {radar}")
+    parts.append(f"*Evidence:* {evidence}")
+    parts.append(f"*Invalidation:* {invalidation}")
+    if risks:
+        parts.append("*Risks:* " + "; ".join(str(r) for r in risks))
+    if watch:
+        parts.append("*Watch:* " + "; ".join(str(w) for w in watch))
+    if isinstance(patterns, list) and patterns:
+        parts.append("*Chart patterns (not in indicators):* " + "; ".join(patterns))
+    elif patterns == "none":
+        pass
+
+    body = "\n".join(parts)
+    return _truncate(body, 1800)
+
+
+def send_stock_candidates(
+    candidates: list[StockCandidate],
+    config: DiscordConfig,
+    theses: dict[str, dict] | None = None,
+) -> None:
     """Send QU100 stock candidate alerts to Discord.
 
     Args:
         candidates: Top N screened stock candidates, sorted by pattern match quality.
         config: Discord configuration with webhook URL and enabled flag.
+        theses: Optional `{symbol: thesis_dict}` map. When provided, the standard
+            top-20 summary is followed by a rich thesis message for each of the
+            top-5 candidates whose symbol is present in `theses`. Default `None`
+            preserves existing top-20-only behavior — the regression contract.
     """
     if not candidates:
         return
@@ -266,6 +320,23 @@ def send_stock_candidates(candidates: list[StockCandidate], config: DiscordConfi
             response.raise_for_status()
         except Exception:
             log.exception("discord_send_failed")
+
+    if not theses:
+        return
+
+    # Per-ticker rich thesis messages — top 5 only, in candidate order.
+    for candidate in candidates[:5]:
+        thesis = theses.get(candidate.symbol)
+        if not thesis:
+            continue
+        try:
+            content = _format_thesis_message(candidate, thesis)
+            response = httpx.post(
+                webhook_url, json={"content": content}, timeout=10
+            )
+            response.raise_for_status()
+        except Exception:
+            log.exception("discord_thesis_send_failed symbol=%s", candidate.symbol)
 
 
 def format_stock_candidates_json(candidates: list[StockCandidate]) -> str:

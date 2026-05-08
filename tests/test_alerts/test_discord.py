@@ -227,3 +227,62 @@ class TestFormatJson:
         assert isinstance(parsed, list)
         assert len(parsed) == 1
         assert "embeds" in parsed[0]
+
+
+class TestSendStockCandidatesWithTheses:
+    """PR1 regression: theses=None preserves existing behavior; theses dict adds messages."""
+
+    def _thesis(self, **overrides):
+        defaults = dict(
+            verdict="setup_long",
+            setup_quality=7,
+            llm_confidence=7,
+            paragraph_radar="Why on radar.",
+            paragraph_evidence="Evidence text.",
+            paragraph_invalidation="Invalidation rules.",
+            risks=["earnings"],
+            watch_items=["volume"],
+            evidence_used=["pattern"],
+            signals_used=["rank_trajectory"],
+            patterns_in_chart_not_in_indicators=["narrowing volume"],
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_theses_none_preserves_existing_call_count(self):
+        """Without theses, only the embeds payload(s) get posted — no per-ticker text messages."""
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates([_candidate()], config)
+            # 1 embed payload only.
+            assert mock_post.call_count == 1
+
+    def test_theses_dict_emits_summary_plus_thesis_messages(self):
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        candidates = [_candidate(symbol=f"S{i}") for i in range(5)]
+        theses = {f"S{i}": self._thesis() for i in range(5)}
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates(candidates, config, theses=theses)
+            # 1 embed payload + 5 thesis text messages = 6 calls minimum.
+            assert mock_post.call_count == 6
+
+    def test_thesis_message_under_1800_chars(self):
+        from rainier.alerts.discord import _format_thesis_message
+        long_thesis = self._thesis(
+            paragraph_evidence="x" * 600, paragraph_radar="y" * 400,
+            paragraph_invalidation="z" * 400,
+        )
+        msg = _format_thesis_message(_candidate(symbol="NVDA"), long_thesis)
+        assert len(msg) <= 1800
+
+    def test_thesis_only_renders_top_5_in_candidate_order(self):
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        candidates = [_candidate(symbol=f"S{i}") for i in range(8)]
+        theses = {c.symbol: self._thesis() for c in candidates}
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates(candidates, config, theses=theses)
+        # 1 embed payload + 5 thesis messages (top-5 only) = 6 total.
+        assert mock_post.call_count == 6

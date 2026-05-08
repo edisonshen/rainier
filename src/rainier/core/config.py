@@ -267,6 +267,44 @@ class LLMAnalysisConfig(BaseModel):
     timeout_seconds: int = 120
 
 
+# ---------------------------------------------------------------------------
+# LLM thesis layer (PR1)
+# ---------------------------------------------------------------------------
+
+
+class ThesisSignalConfig(BaseModel):
+    """Per-signal registry entry — toggle, params, weight."""
+
+    enabled: bool = True
+    params: dict[str, Any] = Field(default_factory=dict)
+    weight: float = 1.0
+
+
+def _default_thesis_signals() -> dict[str, ThesisSignalConfig]:
+    return {
+        "rank_trajectory": ThesisSignalConfig(params={"days": 10}),
+        "capital_flow_streak": ThesisSignalConfig(params={"days": 10}),
+        "sector_momentum": ThesisSignalConfig(params={"days": 10}),
+        "fundamentals": ThesisSignalConfig(params={}),
+    }
+
+
+class LLMThesisConfig(BaseModel):
+    """LLM thesis layer config (eng review D2: reload fresh each scan)."""
+
+    enabled: bool = True
+    model: str = "claude-sonnet-4-6"
+    max_usd_per_scan: float = 1.0
+    prompt_version: str = "v1"
+    enabled_sessions: list[str] = Field(
+        default_factory=lambda: ["afternoon", "close"]
+    )
+    fallback_to_anthropic_sdk: bool = False
+    signals: dict[str, ThesisSignalConfig] = Field(
+        default_factory=_default_thesis_signals
+    )
+
+
 class NotifyConfig(BaseModel):
     enabled: bool = True
     subject_prefix: str = "[Rainier]"
@@ -328,6 +366,9 @@ class Settings(BaseSettings):
 
     # LLM analysis
     llm: LLMAnalysisConfig = LLMAnalysisConfig()
+
+    # LLM thesis (PR1)
+    llm_thesis: LLMThesisConfig = LLMThesisConfig()
 
     # Notifications
     notify: NotifyConfig = NotifyConfig()
@@ -393,6 +434,19 @@ def load_settings(config_path: Path | None = None) -> Settings:
         )
     if "llm" in yaml_config:
         kwargs["llm"] = LLMAnalysisConfig(**yaml_config["llm"])
+    if "llm_thesis" in yaml_config:
+        raw_thesis = dict(yaml_config["llm_thesis"])
+        raw_signals = raw_thesis.pop("signals", None)
+        signals: dict[str, ThesisSignalConfig] | None = None
+        if raw_signals:
+            signals = {
+                name: ThesisSignalConfig(**(cfg or {}))
+                for name, cfg in raw_signals.items()
+            }
+        thesis_kwargs: dict[str, Any] = dict(raw_thesis)
+        if signals is not None:
+            thesis_kwargs["signals"] = signals
+        kwargs["llm_thesis"] = LLMThesisConfig(**thesis_kwargs)
     if "notify" in yaml_config:
         kwargs["notify"] = NotifyConfig(**yaml_config["notify"])
     if "stock_screener" in yaml_config:
@@ -426,11 +480,29 @@ _settings: Settings | None = None
 
 
 def get_settings(config_path: str = "config/settings.yaml") -> Settings:
-    """Get or create the global settings instance."""
+    """Get or create the global settings instance.
+
+    NOTE: this returns a process-lifetime cached Settings — fine for read-only
+    plumbing (DB engine, app metadata) where YAML edits don't matter mid-run.
+
+    Scheduled jobs that want YAML toggles to take effect on the NEXT scan
+    invocation (e.g., flipping `llm_thesis.signals.fundamentals.enabled`)
+    MUST call `load_settings_fresh()` instead. See `scheduler/service.py:run_qu_scrape`.
+    """
     global _settings
     if _settings is None:
         _settings = load_settings(Path(config_path))
     return _settings
+
+
+def load_settings_fresh(config_path: str = "config/settings.yaml") -> Settings:
+    """Load Settings from disk, bypassing the singleton cache.
+
+    Use this in scheduler entry points so a YAML edit takes effect on the
+    next scan without restarting the daemon. Costs one YAML parse (~ms);
+    the file is small.
+    """
+    return load_settings(Path(config_path))
 
 
 def load_watchlist(watchlist_path: Path | None = None) -> dict[str, InstrumentConfig]:

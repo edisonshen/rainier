@@ -56,6 +56,10 @@ packages = ["src/rainier"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+markers = [
+    "llm_integration: real-LLM end-to-end (skipped unless RAINIER_LLM_INTEGRATION_TEST=1)",
+    "requires_postgres: tests that need a live Postgres DB",
+]
 
 [tool.ruff]
 line-length = 100
