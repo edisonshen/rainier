@@ -172,6 +172,12 @@ llm_thesis:
     - afternoon
     - close
   fallback_to_anthropic_sdk: false
+  # PR5: when set, the Discord per-ticker embed gets a clickable link to the
+  # dashboard pre-filtered to this thesis. Leave as ``null`` to render no
+  # link (graceful degradation when the dashboard isn't running). Override
+  # for tunnelled / hosted setups, e.g. https://rainier.your-tunnel.example.
+  # dashboard_base_url: "http://localhost:8501"
+  dashboard_base_url: null
   signals:
     rank_trajectory:
       enabled: true

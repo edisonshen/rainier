@@ -424,7 +424,11 @@ def load_recent_theses(
 def load_thesis_chart(thesis_id: int) -> bytes | None:
     """Read the first chart PNG associated with a thesis.
 
-    `LLMAnalysisRecord.chart_image_ids` -> `ChartImage.file_path`.
+    PR5: prefer the inline ``image_bytes`` column (filled by
+    ``llm_thesis.chart_persistence.persist_chart_image``) so Discord +
+    dashboard never depend on the filesystem. Legacy rows that only have
+    ``file_path`` set still resolve via the on-disk read path.
+
     Returns the file bytes, or None when the thesis has no chart, the
     file is missing on disk, or anything errors. Never raises — Tab 3
     just renders "no chart available" instead.
@@ -437,7 +441,12 @@ def load_thesis_chart(thesis_id: int) -> bytes | None:
         if first_id is None:
             return None
         chart = session.get(ChartImage, int(first_id))
-        if chart is None or not chart.file_path:
+        if chart is None:
+            return None
+        # PR5 path: bytes inline.
+        if chart.image_bytes:
+            return bytes(chart.image_bytes)
+        if not chart.file_path:
             return None
         path = Path(chart.file_path)
 

@@ -15,6 +15,28 @@ from rainier.core.config import get_settings, load_settings_fresh
 log = structlog.get_logger()
 
 
+def _send_stock_candidates_with_dashboard_url(
+    candidates,
+    discord_config,
+    theses,
+    dashboard_base_url,
+):
+    """Sync helper so ``asyncio.to_thread`` can carry the dashboard URL kwarg.
+
+    ``send_stock_candidates`` accepts ``dashboard_base_url`` only as a keyword
+    argument; ``asyncio.to_thread`` forwards positional + keyword args but is
+    cleaner with a small wrapper that names them.
+    """
+    from rainier.alerts.discord import send_stock_candidates as _send
+
+    _send(
+        candidates,
+        discord_config,
+        theses=theses,
+        dashboard_base_url=dashboard_base_url,
+    )
+
+
 async def run_qu_scrape(session_name: str) -> None:
     """Run a single QU100 scrape for the given session. Called by APScheduler.
 
@@ -55,7 +77,9 @@ async def run_qu_scrape(session_name: str) -> None:
         settings = await asyncio.to_thread(load_settings_fresh)
 
         # 2. Screener — refactored to return (candidates, ohlcv_dict).
-        from rainier.alerts.discord import send_stock_candidates
+        # send_stock_candidates is invoked indirectly via
+        # _send_stock_candidates_with_dashboard_url so we don't need it
+        # imported in this scope.
         from rainier.analysis.stock_screener import screen_stocks
 
         all_candidates, ohlcv_by_symbol = await asyncio.to_thread(
@@ -109,11 +133,15 @@ async def run_qu_scrape(session_name: str) -> None:
                 theses = {}
 
         # 5. Discord — empty theses dict means existing top-20-only behavior.
+        # PR5: pass the dashboard base URL through so per-ticker embeds carry
+        # a clickable deep-link to the Streamlit dashboard. None disables the
+        # link (graceful degradation when the dashboard isn't running).
         await asyncio.to_thread(
-            send_stock_candidates,
+            _send_stock_candidates_with_dashboard_url,
             candidates,
             settings.alerts.discord,
-            theses=theses or None,
+            theses or None,
+            settings.llm_thesis.dashboard_base_url,
         )
 
     except Exception as exc:

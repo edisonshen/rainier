@@ -253,6 +253,24 @@ def _is_falsified(lift: float, p_value: float | None) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _read_query_thesis_id() -> int | None:
+    """Pull ?thesis_id=N from the URL for the Discord deep-link (PR5).
+
+    When a Discord embed's "open in dashboard" link fires, Streamlit lands
+    on this page with the query param set. We pre-select the matching row
+    and auto-expand its detail panel so the user lands directly on the
+    thesis they clicked. Returns None when the param is missing or
+    malformed (the tab degrades to its default view).
+    """
+    raw = st.query_params.get("thesis_id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _render_theses_tab() -> None:
     st.header("Recent theses")
     st.caption(
@@ -260,11 +278,20 @@ def _render_theses_tab() -> None:
         "(NULL until the daily eval job has run for that horizon)."
     )
 
+    deep_link_id = _read_query_thesis_id()
+    # PR5: a deep-link from Discord widens the date window so the
+    # referenced thesis is always in the view, no matter how stale.
+    default_since = (
+        date.today() - timedelta(days=365)
+        if deep_link_id is not None
+        else date.today() - timedelta(days=30)
+    )
+
     col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
     with col1:
         since = st.date_input(
             "Since",
-            value=date.today() - timedelta(days=30),
+            value=default_since,
             key="theses_since",
         )
     with col2:
@@ -315,9 +342,16 @@ def _render_theses_tab() -> None:
     )
     st.dataframe(df, hide_index=True, use_container_width=True)
 
+    # PR5: when the deep-link query param is set AND that id is in the
+    # filtered rows, auto-select it. Otherwise default to no selection.
+    options_list: list[int | None] = [None, *df["thesis_id"].tolist()]
+    default_idx = 0
+    if deep_link_id is not None and deep_link_id in df["thesis_id"].tolist():
+        default_idx = options_list.index(deep_link_id)
     selected_id = st.selectbox(
         "Inspect thesis (id)",
-        options=[None, *df["thesis_id"].tolist()],
+        options=options_list,
+        index=default_idx,
         format_func=lambda x: "—" if x is None else str(x),
         key="theses_inspect",
     )
