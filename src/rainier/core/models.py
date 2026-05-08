@@ -338,6 +338,69 @@ class LLMAnalysisRecord(Base):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[float | None] = mapped_column(Float)
+    # PR1: idempotency hash + per-call signal name list (for SQL performance queries).
+    # Migration for existing databases lives in migrations/0001_llm_thesis_pr1.sql —
+    # `db init` (Base.metadata.create_all) is additive only, not ALTER.
+    input_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    signals_used: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)))
+
+
+class ScreenedStockRecord(Base):
+    """Per-scan screener output + LLM augmentation + outcome tracking.
+
+    Captures every screened candidate (~20 rows × every scan, ~80/day) plus
+    LLM thesis fields on the top-5 of `afternoon`/`close` scans plus manual
+    outcome tracking via `rainier thesis log`.
+
+    Plain Postgres (NOT a TimescaleDB hypertable) — ~28K rows/year is small.
+    """
+
+    __tablename__ = "screened_stocks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    scan_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    session_name: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    # From screener (always populated)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    rule_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    composite_score: Mapped[float] = mapped_column(Float, nullable=False)
+    money_flow_score: Mapped[float | None] = mapped_column(Float)
+    sector: Mapped[str | None] = mapped_column(String(50))
+    pattern_type: Mapped[str | None] = mapped_column(String(50))
+    pattern_confidence: Mapped[float | None] = mapped_column(Float)
+
+    # From LLM (nullable — only afternoon/close top-5 get this)
+    llm_confidence: Mapped[int | None] = mapped_column(Integer)
+    shadow_combined_score: Mapped[float | None] = mapped_column(Float)
+    would_be_combined_rank: Mapped[int | None] = mapped_column(Integer)
+    thesis_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("analysis_results.id")
+    )
+    patterns_in_chart_not_in_indicators_count: Mapped[int | None] = mapped_column(Integer)
+
+    # Manual outcome tracking (filled in via `rainier thesis log`)
+    action_taken: Mapped[str | None] = mapped_column(String(20))
+    outcome_pct: Mapped[float | None] = mapped_column(Float)
+    outcome_recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    # Auto outcome backfill (PR2 — columns reserved here so PR1 schema is forward-compat)
+    forward_return_5d: Mapped[float | None] = mapped_column(Float)
+    forward_return_10d: Mapped[float | None] = mapped_column(Float)
+    outcome_backfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scan_date",
+            "session_name",
+            "symbol",
+            name="uq_screened_stocks_scan_session_symbol",
+        ),
+    )
 
 
 # Tables to convert to TimescaleDB hypertables

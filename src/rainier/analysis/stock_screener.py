@@ -36,14 +36,20 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def screen_stocks(settings: Settings | None = None) -> list[StockCandidate]:
+def screen_stocks(
+    settings: Settings | None = None,
+) -> tuple[list[StockCandidate], dict[str, pd.DataFrame]]:
     """Run the full 3-layer stock screening pipeline.
 
     Layer 1: Money flow screening from QU100 data
     Layer 2: Sector trend analysis + boost
     Layer 3: Technical pattern detection on each candidate
 
-    Returns list of StockCandidate sorted by composite score descending.
+    Returns a tuple ``(candidates, ohlcv_by_symbol)``:
+      * candidates: list of StockCandidate sorted by composite score descending.
+      * ohlcv_by_symbol: the OHLCV DataFrames already fetched in Layer 3,
+        keyed by symbol. Bubbled up so the LLM thesis layer can render charts
+        without re-hitting yfinance.
     """
     if settings is None:
         settings = get_settings()
@@ -54,7 +60,7 @@ def screen_stocks(settings: Settings | None = None) -> list[StockCandidate]:
         signals = _screen_money_flow(session)
         if not signals:
             log.warning("No QU100 candidates after money flow screening")
-            return []
+            return [], {}
         log.info("Layer 1 complete: %d candidates from money flow", len(signals))
 
         # Layer 2 — sector analysis + boost
@@ -163,7 +169,7 @@ def screen_stocks(settings: Settings | None = None) -> list[StockCandidate]:
         sum(1 for r in results if r.recommendation == "buy"),
         sum(1 for r in results if r.recommendation == "watch"),
     )
-    return candidates
+    return candidates, stock_data
 
 
 # ---------------------------------------------------------------------------

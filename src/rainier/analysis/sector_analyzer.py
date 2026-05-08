@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from datetime import datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -128,6 +129,94 @@ def _analyze_sectors(session: Session) -> list[SectorTrend]:
         len(ranked),
         ranked[0].sector if ranked else "N/A",
     )
+    return ranked
+
+
+def analyze_sectors_at(
+    captured_at: datetime, session: Session | None = None,
+) -> list[SectorTrend]:
+    """Analyze sector trends as of a specific snapshot timestamp.
+
+    Used by the LLM-thesis sector_momentum signal so it can compare today's
+    sector sentiment against N days ago. The default `analyze_sectors()` keeps
+    its `max(captured_at)` semantics for the existing screener — this function
+    is a strict additive helper.
+    """
+    if session is not None:
+        return _analyze_sectors_for_ts(session, captured_at)
+    with get_session() as s:
+        return _analyze_sectors_for_ts(s, captured_at)
+
+
+def _analyze_sectors_for_ts(
+    session: Session, captured_at: datetime,
+) -> list[SectorTrend]:
+    """Same shape as _analyze_sectors but pinned to a specific timestamp."""
+    rows = (
+        session.query(
+            MoneyFlowSnapshot.sector,
+            MoneyFlowSnapshot.long_short,
+            MoneyFlowSnapshot.rank,
+            MoneyFlowSnapshot.symbol,
+        )
+        .filter(MoneyFlowSnapshot.captured_at == captured_at)
+        .all()
+    )
+
+    if not rows:
+        log.warning("No snapshots at captured_at=%s", captured_at)
+        return []
+
+    sector_data: dict[str, list[tuple[str, str | None, int]]] = defaultdict(list)
+    for sector, long_short, rank, symbol in rows:
+        sector_key = sector or "Unknown"
+        sector_data[sector_key].append((symbol, long_short, rank))
+
+    sector_trends: list[SectorTrend] = []
+    for sector, stocks in sector_data.items():
+        long_count = sum(1 for _, ls, _ in stocks if ls == "Long in")
+        short_count = sum(1 for _, ls, _ in stocks if ls == "Short in")
+        total = len(stocks)
+        net_sentiment = (long_count - short_count) / total if total > 0 else 0.0
+        if net_sentiment > _BULLISH_THRESHOLD:
+            trend_direction = "bullish"
+        elif net_sentiment < _BEARISH_THRESHOLD:
+            trend_direction = "bearish"
+        else:
+            trend_direction = "neutral"
+        long_stocks = [
+            (symbol, rank)
+            for symbol, ls, rank in stocks
+            if ls == "Long in"
+        ]
+        long_stocks.sort(key=lambda x: x[1])
+        top_stocks = [symbol for symbol, _ in long_stocks[:_TOP_STOCKS_LIMIT]]
+        sector_trends.append(
+            SectorTrend(
+                sector=sector,
+                long_in_count=long_count,
+                short_in_count=short_count,
+                net_sentiment=round(net_sentiment, 4),
+                top_stocks=top_stocks,
+                trend_direction=trend_direction,
+                sector_rank=0,
+            )
+        )
+
+    sector_trends.sort(key=lambda st: st.net_sentiment, reverse=True)
+    ranked: list[SectorTrend] = []
+    for i, st in enumerate(sector_trends, start=1):
+        ranked.append(
+            SectorTrend(
+                sector=st.sector,
+                long_in_count=st.long_in_count,
+                short_in_count=st.short_in_count,
+                net_sentiment=st.net_sentiment,
+                top_stocks=st.top_stocks,
+                trend_direction=st.trend_direction,
+                sector_rank=i,
+            )
+        )
     return ranked
 
 

@@ -4,18 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from datetime import date
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from rainier.core.config import get_settings
+from rainier.core.config import get_settings, load_settings_fresh
 
 log = structlog.get_logger()
 
 
 async def run_qu_scrape(session_name: str) -> None:
-    """Run a single QU100 scrape for the given session. Called by APScheduler."""
+    """Run a single QU100 scrape for the given session. Called by APScheduler.
+
+    Pipeline (post-scrape):
+        1. load_settings_fresh — pick up YAML toggles (eng review D2)
+        2. screen_stocks       — 3-layer screener; returns (candidates, ohlcv)
+        3. persist_screened_stocks — DB row for every candidate, every session
+        4. compute_theses_and_persist — LLM thesis on top-5, only on
+           sessions in `settings.llm_thesis.enabled_sessions`
+        5. send_stock_candidates — Discord; theses dict empty for non-LLM sessions
+    """
     from rainier.scrapers import get_scraper
     from rainier.scrapers.browser import BrowserManager
 
@@ -41,12 +51,62 @@ async def run_qu_scrape(session_name: str) -> None:
         from rainier.notifications.notifier import notify_scrape_result
         notify_scrape_result(session_name, result)
 
-        # Send stock candidates to Discord after scrape
+        # 1. Reload settings every scan so YAML toggles take effect (D2).
+        settings = await asyncio.to_thread(load_settings_fresh)
+
+        # 2. Screener — refactored to return (candidates, ohlcv_dict).
         from rainier.alerts.discord import send_stock_candidates
         from rainier.analysis.stock_screener import screen_stocks
-        settings = get_settings()
-        candidates = screen_stocks(settings)[:20]
-        send_stock_candidates(candidates, settings.alerts.discord)
+
+        candidates, ohlcv_by_symbol = await asyncio.to_thread(screen_stocks, settings)
+        candidates = candidates[:20]
+
+        scan_date = date.today()
+
+        # 3. Always persist screener output for every scan.
+        try:
+            from rainier.llm_thesis.persistence import persist_screened_stocks
+            await asyncio.to_thread(
+                persist_screened_stocks,
+                candidates,
+                scan_date=scan_date,
+                session_name=session_name,
+            )
+        except Exception as exc:
+            log.error(
+                "persist_screened_stocks_failed",
+                session=session_name,
+                error=str(exc),
+            )
+
+        # 4. LLM thesis ONLY on configured sessions (afternoon + close).
+        theses: dict[str, dict] = {}
+        if (
+            settings.llm_thesis.enabled
+            and session_name in settings.llm_thesis.enabled_sessions
+            and candidates
+        ):
+            try:
+                from rainier.llm_thesis.service import compute_theses_and_persist
+                theses = await asyncio.to_thread(
+                    compute_theses_and_persist,
+                    candidates[:5],
+                    ohlcv_by_symbol,
+                    scan_date=scan_date,
+                    session_name=session_name,
+                    settings=settings,
+                )
+            except Exception as exc:
+                log.error("compute_theses_unexpected_failure", error=str(exc))
+                theses = {}
+
+        # 5. Discord — empty theses dict means existing top-20-only behavior.
+        await asyncio.to_thread(
+            send_stock_candidates,
+            candidates,
+            settings.alerts.discord,
+            theses=theses or None,
+        )
 
     except Exception as exc:
         log.error("scheduled_scrape_failed", session=session_name, error=str(exc))

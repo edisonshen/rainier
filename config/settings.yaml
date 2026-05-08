@@ -157,6 +157,42 @@ llm:
     - "gemini/gemini-2.0-flash"
   local_model: "ollama/deepseek-r1:14b"
 
+# --- LLM thesis layer (PR1) ---
+#
+# Per-scan settings reload (eng review D2): the scheduler calls
+# load_settings_fresh() at the top of run_qu_scrape, so flipping any toggle
+# below takes effect on the NEXT scan invocation — no daemon restart needed.
+
+llm_thesis:
+  enabled: true
+  model: "claude-sonnet-4-6"
+  max_usd_per_scan: 1.0
+  prompt_version: "v1"
+  enabled_sessions:
+    - afternoon
+    - close
+  fallback_to_anthropic_sdk: false
+  signals:
+    rank_trajectory:
+      enabled: true
+      params:
+        days: 10
+      weight: 1.0
+    capital_flow_streak:
+      enabled: true
+      params:
+        days: 10
+      weight: 1.0
+    sector_momentum:
+      enabled: true
+      params:
+        days: 10
+      weight: 1.0
+    fundamentals:
+      enabled: true
+      params: {}
+      weight: 1.0
+
 # --- Notifications ---
 
 notify:

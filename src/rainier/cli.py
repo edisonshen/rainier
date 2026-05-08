@@ -1044,7 +1044,8 @@ def alert_discord(ctx, dry_run, top_n):
     settings = ctx.obj["settings"]
 
     click.echo("Running QU100 stock screener (3-layer pipeline)...")
-    candidates = screen_stocks(settings)[:top_n]
+    candidates, _ohlcv = screen_stocks(settings)
+    candidates = candidates[:top_n]
 
     if not candidates:
         click.echo("No candidates found from screener.")
@@ -1322,7 +1323,8 @@ def _post_scrape_screener(settings, session: str) -> None:
 
     click.echo("Running post-scrape stock screener...")
     try:
-        candidates = screen_stocks(settings)[:20]
+        candidates, _ohlcv = screen_stocks(settings)
+        candidates = candidates[:20]
     except Exception as exc:
         click.echo(f"  Screener failed: {exc}")
         _notify_scrape_discord(
@@ -2099,3 +2101,275 @@ def ml_select_features(
 
     if output_path:
         click.echo(f"Results saved to: {output_path}")
+
+
+# ---------------------------------------------------------------------------
+# `rainier thesis` — LLM thesis layer (PR1)
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def thesis():
+    """LLM thesis layer (signals, daily run, single-ticker debug, log, signals registry)."""
+
+
+@thesis.command("daily")
+@click.option(
+    "--session",
+    "session_name",
+    default="afternoon",
+    type=click.Choice(["morning", "midday", "afternoon", "close"]),
+    help="Which scan to attribute this run to.",
+)
+@click.option("--top-n", default=5, type=int, help="How many top candidates to LLM-thesis.")
+@click.option("--discord/--no-discord", default=False, help="Post results to Discord.")
+@click.option("--dry-run", is_flag=True, help="Skip Discord, print theses to stdout.")
+@click.option("--max-usd", default=1.0, type=float, help="Hard kill switch on cumulative spend.")
+@click.pass_context
+def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
+    """Manual scheduler-hook trigger — runs the same pipeline as `rainier run`."""
+    from datetime import date as _date
+
+    from rainier.alerts.discord import send_stock_candidates
+    from rainier.analysis.stock_screener import screen_stocks
+    from rainier.core.config import load_settings_fresh
+    from rainier.llm_thesis.persistence import persist_screened_stocks
+    from rainier.llm_thesis.service import compute_theses_and_persist
+
+    settings = load_settings_fresh()
+    # Override the kill switch via CLI.
+    settings.llm_thesis.max_usd_per_scan = float(max_usd)
+
+    click.echo(f"Running screener for session={session_name}...")
+    candidates, ohlcv_by_symbol = screen_stocks(settings)
+    candidates = candidates[:20]
+    if not candidates:
+        click.echo("No candidates from screener.")
+        return
+
+    scan_date = _date.today()
+    persist_screened_stocks(
+        candidates, scan_date=scan_date, session_name=session_name
+    )
+
+    click.echo(f"Running LLM thesis on top {top_n} (max_usd={max_usd:.2f})...")
+    theses = compute_theses_and_persist(
+        candidates[:top_n],
+        ohlcv_by_symbol,
+        scan_date=scan_date,
+        session_name=session_name,
+        settings=settings,
+    )
+
+    if dry_run or not discord:
+        import json as _json
+        click.echo(_json.dumps(theses, indent=2, default=str))
+        click.echo(f"\n({len(theses)} theses generated, Discord skipped)")
+        return
+
+    send_stock_candidates(candidates, settings.alerts.discord, theses=theses or None)
+    click.echo(f"Sent {len(theses)} theses + summary to Discord.")
+
+
+@thesis.command("ticker")
+@click.argument("symbol")
+@click.option(
+    "--session", "session_name", default="afternoon",
+    type=click.Choice(["morning", "midday", "afternoon", "close"]),
+)
+@click.option("--max-usd", default=1.0, type=float)
+@click.pass_context
+def thesis_ticker(ctx, symbol, session_name, max_usd):
+    """Single-ticker debug pipeline against the latest QU100 snapshot."""
+    from datetime import date as _date
+
+    from rainier.analysis.stock_screener import screen_stocks
+    from rainier.core.config import load_settings_fresh
+    from rainier.llm_thesis.service import compute_theses_and_persist
+
+    settings = load_settings_fresh()
+    settings.llm_thesis.max_usd_per_scan = float(max_usd)
+
+    click.echo(f"Running screener (will filter to {symbol})...")
+    candidates, ohlcv = screen_stocks(settings)
+    target = next((c for c in candidates if c.symbol.upper() == symbol.upper()), None)
+    if target is None:
+        click.echo(f"{symbol} not in screener output.")
+        return
+
+    theses = compute_theses_and_persist(
+        [target], ohlcv,
+        scan_date=_date.today(),
+        session_name=session_name,
+        settings=settings,
+    )
+    import json as _json
+    click.echo(_json.dumps(theses, indent=2, default=str))
+
+
+@thesis.command("log")
+@click.option("--ticker", required=True)
+@click.option("--date", "scan_date_s", required=True, help="Scan date YYYY-MM-DD.")
+@click.option(
+    "--action", required=True, type=click.Choice(["took", "skipped", "watched"])
+)
+@click.option("--outcome", "outcome", default=None, help="e.g. +2.3% or -1.1%.")
+@click.option("--notes", default=None)
+def thesis_log(ticker, scan_date_s, action, outcome, notes):
+    """Manually record action_taken + outcome on a ScreenedStockRecord."""
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+    from datetime import timezone as _tz
+
+    from sqlalchemy import update
+
+    from rainier.core.database import get_session
+    from rainier.core.models import ScreenedStockRecord
+
+    scan_date = _date.fromisoformat(scan_date_s)
+
+    pct: float | None = None
+    if outcome is not None:
+        try:
+            pct = float(outcome.strip().rstrip("%"))
+        except ValueError as exc:
+            raise click.BadParameter(f"Bad --outcome: {exc}") from exc
+
+    with get_session() as session:
+        result = session.execute(
+            update(ScreenedStockRecord)
+            .where(
+                ScreenedStockRecord.scan_date == scan_date,
+                ScreenedStockRecord.symbol == ticker.upper(),
+            )
+            .values(
+                action_taken=action,
+                outcome_pct=pct,
+                outcome_recorded_at=_datetime.now(_tz.utc),
+                notes=notes,
+            )
+        )
+    affected = int(result.rowcount or 0)
+    if affected == 0:
+        raise click.ClickException(
+            f"No ScreenedStockRecord row found for symbol={ticker} scan_date={scan_date_s}"
+        )
+    click.echo(f"Updated {affected} row(s) for {ticker} on {scan_date_s}.")
+
+
+@thesis.group("signals")
+def thesis_signals():
+    """Inspect / toggle / test individual signals in the LLM thesis registry."""
+
+
+@thesis_signals.command("list")
+def thesis_signals_list():
+    """Print every signal in the registry + its enabled flag from settings.yaml."""
+    from rainier.core.config import load_settings_fresh
+    from rainier.llm_thesis.signals import REGISTRY
+
+    settings = load_settings_fresh()
+    cfg_map = settings.llm_thesis.signals
+    click.echo(f"{'Name':<24} {'Enabled':<8} {'Version':<8} {'Cost(ms)':<10} Weight")
+    click.echo("-" * 64)
+    for name, sig_cls in REGISTRY.items():
+        instance = sig_cls()
+        cfg = cfg_map.get(name)
+        enabled = "yes" if (cfg and cfg.enabled) else "no"
+        weight = cfg.weight if cfg else 1.0
+        click.echo(
+            f"{name:<24} {enabled:<8} {instance.version:<8} "
+            f"{instance.cost_estimate_ms:<10} {weight:.2f}"
+        )
+
+
+def _set_signal_enabled_yaml(name: str, enabled: bool) -> None:
+    """Toggle a signal in `config/settings.yaml` via plain PyYAML.
+
+    PR1 uses PyYAML which does not preserve comments/order — that's intentional
+    for PR1 minimality. PR3 will swap in ruamel.yaml when the auto-research
+    accept flow needs to mutate config without nuking layout.
+    """
+    import yaml as _yaml
+    path = Path("config/settings.yaml")
+    if not path.exists():
+        raise click.ClickException(f"Missing {path}")
+    with path.open("r") as f:
+        data = _yaml.safe_load(f) or {}
+    section = data.setdefault("llm_thesis", {}).setdefault("signals", {})
+    if name not in section:
+        section[name] = {"enabled": enabled, "params": {}, "weight": 1.0}
+    else:
+        section[name]["enabled"] = enabled
+    with path.open("w") as f:
+        _yaml.safe_dump(data, f, sort_keys=False)
+
+
+@thesis_signals.command("enable")
+@click.argument("name")
+def thesis_signals_enable(name):
+    """Flip the signal to enabled=true in settings.yaml."""
+    from rainier.llm_thesis.signals import REGISTRY
+    if name not in REGISTRY:
+        raise click.ClickException(
+            f"Unknown signal {name!r}. Known: {', '.join(REGISTRY)}"
+        )
+    _set_signal_enabled_yaml(name, True)
+    click.echo(f"Enabled signal: {name}")
+
+
+@thesis_signals.command("disable")
+@click.argument("name")
+def thesis_signals_disable(name):
+    """Flip the signal to enabled=false in settings.yaml."""
+    from rainier.llm_thesis.signals import REGISTRY
+    if name not in REGISTRY:
+        raise click.ClickException(
+            f"Unknown signal {name!r}. Known: {', '.join(REGISTRY)}"
+        )
+    _set_signal_enabled_yaml(name, False)
+    click.echo(f"Disabled signal: {name}")
+
+
+@thesis_signals.command("test")
+@click.argument("name")
+@click.option("--symbol", required=True, help="Symbol to dry-run the signal against.")
+def thesis_signals_test(name, symbol):
+    """Dry-run a single signal's compute() against the latest QU100 snapshot."""
+    from datetime import date as _date
+
+    from rainier.analysis.stock_screener import screen_stocks
+    from rainier.core.config import load_settings_fresh
+    from rainier.core.types import StockCandidate
+    from rainier.llm_thesis.signals import REGISTRY
+    from rainier.llm_thesis.signals.base import SignalContext
+
+    if name not in REGISTRY:
+        raise click.ClickException(
+            f"Unknown signal {name!r}. Known: {', '.join(REGISTRY)}"
+        )
+
+    settings = load_settings_fresh()
+    candidates, ohlcv = screen_stocks(settings)
+    target: StockCandidate | None = next(
+        (c for c in candidates if c.symbol.upper() == symbol.upper()), None
+    )
+    if target is None:
+        click.echo(f"{symbol} not in screener output — building stub candidate.")
+        target = StockCandidate(
+            symbol=symbol.upper(), rank=0, rank_change=0, long_short="Long in",
+            capital_flow_direction="N", sector="Unknown", signal_strength=0.0,
+        )
+
+    cfg = settings.llm_thesis.signals.get(name)
+    params = dict(cfg.params) if cfg else {}
+    ctx = SignalContext(
+        symbol=target.symbol, scan_date=_date.today(),
+        session_name="manual", candidate=target,
+        ohlcv_df=ohlcv.get(target.symbol), params=params,
+    )
+    sig = REGISTRY[name]()
+    value = sig.compute(ctx)
+    click.echo(f"value: {value}")
+    if value is not None:
+        click.echo(f"render_for_prompt: {sig.render_for_prompt(value)}")
