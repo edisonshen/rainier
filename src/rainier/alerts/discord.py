@@ -476,6 +476,28 @@ _INSIGHT_SEVERITY_TAGS: dict[str, str] = {
 }
 
 
+def _scrub_discord_text(text: str) -> str:
+    """Strip Discord-meaningful characters from LLM/user text rendered into
+    a webhook message.
+
+    `subject` (e.g. `new_pattern_discovered`) and `rationale` text can include
+    LLM-generated strings — an adversarial LLM could embed `@everyone`,
+    backticks, or markdown that breaks the surrounding code block.
+
+    We replace `@` with a fullwidth variant (still readable, no mention),
+    drop backticks, and collapse newlines to spaces. Cheap, no escape
+    arms-race.
+    """
+    if not text:
+        return ""
+    return (
+        text.replace("@", "＠")  # FULLWIDTH COMMERCIAL AT
+        .replace("`", "'")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def _format_research_message(
     *,
     eval_date: date_cls,
@@ -524,12 +546,15 @@ def _format_research_message(
     for ins in bucket:
         tag = _INSIGHT_SEVERITY_TAGS.get(ins.severity, ins.severity)
         kind = ins.kind
-        subj = (ins.subject or "")[:30]
+        # Review iter-1 [P2]: scrub LLM-generated text (subject + rationale)
+        # before piping to Discord so an adversarial pattern name like
+        # "@everyone bad pattern" can't trigger a server-wide mention.
+        subj = _scrub_discord_text((ins.subject or "")[:30])
         recur = getattr(ins, "recurrence_count", 1) or 1
         action_kind = "noop"
         if isinstance(ins.action, dict):
             action_kind = str(ins.action.get("kind", "?"))
-        rationale = (ins.rationale or "").strip().replace("\n", " ")
+        rationale = _scrub_discord_text((ins.rationale or "").strip())
         if len(rationale) > 200:
             rationale = rationale[:197] + "..."
         recur_part = f" (x{recur})" if recur > 1 else ""
