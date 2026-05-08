@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
 
+import pandas as pd
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -111,6 +112,26 @@ def _close_on_or_before(symbol: str, target: date) -> tuple[date, float] | None:
     return (row_date.date() if hasattr(row_date, "date") else row_date), float(row_close)
 
 
+def _trading_days_back(end: date, n: int) -> date:
+    """Return the trading day ``n`` business days before ``end`` (Mon-Fri).
+
+    Uses pandas business-day offsets — Sat/Sun are skipped. We don't subtract
+    market holidays because the scheduler also runs on holidays (the trading
+    closures simply mean StockPrice has no row, which the price helper
+    already tolerates by walking back to the most recent close).
+
+    n=0 returns ``end`` itself (or the prior weekday if ``end`` is Sat/Sun).
+    """
+    # `pd.bdate_range` returns business days inclusive of endpoints. We want
+    # the n-th business day strictly before `end`. Generate a window large
+    # enough (n*2 + a slack) and pick the appropriate index.
+    window = max(n * 2 + 5, 10)
+    rng = pd.bdate_range(end=pd.Timestamp(end), periods=window + 1)
+    # rng[-1] is the last business day at-or-before end; we want n steps back.
+    target = rng[-1 - n]
+    return target.date()
+
+
 def _hit(verdict: str, return_pct: float) -> bool:
     """Did the thesis direction match the realized return sign?
 
@@ -143,7 +164,11 @@ def evaluate_horizon(
         raise ValueError(f"Unsupported horizon: {horizon!r}; choose from {HORIZONS}")
 
     days = _HORIZON_DAYS[horizon]
-    target_scan_date = scan_date - timedelta(days=days)
+    # Codex iter-1 [P1]: use trading-day offsets so weekend / holiday gaps
+    # don't leave Friday picks ungraded. `bdate_range` covers Mon-Fri; the
+    # `_close_on_or_before` helper already walks back when StockPrice has
+    # no row for that exact date (covers market holidays).
+    target_scan_date = _trading_days_back(scan_date, days)
     horizon_date = scan_date  # exit price at the eval date itself
 
     log.info(
