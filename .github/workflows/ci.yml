@@ -108,6 +108,8 @@ jobs:
 
       - name: Verify wheel installs cleanly into a fresh venv
         run: |
-          uv venv /tmp/wheel-test
-          /tmp/wheel-test/bin/pip install dist/*.whl
+          uv venv /tmp/wheel-test --python 3.12
+          # uv venv doesn't include pip by default, so use `uv pip install`
+          # pointing at the new venv's python.
+          uv pip install --python /tmp/wheel-test/bin/python dist/*.whl
           /tmp/wheel-test/bin/rainier --help
