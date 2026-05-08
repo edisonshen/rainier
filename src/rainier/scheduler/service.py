@@ -166,13 +166,19 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
 
     settings = await asyncio.to_thread(load_settings_fresh)
 
-    # Pull "yesterday's afternoon scan" rows for the report block. We use the
+    # Pull "yesterday's scan" rows for the report block. We use the
     # 1d horizon since that captures the freshest readout the operator cares
     # about each morning.
+    #
+    # PR3 carry-over [P2]: roll back via TRADING days, not calendar days. On
+    # a Monday eval, calendar-rollback lands on Sunday and quietly returns
+    # zero theses; the operator never sees Friday's afternoon/close picks
+    # graded. `_trading_days_back` from llm_thesis.eval already handles the
+    # weekend skip — reuse it here.
     def _fetch_yesterday():
-        from datetime import timedelta as _td
+        from rainier.llm_thesis.eval import _trading_days_back
 
-        prior = eval_date - _td(days=1)
+        prior = _trading_days_back(eval_date, 1)
         with get_session() as session:
             rows = (
                 session.query(
@@ -216,13 +222,20 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
         yesterday_rows = []
 
     try:
-        base_rates = await asyncio.to_thread(compute_verdict_hit_rate, 30)
+        # PR3 carry-over [P3]: pass eval_date so the rolling window anchors on
+        # the run's logical "today" rather than `date.today()` at function-call
+        # time (matters for historical replay / manual eval).
+        base_rates = await asyncio.to_thread(
+            lambda: compute_verdict_hit_rate(30, eval_date=eval_date)
+        )
     except Exception as exc:
         log.error("daily_eval_base_rates_failed", error=str(exc))
         base_rates = {}
 
     try:
-        contribs = await asyncio.to_thread(compute_signal_contribution, 30, "5d")
+        contribs = await asyncio.to_thread(
+            lambda: compute_signal_contribution(30, "5d", eval_date=eval_date)
+        )
     except Exception as exc:
         log.error("daily_eval_contribs_failed", error=str(exc))
         contribs = []

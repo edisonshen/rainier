@@ -353,25 +353,46 @@ def _format_eval_message(
     signal_contribs: list,         # [SignalContribution]
     p_threshold: float = 0.05,
 ) -> str:
-    """Render the Discord eval-report body. <=1800 chars per message."""
+    """Render the Discord eval-report body. <=1800 chars per message.
+
+    PR3 carry-over [P2]: when ``yesterday_rows`` mixes ``afternoon`` and
+    ``close`` sessions, render a separate header per session so the operator
+    can distinguish "afternoon scan picks" from "close scan picks". The old
+    renderer used the first row's session as a single global heading and
+    interleaved both sets of picks underneath, hiding which scan produced
+    each pick.
+    """
     lines: list[str] = []
     lines.append(f"**Eval report — {eval_date.isoformat()}**")
     if yesterday_rows:
-        scan_date = yesterday_rows[0].get("scan_date") or "(prior scan)"
-        session = yesterday_rows[0].get("session_name") or "afternoon"
-        lines.append(
-            f"Yesterday's {session} scan ({scan_date}):"
-        )
+        # Group rows by session_name preserving session insertion order. Use a
+        # plain list-of-(key, list) so the rendering stays deterministic and
+        # we don't need an OrderedDict import. Rows of unknown session collapse
+        # under the "(unknown)" bucket.
+        by_session: list[tuple[str, list[dict]]] = []
+        index: dict[str, int] = {}
         for row in yesterday_rows:
-            mark = "[HIT]" if row.get("hit") else "[miss]"
-            verdict = row.get("verdict") or "?"
-            confidence = row.get("llm_confidence")
-            sym = row.get("symbol") or "?"
-            ret = float(row.get("return_pct") or 0.0)
-            conf_part = f"({confidence}/10)" if confidence is not None else ""
-            lines.append(
-                f"  {mark} {sym:<6} {verdict:<10} {conf_part:<7} -> {ret:+.2%}"
-            )
+            sess = row.get("session_name") or "(unknown)"
+            idx = index.get(sess)
+            if idx is None:
+                index[sess] = len(by_session)
+                by_session.append((sess, [row]))
+            else:
+                by_session[idx][1].append(row)
+
+        for sess, rows in by_session:
+            scan_date = rows[0].get("scan_date") or "(prior scan)"
+            lines.append(f"Yesterday's {sess} scan ({scan_date}):")
+            for row in rows:
+                mark = "[HIT]" if row.get("hit") else "[miss]"
+                verdict = row.get("verdict") or "?"
+                confidence = row.get("llm_confidence")
+                sym = row.get("symbol") or "?"
+                ret = float(row.get("return_pct") or 0.0)
+                conf_part = f"({confidence}/10)" if confidence is not None else ""
+                lines.append(
+                    f"  {mark} {sym:<6} {verdict:<10} {conf_part:<7} -> {ret:+.2%}"
+                )
     else:
         lines.append("Yesterday's scan: no graded picks.")
 
