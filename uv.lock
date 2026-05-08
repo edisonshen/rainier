@@ -2230,7 +2230,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.11" },
     { name = "shap", specifier = ">=0.51.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
-    { name = "streamlit", marker = "extra == 'dashboard'", specifier = ">=1.30" },
+    { name = "streamlit", marker = "extra == 'dashboard'", specifier = ">=1.30,<2" },
     { name = "structlog", specifier = ">=24.0" },
     { name = "xgboost", specifier = ">=3.2.0" },
     { name = "yfinance", specifier = ">=1.2.0" },
