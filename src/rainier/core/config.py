@@ -290,7 +290,14 @@ def _default_thesis_signals() -> dict[str, ThesisSignalConfig]:
 
 
 class LLMThesisConfig(BaseModel):
-    """LLM thesis layer config (eng review D2: reload fresh each scan)."""
+    """LLM thesis layer config (eng review D2: reload fresh each scan).
+
+    PR5 adds ``dashboard_base_url`` — the public URL of the Streamlit
+    dashboard. When set, the Discord embed renderer attaches a clickable
+    "open in dashboard" link on each thesis. Default ``None`` keeps the
+    embed link-less so a tunnelled / hosted dashboard can be wired in
+    without touching code.
+    """
 
     enabled: bool = True
     model: str = "claude-sonnet-4-6"
@@ -303,6 +310,7 @@ class LLMThesisConfig(BaseModel):
     signals: dict[str, ThesisSignalConfig] = Field(
         default_factory=_default_thesis_signals
     )
+    dashboard_base_url: str | None = None
 
 
 class NotifyConfig(BaseModel):

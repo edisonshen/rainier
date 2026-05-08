@@ -573,6 +573,7 @@ async def _compute_theses_async(
     settings: Settings,
 ) -> dict[str, dict[str, Any]]:
     from .chart_export import render_chart_png
+    from .chart_persistence import attach_chart_id_to_thesis, persist_chart_image
 
     thesis_cfg = settings.llm_thesis
     max_usd = float(thesis_cfg.max_usd_per_scan)
@@ -582,6 +583,10 @@ async def _compute_theses_async(
     # Pre-rank by composite_score so we can compute would_be_combined_rank
     # within just the LLM-augmented set (top N — typically 5).
     ranked: list[tuple[StockCandidate, dict[str, Any]]] = []
+    # PR5: track the persisted chart_id per symbol so the post-thesis hook
+    # can attach it to LLMAnalysisRecord.chart_image_ids. This stays bounded
+    # to top-N candidates, so dict size is trivial.
+    chart_ids_by_symbol: dict[str, int] = {}
 
     for candidate in candidates:
         if cost_used >= max_usd:
@@ -604,15 +609,30 @@ async def _compute_theses_async(
         pattern = _candidate_to_pattern_signal(candidate)
 
         async def _async_provider(c=candidate, s=symbol, _df=df, _pattern=pattern):
+            image_bytes: bytes | None = None
+            digest: str | None = None
             try:
-                image_bytes, _digest = (
-                    render_chart_png(s, _df, pattern=_pattern)
-                    if _df is not None
-                    else (None, None)
-                )
+                if _df is not None:
+                    image_bytes, digest = render_chart_png(s, _df, pattern=_pattern)
             except Exception:
                 log.exception("chart_export_failed symbol=%s", s)
                 image_bytes = None
+                digest = None
+            # PR5: persist the chart bytes alongside their sha256 digest so
+            # the Discord renderer + dashboard can serve the exact PNG that
+            # went to the LLM. Idempotent on (symbol, scan_date, sha256).
+            if image_bytes is not None and digest is not None:
+                try:
+                    chart_id = persist_chart_image(
+                        symbol=s,
+                        scan_date=scan_date,
+                        image_bytes=image_bytes,
+                        sha256=digest,
+                    )
+                    if chart_id is not None:
+                        chart_ids_by_symbol[s] = chart_id
+                except Exception:
+                    log.exception("persist_chart_image_failed symbol=%s", s)
             pack, renders = await assemble_evidence(
                 c, _df, scan_date, session_name, thesis_cfg
             )
@@ -645,8 +665,36 @@ async def _compute_theses_async(
             continue
 
         thesis_dict = thesis.model_dump()
+        # PR5: stamp the LLMAnalysisRecord id on the thesis dict so the
+        # Discord renderer can build a dashboard deep-link without making
+        # an extra DB lookup. Underscore-prefixed key — not part of the
+        # Pydantic schema, just transport metadata for downstream
+        # rendering. The leading underscore matches the existing
+        # `_session_name` precedent in service._persist_thesis.
+        if record_id is not None:
+            thesis_dict["_thesis_id"] = int(record_id)
         out[symbol] = thesis_dict
         ranked.append((candidate, thesis_dict))
+
+        # PR5: attach the persisted chart_id (if any) to the thesis record so
+        # the Discord renderer + dashboard can read the exact bytes back. We
+        # do this AFTER the thesis succeeds — a cache hit returns no chart
+        # bytes (we never invoked the provider) and that's fine: an earlier
+        # scan's row already carries chart_image_ids. This is also why the
+        # mutation is idempotent at the data layer (skip if already present).
+        chart_id = chart_ids_by_symbol.get(symbol)
+        if chart_id is not None and record_id is not None:
+            try:
+                attach_chart_id_to_thesis(
+                    thesis_id=record_id, chart_id=chart_id
+                )
+            except Exception:
+                log.exception(
+                    "attach_chart_id_failed symbol=%s thesis_id=%s chart_id=%s",
+                    symbol,
+                    record_id,
+                    chart_id,
+                )
 
         # Persist LLM-side fields onto ScreenedStockRecord.
         composite = float(candidate.signal_strength or 0.0)

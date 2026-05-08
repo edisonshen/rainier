@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     PrimaryKeyConstraint,
     String,
     Text,
@@ -223,6 +224,20 @@ class StockPrice(Base):
 
 
 class ChartImage(Base):
+    """Persisted chart PNG per (symbol, scan_date).
+
+    Originally PR1's ChartImage used a `file_path` to point at chart files on disk.
+    PR5 introduces inline byte storage so the Discord renderer (and dashboard)
+    can serve the exact PNG that went to the LLM without depending on the
+    filesystem layout. New columns are nullable for backward compatibility:
+    legacy rows keep using ``file_path``; new rows fill ``image_bytes`` +
+    ``sha256`` and leave ``file_path`` empty.
+
+    The partial unique index on ``(symbol, scan_date, sha256)`` (declared in
+    migrations/0004_llm_thesis_pr5.sql) makes the persist path idempotent —
+    two re-runs that produce identical PNG bytes collapse to one row.
+    """
+
     __tablename__ = "chart_images"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -233,13 +248,35 @@ class ChartImage(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     timeframe_days: Mapped[int] = mapped_column(Integer, default=120)
-    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Nullable now: PR5 rows persist bytes inline and leave file_path empty.
+    file_path: Mapped[str | None] = mapped_column(String(500))
     file_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    # PR5: store the PNG bytes that went to the LLM so Discord/dashboard can
+    # serve the exact image without re-rendering or hitting the filesystem.
+    image_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    scan_date: Mapped[date | None] = mapped_column(Date, index=True)
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
 
     stock: Mapped[Stock] = relationship(
         back_populates="chart_images",
         foreign_keys=[symbol],
         primaryjoin="ChartImage.symbol == Stock.symbol",
+    )
+
+    __table_args__ = (
+        # Partial unique index — only one PR5 row per (symbol, scan_date,
+        # sha256) at a time. Legacy rows (sha256 IS NULL) are excluded so the
+        # constraint never fires on PR1-vintage data.
+        Index(
+            "idx_chart_image_symbol_scan_sha",
+            "symbol",
+            "scan_date",
+            "sha256",
+            unique=True,
+            postgresql_where="sha256 IS NOT NULL",
+        ),
     )
 
 

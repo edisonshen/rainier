@@ -380,7 +380,7 @@ def test_load_thesis_chart_returns_none_for_unknown_id():
 
 
 def test_load_thesis_chart_returns_bytes_when_file_exists(tmp_path):
-    """Happy path: thesis -> ChartImage(file_path) -> bytes."""
+    """Legacy path: thesis -> ChartImage(file_path) -> bytes."""
     from rainier.core.models import ChartImage, LLMAnalysisRecord
 
     png_path = tmp_path / "nvda.png"
@@ -391,6 +391,9 @@ def test_load_thesis_chart_returns_bytes_when_file_exists(tmp_path):
     analysis.chart_image_ids = [42]
     chart = MagicMock(spec=ChartImage)
     chart.file_path = str(png_path)
+    # PR5: legacy rows have image_bytes=None and the loader falls back to
+    # the on-disk file_path read path.
+    chart.image_bytes = None
 
     sess = _ScriptedSession(
         gets={
@@ -411,6 +414,7 @@ def test_load_thesis_chart_returns_none_when_file_missing(tmp_path):
     analysis.chart_image_ids = [42]
     chart = MagicMock(spec=ChartImage)
     chart.file_path = str(tmp_path / "missing.png")
+    chart.image_bytes = None
 
     sess = _ScriptedSession(
         gets={
@@ -421,6 +425,29 @@ def test_load_thesis_chart_returns_none_when_file_missing(tmp_path):
     with _patch_session(sess):
         out = ddata.load_thesis_chart(100)
     assert out is None
+
+
+def test_load_thesis_chart_prefers_inline_image_bytes_over_file_path(tmp_path):
+    """PR5: when ``image_bytes`` is set, return them directly without
+    touching the filesystem (the file_path may be empty/legacy)."""
+    from rainier.core.models import ChartImage, LLMAnalysisRecord
+
+    inline_bytes = b"\x89PNG\r\n\x1a\nINLINE-PR5"
+    analysis = MagicMock(spec=LLMAnalysisRecord)
+    analysis.chart_image_ids = [42]
+    chart = MagicMock(spec=ChartImage)
+    chart.file_path = None
+    chart.image_bytes = inline_bytes
+
+    sess = _ScriptedSession(
+        gets={
+            (LLMAnalysisRecord, 100): analysis,
+            (ChartImage, 42): chart,
+        }
+    )
+    with _patch_session(sess):
+        out = ddata.load_thesis_chart(100)
+    assert out == inline_bytes
 
 
 def test_load_thesis_chart_returns_none_when_thesis_has_no_chart_ids():

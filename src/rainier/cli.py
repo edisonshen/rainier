@@ -2194,7 +2194,14 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
         click.echo(f"\n({len(theses)} theses generated, Discord skipped)")
         return
 
-    send_stock_candidates(candidates, settings.alerts.discord, theses=theses or None)
+    send_stock_candidates(
+        candidates,
+        settings.alerts.discord,
+        theses=theses or None,
+        # PR5: pipe the dashboard base URL through so embed titles get a
+        # clickable deep-link. None disables the link.
+        dashboard_base_url=settings.llm_thesis.dashboard_base_url,
+    )
     click.echo(f"Sent {len(theses)} theses + summary to Discord.")
 
 
