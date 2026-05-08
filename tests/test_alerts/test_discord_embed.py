@@ -389,6 +389,48 @@ class TestDashboardLink:
 # ---------------------------------------------------------------------------
 
 
+class TestLLMTextScrubbing:
+    """PR5 review iter-1 regression — LLM-generated text fields must NOT
+    leak ``@everyone`` / ``@here`` / backticks into Discord because an
+    adversarial completion could trigger a server-wide mention or break
+    the surrounding embed formatting. Mirrors the existing scrub on the
+    eval/research renderers (PR3 review iter-1 [P2]).
+    """
+
+    def test_risks_scrub_at_everyone(self):
+        risks = _risks_lines(_thesis(risks=["@everyone bad risk"]))
+        assert risks
+        assert "@everyone" not in risks[0]
+        # FULLWIDTH @ sign replacement — visible to the user, not a mention.
+        assert "＠" in risks[0]
+
+    def test_watch_scrub_at_here(self):
+        out = _watch_line(_thesis(watch_items=["@here pullback to 100"]))
+        assert out is not None
+        assert "@here" not in out
+        assert "＠" in out
+
+    def test_llm_noticed_scrub_backticks(self):
+        out = _llm_noticed(
+            _thesis(
+                patterns_in_chart_not_in_indicators=["pattern with ``code`` block"]
+            )
+        )
+        assert out is not None
+        # Backticks would break the surrounding embed code-block formatting.
+        assert "`" not in out
+
+    def test_why_bullets_scrub_paragraph_radar(self):
+        from rainier.alerts.discord import _why_bullets
+        bullets = _why_bullets(
+            _thesis(
+                paragraph_radar="@everyone strong setup. Volume confirms."
+            )
+        )
+        for b in bullets:
+            assert "@everyone" not in b
+
+
 class TestFooterAndImage:
 
     def test_footer_renders_setup_quality_and_signals(self):

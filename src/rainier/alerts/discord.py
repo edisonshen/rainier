@@ -478,10 +478,16 @@ def _why_bullets(thesis: dict) -> list[str]:
     Strategy: split paragraph_radar + paragraph_evidence on sentence
     boundaries, drop blanks, keep the first 4, cap each at 60 chars
     (word-boundary safe).
+
+    PR5 review iter-1: LLM-generated paragraphs flow into Discord text;
+    scrub ``@everyone`` / ``@here`` / backticks before emitting so an
+    adversarial completion can't trigger a mass-mention or break the
+    surrounding embed formatting (mirrors the same defense already in
+    place on the eval/research renderers).
     """
     chunks: list[str] = []
     for key in ("paragraph_radar", "paragraph_evidence"):
-        text = (thesis.get(key) or "").strip()
+        text = _scrub_discord_text((thesis.get(key) or "").strip())
         if not text:
             continue
         # Split on sentence-ish boundaries; we don't need linguistic
@@ -548,7 +554,8 @@ def _llm_noticed(thesis: dict) -> str | None:
     The schema's ``patterns_in_chart_not_in_indicators`` is either a list
     (max 5) of named patterns OR the literal string ``"none"``. We emit
     the field only when there's signal — joining the list into one short
-    sentence (or showing the first item if the list is long).
+    sentence (or showing the first item if the list is long). PR5 review
+    iter-1: scrubs LLM-controlled text via ``_scrub_discord_text``.
     """
     raw = thesis.get("patterns_in_chart_not_in_indicators")
     if raw == "none" or raw is None:
@@ -556,13 +563,14 @@ def _llm_noticed(thesis: dict) -> str | None:
     if isinstance(raw, list):
         if not raw:
             return None
-        items = [str(x).strip() for x in raw if str(x).strip()]
+        items = [_scrub_discord_text(str(x).strip()) for x in raw if str(x).strip()]
+        items = [i for i in items if i]
         if not items:
             return None
         text = "; ".join(items)
         return _truncate_at_word(text, 200)
     if isinstance(raw, str):
-        text = raw.strip()
+        text = _scrub_discord_text(raw.strip())
         if not text:
             return None
         return _truncate_at_word(text, 200)
@@ -570,13 +578,17 @@ def _llm_noticed(thesis: dict) -> str | None:
 
 
 def _risks_lines(thesis: dict) -> list[str]:
-    """Top-3 risks, each <80 chars, word-boundary safe."""
+    """Top-3 risks, each <80 chars, word-boundary safe.
+
+    PR5 review iter-1: scrubs LLM-controlled text so a malicious
+    ``risks=["@everyone bad risk"]`` can't trigger a mass mention.
+    """
     risks = thesis.get("risks") or []
     if not isinstance(risks, list):
         return []
     out: list[str] = []
     for r in risks[:3]:
-        text = str(r).strip()
+        text = _scrub_discord_text(str(r).strip())
         if not text:
             continue
         out.append(_truncate_at_word(text, 80))
@@ -584,11 +596,14 @@ def _risks_lines(thesis: dict) -> list[str]:
 
 
 def _watch_line(thesis: dict) -> str | None:
-    """Single most-actionable watch item, <120 chars, word-boundary safe."""
+    """Single most-actionable watch item, <120 chars, word-boundary safe.
+
+    PR5 review iter-1: scrubs LLM-controlled text.
+    """
     items = thesis.get("watch_items") or []
     if not isinstance(items, list) or not items:
         return None
-    first = str(items[0]).strip()
+    first = _scrub_discord_text(str(items[0]).strip())
     if not first:
         return None
     return _truncate_at_word(first, 120)
