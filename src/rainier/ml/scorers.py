@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from rainier.analysis.pattern_primitives import VolumePriceSignal, analyze_volume_price
 from rainier.core.types import PatternSignal
 
 

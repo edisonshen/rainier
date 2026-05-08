@@ -1,7 +1,6 @@
 """Tests for ScoringStrategy implementations."""
 
 import pandas as pd
-import pytest
 
 from rainier.core.protocols import ScoringStrategy
 from rainier.core.types import PatternSignal

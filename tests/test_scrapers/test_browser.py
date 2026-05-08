@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from rainier.scrapers.browser import BrowserManager
 
@@ -45,3 +48,62 @@ class TestIsSessionValid:
         p = tmp_path / "session.json"
         p.write_text("{}")
         assert BrowserManager.is_session_valid(p, ttl_hours=0) is False
+
+
+def _mock_playwright(connect_side_effect):
+    """Build a patched async_playwright() whose chromium.connect_over_cdp uses the given side effect."""
+    mock_chromium = MagicMock()
+    mock_chromium.connect_over_cdp = AsyncMock(side_effect=connect_side_effect)
+    mock_pw = MagicMock()
+    mock_pw.chromium = mock_chromium
+    mock_pw_factory = MagicMock()
+    mock_pw_factory.start = AsyncMock(return_value=mock_pw)
+    return mock_pw_factory, mock_chromium
+
+
+class TestCDPConnectRetry:
+    """start() force-restarts Chrome and retries once if connect_over_cdp fails."""
+
+    async def test_retries_after_force_restart(self):
+        mock_browser = MagicMock()
+        factory, chromium = _mock_playwright(
+            [RuntimeError("Browser.setDownloadBehavior: not supported"), mock_browser]
+        )
+        with (
+            patch("rainier.scrapers.browser.async_playwright", return_value=factory),
+            patch.object(BrowserManager, "_force_restart_chrome", new=AsyncMock()) as restart,
+        ):
+            bm = BrowserManager(cdp_url="http://localhost:9222")
+            await bm.start()
+
+        assert bm._browser is mock_browser
+        assert bm._is_cdp is True
+        assert chromium.connect_over_cdp.await_count == 2
+        restart.assert_awaited_once()
+
+    async def test_second_failure_propagates(self):
+        factory, chromium = _mock_playwright(RuntimeError("still broken"))
+        with (
+            patch("rainier.scrapers.browser.async_playwright", return_value=factory),
+            patch.object(BrowserManager, "_force_restart_chrome", new=AsyncMock()) as restart,
+        ):
+            bm = BrowserManager(cdp_url="http://localhost:9222")
+            with pytest.raises(RuntimeError, match="still broken"):
+                await bm.start()
+
+        assert chromium.connect_over_cdp.await_count == 2
+        restart.assert_awaited_once()
+
+    async def test_happy_path_no_restart(self):
+        mock_browser = MagicMock()
+        factory, chromium = _mock_playwright([mock_browser])
+        with (
+            patch("rainier.scrapers.browser.async_playwright", return_value=factory),
+            patch.object(BrowserManager, "_force_restart_chrome", new=AsyncMock()) as restart,
+        ):
+            bm = BrowserManager(cdp_url="http://localhost:9222")
+            await bm.start()
+
+        assert bm._browser is mock_browser
+        assert chromium.connect_over_cdp.await_count == 1
+        restart.assert_not_awaited()

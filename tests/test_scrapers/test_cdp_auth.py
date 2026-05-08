@@ -8,13 +8,12 @@ are mocked — no real browser needed.
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
-from rainier.scrapers.qu.scraper import QUScraper
 from rainier.scrapers.qu import selectors as sel
-
+from rainier.scrapers.qu.scraper import QUScraper
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -523,8 +522,9 @@ class TestScrapeQU100PostLogin:
         scraper = _make_scraper()
         scraper._page = page
 
-        from rainier.scrapers.base import ScrapeResult
         from datetime import datetime, timezone
+
+        from rainier.scrapers.base import ScrapeResult
         result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
 
         with (
@@ -563,8 +563,9 @@ class TestScrapeQU100PostLogin:
         scraper = _make_scraper()
         scraper._page = page
 
-        from rainier.scrapers.base import ScrapeResult
         from datetime import datetime, timezone
+
+        from rainier.scrapers.base import ScrapeResult
         result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
 
         with (
@@ -577,3 +578,87 @@ class TestScrapeQU100PostLogin:
         # Search button was found via wait_for_selector, not query_selector
         assert sel.SEARCH_BUTTON in wait_selectors
         search_btn.click.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_no_spinner() tests
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForNoSpinner:
+    """Tests for the antd loading-spinner wait that guards toggle clicks."""
+
+    @pytest.mark.asyncio
+    async def test_waits_for_spinner_hidden(self):
+        """Calls wait_for_selector with the antd spinner selector and state='hidden'."""
+        page, _ = _make_mock_page()
+        scraper = _make_scraper()
+        scraper._page = page
+
+        await scraper._wait_for_no_spinner(timeout_ms=5000)
+
+        page.wait_for_selector.assert_awaited_once_with(
+            ".ant-spin-spinning", state="hidden", timeout=5000
+        )
+
+    @pytest.mark.asyncio
+    async def test_swallows_timeout(self):
+        """A stuck spinner must not raise — we log and continue."""
+        page, _ = _make_mock_page()
+        page.wait_for_selector = AsyncMock(side_effect=TimeoutError("spinner stuck"))
+        scraper = _make_scraper()
+        scraper._page = page
+
+        # Must not raise — the actual click will surface a clearer error if needed
+        await scraper._wait_for_no_spinner(timeout_ms=100)
+
+    @pytest.mark.asyncio
+    async def test_invoked_before_toggle_click(self):
+        """_scrape_qu100 calls _wait_for_no_spinner before each toggle click."""
+        page, _ = _make_mock_page(url="https://www.quantunicorn.com/products#qu100")
+
+        # Order trace: every page.click and every _wait_for_no_spinner call
+        events: list[str] = []
+
+        async def trace_click(target):
+            events.append(f"click:{target}")
+
+        page.click = AsyncMock(side_effect=trace_click)
+        page.wait_for_selector = AsyncMock(return_value=AsyncMock())
+        page.query_selector = AsyncMock(return_value=None)
+        page.get_attribute = AsyncMock(return_value="2026-04-09")
+        page.evaluate = AsyncMock(return_value=[
+            {"rank": "1", "symbol": "NVDA", "daily_change": "▲5",
+             "sector": "Tech", "industry": "Semi", "long_short": "多"}
+        ])
+
+        scraper = _make_scraper()
+        scraper._page = page
+
+        async def trace_spinner_wait(timeout_ms=10000):
+            events.append("spinner_wait")
+
+        from datetime import datetime, timezone
+
+        from rainier.scrapers.base import ScrapeResult
+
+        result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
+
+        with (
+            patch("rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock),
+            patch("rainier.scrapers.qu.scraper.login", new_callable=AsyncMock),
+            patch.object(scraper, "_persist_qu100", return_value=1),
+            patch.object(scraper, "_wait_for_no_spinner", side_effect=trace_spinner_wait),
+        ):
+            await scraper._scrape_qu100("afternoon", datetime.now(timezone.utc), result)
+
+        # Both toggle clicks must be preceded by a spinner wait
+        toggle_clicks = [
+            (i, e) for i, e in enumerate(events)
+            if e in (f"click:{sel.TOP100_BUTTON}", f"click:{sel.BOTTOM100_BUTTON}")
+        ]
+        assert len(toggle_clicks) == 2, f"Expected 2 toggle clicks, got {events}"
+        for idx, _ in toggle_clicks:
+            assert events[idx - 1] == "spinner_wait", (
+                f"Expected spinner_wait before toggle click at index {idx}, got {events}"
+            )

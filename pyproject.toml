@@ -63,6 +63,11 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+# Pre-existing tech debt parked so CI runs on net-new code; clean up incrementally.
+# - E501 (line too long): 44 hits, mostly long log strings; fix in a follow-up
+# - E741 (ambiguous var name like `l`/`I`): 18 hits, scientific code convention
+# - N806 (lowercase var name): 10 hits, ditto
+ignore = ["E501", "E741", "N806"]
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.30"]

@@ -1,11 +1,11 @@
 """Tests for confidence scoring."""
 
+from datetime import datetime
+
 import pandas as pd
 
-from rainier.core.config import ScorerConfig
 from rainier.core.types import Candle, Direction, PinBar, SRLevel, SRRole, SRType, Timeframe
 from rainier.signals.scorer import score_setup
-from datetime import datetime
 
 
 def _make_pin_bar(

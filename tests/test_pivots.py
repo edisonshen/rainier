@@ -26,8 +26,9 @@ class TestDetectPivots:
                 assert p.price == swing_candles.iloc[p.index]["low"]
 
     def test_too_few_bars_returns_empty(self, base_timestamp):
-        import pandas as pd
         from datetime import timedelta
+
+        import pandas as pd
 
         df = pd.DataFrame([
             {"timestamp": base_timestamp + timedelta(hours=i),
