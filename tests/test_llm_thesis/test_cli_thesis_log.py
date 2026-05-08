@@ -102,7 +102,7 @@ def test_thesis_log_zero_rows_raises_with_session_in_message():
 
 
 def test_thesis_log_rejects_unknown_session_value():
-    """Click Choice gates `--session` to {morning, afternoon, close}."""
+    """Click Choice gates `--session` to the four scheduler sessions."""
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -110,9 +110,34 @@ def test_thesis_log_rejects_unknown_session_value():
             "thesis", "log",
             "--ticker", "NVDA",
             "--date", "2026-05-07",
-            "--session", "midday",  # not a valid session
+            "--session", "premarket",  # not a valid session
             "--action", "took",
         ],
     )
     assert result.exit_code != 0
-    assert "midday" in result.output or "Choice" in result.output
+    assert "premarket" in result.output or "Choice" in result.output
+
+
+def test_thesis_log_accepts_all_four_scheduler_sessions(tmp_path):
+    """The scheduler runs morning/midday/afternoon/close; --session must
+    accept all four so a midday-screened row can be logged."""
+    fake_session = MagicMock()
+    fake_session.execute.return_value = MagicMock(rowcount=1)
+    cm = MagicMock()
+    cm.__enter__.return_value = fake_session
+    cm.__exit__.return_value = False
+
+    runner = CliRunner()
+    for session in ("morning", "midday", "afternoon", "close"):
+        with patch("rainier.core.database.get_session", return_value=cm):
+            result = runner.invoke(
+                cli,
+                [
+                    "thesis", "log",
+                    "--ticker", "NVDA",
+                    "--date", "2026-05-07",
+                    "--session", session,
+                    "--action", "watched",
+                ],
+            )
+        assert result.exit_code == 0, f"session {session} failed: {result.output}"
