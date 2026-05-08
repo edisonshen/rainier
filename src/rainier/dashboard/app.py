@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 
 from rainier.dashboard import actions, data
+from rainier.llm_thesis.eval import VERDICTS
 from rainier.llm_thesis.signals import REGISTRY
 
 # ---------------------------------------------------------------------------
@@ -275,7 +276,9 @@ def _render_theses_tab() -> None:
     with col3:
         verdicts = st.multiselect(
             "Verdict",
-            options=["setup_long", "watch", "no_setup"],
+            # Single source of truth — eval.VERDICTS. Keeps the dashboard
+            # filter from going stale silently if a new verdict is added.
+            options=list(VERDICTS),
             default=[],
             key="theses_verdict",
         )
