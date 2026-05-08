@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -160,14 +161,24 @@ async def test_cost_overrun_after_call_aborts_with_charge():
 # ---------------------------------------------------------------------------
 
 
-def _stub_query_returning(rows: list[tuple[int, dict]]):
-    """Build a fake SQLAlchemy query whose .filter().order_by().first() pops rows.
+def _stub_query_returning(rows: list[tuple]):
+    """Build a fake SQLAlchemy query whose .filter().order_by().all() returns rows.
 
-    Each call to .first() returns the first remaining row (or None when empty).
+    Each row may be a 2-tuple (id, output) — legacy form — or a 3-tuple
+    (id, output, session_name) matching the post-PR2 SELECT shape. The stub
+    normalizes 2-tuples by appending ``None`` for session_name so legacy
+    fixtures keep working.
+
     We capture the .filter args on each call so the test can assert what was
     actually pushed into the WHERE clause.
     """
     captured_filters: list[tuple] = []
+    normalized: list[tuple] = []
+    for r in rows:
+        if len(r) == 2:
+            normalized.append((r[0], r[1], None))
+        else:
+            normalized.append(tuple(r))
 
     class _Query:
         def query(self, *args, **kwargs):
@@ -181,7 +192,12 @@ def _stub_query_returning(rows: list[tuple[int, dict]]):
             return self
 
         def first(self):
-            return rows.pop(0) if rows else None
+            return normalized.pop(0) if normalized else None
+
+        def all(self):
+            out = list(normalized)
+            normalized.clear()
+            return out
 
     return _Query(), captured_filters
 
@@ -193,6 +209,113 @@ def _patched_get_session(query_obj):
     cm.__enter__.return_value = fake_session
     cm.__exit__.return_value = False
     return cm
+
+
+def test_candidate_to_pattern_signal_round_trips_levels():
+    """PR2 carry-over P2 #4: chart_export receives a real PatternSignal so
+    the chart sent to the LLM gets the entry / SL / target overlays. We
+    reconstruct it from the flat fields on StockCandidate.
+    """
+    from rainier.core.types import PatternSignal, StockCandidate
+    from rainier.llm_thesis.service import _candidate_to_pattern_signal
+
+    cand = StockCandidate(
+        symbol="NVDA", rank=5, rank_change=1, long_short="Long in",
+        capital_flow_direction="+", sector="Technology", signal_strength=0.8,
+        pattern_type="w_bottom", pattern_direction="bullish",
+        pattern_status="forming", pattern_confidence=0.72,
+        entry_price=120.5, stop_loss=115.0, target_price=132.0,
+        rr_ratio=2.1, volume_confirmed=True,
+    )
+    p = _candidate_to_pattern_signal(cand)
+    assert isinstance(p, PatternSignal)
+    assert p.pattern_type == "w_bottom"
+    assert p.entry_price == 120.5
+    assert p.stop_loss == 115.0
+    assert p.target_wave1 == 132.0
+    assert p.confidence == 0.72
+
+
+def test_candidate_to_pattern_signal_returns_none_when_no_pattern():
+    """No pattern fields → no overlay. Chart still renders cleanly."""
+    from rainier.core.types import StockCandidate
+    from rainier.llm_thesis.service import _candidate_to_pattern_signal
+
+    cand = StockCandidate(
+        symbol="NVDA", rank=5, rank_change=0, long_short="Long in",
+        capital_flow_direction="+", sector="Technology", signal_strength=0.5,
+    )
+    assert _candidate_to_pattern_signal(cand) is None
+
+
+@pytest.mark.asyncio
+async def test_compute_theses_async_passes_pattern_signal_to_chart():
+    """Cache miss must call render_chart_png with a reconstructed PatternSignal,
+    not None — fix #4. Captures the kwarg value passed."""
+    from datetime import date as _date
+
+    from rainier.core.types import StockCandidate
+    from rainier.llm_thesis.service import _compute_theses_async
+
+    cand = StockCandidate(
+        symbol="NVDA", rank=5, rank_change=0, long_short="Long in",
+        capital_flow_direction="+", sector="Technology", signal_strength=0.8,
+        pattern_type="bull_flag", pattern_direction="bullish",
+        pattern_status="forming", pattern_confidence=0.7,
+        entry_price=200.0, stop_loss=190.0, target_price=215.0,
+        rr_ratio=1.5,
+    )
+
+    captured: dict = {}
+
+    def _capture_chart(symbol, df, pattern=None, **kwargs):
+        captured["pattern"] = pattern
+        return b"png-bytes", "deadbeef"
+
+    async def _fake_assemble(*args, **kwargs):
+        from rainier.llm_thesis.schemas import EvidencePack
+        pack = EvidencePack(
+            symbol="NVDA", scan_date=_date(2026, 5, 7).isoformat(),
+            session_name="afternoon", candidate={"rank": 5}, signals={},
+        )
+        return pack, []
+
+    async def _fake_generate(**kwargs):
+        # Force the cache-miss path by invoking the provider, just like the
+        # real generate_thesis does (via asyncio.to_thread). The provider
+        # internally calls asyncio.run, which only works off-loop, so we
+        # match production by offloading to a worker thread here too.
+        provider = kwargs["evidence_provider"]
+        await asyncio.to_thread(provider)
+        return TradeThesis.model_validate(_valid_thesis_dict()), 0.05, 99
+
+    with (
+        patch(
+            "rainier.llm_thesis.service.generate_thesis", side_effect=_fake_generate,
+        ),
+        patch(
+            "rainier.llm_thesis.chart_export.render_chart_png",
+            side_effect=_capture_chart,
+        ),
+        patch(
+            "rainier.llm_thesis.service.assemble_evidence",
+            side_effect=_fake_assemble,
+        ),
+        patch("rainier.llm_thesis.service.update_with_thesis"),
+    ):
+        await _compute_theses_async(
+            [cand], {"NVDA": MagicMock()},
+            scan_date=_date(2026, 5, 7),
+            session_name="afternoon",
+            settings=_settings(),
+        )
+
+    assert captured.get("pattern") is not None, (
+        "render_chart_png was called with pattern=None — fix #4 regression"
+    )
+    p = captured["pattern"]
+    assert p.pattern_type == "bull_flag"
+    assert p.entry_price == 200.0
 
 
 def test_tier1_lookup_returns_hit_for_same_session_and_model():
@@ -265,6 +388,111 @@ def test_tier1_lookup_filter_includes_llm_model():
     assert LLMAnalysisRecord.llm_model is not None
 
 
+def test_tier1_lookup_invalidates_when_signals_used_differs():
+    """PR2 carry-over P2 #2: toggling a signal off in YAML must invalidate
+    same-day cached theses. The cached row was produced with a stale signal
+    set; reusing it would feed the LLM verdict drift into the next scan.
+    """
+    payload = {
+        **_valid_thesis_dict(),
+        "_session_name": "afternoon",
+        "signals_used": ["rank_trajectory", "fundamentals"],  # cached with two
+    }
+    q, _ = _stub_query_returning([(123, payload, "afternoon")])
+    cm = _patched_get_session(q)
+    with patch("rainier.llm_thesis.service.get_session", return_value=cm):
+        result = _tier1_lookup(
+            "NVDA",
+            date(2026, 5, 7),
+            "v1",
+            session_name="afternoon",
+            llm_model="test-model",
+            # Current enabled set differs — fundamentals was just toggled off.
+            enabled_signals=["rank_trajectory"],
+        )
+    assert result is None, (
+        "Expected cache miss because the cached signals_used differs from "
+        "the current enabled-signals set."
+    )
+
+
+def test_tier1_lookup_hits_when_signals_used_matches():
+    """Same set, just permuted — cache should still hit."""
+    payload = {
+        **_valid_thesis_dict(),
+        "_session_name": "afternoon",
+        "signals_used": ["fundamentals", "rank_trajectory"],
+    }
+    q, _ = _stub_query_returning([(123, payload, "afternoon")])
+    cm = _patched_get_session(q)
+    with patch("rainier.llm_thesis.service.get_session", return_value=cm):
+        result = _tier1_lookup(
+            "NVDA",
+            date(2026, 5, 7),
+            "v1",
+            session_name="afternoon",
+            llm_model="test-model",
+            enabled_signals=["rank_trajectory", "fundamentals"],
+        )
+    assert result is not None
+    rec_id, _ = result
+    assert rec_id == 123
+
+
+def test_tier1_lookup_session_column_takes_precedence_over_jsonb_legacy():
+    """[P3] fix #6: with the new session_name column populated, the lookup
+    must filter on the column directly. A row whose JSONB stamp says one
+    session but whose session_name column says another should match the
+    column (the JSONB stamp is informational only on PR2+ rows).
+    """
+    payload = {
+        **_valid_thesis_dict(),
+        "_session_name": "ignored-jsonb",  # legacy field still present
+    }
+    # Column-row says "afternoon"; the lookup is for "afternoon" too.
+    q, _ = _stub_query_returning([(7, payload, "afternoon")])
+    cm = _patched_get_session(q)
+    with patch("rainier.llm_thesis.service.get_session", return_value=cm):
+        result = _tier1_lookup(
+            "NVDA",
+            date(2026, 5, 7),
+            "v1",
+            session_name="afternoon",
+            llm_model="test-model",
+        )
+    assert result is not None
+    rec_id, _ = result
+    assert rec_id == 7
+
+
+def test_tier1_lookup_skips_cross_session_row_continues_search():
+    """[P3] fix #6 regression: a cross-session row earlier in the partition
+    must NOT block a same-session row from being found. The old code did
+    `.first()` + post-filter, returning None whenever the first row was the
+    wrong session. The new code iterates all rows and returns the first
+    matching one.
+    """
+    rows = [
+        # Most-recent row is the WRONG session (close).
+        (200, {**_valid_thesis_dict(), "_session_name": "close"}, "close"),
+        # Earlier same-session row should win.
+        (100, {**_valid_thesis_dict(), "_session_name": "afternoon"}, "afternoon"),
+    ]
+    q, _ = _stub_query_returning(rows)
+    cm = _patched_get_session(q)
+    with patch("rainier.llm_thesis.service.get_session", return_value=cm):
+        result = _tier1_lookup(
+            "NVDA",
+            date(2026, 5, 7),
+            "v1",
+            session_name="afternoon",
+            llm_model="test-model",
+        )
+    assert result is not None
+    rec_id, _ = result
+    assert rec_id == 100
+
+
 def test_tier1_lookup_legacy_row_without_session_marker_is_reusable():
     """Backwards compat: rows persisted before the _session_name stamp existed
     have no _session_name key. These should remain reusable rather than
@@ -302,7 +530,10 @@ async def test_generate_thesis_close_session_misses_afternoon_cache():
     """
     captured_kwargs: dict = {}
 
-    def _fake_lookup(symbol, scan_date, prompt_version, *, session_name, llm_model):
+    def _fake_lookup(
+        symbol, scan_date, prompt_version, *, session_name, llm_model,
+        enabled_signals=None,
+    ):
         captured_kwargs["session_name"] = session_name
         captured_kwargs["llm_model"] = llm_model
         # Afternoon hit, close miss.
@@ -344,7 +575,10 @@ async def test_generate_thesis_close_session_misses_afternoon_cache():
 async def test_generate_thesis_same_session_hits_cache_no_llm_call():
     """Same date + symbol + prompt + session + model → Tier-1 hit, no LLM call."""
 
-    def _fake_lookup(symbol, scan_date, prompt_version, *, session_name, llm_model):
+    def _fake_lookup(
+        symbol, scan_date, prompt_version, *, session_name, llm_model,
+        enabled_signals=None,
+    ):
         # Hit only when session+model match.
         if session_name == "afternoon" and llm_model == "claude-sonnet-4-6":
             return 42, _valid_thesis_dict()
@@ -371,6 +605,69 @@ async def test_generate_thesis_same_session_hits_cache_no_llm_call():
     assert cost == 0.0
     mock_llm.assert_not_called()
     mock_persist.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PR2 carry-over P2 #1: _compute_theses_async must defer evidence assembly
+# until generate_thesis confirms a Tier-1 miss. A cache hit must skip the
+# chart export + signal compute calls entirely.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compute_theses_async_cache_hit_skips_chart_and_assembly():
+    """Cache-hit path must not invoke render_chart_png or assemble_evidence.
+
+    Regression: a previous version of _compute_theses_async pre-resolved the
+    evidence pack BEFORE handing it to generate_thesis, so even a Tier-1 hit
+    paid for chart export + every signal compute. PR2 carry-over P2 #1 fixes
+    this by deferring the evidence assembly behind a closure that only runs
+    when generate_thesis decides the cache missed.
+    """
+    from datetime import date as _date
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from rainier.core.types import StockCandidate
+    from rainier.llm_thesis.service import _compute_theses_async
+
+    cand = StockCandidate(
+        symbol="NVDA", rank=5, rank_change=0, long_short="Long in",
+        capital_flow_direction="+", sector="Technology", signal_strength=0.8,
+    )
+
+    cached_thesis_dict = _valid_thesis_dict()
+    chart_mock = MagicMock()
+    assemble_mock = _AsyncMock()
+
+    async def _fake_generate(**kwargs):
+        # Simulate the Tier-1 hit — generate_thesis returns the cached thesis
+        # without ever calling its evidence_provider.
+        return TradeThesis.model_validate(cached_thesis_dict), 0.0, 42
+
+    with (
+        patch(
+            "rainier.llm_thesis.service.generate_thesis",
+            side_effect=_fake_generate,
+        ),
+        patch(
+            "rainier.llm_thesis.chart_export.render_chart_png", chart_mock
+        ),
+        patch(
+            "rainier.llm_thesis.service.assemble_evidence", assemble_mock
+        ),
+        patch("rainier.llm_thesis.service.update_with_thesis"),
+    ):
+        result = await _compute_theses_async(
+            [cand], {"NVDA": MagicMock()},
+            scan_date=_date(2026, 5, 7),
+            session_name="afternoon",
+            settings=_settings(),
+        )
+
+    assert "NVDA" in result
+    # The cache-hit path must NOT have asked for the chart or run any signal.
+    chart_mock.assert_not_called()
+    assemble_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

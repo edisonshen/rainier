@@ -343,6 +343,14 @@ class LLMAnalysisRecord(Base):
     # `db init` (Base.metadata.create_all) is additive only, not ALTER.
     input_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     signals_used: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)))
+    # PR2 carry-over [P3]: first-class session column so Tier-1 cache lookup
+    # filters in the WHERE clause instead of post-filtering on a JSONB key.
+    # Avoids the bug where a cross-session row hides a same-session row from
+    # the SELECT (the previous query used .order_by(id desc).first() and
+    # post-filtered on _session_name, which dropped the lookup to None even
+    # when a same-session row existed earlier in the partition). Migration
+    # in migrations/0002_llm_thesis_pr2.sql.
+    session_name: Mapped[str | None] = mapped_column(String(20), index=True)
 
 
 class ScreenedStockRecord(Base):
@@ -399,6 +407,53 @@ class ScreenedStockRecord(Base):
             "session_name",
             "symbol",
             name="uq_screened_stocks_scan_session_symbol",
+        ),
+    )
+
+
+class ThesisEvaluation(Base):
+    """Per-thesis forward-return outcome at a fixed horizon (PR2).
+
+    One row per (thesis_id, horizon). Populated by the daily eval job
+    (`llm_thesis.eval.evaluate_horizon`) which runs nightly at 17:00 PT.
+    Idempotent: re-running fills only missing rows.
+
+    Plain Postgres (NOT a hypertable) — small row count (5 picks/day x 3
+    horizons x ~252 trading days = ~3.8K/yr).
+    """
+
+    __tablename__ = "thesis_evaluations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thesis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_results.id"), nullable=False, index=True
+    )
+    screened_record_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("screened_stocks.id")
+    )
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    horizon: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    scan_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    verdict: Mapped[str] = mapped_column(String(20), nullable=False)
+    llm_confidence: Mapped[int | None] = mapped_column(Integer)
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_price: Mapped[float] = mapped_column(Float, nullable=False)
+    return_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    # `hit` is True when the thesis direction matched the realized return sign.
+    # For setup_long: hit iff return_pct > 0. For watch / no_setup: hit iff
+    # return_pct <= 0 (i.e. the LLM was right NOT to buy).
+    hit: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Denormalized from LLMAnalysisRecord so per-signal contribution queries
+    # avoid the join entirely.
+    signals_used: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "thesis_id", "horizon", name="uq_thesis_evaluations_thesis_horizon"
         ),
     )
 
