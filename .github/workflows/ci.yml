@@ -82,3 +82,32 @@ jobs:
 
       - name: pytest
         run: uv run pytest tests/ -v --tb=short
+
+  build:
+    name: Build (import smoke + wheel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra dashboard
+
+      - name: Import smoke (CLI loads, all modules import)
+        run: |
+          uv run rainier --help
+          uv run python -c "import rainier; import rainier.cli; import rainier.scheduler.service"
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Verify wheel installs cleanly into a fresh venv
+        run: |
+          uv venv /tmp/wheel-test
+          /tmp/wheel-test/bin/pip install dist/*.whl
+          /tmp/wheel-test/bin/rainier --help

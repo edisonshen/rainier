@@ -147,7 +147,7 @@ def fetch_all_prices(
     On first run, downloads from yfinance and persists to stock_prices table.
     Subsequent runs load from DB instantly. Only fetches new symbols/dates.
     """
-    from rainier.core.models import Stock, StockPrice
+    from rainier.core.models import StockPrice
 
     end_buffered = end + timedelta(days=30)
 
@@ -344,8 +344,8 @@ def _long_to_multiindex(df: pd.DataFrame) -> pd.DataFrame:
             [fields, [sym]]
         )
         # Flatten to individual (field, sym) columns
-        for field in fields:
-            frames[(field, sym)] = sym_data[(field, sym)]
+        for fld in fields:
+            frames[(fld, sym)] = sym_data[(fld, sym)]
 
     result = pd.DataFrame(frames)
     result.columns = pd.MultiIndex.from_tuples(result.columns)
