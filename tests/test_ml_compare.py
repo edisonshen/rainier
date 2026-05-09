@@ -5,11 +5,20 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pandas as pd
+import pytest
 
 from rainier.core.config import BacktestConfig
 from rainier.core.protocols import BacktestMetrics
 from rainier.core.types import Signal, Timeframe
-from rainier.ml.compare import ComparisonResult, compare_emitters, format_comparison_table
+from rainier.ml.compare import (
+    ComparisonResult,
+    WalkForwardResult,
+    WalkForwardWindow,
+    compare_emitters,
+    format_comparison_table,
+    format_walkforward_table,
+    run_walkforward_compare,
+)
 
 # ---------------------------------------------------------------------------
 # Fake emitters for deterministic testing
@@ -179,3 +188,185 @@ class TestFormatComparisonTable:
         result = ComparisonResult(rows=[("A", m), ("B", m), ("C", m)])
         output = format_comparison_table(result)
         assert "Delta" not in output
+
+
+# ---------------------------------------------------------------------------
+# Walk-forward tests
+# ---------------------------------------------------------------------------
+
+
+class _ConstantEmitter:
+    """Emits zero signals — gives deterministic backtest with no trades."""
+
+    def emit(self, df, symbol, timeframe) -> list[Signal]:
+        return []
+
+
+class TestRunWalkforwardCompare:
+    """run_walkforward_compare slides train/test windows and aggregates."""
+
+    def test_yields_expected_window_count(self):
+        df = _make_df(500)
+        # train=200, test=100, step=100 → folds at train_starts 0,100,200
+        # need train_start + 300 <= 500 → 0,100,200 valid
+        result = run_walkforward_compare(
+            df=df,
+            symbol="TEST",
+            timeframe=Timeframe.H1,
+            emitter_factories={"empty": lambda _train: _ConstantEmitter()},
+            train_bars=200,
+            test_bars=100,
+            step_bars=100,
+            config=BacktestConfig(),
+        )
+        assert len(result.windows) == 3
+
+    def test_default_step_equals_test_bars(self):
+        df = _make_df(400)
+        # train=200, test=100, default step=100 → folds at 0, 100
+        result = run_walkforward_compare(
+            df=df,
+            symbol="TEST",
+            timeframe=Timeframe.H1,
+            emitter_factories={"empty": lambda _train: _ConstantEmitter()},
+            train_bars=200,
+            test_bars=100,
+            config=BacktestConfig(),
+        )
+        assert len(result.windows) == 2
+
+    def test_window_indices_are_correct(self):
+        df = _make_df(400)
+        result = run_walkforward_compare(
+            df=df,
+            symbol="TEST",
+            timeframe=Timeframe.H1,
+            emitter_factories={"empty": lambda _train: _ConstantEmitter()},
+            train_bars=200,
+            test_bars=100,
+            step_bars=100,
+            config=BacktestConfig(),
+        )
+        w0 = result.windows[0]
+        assert (w0.train_start, w0.train_end) == (0, 200)
+        assert (w0.test_start, w0.test_end) == (200, 300)
+        w1 = result.windows[1]
+        assert (w1.train_start, w1.train_end) == (100, 300)
+        assert (w1.test_start, w1.test_end) == (300, 400)
+
+    def test_factory_receives_train_slice_only(self):
+        """Factory must be called with the training slice, not the full df."""
+        df = _make_df(400)
+        captured: list[int] = []
+
+        def factory(train_df):
+            captured.append(len(train_df))
+            return _ConstantEmitter()
+
+        run_walkforward_compare(
+            df=df,
+            symbol="TEST",
+            timeframe=Timeframe.H1,
+            emitter_factories={"e": factory},
+            train_bars=200,
+            test_bars=100,
+            step_bars=100,
+            config=BacktestConfig(),
+        )
+        assert captured == [200, 200]  # called once per fold with train_bars
+
+    def test_aggregates_per_label(self):
+        df = _make_df(400)
+        result = run_walkforward_compare(
+            df=df,
+            symbol="TEST",
+            timeframe=Timeframe.H1,
+            emitter_factories={
+                "A": lambda _train: _ConstantEmitter(),
+                "B": lambda _train: _ConstantEmitter(),
+            },
+            train_bars=200,
+            test_bars=100,
+            step_bars=100,
+            config=BacktestConfig(),
+        )
+        assert result.labels == ["A", "B"]
+        assert result.get_aggregate("A") is not None
+        assert result.get_aggregate("B") is not None
+        # No signals → 0 trades aggregated
+        assert result.get_aggregate("A").total_trades == 0
+
+    def test_raises_on_empty_factories(self):
+        df = _make_df(400)
+        with pytest.raises(ValueError, match="non-empty"):
+            run_walkforward_compare(
+                df=df,
+                symbol="TEST",
+                timeframe=Timeframe.H1,
+                emitter_factories={},
+                train_bars=200,
+                test_bars=100,
+            )
+
+    def test_raises_on_too_short_data(self):
+        df = _make_df(100)
+        with pytest.raises(ValueError, match="need at least"):
+            run_walkforward_compare(
+                df=df,
+                symbol="TEST",
+                timeframe=Timeframe.H1,
+                emitter_factories={"e": lambda _t: _ConstantEmitter()},
+                train_bars=200,
+                test_bars=100,
+            )
+
+    def test_raises_on_invalid_bar_counts(self):
+        df = _make_df(400)
+        with pytest.raises(ValueError, match="must be positive"):
+            run_walkforward_compare(
+                df=df,
+                symbol="TEST",
+                timeframe=Timeframe.H1,
+                emitter_factories={"e": lambda _t: _ConstantEmitter()},
+                train_bars=0,
+                test_bars=100,
+            )
+
+
+class TestWalkForwardResult:
+    def test_empty_result(self):
+        result = WalkForwardResult()
+        assert result.labels == []
+        assert result.get_aggregate("anything") is None
+
+    def test_window_dataclass(self):
+        w = WalkForwardWindow(
+            fold=0, train_start=0, train_end=200,
+            test_start=200, test_end=300,
+        )
+        assert w.fold == 0
+        assert w.metrics_by_label == {}
+
+
+class TestFormatWalkforwardTable:
+    def test_empty_returns_message(self):
+        out = format_walkforward_table(WalkForwardResult())
+        assert "No walk-forward" in out
+
+    def test_renders_per_window_and_aggregate(self):
+        df = _make_df(400)
+        result = run_walkforward_compare(
+            df=df,
+            symbol="TEST",
+            timeframe=Timeframe.H1,
+            emitter_factories={"Book": lambda _t: _ConstantEmitter()},
+            train_bars=200,
+            test_bars=100,
+            step_bars=100,
+            config=BacktestConfig(),
+        )
+        out = format_walkforward_table(result)
+        assert "WALK-FORWARD COMPARISON" in out
+        assert "Book" in out
+        assert "Aggregate" in out
+        assert "Profit factor" in out
