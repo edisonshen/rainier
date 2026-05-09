@@ -2157,8 +2157,12 @@ def ml_compare(ctx, csv_path, symbol, tf, model_path, start, end,
     operator can answer "would this model make more money?".
 
     Use --walk-forward to slide a (train, test) window through the data and
-    aggregate out-of-sample metrics — model is built from train_df at every
-    fold, so there is no lookahead leakage.
+    aggregate per-fold out-of-sample metrics. NOTE: this CLI does NOT refit
+    the ML model per fold; the model from --model is loaded once and
+    evaluated on each test window. Model retraining is offline via
+    ``rainier ml train``. Lookahead leakage is therefore only as good as the
+    training cut-off used to produce the model file — pass a model trained
+    strictly on data before the CSV's earliest test bar.
     """
     from rainier.core.config import ScorerConfig, SignalConfig
     from rainier.data.csv_provider import CSVProvider
