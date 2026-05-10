@@ -79,6 +79,23 @@ class ScoringStrategy(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Feature extraction boundary: AnalysisResult + DataFrame → feature DataFrame
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class FeatureExtractorProtocol(Protocol):
+    """Transforms an AnalysisResult + OHLCV DataFrame into ML-ready features.
+
+    Implemented by features/extractor.py:FeatureExtractor.
+    Defined as a protocol so signals/ and ml/ can depend on the contract
+    instead of importing features/ directly.
+    """
+
+    def extract(self, result: AnalysisResult, df: pd.DataFrame) -> pd.DataFrame: ...
+
+
+# ---------------------------------------------------------------------------
 # Backtest result contract (shared output type)
 # ---------------------------------------------------------------------------
 

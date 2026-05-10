@@ -2127,6 +2127,132 @@ def ml_select_features(
         click.echo(f"Results saved to: {output_path}")
 
 
+@ml.command(name="compare")
+@click.option("--csv", "csv_path", required=True, type=click.Path(exists=True),
+              help="OHLCV CSV file")
+@click.option("--symbol", required=True, help="Instrument symbol (e.g. MES)")
+@click.option("--timeframe", "tf", default="1H",
+              type=click.Choice([t.value for t in Timeframe]),
+              help="Bar timeframe")
+@click.option("--model", "model_path", default=None, type=click.Path(exists=True),
+              help="Trained ML model path (XGBoost JSON). When omitted, only "
+                   "the BookScorer baseline is evaluated.")
+@click.option("--start", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--end", default=None, help="End date (YYYY-MM-DD)")
+@click.option("--walk-forward", "walk_forward", is_flag=True, default=False,
+              help="Run walk-forward backtest comparison instead of full-sample.")
+@click.option("--wf-train-bars", default=500, type=int,
+              help="Walk-forward training window size (bars).")
+@click.option("--wf-test-bars", default=100, type=int,
+              help="Walk-forward test window size (bars).")
+@click.option("--wf-step-bars", default=None, type=int,
+              help="Walk-forward step between folds (default: --wf-test-bars).")
+@click.pass_context
+def ml_compare(ctx, csv_path, symbol, tf, model_path, start, end,
+               walk_forward, wf_train_bars, wf_test_bars, wf_step_bars):
+    """Compare BookScorer vs MLScorer side-by-side on the same data.
+
+    Closes the ML feedback loop: takes a trained XGBoost model and runs it
+    through the backtest engine alongside the rule-based BookScorer so the
+    operator can answer "would this model make more money?".
+
+    Use --walk-forward to slide a (train, test) window through the data and
+    aggregate per-fold out-of-sample metrics. NOTE: this CLI does NOT refit
+    the ML model per fold; the model from --model is loaded once and
+    evaluated on each test window. Model retraining is offline via
+    ``rainier ml train``. Lookahead leakage is therefore only as good as the
+    training cut-off used to produce the model file — pass a model trained
+    strictly on data before the CSV's earliest test bar.
+    """
+    from rainier.core.config import ScorerConfig, SignalConfig
+    from rainier.data.csv_provider import CSVProvider
+    from rainier.features.extractor import FeatureExtractor
+    from rainier.ml.compare import (
+        compare_emitters,
+        format_comparison_table,
+        format_walkforward_table,
+        run_walkforward_compare,
+    )
+    from rainier.ml.scorers import MLScorer
+    from rainier.signals.emitter import PinBarSignalEmitter
+    from rainier.signals.ml_emitter import MLSignalEmitter
+
+    settings = ctx.obj["settings"]
+    timeframe = Timeframe(tf)
+    start_dt = datetime.strptime(start, "%Y-%m-%d") if start else None
+    end_dt = datetime.strptime(end, "%Y-%m-%d") if end else None
+
+    provider = CSVProvider(Path(csv_path).parent)
+    df = provider._read_csv(Path(csv_path), start_dt, end_dt)
+
+    if df is None or df.empty:
+        click.echo(f"No data loaded from {csv_path}")
+        return
+
+    bt_config = settings.backtest
+    sig_config = SignalConfig(
+        scorer=ScorerConfig(min_confidence=settings.signal.scorer.min_confidence),
+        min_rr_ratio=settings.signal.min_rr_ratio,
+    )
+    extractor = FeatureExtractor()
+
+    # Always include BookScorer baseline; ML scorer only if --model given.
+    def make_book_emitter(_train_df=None) -> PinBarSignalEmitter:
+        return PinBarSignalEmitter(settings.analysis, sig_config)
+
+    ml_factory = None
+    if model_path is not None:
+        ml_scorer = MLScorer(model_path=Path(model_path))
+
+        def _make_ml(_train_df=None) -> MLSignalEmitter:
+            # MLScorer is loaded once and reused across folds (the model
+            # itself doesn't refit; the caller refits offline via `ml train`).
+            return MLSignalEmitter(
+                scorer=ml_scorer,
+                feature_extractor=extractor,
+                analysis_config=settings.analysis,
+                signal_config=sig_config,
+            )
+
+        ml_factory = _make_ml
+
+    if walk_forward:
+        factories: dict = {"BookScorer": make_book_emitter}
+        if ml_factory is not None:
+            factories["MLScorer"] = ml_factory
+
+        click.echo(
+            f"Walk-forward compare: train={wf_train_bars}, test={wf_test_bars}, "
+            f"step={wf_step_bars or wf_test_bars}, n_bars={len(df)}"
+        )
+        wf_result = run_walkforward_compare(
+            df=df,
+            symbol=symbol,
+            timeframe=timeframe,
+            emitter_factories=factories,
+            train_bars=wf_train_bars,
+            test_bars=wf_test_bars,
+            step_bars=wf_step_bars,
+            config=bt_config,
+        )
+        click.echo(format_walkforward_table(wf_result))
+        return
+
+    emitters: dict = {"BookScorer": make_book_emitter()}
+    if ml_factory is not None:
+        emitters["MLScorer"] = ml_factory()
+
+    click.echo(f"Single-window compare: n_bars={len(df)}, emitters={list(emitters)}")
+    cmp_result = compare_emitters(
+        df=df,
+        symbol=symbol,
+        timeframe=timeframe,
+        emitters=emitters,
+        config=bt_config,
+    )
+    click.echo(format_comparison_table(cmp_result))
+
+
 # ---------------------------------------------------------------------------
 # `rainier thesis` — LLM thesis layer (PR1)
 # ---------------------------------------------------------------------------
