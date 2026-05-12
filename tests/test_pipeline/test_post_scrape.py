@@ -430,7 +430,7 @@ class TestCliDelegation:
         with (
             patch("rainier.scrapers.browser.BrowserManager") as MockBM,
             patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
-            patch("rainier.cli.get_settings", return_value=settings),
+            patch("rainier.core.config.get_settings", return_value=settings),
             patch("rainier.cli.run_post_scrape_pipeline") as mock_pipeline,
         ):
             MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
@@ -465,7 +465,7 @@ class TestCliDelegation:
         with (
             patch("rainier.scrapers.browser.BrowserManager") as MockBM,
             patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
-            patch("rainier.cli.get_settings", return_value=settings),
+            patch("rainier.core.config.get_settings", return_value=settings),
             patch("rainier.cli.run_post_scrape_pipeline") as mock_pipeline,
         ):
             MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
@@ -498,7 +498,7 @@ class TestCliDelegation:
         with (
             patch("rainier.scrapers.browser.BrowserManager") as MockBM,
             patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
-            patch("rainier.cli.get_settings", return_value=settings),
+            patch("rainier.core.config.get_settings", return_value=settings),
             patch("rainier.cli.run_post_scrape_pipeline") as mock_pipeline,
         ):
             MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())

@@ -4,49 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from datetime import date
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from rainier.core.config import get_settings, load_settings_fresh
+from rainier.pipeline.post_scrape import run_post_scrape_pipeline
 
 log = structlog.get_logger()
-
-
-def _send_stock_candidates_with_dashboard_url(
-    candidates,
-    discord_config,
-    theses,
-    dashboard_base_url,
-):
-    """Sync helper so ``asyncio.to_thread`` can carry the dashboard URL kwarg.
-
-    ``send_stock_candidates`` accepts ``dashboard_base_url`` only as a keyword
-    argument; ``asyncio.to_thread`` forwards positional + keyword args but is
-    cleaner with a small wrapper that names them.
-    """
-    from rainier.alerts.discord import send_stock_candidates as _send
-
-    _send(
-        candidates,
-        discord_config,
-        theses=theses,
-        dashboard_base_url=dashboard_base_url,
-    )
 
 
 async def run_qu_scrape(session_name: str) -> None:
     """Run a single QU100 scrape for the given session. Called by APScheduler.
 
-    Pipeline (post-scrape):
-        1. load_settings_fresh — pick up YAML toggles (eng review D2)
-        2. screen_stocks       — 3-layer screener; returns (candidates, ohlcv)
-        3. persist_screened_stocks — DB row for every candidate, every session
-        4. compute_theses_and_persist — LLM thesis on top-5, only on
-           sessions in `settings.llm_thesis.enabled_sessions`
-        5. send_stock_candidates — Discord; theses dict empty for non-LLM sessions
+    After the scrape itself succeeds, the post-scrape pipeline (screen ->
+    persist -> LLM thesis -> Discord) is delegated to
+    :func:`rainier.pipeline.post_scrape.run_post_scrape_pipeline` — the same
+    function the cron CLI path uses, so both entry points emit identical
+    Discord output.
     """
     from rainier.scrapers import get_scraper
     from rainier.scrapers.browser import BrowserManager
@@ -73,76 +49,11 @@ async def run_qu_scrape(session_name: str) -> None:
         from rainier.notifications.notifier import notify_scrape_result
         notify_scrape_result(session_name, result)
 
-        # 1. Reload settings every scan so YAML toggles take effect (D2).
+        # Reload settings every scan so YAML toggles take effect (D2). The
+        # shared pipeline is sync — we hand off in a single to_thread call
+        # rather than threading each sub-step.
         settings = await asyncio.to_thread(load_settings_fresh)
-
-        # 2. Screener — refactored to return (candidates, ohlcv_dict).
-        # send_stock_candidates is invoked indirectly via
-        # _send_stock_candidates_with_dashboard_url so we don't need it
-        # imported in this scope.
-        from rainier.analysis.stock_screener import screen_stocks
-
-        all_candidates, ohlcv_by_symbol = await asyncio.to_thread(
-            screen_stocks, settings
-        )
-        # PR2 carry-over P2 #3: persist top-50 (or all if fewer) to give the
-        # 30-day shadow validation an unbiased dataset. Top-20 alone biases
-        # the per-rank correlation toward the upper tail. Discord still gets
-        # top-20 (display rule), and the LLM still only runs on top-5.
-        scan_candidates = all_candidates[:50]
-        candidates = all_candidates[:20]  # Discord display set
-
-        scan_date = date.today()
-
-        # 3. Always persist screener output for every scan — full top-50, not
-        #    only the Discord set.
-        try:
-            from rainier.llm_thesis.persistence import persist_screened_stocks
-            await asyncio.to_thread(
-                persist_screened_stocks,
-                scan_candidates,
-                scan_date=scan_date,
-                session_name=session_name,
-            )
-        except Exception as exc:
-            log.error(
-                "persist_screened_stocks_failed",
-                session=session_name,
-                error=str(exc),
-            )
-
-        # 4. LLM thesis ONLY on configured sessions (afternoon + close).
-        theses: dict[str, dict] = {}
-        if (
-            settings.llm_thesis.enabled
-            and session_name in settings.llm_thesis.enabled_sessions
-            and candidates
-        ):
-            try:
-                from rainier.llm_thesis.service import compute_theses_and_persist
-                theses = await asyncio.to_thread(
-                    compute_theses_and_persist,
-                    candidates[:5],
-                    ohlcv_by_symbol,
-                    scan_date=scan_date,
-                    session_name=session_name,
-                    settings=settings,
-                )
-            except Exception as exc:
-                log.error("compute_theses_unexpected_failure", error=str(exc))
-                theses = {}
-
-        # 5. Discord — empty theses dict means existing top-20-only behavior.
-        # PR5: pass the dashboard base URL through so per-ticker embeds carry
-        # a clickable deep-link to the Streamlit dashboard. None disables the
-        # link (graceful degradation when the dashboard isn't running).
-        await asyncio.to_thread(
-            _send_stock_candidates_with_dashboard_url,
-            candidates,
-            settings.alerts.discord,
-            theses or None,
-            settings.llm_thesis.dashboard_base_url,
-        )
+        await asyncio.to_thread(run_post_scrape_pipeline, settings, session_name)
 
     except Exception as exc:
         log.error("scheduled_scrape_failed", session=session_name, error=str(exc))

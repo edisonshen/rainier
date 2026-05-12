@@ -11,6 +11,7 @@ import pandas as pd
 
 from rainier.core.config import load_settings
 from rainier.core.types import Timeframe
+from rainier.pipeline.post_scrape import run_post_scrape_pipeline
 
 
 @click.group()
@@ -1274,9 +1275,14 @@ async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, dela
                 color=0xFFA500,  # orange
             )
 
-        # Post-scrape: run screener and send actionable setups to Discord
+        # Post-scrape: delegate to the shared pipeline so the cron CLI path
+        # emits the same Discord output as the long-running ``rainier run``
+        # scheduler — including the LLM thesis embeds for sessions in
+        # settings.llm_thesis.enabled_sessions. Skip during backfill runs
+        # (date_list is set) since those replay historical scans and would
+        # spam the channel.
         if result.records_created > 0 and not date_list:
-            _post_scrape_screener(settings, session)
+            run_post_scrape_pipeline(settings, session)
 
     except Exception as exc:
         error_msg = str(exc)
@@ -1322,52 +1328,6 @@ def _notify_scrape_discord(
         click.echo(f"  Discord notification sent: {title}")
     except Exception as notify_exc:
         click.echo(f"  Failed to send Discord notification: {notify_exc}")
-
-
-def _post_scrape_screener(settings, session: str) -> None:
-    """Run stock screener after successful scrape and send results to Discord."""
-    import httpx
-
-    from rainier.alerts.discord import _build_payloads
-    from rainier.analysis.stock_screener import screen_stocks
-
-    webhook = _get_discord_webhook(settings)
-    if not webhook:
-        click.echo("  (no Discord webhook, skipping screener alert)")
-        return
-
-    click.echo("Running post-scrape stock screener...")
-    try:
-        candidates, _ohlcv = screen_stocks(settings)
-        candidates = candidates[:20]
-    except Exception as exc:
-        click.echo(f"  Screener failed: {exc}")
-        _notify_scrape_discord(
-            settings, session,
-            title=f"QU100 Screener FAILED ({session})",
-            message=f"Scrape succeeded but screener failed:\n{str(exc)[:400]}",
-            color=0xFF1744,
-        )
-        return
-
-    if not candidates:
-        click.echo("  Screener returned 0 candidates")
-        return
-
-    with_pattern = sum(1 for c in candidates if c.pattern_type)
-    click.echo(
-        f"  Screener: {len(candidates)} candidates "
-        f"({with_pattern} with pattern match)"
-    )
-
-    try:
-        payloads = _build_payloads(candidates, session=session)
-        for payload in payloads:
-            resp = httpx.post(webhook, json=payload, timeout=10)
-            resp.raise_for_status()
-        click.echo(f"  Screener results sent to Discord ({session})")
-    except Exception as exc:
-        click.echo(f"  Failed to send screener results: {exc}")
 
 
 @scrape.command(name="qu-detail")
