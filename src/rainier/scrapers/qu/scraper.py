@@ -319,6 +319,15 @@ class QUScraper(BaseScraper):
                 # Playwright stall on actionability checks until 30s timeout.
                 await self._wait_for_no_spinner()
 
+                # Mid-iteration auth check: the previous iteration's Search
+                # click can trigger a server-side redirect to /signin when the
+                # session cookie has expired silently. In that state, the
+                # `.select-button` toggle no longer exists on the page and
+                # clicking it stalls for the full default click timeout (30s),
+                # which is what was killing the midday + close cron runs.
+                # Recover by re-logging in and re-navigating before the click.
+                await self._recover_if_signin()
+
                 # Click toggle, then Search button (required per QU100 UI)
                 await page.click(button_sel)
                 search_btn = await page.query_selector(sel.SEARCH_BUTTON)
@@ -374,6 +383,39 @@ class QUScraper(BaseScraper):
             )
         except Exception as exc:
             self.log.warning("spinner_wait_timeout", error=str(exc))
+
+    async def _recover_if_signin(self) -> bool:
+        """If the page is on /signin, re-login and navigate back to QU100.
+
+        Returns True if recovery ran, False otherwise.
+
+        Background: between toggle iterations inside `_scrape_qu100`, the
+        previous Search click can produce a 401 from the API and cause the
+        SPA to redirect to /signin. The select-button toggle is then gone
+        from the DOM and the next iteration's `page.click(...)` hangs until
+        the default 30s timeout. This helper makes that path recoverable.
+        """
+        page = self._page
+        url = page.url or ""
+        if "signin" not in url:
+            return False
+
+        self.log.warning("mid_iter_signin_redirect", url=url)
+        await login(page)
+        await goto_with_retry(page, self._qu_config.url)
+        # After re-login, the Search button needs to be clicked again to
+        # repopulate the table. Wait for the button + table to be present.
+        try:
+            search_btn = await page.wait_for_selector(
+                sel.SEARCH_BUTTON, timeout=15000
+            )
+            if search_btn:
+                await search_btn.click()
+            await page.wait_for_selector(sel.QU100_TABLE, timeout=15000)
+        except Exception as exc:
+            self.log.warning("mid_iter_recover_failed", error=str(exc))
+        self.log.info("mid_iter_recovered")
+        return True
 
     async def _set_date(self, date_str: str) -> None:
         """Change the date picker to the given date and trigger search."""
