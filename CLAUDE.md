@@ -22,6 +22,7 @@ src/rainier/
 ├── alerts/         discord.py (webhook notifications)
 ├── reports/        daily.py (daily review + next-day outlook)
 ├── scheduler/      jobs.py (cron.yaml → system crontab), service.py (APScheduler for scraping)
+├── pipeline/       post_scrape.py (shared screen→persist→LLM thesis→Discord, used by cron CLI + scheduler)
 ├── trader/         (Phase 3 placeholder — IB TWS execution)
 └── dashboard/      (placeholder — Streamlit)
 ```
