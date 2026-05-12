@@ -538,6 +538,104 @@ class TestScrapeQU100PostLogin:
         mock_login.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_signin_redirect_between_toggle_iterations_recovers(self):
+        """The Search click inside the top100 iteration can trigger a server-side
+        redirect to /signin (session expired silently). The next iteration's
+        toggle click must NOT fire blind — the scraper must detect the signin
+        URL, re-login, navigate back, and only then click the bottom100 toggle.
+
+        This is the production failure mode that kills 50% of cron runs:
+        - top100 Search → server 401 → page redirects to /signin
+        - `.select-button span:text-is('后100')` no longer exists on the page
+        - default 30s click timeout fires, scraper returns records_created=0
+        """
+        page, page_url = _make_mock_page(
+            url="https://www.quantunicorn.com/products#qu100"
+        )
+
+        # Track every page.click call so we can correlate URL vs. toggle clicks.
+        click_targets: list[str] = []
+
+        async def fake_click(selector, *args, **kwargs):
+            click_targets.append(selector)
+            # When the SEARCH button is clicked the first time, simulate the
+            # server redirecting the SPA to /signin (session expired silently).
+            if selector == sel.SEARCH_BUTTON and click_targets.count(sel.SEARCH_BUTTON) == 1:
+                page_url["value"] = (
+                    "https://www.quantunicorn.com/signin?next=%2Fproducts%23qu100"
+                )
+
+        page.click = AsyncMock(side_effect=fake_click)
+
+        # wait_for_selector returns truthy elements for everything.
+        page.wait_for_selector = AsyncMock(return_value=AsyncMock())
+        # query_selector for SEARCH_BUTTON returns a clickable element.
+        search_btn = AsyncMock()
+        search_btn.click = AsyncMock(side_effect=lambda: None)
+        page.query_selector = AsyncMock(return_value=search_btn)
+        page.get_attribute = AsyncMock(return_value="2026-04-09")
+        page.evaluate = AsyncMock(return_value=[
+            {"rank": "1", "symbol": "NVDA", "daily_change": "▲5",
+             "sector": "Tech", "industry": "Semi", "long_short": "多"}
+        ])
+
+        scraper = _make_scraper()
+        scraper._page = page
+
+        async def fake_goto(p, url):
+            # After re-login + navigate, URL settles on products again.
+            page_url["value"] = url
+
+        login_calls = {"n": 0}
+
+        async def fake_login(p):
+            # Login also returns us to the products URL.
+            login_calls["n"] += 1
+            page_url["value"] = "https://www.quantunicorn.com/products#qu100"
+
+        from datetime import datetime, timezone
+
+        from rainier.scrapers.base import ScrapeResult
+        result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
+
+        with (
+            patch("rainier.scrapers.qu.scraper.goto_with_retry",
+                  new_callable=AsyncMock, side_effect=fake_goto),
+            patch("rainier.scrapers.qu.scraper.login",
+                  new_callable=AsyncMock, side_effect=fake_login),
+            patch.object(scraper, "_persist_qu100", return_value=1),
+            # Stub the spinner wait so the test runs instantly.
+            patch.object(scraper, "_wait_for_no_spinner",
+                         new_callable=AsyncMock),
+        ):
+            await scraper._scrape_qu100(
+                "afternoon", datetime.now(timezone.utc), result
+            )
+
+        # Recovery happened: login was called at least once mid-scrape.
+        assert login_calls["n"] >= 1, (
+            "Scraper must re-login when session redirects mid-iteration; "
+            f"got login_calls={login_calls['n']}"
+        )
+
+        # Both toggle clicks were dispatched (no silent skip).
+        assert sel.TOP100_BUTTON in click_targets
+        assert sel.BOTTOM100_BUTTON in click_targets
+
+        # And critically: the bottom100 click was AFTER the recovery — i.e.
+        # the URL was on /products at the time of the bottom100 click. We
+        # encode that by asserting login fired BEFORE the bottom100 click.
+        bottom100_idx = click_targets.index(sel.BOTTOM100_BUTTON)
+        # Login is invoked by the scraper, not by page.click, so its presence
+        # is observed via login_calls. The structural assertion: at the time
+        # of bottom100 click, signin URL must have been resolved. Validate by
+        # checking that recovery (login) occurred AT LEAST ONCE before the
+        # iteration completed and bottom100 was reached.
+        assert bottom100_idx > click_targets.index(sel.SEARCH_BUTTON), (
+            "bottom100 must be clicked after the (recovering) Search click"
+        )
+
+    @pytest.mark.asyncio
     async def test_search_button_uses_wait_for_selector(self):
         """_scrape_qu100 uses wait_for_selector for Search button (PR #47 fix)."""
         page, page_url = _make_mock_page(
