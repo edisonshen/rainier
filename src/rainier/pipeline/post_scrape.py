@@ -62,6 +62,8 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
     Returns:
         None. Logs structured events at each step boundary.
     """
+    log.info("post_scrape_pipeline_starting", session=session_name)
+
     # 1. Screener — pure function, returns the inputs for everything below.
     all_candidates, ohlcv_by_symbol = screen_stocks(settings)
 
@@ -73,6 +75,13 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
     candidates = all_candidates[:20]
 
     scan_date = date.today()
+    log.info(
+        "post_scrape_screener_done",
+        session=session_name,
+        total_candidates=len(all_candidates),
+        persist_window=len(scan_candidates),
+        discord_window=len(candidates),
+    )
 
     # 2. Persist top-50. Wrapped in try/except so a DB blip doesn't block the
     # Discord post — losing a row of telemetry is recoverable; losing the
@@ -95,11 +104,20 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
     # but we slice here too so the call signature matches the historic
     # service.py contract and so the test layer can assert on the slice.
     theses: dict[str, dict] = {}
-    if (
+    llm_gate_open = (
         settings.llm_thesis.enabled
         and session_name in settings.llm_thesis.enabled_sessions
-        and candidates
-    ):
+        and bool(candidates)
+    )
+    log.info(
+        "post_scrape_llm_gate",
+        session=session_name,
+        gate_open=llm_gate_open,
+        thesis_enabled=settings.llm_thesis.enabled,
+        session_in_allowlist=session_name in settings.llm_thesis.enabled_sessions,
+        has_candidates=bool(candidates),
+    )
+    if llm_gate_open:
         try:
             theses = compute_theses_and_persist(
                 candidates[:5],
@@ -124,4 +142,10 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
         settings.alerts.discord,
         theses=theses or None,
         dashboard_base_url=settings.llm_thesis.dashboard_base_url,
+    )
+    log.info(
+        "post_scrape_pipeline_done",
+        session=session_name,
+        discord_sent=len(candidates),
+        theses_attached=len(theses),
     )
