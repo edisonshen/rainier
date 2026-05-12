@@ -189,8 +189,7 @@ class TestRunQuScrape:
             patch("rainier.scrapers.browser.BrowserManager") as MockBM,
             patch("rainier.scrapers.get_scraper", return_value=mock_scraper) as mock_get,
             patch("rainier.scheduler.service.load_settings_fresh", return_value=settings),
-            patch("rainier.analysis.stock_screener.screen_stocks", return_value=([], {})),
-            patch("rainier.alerts.discord.send_stock_candidates"),
+            patch("rainier.scheduler.service.run_post_scrape_pipeline"),
             patch("rainier.notifications.notifier.notify_scrape_result"),
         ):
             mock_bm_instance = AsyncMock()
@@ -222,8 +221,16 @@ class TestRunQuScrape:
             await run_qu_scrape("morning")
 
 
-class TestRunQuScrapeLLMGating:
-    """PR1: LLM block runs only on `enabled_sessions`; settings reload per scan."""
+class TestRunQuScrapePipelineDelegation:
+    """run_qu_scrape delegates the post-scrape steps (screener, persist,
+    LLM thesis, Discord) to ``rainier.pipeline.post_scrape.run_post_scrape_pipeline``.
+
+    The inline pipeline used to live in service.py; PR moved it into the
+    shared module so the cron CLI path (``rainier scrape qu``) emits the
+    same Discord output. Inline-pipeline-behavior tests now live in
+    tests/test_pipeline/test_post_scrape.py — these tests cover only the
+    delegation contract.
+    """
 
     def _settings(self, enabled_sessions=("afternoon", "close")):
         from rainier.core.config import LLMThesisConfig
@@ -235,30 +242,26 @@ class TestRunQuScrapeLLMGating:
         return s
 
     @pytest.mark.asyncio
-    async def test_afternoon_session_fires_llm_block(self):
+    async def test_delegates_with_reloaded_settings_and_session(self):
+        """service.py reloads settings fresh each scan, then hands off to
+        the shared pipeline with (settings, session_name)."""
         from unittest.mock import AsyncMock, MagicMock
 
         mock_result = MagicMock(records_created=20, errors=[], duration_seconds=1.0)
         mock_scraper = AsyncMock()
         mock_scraper.execute = AsyncMock(return_value=mock_result)
-        candidates = []  # empty short-circuits compute_theses_and_persist
+        settings = self._settings()
 
         with (
             patch("rainier.scrapers.browser.BrowserManager") as MockBM,
             patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
             patch(
                 "rainier.scheduler.service.load_settings_fresh",
-                return_value=self._settings(),
+                return_value=settings,
             ),
             patch(
-                "rainier.analysis.stock_screener.screen_stocks",
-                return_value=(candidates, {}),
-            ),
-            patch("rainier.llm_thesis.persistence.persist_screened_stocks"),
-            patch(
-                "rainier.llm_thesis.service.compute_theses_and_persist", return_value={}
-            ) as mock_llm,
-            patch("rainier.alerts.discord.send_stock_candidates"),
+                "rainier.scheduler.service.run_post_scrape_pipeline"
+            ) as mock_pipeline,
             patch("rainier.notifications.notifier.notify_scrape_result"),
         ):
             MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
@@ -266,97 +269,12 @@ class TestRunQuScrapeLLMGating:
             from rainier.scheduler.service import run_qu_scrape
             await run_qu_scrape("afternoon")
 
-        # No candidates means compute is short-circuited but the gate decision
-        # itself should already hand-off to compute when len(candidates)>0. We
-        # verify the gate by adding a candidate and re-running below; here we
-        # just confirm no crash on the empty path.
-        assert mock_llm.call_count == 0
-
-    @pytest.mark.asyncio
-    async def test_morning_session_skips_llm_block(self):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from rainier.core.types import StockCandidate
-
-        mock_result = MagicMock(records_created=20, errors=[], duration_seconds=1.0)
-        mock_scraper = AsyncMock()
-        mock_scraper.execute = AsyncMock(return_value=mock_result)
-
-        cand = StockCandidate(
-            symbol="NVDA", rank=5, rank_change=0, long_short="Long in",
-            capital_flow_direction="+", sector="Technology", signal_strength=0.8,
-        )
-        candidates = [cand]
-
-        with (
-            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
-            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
-            patch(
-                "rainier.scheduler.service.load_settings_fresh",
-                return_value=self._settings(),
-            ),
-            patch(
-                "rainier.analysis.stock_screener.screen_stocks",
-                return_value=(candidates, {}),
-            ),
-            patch("rainier.llm_thesis.persistence.persist_screened_stocks"),
-            patch(
-                "rainier.llm_thesis.service.compute_theses_and_persist", return_value={}
-            ) as mock_llm,
-            patch("rainier.alerts.discord.send_stock_candidates"),
-            patch("rainier.notifications.notifier.notify_scrape_result"),
-        ):
-            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
-            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
-            from rainier.scheduler.service import run_qu_scrape
-            await run_qu_scrape("morning")
-
-        mock_llm.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_afternoon_session_with_candidates_calls_llm(self):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from rainier.core.types import StockCandidate
-
-        mock_result = MagicMock(records_created=20, errors=[], duration_seconds=1.0)
-        mock_scraper = AsyncMock()
-        mock_scraper.execute = AsyncMock(return_value=mock_result)
-
-        cand = StockCandidate(
-            symbol="NVDA", rank=5, rank_change=0, long_short="Long in",
-            capital_flow_direction="+", sector="Technology", signal_strength=0.8,
-        )
-
-        with (
-            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
-            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
-            patch(
-                "rainier.scheduler.service.load_settings_fresh",
-                return_value=self._settings(),
-            ),
-            patch(
-                "rainier.analysis.stock_screener.screen_stocks",
-                return_value=([cand], {"NVDA": MagicMock()}),
-            ),
-            patch("rainier.llm_thesis.persistence.persist_screened_stocks"),
-            patch(
-                "rainier.llm_thesis.service.compute_theses_and_persist",
-                return_value={"NVDA": {"verdict": "setup_long"}},
-            ) as mock_llm,
-            patch("rainier.alerts.discord.send_stock_candidates"),
-            patch("rainier.notifications.notifier.notify_scrape_result"),
-        ):
-            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
-            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
-            from rainier.scheduler.service import run_qu_scrape
-            await run_qu_scrape("afternoon")
-
-        mock_llm.assert_called_once()
+        mock_pipeline.assert_called_once_with(settings, "afternoon")
 
     @pytest.mark.asyncio
     async def test_settings_reload_called_each_scan(self):
-        """Mid-process YAML edit takes effect on next invocation."""
+        """Mid-process YAML edit takes effect on next invocation — the
+        load_settings_fresh hook fires on every scrape."""
         from unittest.mock import AsyncMock, MagicMock
 
         first = self._settings(enabled_sessions=("afternoon",))
@@ -373,15 +291,7 @@ class TestRunQuScrapeLLMGating:
                 "rainier.scheduler.service.load_settings_fresh",
                 side_effect=[first, second],
             ) as mock_reload,
-            patch(
-                "rainier.analysis.stock_screener.screen_stocks",
-                return_value=([], {}),
-            ),
-            patch("rainier.llm_thesis.persistence.persist_screened_stocks"),
-            patch(
-                "rainier.llm_thesis.service.compute_theses_and_persist", return_value={}
-            ),
-            patch("rainier.alerts.discord.send_stock_candidates"),
+            patch("rainier.scheduler.service.run_post_scrape_pipeline"),
             patch("rainier.notifications.notifier.notify_scrape_result"),
         ):
             MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
@@ -391,138 +301,6 @@ class TestRunQuScrapeLLMGating:
             await run_qu_scrape("afternoon")
 
         assert mock_reload.call_count == 2
-
-
-class TestPersistScreenedTop50:
-    """PR2 carry-over P2 #3: persist top-50 candidates (not top-20) so the
-    shadow-validation dataset isn't biased toward the upper tail.
-    """
-
-    def _settings(self, enabled_sessions=("afternoon", "close")):
-        from rainier.core.config import LLMThesisConfig
-
-        s = _make_settings()
-        s.llm_thesis = LLMThesisConfig(
-            enabled=True,
-            model="test",
-            max_usd_per_scan=1.0,
-            enabled_sessions=list(enabled_sessions),
-        )
-        return s
-
-    @pytest.mark.asyncio
-    async def test_persist_called_with_top_50_candidates(self):
-        """When the screener returns >50 candidates, scheduler hands the first
-        50 to persist_screened_stocks. Discord still gets top-20."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from rainier.core.types import StockCandidate
-
-        cands = [
-            StockCandidate(
-                symbol=f"S{i:03d}", rank=i + 1, rank_change=0,
-                long_short="Long in", capital_flow_direction="+",
-                sector="Technology", signal_strength=1.0 - i * 0.001,
-            )
-            for i in range(80)
-        ]
-
-        mock_result = MagicMock(records_created=80, errors=[], duration_seconds=1.0)
-        mock_scraper = AsyncMock()
-        mock_scraper.execute = AsyncMock(return_value=mock_result)
-
-        with (
-            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
-            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
-            patch(
-                "rainier.scheduler.service.load_settings_fresh",
-                return_value=self._settings(),
-            ),
-            patch(
-                "rainier.analysis.stock_screener.screen_stocks",
-                return_value=(cands, {}),
-            ),
-            patch(
-                "rainier.llm_thesis.persistence.persist_screened_stocks"
-            ) as mock_persist,
-            patch(
-                "rainier.llm_thesis.service.compute_theses_and_persist",
-                return_value={},
-            ),
-            patch(
-                "rainier.alerts.discord.send_stock_candidates"
-            ) as mock_discord,
-            patch("rainier.notifications.notifier.notify_scrape_result"),
-        ):
-            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
-            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
-            from rainier.scheduler.service import run_qu_scrape
-
-            await run_qu_scrape("afternoon")
-
-        mock_persist.assert_called_once()
-        persist_args, persist_kwargs = mock_persist.call_args
-        # First positional arg is the candidate list.
-        persisted = persist_args[0]
-        assert len(persisted) == 50, (
-            f"expected 50 persisted candidates, got {len(persisted)} — "
-            "P2 #3 regression: scheduler is truncating before persistence."
-        )
-        # Discord display set is still top-20.
-        mock_discord.assert_called_once()
-        discord_args = mock_discord.call_args.args
-        displayed = discord_args[0]
-        assert len(displayed) == 20
-
-    @pytest.mark.asyncio
-    async def test_persist_under_50_uses_actual_count(self):
-        """When the screener returns <50 candidates, persistence gets all of them."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from rainier.core.types import StockCandidate
-
-        cands = [
-            StockCandidate(
-                symbol=f"S{i:03d}", rank=i + 1, rank_change=0,
-                long_short="Long in", capital_flow_direction="+",
-                sector="Technology", signal_strength=1.0 - i * 0.001,
-            )
-            for i in range(7)
-        ]
-
-        mock_result = MagicMock(records_created=7, errors=[], duration_seconds=1.0)
-        mock_scraper = AsyncMock()
-        mock_scraper.execute = AsyncMock(return_value=mock_result)
-
-        with (
-            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
-            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
-            patch(
-                "rainier.scheduler.service.load_settings_fresh",
-                return_value=self._settings(),
-            ),
-            patch(
-                "rainier.analysis.stock_screener.screen_stocks",
-                return_value=(cands, {}),
-            ),
-            patch(
-                "rainier.llm_thesis.persistence.persist_screened_stocks"
-            ) as mock_persist,
-            patch(
-                "rainier.llm_thesis.service.compute_theses_and_persist",
-                return_value={},
-            ),
-            patch("rainier.alerts.discord.send_stock_candidates"),
-            patch("rainier.notifications.notifier.notify_scrape_result"),
-        ):
-            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
-            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
-            from rainier.scheduler.service import run_qu_scrape
-
-            await run_qu_scrape("afternoon")
-
-        persist_args, _ = mock_persist.call_args
-        assert len(persist_args[0]) == 7
 
 
 class TestAppConfig:
