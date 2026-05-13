@@ -84,6 +84,23 @@ def _resolve_webhook_url(config: DiscordConfig) -> str | None:
     return config.stock_webhook_url or config.webhook_url or None
 
 
+def _resolve_llm_webhook_url(config: DiscordConfig) -> str | None:
+    """Get the webhook URL for per-ticker LLM thesis embeds.
+
+    Routing precedence: ``llm_webhook_url`` (dedicated QU100-LLM channel) →
+    ``stock_webhook_url`` (general QU100 channel) → ``webhook_url`` (catch-all)
+    → ``None``. The dedicated LLM channel is opt-in; leaving it empty keeps
+    legacy behavior where rich thesis embeds and the top-20 screener post
+    share the stock channel.
+    """
+    return (
+        config.llm_webhook_url
+        or config.stock_webhook_url
+        or config.webhook_url
+        or None
+    )
+
+
 # Session → display label
 SESSION_LABELS: dict[str, str] = {
     "morning": "Morning (ET 11:30)",
@@ -843,6 +860,15 @@ def send_stock_candidates(
     if not theses:
         return
 
+    # Per-ticker rich thesis embeds route to the LLM-dedicated channel when
+    # configured (DISCORD_LLM_WEBHOOK_URL), otherwise fall back to the stock
+    # channel. Note the regular top-20 screener payload above always stays on
+    # the stock channel (`webhook_url`) regardless of llm_webhook_url state.
+    llm_webhook_url = _resolve_llm_webhook_url(config)
+    if not llm_webhook_url:
+        log.warning("discord_no_webhook_url_llm")
+        return
+
     # Per-ticker rich thesis embeds — top 5 only, in candidate order.
     for candidate in candidates[:5]:
         thesis = theses.get(candidate.symbol)
@@ -860,7 +886,7 @@ def send_stock_candidates(
                 chart_filename=chart_filename if chart_bytes else None,
             )
             _post_thesis_embed(
-                webhook_url=webhook_url,
+                webhook_url=llm_webhook_url,
                 embed=embed,
                 chart_bytes=chart_bytes,
                 chart_filename=chart_filename,
