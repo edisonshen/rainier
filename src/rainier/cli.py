@@ -2317,6 +2317,10 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
         # PR5: pipe the dashboard base URL through so embed titles get a
         # clickable deep-link. None disables the link.
         dashboard_base_url=settings.llm_thesis.dashboard_base_url,
+        # iter-2: forward session so the summary embed title carries the
+        # `— Morning/Midday/Afternoon/Close` suffix when multiple scans
+        # land in the same channel on the same day.
+        session=session_name,
     )
     click.echo(f"Sent {len(theses)} theses + summary to Discord.")
 

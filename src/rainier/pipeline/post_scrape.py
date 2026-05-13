@@ -137,11 +137,16 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
     # 4. Discord. ``theses or None`` preserves the legacy top-20-only path
     # when theses is empty (gate disabled, or compute failed). dashboard URL
     # is forwarded so the PR5 per-ticker embeds can deep-link into Streamlit.
+    # ``session=session_name`` restores the session-label suffix on the
+    # summary embed title that the pre-extraction CLI used (via
+    # _build_payloads(candidates, session=session)) — without it, the four
+    # daily scans become indistinguishable in the channel.
     send_stock_candidates(
         candidates,
         settings.alerts.discord,
         theses=theses or None,
         dashboard_base_url=settings.llm_thesis.dashboard_base_url,
+        session=session_name,
     )
     log.info(
         "post_scrape_pipeline_done",

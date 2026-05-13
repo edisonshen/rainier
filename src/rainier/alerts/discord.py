@@ -798,6 +798,7 @@ def send_stock_candidates(
     theses: dict[str, dict] | None = None,
     *,
     dashboard_base_url: str | None = None,
+    session: str | None = None,
 ) -> None:
     """Send QU100 stock candidate alerts to Discord.
 
@@ -813,6 +814,11 @@ def send_stock_candidates(
         dashboard_base_url: Public URL of the Streamlit dashboard. When set
             and the thesis dict carries ``_thesis_id``, the embed title
             links to ``<base>?thesis_id=<id>``. None disables the link.
+        session: Scrape session label ("morning" | "midday" | "afternoon" |
+            "close"). When set, the summary embed title gets a `—
+            Morning/Midday/Afternoon/Close` suffix so operators can tell
+            multiple same-day scans apart in the stock channel. ``None``
+            preserves the legacy session-less title.
     """
     if not candidates:
         return
@@ -825,7 +831,7 @@ def send_stock_candidates(
         log.warning("discord_no_webhook_url")
         return
 
-    payloads = _build_payloads(candidates)
+    payloads = _build_payloads(candidates, session=session)
 
     for payload in payloads:
         try:
