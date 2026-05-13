@@ -131,10 +131,49 @@ class TestSessionGating:
         assert len(sent) == 20
         # theses kwarg is None when LLM didn't run.
         assert mock_discord.call_args.kwargs.get("theses") is None
+        # iter-2 regression: session label must be forwarded so the summary
+        # embed title carries the "— Morning" suffix (pre-extraction CLI did
+        # this via _build_payloads(candidates, session=session); the codex
+        # iter-2 P2 finding caught the regression when this dropped).
+        assert mock_discord.call_args.kwargs.get("session") == "morning"
         # Persist still got top-50 (or all if fewer).
         mock_persist.assert_called_once()
         persisted = mock_persist.call_args.args[0]
         assert len(persisted) == min(50, len(cands))
+
+    def test_session_label_forwarded_for_all_sessions(self):
+        """Regression for codex [P2] iter-2: every session (morning, midday,
+        afternoon, close) must propagate session= to send_stock_candidates so
+        the summary embed title gets the session-label suffix. Without this,
+        four same-day scans become indistinguishable in the Discord channel.
+        """
+        cands = _candidates(5)
+        settings = _make_settings()
+
+        for session_name in ("morning", "midday", "afternoon", "close"):
+            with (
+                patch(
+                    "rainier.pipeline.post_scrape.screen_stocks",
+                    return_value=(cands, {}),
+                ),
+                patch("rainier.pipeline.post_scrape.persist_screened_stocks"),
+                patch(
+                    "rainier.pipeline.post_scrape.compute_theses_and_persist",
+                    return_value={},
+                ),
+                patch(
+                    "rainier.pipeline.post_scrape.send_stock_candidates"
+                ) as mock_discord,
+            ):
+                from rainier.pipeline.post_scrape import run_post_scrape_pipeline
+
+                run_post_scrape_pipeline(settings, session_name)
+
+            assert (
+                mock_discord.call_args.kwargs.get("session") == session_name
+            ), (
+                f"session={session_name!r} not forwarded to send_stock_candidates"
+            )
 
     def test_afternoon_session_fires_llm_on_top_5(self):
         cands = _candidates(25)
