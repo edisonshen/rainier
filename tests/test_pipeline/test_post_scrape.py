@@ -519,3 +519,123 @@ class TestCliDelegation:
 
         # date_list is non-empty -> skip post-scrape pipeline.
         mock_pipeline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_pipeline_runs_in_thread_so_inner_asyncio_run_is_safe(
+        self,
+    ):
+        """Regression for codex [P1] iter-1: _run_qu_scrape is already running
+        inside an event loop, so the pipeline (which internally does
+        asyncio.run via compute_theses_and_persist) must be handed off via
+        asyncio.to_thread. Verify by patching the pipeline with a callable
+        that itself calls asyncio.run — if we were calling the pipeline
+        directly from the running loop, that would raise RuntimeError. Run
+        in a thread, it works.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        mock_result = MagicMock(records_created=20, errors=[], duration_seconds=1.0)
+        mock_scraper = AsyncMock()
+        mock_scraper.execute = AsyncMock(return_value=mock_result)
+        settings = _make_settings()
+
+        async def _noop_coro():
+            return None
+
+        def _pipeline_that_uses_asyncio_run(_settings, _session):
+            # Mirrors compute_theses_and_persist's pattern of wrapping async
+            # work in asyncio.run inside a sync function. If the call site in
+            # _run_qu_scrape ever drops the asyncio.to_thread hand-off, this
+            # call raises RuntimeError("asyncio.run() cannot be called from a
+            # running event loop") and the test fails.
+            asyncio.run(_noop_coro())
+
+        with (
+            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
+            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
+            patch("rainier.core.config.get_settings", return_value=settings),
+            patch(
+                "rainier.cli.run_post_scrape_pipeline",
+                side_effect=_pipeline_that_uses_asyncio_run,
+            ) as mock_pipeline,
+        ):
+            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            from rainier.cli import _run_qu_scrape
+
+            await _run_qu_scrape(
+                session="afternoon",
+                detail_top=None,
+                dates=None,
+                days_back=0,
+                start_date=None,
+                delay=None,
+                headed=False,
+                cdp=None,
+            )
+
+        mock_pipeline.assert_called_once_with(settings, "afternoon")
+
+    @pytest.mark.asyncio
+    async def test_cli_pipeline_failure_does_not_morph_into_scrape_failure(self):
+        """Regression for codex [P2] iter-1: pre-extraction CLI guarded the
+        screener block in its own try/except and reported a partial-success
+        warning. After extraction, a screener / pipeline failure was bubbling
+        all the way up to _run_qu_scrape's outer except, turning a successful
+        scrape into a red "Scrape FAILED" alert and a non-zero exit.
+
+        Expected behavior: pipeline exception is caught locally, an orange
+        partial-success Discord alert is emitted, and the function returns
+        normally (no re-raise).
+        """
+        from unittest.mock import AsyncMock
+
+        mock_result = MagicMock(records_created=20, errors=[], duration_seconds=1.0)
+        mock_scraper = AsyncMock()
+        mock_scraper.execute = AsyncMock(return_value=mock_result)
+        settings = _make_settings()
+
+        with (
+            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
+            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
+            patch("rainier.core.config.get_settings", return_value=settings),
+            patch(
+                "rainier.cli.run_post_scrape_pipeline",
+                side_effect=RuntimeError("screener db blip"),
+            ),
+            patch("rainier.cli._notify_scrape_discord") as mock_notify,
+        ):
+            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            from rainier.cli import _run_qu_scrape
+
+            # Must NOT raise — pipeline failures stay local.
+            await _run_qu_scrape(
+                session="afternoon",
+                detail_top=None,
+                dates=None,
+                days_back=0,
+                start_date=None,
+                delay=None,
+                headed=False,
+                cdp=None,
+            )
+
+        # The partial-success notification fired (orange, not red).
+        # _notify_scrape_discord may also be called for other reasons in the
+        # path (e.g. scrape warnings) so we scan calls for the post-scrape
+        # alert specifically rather than asserting call count.
+        titles = [
+            call.kwargs.get("title") or (call.args[2] if len(call.args) >= 3 else "")
+            for call in mock_notify.call_args_list
+        ]
+        assert any("Post-Scrape FAILED" in t for t in titles), (
+            f"expected a Post-Scrape FAILED partial-success alert; got: {titles}"
+        )
+        # The red "Scrape FAILED" alert (outer except) must NOT have fired.
+        assert not any("Scrape FAILED" in t and "Post-Scrape" not in t for t in titles), (
+            f"unexpected red Scrape FAILED alert fired: {titles}"
+        )

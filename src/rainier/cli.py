@@ -1204,6 +1204,7 @@ def qu(ctx, session, detail_top, dates, days_back, start_date, delay, headed, cd
 
 
 async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, delay, headed, cdp):
+    import asyncio
     from datetime import date, datetime, timedelta
 
     from rainier.core.config import get_settings
@@ -1281,8 +1282,37 @@ async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, dela
         # settings.llm_thesis.enabled_sessions. Skip during backfill runs
         # (date_list is set) since those replay historical scans and would
         # spam the channel.
+        #
+        # Hand off via asyncio.to_thread because compute_theses_and_persist
+        # wraps its async work in asyncio.run(); calling it directly from this
+        # already-running event loop raises RuntimeError. The shared pipeline
+        # is sync (mirrors the scheduler hand-off in scheduler/service.py).
+        #
+        # Wrap in try/except so a screener / pipeline failure POST scrape
+        # surfaces as a partial-success warning rather than morphing the
+        # already-successful scrape into a red "Scrape FAILED" alert. The
+        # outer except is for actual scrape errors only.
         if result.records_created > 0 and not date_list:
-            run_post_scrape_pipeline(settings, session)
+            try:
+                await asyncio.to_thread(
+                    run_post_scrape_pipeline, settings, session,
+                )
+            except Exception as pipeline_exc:
+                err_msg = str(pipeline_exc)
+                if len(err_msg) > 400:
+                    err_msg = err_msg[:400] + "..."
+                click.echo(
+                    f"  Post-scrape pipeline failed: {err_msg}", err=True,
+                )
+                _notify_scrape_discord(
+                    settings, session,
+                    title=f"QU100 Post-Scrape FAILED ({session})",
+                    message=(
+                        f"Scrape succeeded but post-scrape pipeline failed:\n"
+                        f"{err_msg}"
+                    ),
+                    color=0xFFA500,  # orange — partial success
+                )
 
     except Exception as exc:
         error_msg = str(exc)
