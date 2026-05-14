@@ -188,3 +188,266 @@ class TestMultipartAttachment:
         assert len(thesis_calls) == 1
         embed = thesis_calls[0].kwargs["json"]["embeds"][0]
         assert embed["url"] == "http://dashboard.local?thesis_id=999"
+
+
+# ---------------------------------------------------------------------------
+# LLM-channel routing — DISCORD_LLM_WEBHOOK_URL splits LLM thesis embeds from
+# the regular QU100 top-20 screener payload.
+# ---------------------------------------------------------------------------
+
+
+class TestLLMChannelRouting:
+    """Routing per `_resolve_llm_webhook_url`:
+
+    - Top-20 summary embed: always uses stock_webhook_url (or webhook_url
+      fallback).
+    - Per-ticker LLM thesis embed: uses llm_webhook_url when set; otherwise
+      falls back to stock_webhook_url; otherwise webhook_url.
+    """
+
+    def _classify_calls(self, call_args_list):
+        """Split httpx.post calls into (summary_calls, thesis_calls).
+
+        Summary calls carry json={"embeds": [...]} where at least one embed
+        contains a description with a ```code block``` (the QU100 table).
+        Thesis calls either ride on multipart (files=, data=payload_json)
+        OR carry a single embed whose title starts with the verdict label.
+        """
+        summary_calls = []
+        thesis_calls = []
+        for call in call_args_list:
+            kwargs = call.kwargs
+            if "files" in kwargs:
+                thesis_calls.append(call)
+                continue
+            payload = kwargs.get("json")
+            if not isinstance(payload, dict):
+                continue
+            embeds = payload.get("embeds") or []
+            if not embeds:
+                continue
+            # Thesis embed: single embed, title starts with verdict label.
+            if len(embeds) == 1 and embeds[0].get("title", "").startswith(
+                ("setup_long", "watch", "no_setup")
+            ):
+                thesis_calls.append(call)
+            else:
+                summary_calls.append(call)
+        return summary_calls, thesis_calls
+
+    def test_thesis_embed_routes_to_llm_webhook_when_set(self):
+        config = DiscordConfig(
+            enabled=True,
+            webhook_url="https://main/hook",
+            stock_webhook_url="https://stock/hook",
+            llm_webhook_url="https://llm/hook",
+        )
+        with patch(
+            "rainier.alerts.discord.httpx.post"
+        ) as mock_post, patch(
+            "rainier.alerts.discord._load_chart_bytes_for_thesis",
+            return_value=None,
+        ):
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates(
+                [_candidate("NVDA")],
+                config,
+                theses={"NVDA": _thesis()},
+            )
+        summary_calls, thesis_calls = self._classify_calls(
+            mock_post.call_args_list
+        )
+        assert summary_calls, "expected at least one summary POST"
+        assert thesis_calls, "expected at least one thesis POST"
+        for call in summary_calls:
+            assert call.args[0] == "https://stock/hook"
+        for call in thesis_calls:
+            assert call.args[0] == "https://llm/hook"
+
+    def test_thesis_embed_falls_back_to_stock_webhook_when_llm_empty(self):
+        config = DiscordConfig(
+            enabled=True,
+            webhook_url="https://main/hook",
+            stock_webhook_url="https://stock/hook",
+            llm_webhook_url="",
+        )
+        with patch(
+            "rainier.alerts.discord.httpx.post"
+        ) as mock_post, patch(
+            "rainier.alerts.discord._load_chart_bytes_for_thesis",
+            return_value=None,
+        ):
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates(
+                [_candidate("NVDA")],
+                config,
+                theses={"NVDA": _thesis()},
+            )
+        summary_calls, thesis_calls = self._classify_calls(
+            mock_post.call_args_list
+        )
+        assert summary_calls and thesis_calls
+        for call in summary_calls:
+            assert call.args[0] == "https://stock/hook"
+        for call in thesis_calls:
+            assert call.args[0] == "https://stock/hook"
+
+    def test_thesis_embed_falls_back_to_webhook_when_stock_and_llm_empty(self):
+        config = DiscordConfig(
+            enabled=True,
+            webhook_url="https://main/hook",
+            stock_webhook_url="",
+            llm_webhook_url="",
+        )
+        with patch(
+            "rainier.alerts.discord.httpx.post"
+        ) as mock_post, patch(
+            "rainier.alerts.discord._load_chart_bytes_for_thesis",
+            return_value=None,
+        ):
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates(
+                [_candidate("NVDA")],
+                config,
+                theses={"NVDA": _thesis()},
+            )
+        summary_calls, thesis_calls = self._classify_calls(
+            mock_post.call_args_list
+        )
+        assert summary_calls and thesis_calls
+        for call in summary_calls:
+            assert call.args[0] == "https://main/hook"
+        for call in thesis_calls:
+            assert call.args[0] == "https://main/hook"
+
+    def test_regular_candidates_only_use_stock_webhook_regardless_of_llm(self):
+        """No `theses=` arg — all calls should land on the stock channel
+        even when llm_webhook_url is set."""
+        config = DiscordConfig(
+            enabled=True,
+            webhook_url="https://main/hook",
+            stock_webhook_url="https://stock/hook",
+            llm_webhook_url="https://llm/hook",
+        )
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates([_candidate("NVDA")], config)
+        # No theses → no thesis-embed POSTs; every call must go to stock URL.
+        assert mock_post.call_count >= 1
+        for call in mock_post.call_args_list:
+            assert call.args[0] == "https://stock/hook"
+
+    def test_multipart_thesis_post_uses_llm_webhook(self):
+        """When a chart attachment rides on multipart, the destination still
+        flips to llm_webhook_url."""
+        config = DiscordConfig(
+            enabled=True,
+            webhook_url="https://main/hook",
+            stock_webhook_url="https://stock/hook",
+            llm_webhook_url="https://llm/hook",
+        )
+        png_bytes = b"\x89PNG\r\n\x1a\nFAKE"
+        with patch(
+            "rainier.alerts.discord.httpx.post"
+        ) as mock_post, patch(
+            "rainier.alerts.discord._load_chart_bytes_for_thesis",
+            return_value=png_bytes,
+        ):
+            mock_post.return_value = MagicMock(status_code=204)
+            send_stock_candidates(
+                [_candidate("NVDA")],
+                config,
+                theses={"NVDA": _thesis()},
+            )
+        multipart_calls = [
+            c for c in mock_post.call_args_list if "files" in c.kwargs
+        ]
+        assert len(multipart_calls) == 1
+        assert multipart_calls[0].args[0] == "https://llm/hook"
+
+
+class TestResolveLLMWebhookUrl:
+    """Direct coverage of the `_resolve_llm_webhook_url` helper."""
+
+    def test_returns_llm_when_set(self):
+        from rainier.alerts.discord import _resolve_llm_webhook_url
+
+        cfg = DiscordConfig(
+            webhook_url="https://main/hook",
+            stock_webhook_url="https://stock/hook",
+            llm_webhook_url="https://llm/hook",
+        )
+        assert _resolve_llm_webhook_url(cfg) == "https://llm/hook"
+
+    def test_falls_back_to_stock_when_llm_empty(self):
+        from rainier.alerts.discord import _resolve_llm_webhook_url
+
+        cfg = DiscordConfig(
+            webhook_url="https://main/hook",
+            stock_webhook_url="https://stock/hook",
+            llm_webhook_url="",
+        )
+        assert _resolve_llm_webhook_url(cfg) == "https://stock/hook"
+
+    def test_falls_back_to_webhook_when_stock_and_llm_empty(self):
+        from rainier.alerts.discord import _resolve_llm_webhook_url
+
+        cfg = DiscordConfig(
+            webhook_url="https://main/hook",
+            stock_webhook_url="",
+            llm_webhook_url="",
+        )
+        assert _resolve_llm_webhook_url(cfg) == "https://main/hook"
+
+    def test_returns_none_when_all_empty(self):
+        from rainier.alerts.discord import _resolve_llm_webhook_url
+
+        cfg = DiscordConfig(
+            webhook_url="",
+            stock_webhook_url="",
+            llm_webhook_url="",
+        )
+        assert _resolve_llm_webhook_url(cfg) is None
+
+
+class TestSettingsPlumbing:
+    """`DISCORD_LLM_WEBHOOK_URL` env var → `Settings.alerts.discord.llm_webhook_url`."""
+
+    def test_env_var_populates_nested_field(self, monkeypatch, tmp_path):
+        from rainier.core.config import load_settings
+
+        yaml_path = tmp_path / "settings.yaml"
+        yaml_path.write_text(
+            "alerts:\n  discord:\n    enabled: true\n",
+            encoding="utf-8",
+        )
+        # The loader also reads .env via load_dotenv; chdir to a clean tmp
+        # path so the project's real .env doesn't leak into the test.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv(
+            "DISCORD_LLM_WEBHOOK_URL", "https://llm-channel.example/hook"
+        )
+        settings = load_settings(config_path=yaml_path)
+        assert (
+            settings.alerts.discord.llm_webhook_url
+            == "https://llm-channel.example/hook"
+        )
+
+    def test_yaml_value_wins_when_env_empty(self, monkeypatch, tmp_path):
+        from rainier.core.config import load_settings
+
+        yaml_path = tmp_path / "settings.yaml"
+        yaml_path.write_text(
+            "alerts:\n"
+            "  discord:\n"
+            "    enabled: true\n"
+            "    llm_webhook_url: https://yaml.example/hook\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DISCORD_LLM_WEBHOOK_URL", raising=False)
+        settings = load_settings(config_path=yaml_path)
+        assert (
+            settings.alerts.discord.llm_webhook_url
+            == "https://yaml.example/hook"
+        )

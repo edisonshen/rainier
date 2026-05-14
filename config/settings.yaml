@@ -67,6 +67,7 @@ alerts:
   discord:
     webhook_url: ""              # Set via DISCORD_WEBHOOK_URL in .env
     stock_webhook_url: ""        # Set via DISCORD_STOCK_WEBHOOK_URL in .env (falls back to webhook_url)
+    llm_webhook_url: ""          # Set via DISCORD_LLM_WEBHOOK_URL in .env; dedicated channel for per-ticker LLM thesis embeds (falls back to stock_webhook_url)
     enabled: true
 
 # --- Stock scraping (QuantUnicorn) ---

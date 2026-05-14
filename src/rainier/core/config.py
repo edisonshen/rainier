@@ -134,6 +134,7 @@ class IBKRConfig(BaseModel):
 class DiscordConfig(BaseModel):
     webhook_url: str = ""
     stock_webhook_url: str = ""  # Separate channel for stock alerts; falls back to webhook_url
+    llm_webhook_url: str = ""  # Separate channel for per-ticker LLM thesis embeds; falls back to stock_webhook_url
     enabled: bool = False
 
 
@@ -353,6 +354,7 @@ class Settings(BaseSettings):
     polygon_api_key: str = ""
     discord_webhook_url: str = ""
     discord_stock_webhook_url: str = ""
+    discord_llm_webhook_url: str = ""
     discord_backtest_webhook_url: str = ""
     notify_urls: str = ""  # Apprise URL(s), comma-separated
     x_api_bearer_token: str = ""  # X/Twitter API v2 bearer token
@@ -479,6 +481,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         settings.alerts.discord.webhook_url = settings.discord_webhook_url
     if settings.discord_stock_webhook_url and not settings.alerts.discord.stock_webhook_url:
         settings.alerts.discord.stock_webhook_url = settings.discord_stock_webhook_url
+    if settings.discord_llm_webhook_url and not settings.alerts.discord.llm_webhook_url:
+        settings.alerts.discord.llm_webhook_url = settings.discord_llm_webhook_url
 
     return settings
 
