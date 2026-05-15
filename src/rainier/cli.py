@@ -2810,3 +2810,157 @@ def thesis_research_verdicts(days):
                 f"{verdict:<12} {hr.horizon:<8} {hr.n:<6} {hr.win_rate:<10.2%} "
                 f"{hr.avg_return_pct:+.4f}"
             )
+
+
+# ---------------------------------------------------------------------------
+# `rainier debug ...` — test utilities. NOT for normal operations.
+# ---------------------------------------------------------------------------
+#
+# This group hosts probes that exercise live integration points without
+# their usual upstream dependencies (scrape, screener, LLM). Today: one
+# command that POSTs a synthetic per-ticker thesis embed to Discord so the
+# operator can verify the PR #73 routing (llm_webhook_url vs
+# stock_webhook_url) end-to-end without waiting on a fresh scan.
+
+@cli.group()
+def debug():
+    """Test utilities — synthetic probes, no DB / LLM side effects."""
+
+
+# Verdicts allowed by `core.llm_thesis.schemas.TradeThesis.verdict`. Kept in
+# sync with the Literal there; importing from the schema at module load
+# time would force pydantic into the cli import path so we re-declare the
+# small enum here. A drift would be caught by `test_post_fake_thesis_help_shows_options`
+# (which exercises the click.Choice) the moment the schema adds a new verdict.
+_FAKE_THESIS_VERDICTS = ("setup_long", "watch", "no_setup")
+
+
+@debug.command("post-fake-thesis")
+@click.option(
+    "--symbol",
+    default="TSLA",
+    help="Ticker symbol stamped on the synthetic candidate + thesis.",
+)
+@click.option(
+    "--verdict",
+    default="setup_long",
+    type=click.Choice(_FAKE_THESIS_VERDICTS),
+    help="TradeThesis.verdict on the synthetic post.",
+)
+@click.option(
+    "--llm-webhook/--stock-webhook",
+    "use_llm_webhook",
+    default=True,
+    help=(
+        "--llm-webhook (default): natural routing — thesis embed goes to "
+        "llm_webhook_url. --stock-webhook: clear llm_webhook_url in-memory "
+        "so the thesis falls back to stock_webhook_url (verifies the "
+        "_resolve_llm_webhook_url fallback path)."
+    ),
+)
+@click.pass_context
+def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
+    """POST a synthetic thesis embed to Discord — routing-only probe.
+
+    Builds an in-memory StockCandidate + TradeThesis tagged with the
+    literal `[FAKE TEST POST]` marker, then calls send_stock_candidates
+    to exercise the same code path the scheduler uses. No DB I/O, no LLM
+    call, no chart attachment. Prints the resolved webhook URLs to stdout
+    so the operator can confirm routing without parsing Discord.
+
+    Exit code: 0 on successful POST(s); non-zero if no webhook is
+    configured or the underlying httpx call raises.
+    """
+    from rainier.alerts.discord import (
+        _resolve_llm_webhook_url,
+        _resolve_webhook_url,
+        send_stock_candidates,
+    )
+    from rainier.core.config import DiscordConfig, load_settings_fresh
+    from rainier.core.types import StockCandidate
+    from rainier.llm_thesis.schemas import TradeThesis
+
+    settings = load_settings_fresh(_settings_path(ctx))
+
+    # We never mutate the operator's live settings — clone the DiscordConfig
+    # so the --stock-webhook override stays in-process only. Pydantic v2's
+    # model_copy keeps validation invariants intact.
+    discord_cfg: DiscordConfig = settings.alerts.discord.model_copy()
+    # The probe always wants Discord on, even if the operator's config
+    # has alerts.discord.enabled=False (e.g. local dev where notifications
+    # are normally muted). The probe IS the notification.
+    discord_cfg.enabled = True
+    if not use_llm_webhook:
+        # --stock-webhook: clear llm_webhook_url so _resolve_llm_webhook_url
+        # falls back to stock_webhook_url (or webhook_url).
+        discord_cfg.llm_webhook_url = ""
+
+    # Resolve both URLs ahead of time so we can print + sanity-check before
+    # POSTing. Stays in sync with send_stock_candidates' own resolution.
+    stock_url = _resolve_webhook_url(discord_cfg)
+    thesis_url = _resolve_llm_webhook_url(discord_cfg)
+    if not stock_url and not thesis_url:
+        raise click.ClickException(
+            "No Discord webhook URLs configured (webhook_url, "
+            "stock_webhook_url, llm_webhook_url all empty). "
+            "Set DISCORD_*_WEBHOOK_URL in .env or alerts.discord.* in "
+            "settings.yaml."
+        )
+
+    # ---- synthetic candidate ------------------------------------------------
+    # Plausible-looking but obviously test values; the [FAKE TEST POST]
+    # marker is the load-bearing safety signal once this lands in Discord.
+    fake_symbol = symbol.upper()
+    candidate = StockCandidate(
+        symbol=fake_symbol,
+        rank=1,
+        rank_change=0,
+        long_short="Long in",
+        capital_flow_direction="+",
+        sector="[FAKE TEST POST] Synthetic",
+        signal_strength=0.85,
+        money_flow_score=70.0,
+        pattern_type="bull_flag",
+        pattern_direction="bullish",
+        pattern_status="confirmed",
+        pattern_confidence=0.85,
+        entry_price=100.0,
+        stop_loss=95.0,
+        target_price=115.0,
+        rr_ratio=3.0,
+        volume_confirmed=True,
+        current_price=100.0,
+        distance_to_entry_pct=0.0,
+        bars_since_breakout=0,
+    )
+
+    # ---- synthetic thesis ---------------------------------------------------
+    thesis_model = TradeThesis(
+        verdict=verdict,
+        setup_quality=8,
+        llm_confidence=7,
+        paragraph_radar="[FAKE TEST POST] synthetic",
+        paragraph_evidence="[FAKE TEST POST] synthetic",
+        paragraph_invalidation="[FAKE TEST POST] synthetic",
+        risks=["[FAKE TEST POST] synthetic risk"],
+        watch_items=["[FAKE TEST POST] synthetic watch"],
+        evidence_used=["rank_trajectory"],
+        signals_used=["rank_trajectory", "capital_flow_streak"],
+        patterns_in_chart_not_in_indicators="none",
+    )
+    thesis_dict = thesis_model.model_dump()
+
+    click.echo(f"Posting [FAKE TEST POST] thesis for {fake_symbol}...")
+    click.echo(f"  summary webhook (stock_webhook_url) : {stock_url or '(none)'}")
+    click.echo(f"  thesis  webhook (llm_webhook_url)   : {thesis_url or '(none)'}")
+    try:
+        send_stock_candidates(
+            [candidate],
+            discord_cfg,
+            theses={fake_symbol: thesis_dict},
+            dashboard_base_url=None,
+        )
+    except Exception as exc:
+        raise click.ClickException(f"Discord POST failed: {exc}") from exc
+
+    click.echo("done.")
