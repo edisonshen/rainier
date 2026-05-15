@@ -2810,3 +2810,277 @@ def thesis_research_verdicts(days):
                 f"{verdict:<12} {hr.horizon:<8} {hr.n:<6} {hr.win_rate:<10.2%} "
                 f"{hr.avg_return_pct:+.4f}"
             )
+
+
+# ---------------------------------------------------------------------------
+# `rainier debug ...` — test utilities. NOT for normal operations.
+# ---------------------------------------------------------------------------
+#
+# This group hosts probes that exercise live integration points without
+# their usual upstream dependencies (scrape, screener, LLM). Today: one
+# command that POSTs a synthetic per-ticker thesis embed to Discord so the
+# operator can verify the PR #73 routing (llm_webhook_url vs
+# stock_webhook_url) end-to-end without waiting on a fresh scan.
+
+@cli.group()
+def debug():
+    """Test utilities — synthetic probes, no DB / LLM side effects."""
+
+
+# Verdicts allowed by `core.llm_thesis.schemas.TradeThesis.verdict`. Derived
+# from the Literal annotation at module load so a schema change (new verdict,
+# rename, removal) automatically flows through to the click.Choice without a
+# manual edit here. The import does pull pydantic into the cli import path,
+# but that's already true via core.config → BaseSettings, so the cost is zero.
+def _trade_thesis_verdicts() -> tuple[str, ...]:
+    from typing import get_args
+
+    from rainier.llm_thesis.schemas import TradeThesis
+
+    return tuple(get_args(TradeThesis.model_fields["verdict"].annotation))
+
+
+_FAKE_THESIS_VERDICTS = _trade_thesis_verdicts()
+
+
+def _mask_webhook_url(url: str | None) -> str:
+    """Redact a Discord webhook URL for stdout logging.
+
+    Discord webhook URLs are bearer credentials: anyone with the full URL
+    can post into the channel. The routing probe needs to tell the
+    operator WHICH channel was resolved (so they can verify a config
+    change took effect) without leaking the credential into shared
+    shells, CI logs, or debugging transcripts.
+
+    Format: ``https://<host>/api/webhooks/<channel_id>/****<last6>``
+    Channel ID is non-secret (visible in Discord's UI); the token tail
+    gives the operator a stable 6-char fingerprint they can compare
+    against their .env to confirm the right URL was picked without
+    exposing the full secret.
+
+    Returns ``"(none)"`` for empty / missing URLs, and the literal input
+    (with a fallback redaction) for malformed URLs that don't match the
+    Discord webhook shape — we never echo a non-empty URL verbatim.
+    """
+    if not url:
+        return "(none)"
+    # Discord webhook URL: https://discord.com/api/webhooks/<channel_id>/<token>
+    # Token is the secret. Channel ID is public-equivalent (visible in UI).
+    marker = "/api/webhooks/"
+    idx = url.find(marker)
+    if idx == -1:
+        # Not a Discord webhook URL — could be a proxy / smee.io / custom
+        # relay. Don't trust the format; redact aggressively.
+        return f"<non-discord webhook, {len(url)} chars, ...{url[-6:]}>"
+    prefix = url[: idx + len(marker)]
+    tail = url[idx + len(marker) :]
+    parts = tail.split("/", 1)
+    if len(parts) != 2 or not parts[1]:
+        return f"{prefix}<malformed>"
+    channel_id, token = parts
+    token_tail = token[-6:] if len(token) > 6 else "****"
+    return f"{prefix}{channel_id}/****{token_tail}"
+
+
+@debug.command("post-fake-thesis")
+@click.option(
+    "--symbol",
+    default="TSLA",
+    help="Ticker symbol stamped on the synthetic candidate + thesis.",
+)
+@click.option(
+    "--verdict",
+    default="setup_long",
+    type=click.Choice(_FAKE_THESIS_VERDICTS),
+    help="TradeThesis.verdict on the synthetic post.",
+)
+@click.option(
+    "--llm-webhook/--stock-webhook",
+    "use_llm_webhook",
+    default=True,
+    help=(
+        "--llm-webhook (default): natural routing — thesis embed goes to "
+        "llm_webhook_url. --stock-webhook: clear llm_webhook_url in-memory "
+        "so the thesis falls back to stock_webhook_url (verifies the "
+        "_resolve_llm_webhook_url fallback path)."
+    ),
+)
+@click.pass_context
+def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
+    """POST a synthetic thesis embed to Discord — routing-only probe.
+
+    Builds an in-memory StockCandidate + TradeThesis tagged with the
+    literal `[FAKE TEST POST]` marker, then calls send_stock_candidates
+    to exercise the same code path the scheduler uses. No DB I/O, no LLM
+    call, no chart attachment. Prints the resolved webhook URLs to stdout
+    so the operator can confirm routing without parsing Discord.
+
+    Exit code: 0 on successful POST(s). Non-zero on (a) missing
+    summary-channel webhook config, (b) ``send_stock_candidates``
+    raising synchronously, or (c) a Discord HTTP failure (4xx/5xx,
+    timeout, connection error) that ``send_stock_candidates`` would
+    otherwise swallow as ``log.exception(...)``. The probe attaches a
+    logging captor to ``rainier.alerts.discord`` so swallowed httpx
+    failures surface as a ClickException, preserving the routing
+    probe's value as a real end-to-end diagnostic.
+    """
+    from rainier.alerts.discord import (
+        _resolve_llm_webhook_url,
+        _resolve_webhook_url,
+        send_stock_candidates,
+    )
+    from rainier.core.config import DiscordConfig, load_settings_fresh
+    from rainier.core.types import StockCandidate
+    from rainier.llm_thesis.schemas import TradeThesis
+
+    settings = load_settings_fresh(_settings_path(ctx))
+
+    # We never mutate the operator's live settings — clone the DiscordConfig
+    # so the --stock-webhook override stays in-process only. Pydantic v2's
+    # model_copy keeps validation invariants intact.
+    discord_cfg: DiscordConfig = settings.alerts.discord.model_copy()
+    # The probe always wants Discord on, even if the operator's config
+    # has alerts.discord.enabled=False (e.g. local dev where notifications
+    # are normally muted). The probe IS the notification.
+    discord_cfg.enabled = True
+    if not use_llm_webhook:
+        # --stock-webhook: clear llm_webhook_url so _resolve_llm_webhook_url
+        # falls back to stock_webhook_url (or webhook_url).
+        discord_cfg.llm_webhook_url = ""
+
+    # Resolve both URLs ahead of time so we can print + sanity-check before
+    # POSTing. Stays in sync with send_stock_candidates' own resolution.
+    stock_url = _resolve_webhook_url(discord_cfg)
+    thesis_url = _resolve_llm_webhook_url(discord_cfg)
+    # send_stock_candidates bails at its first line when stock_url is empty
+    # (it needs the summary channel to fire even if only the thesis is
+    # actually interesting to us). Catch that here so the probe doesn't
+    # exit 0 having sent nothing — the canonical false-success failure
+    # mode for routing diagnostics. A config with ONLY llm_webhook_url
+    # set is supported by the dataclass but unusable by the renderer; the
+    # operator wants to know that immediately.
+    if not stock_url:
+        raise click.ClickException(
+            "No summary Discord webhook configured (stock_webhook_url + "
+            "webhook_url both empty). send_stock_candidates requires a "
+            "summary channel even when llm_webhook_url is set; the thesis "
+            "embed would never POST. Set DISCORD_STOCK_WEBHOOK_URL (or "
+            "DISCORD_WEBHOOK_URL) in .env or alerts.discord.* in "
+            "settings.yaml."
+        )
+
+    # ---- synthetic candidate ------------------------------------------------
+    # Plausible-looking but obviously test values; the [FAKE TEST POST]
+    # marker is the load-bearing safety signal once this lands in Discord.
+    fake_symbol = symbol.upper()
+    candidate = StockCandidate(
+        symbol=fake_symbol,
+        rank=1,
+        rank_change=0,
+        long_short="Long in",
+        capital_flow_direction="+",
+        sector="[FAKE TEST POST] Synthetic",
+        signal_strength=0.85,
+        money_flow_score=70.0,
+        pattern_type="bull_flag",
+        pattern_direction="bullish",
+        pattern_status="confirmed",
+        pattern_confidence=0.85,
+        entry_price=100.0,
+        stop_loss=95.0,
+        target_price=115.0,
+        rr_ratio=3.0,
+        volume_confirmed=True,
+        current_price=100.0,
+        distance_to_entry_pct=0.0,
+        bars_since_breakout=0,
+    )
+
+    # ---- synthetic thesis ---------------------------------------------------
+    thesis_model = TradeThesis(
+        verdict=verdict,
+        setup_quality=8,
+        llm_confidence=7,
+        paragraph_radar="[FAKE TEST POST] synthetic",
+        paragraph_evidence="[FAKE TEST POST] synthetic",
+        paragraph_invalidation="[FAKE TEST POST] synthetic",
+        risks=["[FAKE TEST POST] synthetic risk"],
+        watch_items=["[FAKE TEST POST] synthetic watch"],
+        evidence_used=["rank_trajectory"],
+        signals_used=["rank_trajectory", "capital_flow_streak"],
+        patterns_in_chart_not_in_indicators="none",
+    )
+    thesis_dict = thesis_model.model_dump()
+
+    click.echo(f"Posting [FAKE TEST POST] thesis for {fake_symbol}...")
+    click.echo(f"  summary webhook (stock_webhook_url) : {_mask_webhook_url(stock_url)}")
+    click.echo(f"  thesis  webhook (llm_webhook_url)   : {_mask_webhook_url(thesis_url)}")
+
+    # send_stock_candidates() catches httpx exceptions internally
+    # (`log.exception(...)`) and returns normally, so a 4xx/5xx Discord
+    # response would otherwise let this probe exit 0 with "done." — the
+    # exact false-success path operators use this command to diagnose.
+    # Attach a captor handler to the discord logger so we can detect
+    # those swallowed failures and surface them as a non-zero exit.
+    import logging as _stdlib_logging
+
+    captured_failures: list[_stdlib_logging.LogRecord] = []
+
+    class _DiscordFailureCaptor(_stdlib_logging.Handler):
+        def emit(self, record: _stdlib_logging.LogRecord) -> None:
+            if record.levelno >= _stdlib_logging.ERROR:
+                captured_failures.append(record)
+
+    captor = _DiscordFailureCaptor(level=_stdlib_logging.ERROR)
+    discord_logger = _stdlib_logging.getLogger("rainier.alerts.discord")
+    # Logger.isEnabledFor() is the gate BEFORE handlers run — if the
+    # caller (CI wrapper, structlog config, etc.) raised the discord
+    # logger to CRITICAL, ERROR records get dropped at the logger and
+    # the captor never sees them. Temporarily lower the level to ERROR
+    # so log.exception(...) calls inside send_stock_candidates reach
+    # our handler, then restore on the way out so we don't perturb the
+    # operator's logging config beyond this call.
+    saved_level = discord_logger.level
+    saved_disabled = discord_logger.disabled
+    saved_propagate = discord_logger.propagate
+    discord_logger.setLevel(_stdlib_logging.ERROR)
+    discord_logger.disabled = False
+    # propagate=False so our captured records don't also fire on parent
+    # handlers (which might surface stack traces the operator doesn't
+    # need for the routing diagnostic). The captor is our only sink.
+    discord_logger.propagate = False
+    discord_logger.addHandler(captor)
+    try:
+        send_stock_candidates(
+            [candidate],
+            discord_cfg,
+            theses={fake_symbol: thesis_dict},
+            dashboard_base_url=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — synthetic-payload bugs surface here
+        raise click.ClickException(f"Discord POST failed: {exc}") from exc
+    finally:
+        discord_logger.removeHandler(captor)
+        discord_logger.setLevel(saved_level)
+        discord_logger.disabled = saved_disabled
+        discord_logger.propagate = saved_propagate
+
+    if captured_failures:
+        # Render a terse one-line summary of each captured failure so the
+        # operator can tell which endpoint failed (summary vs thesis)
+        # without having to grep the structured log. We do NOT echo the
+        # full webhook URL — only the logger event name + exception
+        # class. The URL has already been printed in masked form above.
+        summaries = []
+        for rec in captured_failures:
+            exc_type = (
+                rec.exc_info[0].__name__ if rec.exc_info and rec.exc_info[0] else "?"
+            )
+            summaries.append(f"{rec.getMessage()} ({exc_type})")
+        raise click.ClickException(
+            "Discord POST failed (send_stock_candidates swallowed the "
+            "error internally; the probe surfaced it): "
+            + "; ".join(summaries)
+        )
+
+    click.echo("done.")
