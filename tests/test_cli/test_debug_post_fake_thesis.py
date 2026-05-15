@@ -334,6 +334,71 @@ def test_synthetic_post_contains_fake_test_marker():
 
 
 # ---------------------------------------------------------------------------
+# Failure surfacing — swallowed Discord errors must produce non-zero exit
+# ---------------------------------------------------------------------------
+
+
+def test_discord_post_failure_exits_nonzero_and_does_not_print_done():
+    """If httpx raises (network error, 4xx/5xx, timeout), the probe must
+    surface it as non-zero exit even though ``send_stock_candidates``
+    catches the exception internally.
+
+    Regression test for codex iter-4 [P2]: the probe used to print
+    ``done.`` and exit 0 in this scenario — the exact false-success
+    path operators use this command to diagnose.
+    """
+    import httpx
+
+    settings = _settings_with_discord()
+    mock_post = MagicMock()
+    # First POST (summary) raises — simulates Discord rejecting a
+    # rotated webhook URL with a 401. send_stock_candidates catches
+    # this internally via log.exception; the probe's captor must
+    # convert it into a ClickException.
+    mock_post.side_effect = httpx.HTTPError("simulated 401 Unauthorized")
+    result = _invoke(
+        ["debug", "post-fake-thesis", "--symbol", "TSLA"],
+        settings,
+        mock_post,
+    )
+    assert result.exit_code != 0, result.output
+    assert "done." not in result.output, (
+        "false-success path triggered: probe printed 'done.' on a failed POST"
+    )
+    # Error output must point the operator at the actual failure path.
+    lowered = result.output.lower()
+    assert "discord post failed" in lowered or "discord_send_failed" in lowered
+
+
+def test_thesis_post_failure_alone_still_surfaces():
+    """If only the thesis embed POST fails (summary succeeds), the probe
+    still exits non-zero — partial-delivery is a routing-misconfig
+    signal worth catching."""
+    import httpx
+
+    settings = _settings_with_discord()
+    mock_post = MagicMock()
+
+    call_count = {"n": 0}
+
+    def _side_effect(url, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return MagicMock(status_code=204, raise_for_status=lambda: None)
+        # Second call is the thesis embed → raise.
+        raise httpx.HTTPError("simulated thesis-channel 404")
+
+    mock_post.side_effect = _side_effect
+    result = _invoke(
+        ["debug", "post-fake-thesis", "--symbol", "TSLA"],
+        settings,
+        mock_post,
+    )
+    assert result.exit_code != 0, result.output
+    assert call_count["n"] == 2, "both summary and thesis POSTs should fire"
+
+
+# ---------------------------------------------------------------------------
 # Webhook URL masking — credential safety guard
 # ---------------------------------------------------------------------------
 

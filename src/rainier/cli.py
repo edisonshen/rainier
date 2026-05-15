@@ -2915,12 +2915,14 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
     call, no chart attachment. Prints the resolved webhook URLs to stdout
     so the operator can confirm routing without parsing Discord.
 
-    Exit code: 0 unless no Discord webhook is configured at all (in which
-    case the command exits non-zero before POSTing). Note that the
-    underlying ``send_stock_candidates`` catches httpx exceptions
-    internally (logged via ``log.exception``), so a 4xx/5xx Discord
-    response will still exit 0 — verify the Discord channel directly
-    rather than relying on the exit code as a post-success signal.
+    Exit code: 0 on successful POST(s). Non-zero on (a) missing
+    summary-channel webhook config, (b) ``send_stock_candidates``
+    raising synchronously, or (c) a Discord HTTP failure (4xx/5xx,
+    timeout, connection error) that ``send_stock_candidates`` would
+    otherwise swallow as ``log.exception(...)``. The probe attaches a
+    logging captor to ``rainier.alerts.discord`` so swallowed httpx
+    failures surface as a ClickException, preserving the routing
+    probe's value as a real end-to-end diagnostic.
     """
     from rainier.alerts.discord import (
         _resolve_llm_webhook_url,
@@ -3013,6 +3015,25 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
     click.echo(f"Posting [FAKE TEST POST] thesis for {fake_symbol}...")
     click.echo(f"  summary webhook (stock_webhook_url) : {_mask_webhook_url(stock_url)}")
     click.echo(f"  thesis  webhook (llm_webhook_url)   : {_mask_webhook_url(thesis_url)}")
+
+    # send_stock_candidates() catches httpx exceptions internally
+    # (`log.exception(...)`) and returns normally, so a 4xx/5xx Discord
+    # response would otherwise let this probe exit 0 with "done." — the
+    # exact false-success path operators use this command to diagnose.
+    # Attach a captor handler to the discord logger so we can detect
+    # those swallowed failures and surface them as a non-zero exit.
+    import logging as _stdlib_logging
+
+    captured_failures: list[_stdlib_logging.LogRecord] = []
+
+    class _DiscordFailureCaptor(_stdlib_logging.Handler):
+        def emit(self, record: _stdlib_logging.LogRecord) -> None:
+            if record.levelno >= _stdlib_logging.ERROR:
+                captured_failures.append(record)
+
+    captor = _DiscordFailureCaptor(level=_stdlib_logging.ERROR)
+    discord_logger = _stdlib_logging.getLogger("rainier.alerts.discord")
+    discord_logger.addHandler(captor)
     try:
         send_stock_candidates(
             [candidate],
@@ -3020,7 +3041,27 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
             theses={fake_symbol: thesis_dict},
             dashboard_base_url=None,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — synthetic-payload bugs surface here
         raise click.ClickException(f"Discord POST failed: {exc}") from exc
+    finally:
+        discord_logger.removeHandler(captor)
+
+    if captured_failures:
+        # Render a terse one-line summary of each captured failure so the
+        # operator can tell which endpoint failed (summary vs thesis)
+        # without having to grep the structured log. We do NOT echo the
+        # full webhook URL — only the logger event name + exception
+        # class. The URL has already been printed in masked form above.
+        summaries = []
+        for rec in captured_failures:
+            exc_type = (
+                rec.exc_info[0].__name__ if rec.exc_info and rec.exc_info[0] else "?"
+            )
+            summaries.append(f"{rec.getMessage()} ({exc_type})")
+        raise click.ClickException(
+            "Discord POST failed (send_stock_candidates swallowed the "
+            "error internally; the probe surfaced it): "
+            + "; ".join(summaries)
+        )
 
     click.echo("done.")
