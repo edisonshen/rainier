@@ -370,6 +370,50 @@ def test_discord_post_failure_exits_nonzero_and_does_not_print_done():
     assert "discord post failed" in lowered or "discord_send_failed" in lowered
 
 
+def test_failure_surfaces_even_when_discord_logger_is_silenced():
+    """The probe must detect swallowed httpx failures even when the
+    process has raised the ``rainier.alerts.discord`` logger to
+    CRITICAL (a common CI / wrapper-script default). Without this,
+    `logger.isEnabledFor(ERROR)` returns False and the captor handler
+    is never invoked.
+
+    Regression test for codex iter-5 [P2]: the probe lowers the logger
+    level to ERROR for its own duration and restores the prior level
+    on exit so the operator's logging config isn't perturbed.
+    """
+    import logging
+
+    import httpx
+
+    settings = _settings_with_discord()
+    mock_post = MagicMock()
+    mock_post.side_effect = httpx.HTTPError("simulated 500 internal")
+
+    # Caller (CI / wrapper) silences the discord logger.
+    discord_logger = logging.getLogger("rainier.alerts.discord")
+    saved_level = discord_logger.level
+    saved_disabled = discord_logger.disabled
+    discord_logger.setLevel(logging.CRITICAL)
+    try:
+        result = _invoke(
+            ["debug", "post-fake-thesis", "--symbol", "TSLA"],
+            settings,
+            mock_post,
+        )
+        assert result.exit_code != 0, (
+            "probe must surface the failure even when the caller silenced "
+            "the discord logger"
+        )
+        assert "done." not in result.output
+        # And the probe must NOT permanently change the caller's level.
+        assert discord_logger.level == logging.CRITICAL, (
+            f"probe leaked its logger-level override: level={discord_logger.level}"
+        )
+    finally:
+        discord_logger.setLevel(saved_level)
+        discord_logger.disabled = saved_disabled
+
+
 def test_thesis_post_failure_alone_still_surfaces():
     """If only the thesis embed POST fails (summary succeeds), the probe
     still exits non-zero — partial-delivery is a routing-misconfig

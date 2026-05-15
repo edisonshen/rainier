@@ -3033,6 +3033,22 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
 
     captor = _DiscordFailureCaptor(level=_stdlib_logging.ERROR)
     discord_logger = _stdlib_logging.getLogger("rainier.alerts.discord")
+    # Logger.isEnabledFor() is the gate BEFORE handlers run — if the
+    # caller (CI wrapper, structlog config, etc.) raised the discord
+    # logger to CRITICAL, ERROR records get dropped at the logger and
+    # the captor never sees them. Temporarily lower the level to ERROR
+    # so log.exception(...) calls inside send_stock_candidates reach
+    # our handler, then restore on the way out so we don't perturb the
+    # operator's logging config beyond this call.
+    saved_level = discord_logger.level
+    saved_disabled = discord_logger.disabled
+    saved_propagate = discord_logger.propagate
+    discord_logger.setLevel(_stdlib_logging.ERROR)
+    discord_logger.disabled = False
+    # propagate=False so our captured records don't also fire on parent
+    # handlers (which might surface stack traces the operator doesn't
+    # need for the routing diagnostic). The captor is our only sink.
+    discord_logger.propagate = False
     discord_logger.addHandler(captor)
     try:
         send_stock_candidates(
@@ -3045,6 +3061,9 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
         raise click.ClickException(f"Discord POST failed: {exc}") from exc
     finally:
         discord_logger.removeHandler(captor)
+        discord_logger.setLevel(saved_level)
+        discord_logger.disabled = saved_disabled
+        discord_logger.propagate = saved_propagate
 
     if captured_failures:
         # Render a terse one-line summary of each captured failure so the
