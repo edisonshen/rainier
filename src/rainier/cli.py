@@ -2843,6 +2843,45 @@ def _trade_thesis_verdicts() -> tuple[str, ...]:
 _FAKE_THESIS_VERDICTS = _trade_thesis_verdicts()
 
 
+def _mask_webhook_url(url: str | None) -> str:
+    """Redact a Discord webhook URL for stdout logging.
+
+    Discord webhook URLs are bearer credentials: anyone with the full URL
+    can post into the channel. The routing probe needs to tell the
+    operator WHICH channel was resolved (so they can verify a config
+    change took effect) without leaking the credential into shared
+    shells, CI logs, or debugging transcripts.
+
+    Format: ``https://<host>/api/webhooks/<channel_id>/****<last6>``
+    Channel ID is non-secret (visible in Discord's UI); the token tail
+    gives the operator a stable 6-char fingerprint they can compare
+    against their .env to confirm the right URL was picked without
+    exposing the full secret.
+
+    Returns ``"(none)"`` for empty / missing URLs, and the literal input
+    (with a fallback redaction) for malformed URLs that don't match the
+    Discord webhook shape — we never echo a non-empty URL verbatim.
+    """
+    if not url:
+        return "(none)"
+    # Discord webhook URL: https://discord.com/api/webhooks/<channel_id>/<token>
+    # Token is the secret. Channel ID is public-equivalent (visible in UI).
+    marker = "/api/webhooks/"
+    idx = url.find(marker)
+    if idx == -1:
+        # Not a Discord webhook URL — could be a proxy / smee.io / custom
+        # relay. Don't trust the format; redact aggressively.
+        return f"<non-discord webhook, {len(url)} chars, ...{url[-6:]}>"
+    prefix = url[: idx + len(marker)]
+    tail = url[idx + len(marker) :]
+    parts = tail.split("/", 1)
+    if len(parts) != 2 or not parts[1]:
+        return f"{prefix}<malformed>"
+    channel_id, token = parts
+    token_tail = token[-6:] if len(token) > 6 else "****"
+    return f"{prefix}{channel_id}/****{token_tail}"
+
+
 @debug.command("post-fake-thesis")
 @click.option(
     "--symbol",
@@ -2972,8 +3011,8 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
     thesis_dict = thesis_model.model_dump()
 
     click.echo(f"Posting [FAKE TEST POST] thesis for {fake_symbol}...")
-    click.echo(f"  summary webhook (stock_webhook_url) : {stock_url or '(none)'}")
-    click.echo(f"  thesis  webhook (llm_webhook_url)   : {thesis_url or '(none)'}")
+    click.echo(f"  summary webhook (stock_webhook_url) : {_mask_webhook_url(stock_url)}")
+    click.echo(f"  thesis  webhook (llm_webhook_url)   : {_mask_webhook_url(thesis_url)}")
     try:
         send_stock_candidates(
             [candidate],

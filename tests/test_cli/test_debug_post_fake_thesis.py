@@ -30,12 +30,18 @@ from rainier.core.config import (
     Settings,
 )
 
+# Discord-shaped webhook URLs so the mask helper hits its real path. The
+# token tails are stable strings the tests can match against the masked
+# output. Real Discord webhooks are <channel_id>/<token-of-~68-chars>.
+_FAKE_STOCK_WEBHOOK = "https://discord.com/api/webhooks/111/STOCKTOKENSTOCKTOKEN"
+_FAKE_LLM_WEBHOOK = "https://discord.com/api/webhooks/222/LLMTOKENLLMTOKENLLMTOKEN"
+
 
 def _settings_with_discord(
     *,
     webhook_url: str = "",
-    stock_webhook_url: str = "https://stock.example/hook",
-    llm_webhook_url: str = "https://llm.example/hook",
+    stock_webhook_url: str = _FAKE_STOCK_WEBHOOK,
+    llm_webhook_url: str = _FAKE_LLM_WEBHOOK,
     enabled: bool = True,
 ) -> Settings:
     """Build a Settings instance with just enough wiring for the debug command.
@@ -128,16 +134,25 @@ def test_default_routes_thesis_to_llm_webhook_summary_to_stock_webhook():
     assert result.exit_code == 0, result.output
 
     # Collect every URL httpx.post was called with (positional arg 0 in
-    # the current send_stock_candidates implementation).
+    # the current send_stock_candidates implementation). These are the
+    # FULL URLs — the mask only applies to stdout, not the actual HTTP
+    # call (the renderer needs the credential to POST).
     urls = [call.args[0] for call in mock_post.call_args_list]
     assert len(urls) == 2, f"expected 2 POSTs (summary + thesis), got {urls!r}"
-    assert urls[0] == "https://stock.example/hook"  # summary → stock channel
-    assert urls[1] == "https://llm.example/hook"    # thesis → LLM channel
+    assert urls[0] == _FAKE_STOCK_WEBHOOK  # summary → stock channel
+    assert urls[1] == _FAKE_LLM_WEBHOOK    # thesis → LLM channel
 
 
-def test_default_stdout_reports_resolved_urls():
-    """The operator-facing stdout prints BOTH resolved webhook URLs so the
-    operator can visually confirm routing without parsing Discord."""
+def test_default_stdout_reports_resolved_urls_masked():
+    """The operator-facing stdout prints MASKED webhook URLs (channel_id
+    + last-6 token tail) so the operator can confirm routing without
+    leaking bearer credentials into shared shells, CI logs, or pasted
+    debugging transcripts.
+
+    Regression test for codex iter-2 [P1]: the original implementation
+    printed the full URL — anyone who saw the terminal output could
+    reuse it to post into the channel.
+    """
     settings = _settings_with_discord()
     mock_post = MagicMock()
     result = _invoke(
@@ -146,8 +161,20 @@ def test_default_stdout_reports_resolved_urls():
         mock_post,
     )
     assert result.exit_code == 0, result.output
-    assert "https://llm.example/hook" in result.output
-    assert "https://stock.example/hook" in result.output
+    # Channel IDs (public-equivalent in Discord UI) appear masked-form.
+    # Token tails are the last 6 chars of the URL token segment:
+    #   stock token "STOCKTOKENSTOCKTOKEN" → tail "KTOKEN"
+    #   llm   token "LLMTOKENLLMTOKENLLMTOKEN" → tail "MTOKEN"
+    assert "111/****KTOKEN" in result.output, result.output
+    assert "222/****MTOKEN" in result.output, result.output
+    # And the full tokens NEVER appear verbatim — this is the
+    # credential-leak regression guard.
+    assert "STOCKTOKENSTOCKTOKEN" not in result.output, (
+        "full stock webhook token leaked to stdout"
+    )
+    assert "LLMTOKENLLMTOKENLLMTOKEN" not in result.output, (
+        "full llm webhook token leaked to stdout"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +197,8 @@ def test_stock_webhook_flag_routes_thesis_to_stock_channel():
     assert result.exit_code == 0, result.output
     urls = [call.args[0] for call in mock_post.call_args_list]
     assert len(urls) == 2, f"expected 2 POSTs (summary + thesis), got {urls!r}"
-    assert urls[0] == "https://stock.example/hook"
-    assert urls[1] == "https://stock.example/hook"  # thesis fell back
+    assert urls[0] == _FAKE_STOCK_WEBHOOK
+    assert urls[1] == _FAKE_STOCK_WEBHOOK  # thesis fell back
 
 
 # ---------------------------------------------------------------------------
@@ -242,8 +269,9 @@ def test_webhook_url_fallback_summary_channel_accepted():
     iter-1 fix can't over-narrow and reject legitimate single-channel
     operator configs.
     """
+    catchall = "https://discord.com/api/webhooks/333/CATCHALLTOKENCATCHALL"
     settings = _settings_with_discord(
-        webhook_url="https://catchall.example/hook",
+        webhook_url=catchall,
         stock_webhook_url="",
         llm_webhook_url="",
     )
@@ -257,7 +285,7 @@ def test_webhook_url_fallback_summary_channel_accepted():
     urls = [call.args[0] for call in mock_post.call_args_list]
     # Summary fires to the catch-all. The thesis embed also resolves to
     # the catch-all via the llm→stock→webhook fallback chain.
-    assert urls and urls[0] == "https://catchall.example/hook"
+    assert urls and urls[0] == catchall
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +331,46 @@ def test_synthetic_post_contains_fake_test_marker():
 # ---------------------------------------------------------------------------
 # No LLM calls — pure routing probe must never touch litellm/anthropic
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Webhook URL masking — credential safety guard
+# ---------------------------------------------------------------------------
+
+
+def test_mask_webhook_url_redacts_discord_token():
+    """``_mask_webhook_url`` keeps the channel ID (public-equivalent) and a
+    6-char token tail, redacts the rest. This is the load-bearing
+    credential-leak guard for stdout logging.
+    """
+    from rainier.cli import _mask_webhook_url
+
+    full = "https://discord.com/api/webhooks/123456/SECRETtokenLONG123456abcd"
+    masked = _mask_webhook_url(full)
+    assert "SECRETtokenLONG" not in masked
+    assert "123456/****" in masked  # channel id + redaction marker
+    assert masked.endswith("234abcd"[-6:]) or masked.endswith("56abcd")  # token tail
+
+
+def test_mask_webhook_url_handles_empty_and_none():
+    """Missing URLs render as a clear placeholder, not an empty string
+    (so the operator-facing output stays unambiguous)."""
+    from rainier.cli import _mask_webhook_url
+
+    assert _mask_webhook_url(None) == "(none)"
+    assert _mask_webhook_url("") == "(none)"
+
+
+def test_mask_webhook_url_redacts_non_discord_relay():
+    """A non-Discord relay URL (smee.io, custom proxy) still gets
+    redacted — we never echo a non-empty URL verbatim."""
+    from rainier.cli import _mask_webhook_url
+
+    relay = "https://smee.io/abcdefghijklmnop"
+    masked = _mask_webhook_url(relay)
+    assert "abcdefghij" not in masked
+    assert "mnop" in masked  # last-6 tail preserved
+    assert "non-discord" in masked.lower()
 
 
 # ---------------------------------------------------------------------------
