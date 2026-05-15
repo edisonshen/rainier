@@ -195,6 +195,69 @@ def test_no_webhooks_configured_exits_nonzero_with_message():
     )
     assert result.exit_code != 0, result.output
     assert "webhook" in result.output.lower()
+    # No POSTs should have fired — the preflight gate is upstream of the renderer.
+    assert mock_post.call_count == 0, (
+        f"expected zero httpx.post calls on no-webhook config, got "
+        f"{mock_post.call_args_list!r}"
+    )
+
+
+def test_only_llm_webhook_configured_exits_nonzero():
+    """With ONLY ``llm_webhook_url`` set, send_stock_candidates would bail at
+    its first line (no summary webhook) and the thesis embed would never
+    POST — exactly the false-success failure mode the probe exists to
+    surface. The command must exit non-zero and explain why.
+
+    Regression test for codex iter-1: the original preflight accepted
+    "any webhook URL set" which let a llm-only config slide past, then
+    silently sent nothing.
+    """
+    settings = _settings_with_discord(
+        webhook_url="",
+        stock_webhook_url="",
+        llm_webhook_url="https://llm.example/hook",
+    )
+    mock_post = MagicMock()
+    result = _invoke(
+        ["debug", "post-fake-thesis", "--symbol", "TSLA"],
+        settings,
+        mock_post,
+    )
+    assert result.exit_code != 0, result.output
+    # Error message must point the operator at the missing summary channel,
+    # not just say "no webhook" — the LLM webhook IS set; the message has
+    # to disambiguate.
+    lowered = result.output.lower()
+    assert "summary" in lowered or "stock_webhook_url" in lowered, (
+        f"error must name the missing summary channel, got: {result.output}"
+    )
+    # And no POSTs fired.
+    assert mock_post.call_count == 0
+
+
+def test_webhook_url_fallback_summary_channel_accepted():
+    """If ``stock_webhook_url`` is empty but the generic ``webhook_url``
+    catch-all is set, the preflight accepts it — _resolve_webhook_url
+    falls through stock→webhook. Pins the fallback contract so the
+    iter-1 fix can't over-narrow and reject legitimate single-channel
+    operator configs.
+    """
+    settings = _settings_with_discord(
+        webhook_url="https://catchall.example/hook",
+        stock_webhook_url="",
+        llm_webhook_url="",
+    )
+    mock_post = MagicMock()
+    result = _invoke(
+        ["debug", "post-fake-thesis", "--symbol", "TSLA"],
+        settings,
+        mock_post,
+    )
+    assert result.exit_code == 0, result.output
+    urls = [call.args[0] for call in mock_post.call_args_list]
+    # Summary fires to the catch-all. The thesis embed also resolves to
+    # the catch-all via the llm→stock→webhook fallback chain.
+    assert urls and urls[0] == "https://catchall.example/hook"
 
 
 # ---------------------------------------------------------------------------

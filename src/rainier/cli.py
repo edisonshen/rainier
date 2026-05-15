@@ -2911,11 +2911,20 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
     # POSTing. Stays in sync with send_stock_candidates' own resolution.
     stock_url = _resolve_webhook_url(discord_cfg)
     thesis_url = _resolve_llm_webhook_url(discord_cfg)
-    if not stock_url and not thesis_url:
+    # send_stock_candidates bails at its first line when stock_url is empty
+    # (it needs the summary channel to fire even if only the thesis is
+    # actually interesting to us). Catch that here so the probe doesn't
+    # exit 0 having sent nothing — the canonical false-success failure
+    # mode for routing diagnostics. A config with ONLY llm_webhook_url
+    # set is supported by the dataclass but unusable by the renderer; the
+    # operator wants to know that immediately.
+    if not stock_url:
         raise click.ClickException(
-            "No Discord webhook URLs configured (webhook_url, "
-            "stock_webhook_url, llm_webhook_url all empty). "
-            "Set DISCORD_*_WEBHOOK_URL in .env or alerts.discord.* in "
+            "No summary Discord webhook configured (stock_webhook_url + "
+            "webhook_url both empty). send_stock_candidates requires a "
+            "summary channel even when llm_webhook_url is set; the thesis "
+            "embed would never POST. Set DISCORD_STOCK_WEBHOOK_URL (or "
+            "DISCORD_WEBHOOK_URL) in .env or alerts.discord.* in "
             "settings.yaml."
         )
 
