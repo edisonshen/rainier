@@ -2827,12 +2827,20 @@ def debug():
     """Test utilities — synthetic probes, no DB / LLM side effects."""
 
 
-# Verdicts allowed by `core.llm_thesis.schemas.TradeThesis.verdict`. Kept in
-# sync with the Literal there; importing from the schema at module load
-# time would force pydantic into the cli import path so we re-declare the
-# small enum here. A drift would be caught by `test_post_fake_thesis_help_shows_options`
-# (which exercises the click.Choice) the moment the schema adds a new verdict.
-_FAKE_THESIS_VERDICTS = ("setup_long", "watch", "no_setup")
+# Verdicts allowed by `core.llm_thesis.schemas.TradeThesis.verdict`. Derived
+# from the Literal annotation at module load so a schema change (new verdict,
+# rename, removal) automatically flows through to the click.Choice without a
+# manual edit here. The import does pull pydantic into the cli import path,
+# but that's already true via core.config → BaseSettings, so the cost is zero.
+def _trade_thesis_verdicts() -> tuple[str, ...]:
+    from typing import get_args
+
+    from rainier.llm_thesis.schemas import TradeThesis
+
+    return tuple(get_args(TradeThesis.model_fields["verdict"].annotation))
+
+
+_FAKE_THESIS_VERDICTS = _trade_thesis_verdicts()
 
 
 @debug.command("post-fake-thesis")
@@ -2868,8 +2876,12 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
     call, no chart attachment. Prints the resolved webhook URLs to stdout
     so the operator can confirm routing without parsing Discord.
 
-    Exit code: 0 on successful POST(s); non-zero if no webhook is
-    configured or the underlying httpx call raises.
+    Exit code: 0 unless no Discord webhook is configured at all (in which
+    case the command exits non-zero before POSTing). Note that the
+    underlying ``send_stock_candidates`` catches httpx exceptions
+    internally (logged via ``log.exception``), so a 4xx/5xx Discord
+    response will still exit 0 — verify the Discord channel directly
+    rather than relying on the exit code as a post-success signal.
     """
     from rainier.alerts.discord import (
         _resolve_llm_webhook_url,

@@ -242,6 +242,33 @@ def test_synthetic_post_contains_fake_test_marker():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Schema drift guard — _FAKE_THESIS_VERDICTS must track TradeThesis.verdict
+# ---------------------------------------------------------------------------
+
+
+def test_fake_thesis_verdicts_match_schema():
+    """`_FAKE_THESIS_VERDICTS` must mirror `TradeThesis.verdict` Literal args
+    so the click.Choice on `--verdict` never drifts away from the schema.
+
+    The CLI derives the tuple from the schema at module load
+    (`_trade_thesis_verdicts`), so any new verdict added to the Literal will
+    automatically expand the click.Choice. This test pins that invariant so
+    a refactor that hardcodes the tuple back to a literal trips immediately
+    rather than silently dropping a verdict from the probe.
+    """
+    from typing import get_args
+
+    from rainier.cli import _FAKE_THESIS_VERDICTS
+    from rainier.llm_thesis.schemas import TradeThesis
+
+    schema_verdicts = tuple(get_args(TradeThesis.model_fields["verdict"].annotation))
+    assert _FAKE_THESIS_VERDICTS == schema_verdicts, (
+        f"CLI verdict choice drifted from schema: cli={_FAKE_THESIS_VERDICTS!r} "
+        f"schema={schema_verdicts!r}"
+    )
+
+
 def test_command_does_not_import_llm_client():
     """The command must not call any LLM provider — it's a routing-only
     probe. We assert by checking that send_stock_candidates was the entry
