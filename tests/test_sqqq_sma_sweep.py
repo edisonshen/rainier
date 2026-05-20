@@ -317,6 +317,66 @@ def test_sweep_resumability(tmp_path: Path):
     assert not keys.duplicated().any()
 
 
+def test_sweep_fingerprint_stamped_before_first_flush(tmp_path: Path):
+    """Regression: codex review iter-1 [P1].
+
+    The crash-safety contract is that a sweep interrupted between the first
+    parquet flush and the tail fingerprint write can still be resumed. To
+    enforce this, the fingerprint MUST be written before any chunk is flushed
+    to disk — not at the end. We simulate the crash scenario by patching
+    ``_flush_chunk`` to raise after the first call. The fingerprint file must
+    already exist on disk by the time the crash fires; otherwise the next
+    run_sweep() call raises SweepInputMismatchError and the user is forced
+    to delete the cache.
+    """
+    import rainier.backtest.sqqq_sma_sweep as mod
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    fp_path = results_path.with_suffix(".fingerprint.txt")
+
+    real_flush = mod._flush_chunk
+    call_count = {"n": 0}
+
+    def _crashing_flush(rows, path):
+        # Let the FIRST flush succeed, then crash the sweep mid-run.
+        call_count["n"] += 1
+        real_flush(rows, path)
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated SIGKILL after first chunk")
+
+    mod._flush_chunk = _crashing_flush
+    try:
+        try:
+            run_sweep(
+                df, results_path=results_path, max_window=5, n_workers=1,
+                slippage_bp=5.0, flush_every=3,
+            )
+        except RuntimeError as e:
+            assert "simulated" in str(e)
+    finally:
+        mod._flush_chunk = real_flush
+
+    # The load-bearing assertion: parquet exists, fingerprint exists.
+    assert results_path.exists(), "first chunk should have flushed"
+    assert fp_path.exists(), (
+        "fingerprint must be written BEFORE first flush so a crash here "
+        "is still resumable (codex iter-1 [P1])"
+    )
+
+    # Resume must succeed (no SweepInputMismatchError) and fill the rest.
+    run_sweep(
+        df, results_path=results_path, max_window=5, n_workers=1,
+        slippage_bp=5.0, flush_every=3,
+    )
+    full = pd.read_parquet(results_path)
+    assert len(full) == 25
+    keys = full[["buy_S", "sell_S"]]
+    assert not keys.duplicated().any()
+
+
 # ---------------------------------------------------------------------------
 # strategy_id + dedup
 # ---------------------------------------------------------------------------

@@ -496,6 +496,15 @@ def run_sweep(
         _write_sweep_fingerprint(results_path, fp)
         return results_path
 
+    # Crash-safety: stamp the fingerprint BEFORE the first parquet flush so a
+    # mid-sweep interrupt can still be resumed. Without this, the very first
+    # _flush_chunk creates results.parquet, then a SIGINT/SIGKILL before the
+    # tail _write_sweep_fingerprint(...) leaves the cache in a "parquet exists
+    # but fingerprint missing" state — which run_sweep rejects as
+    # SweepInputMismatchError on the next invocation, defeating the resume path.
+    # (codex review iter-1 [P1])
+    _write_sweep_fingerprint(results_path, fp)
+
     n_workers = n_workers if n_workers is not None else 1
     pending: list[tuple] = []
     start = time.time()
