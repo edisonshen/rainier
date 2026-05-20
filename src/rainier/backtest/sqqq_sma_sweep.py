@@ -426,6 +426,12 @@ def _read_sweep_fingerprint(results_path: Path) -> str | None:
 
 
 def _write_sweep_fingerprint(results_path: Path, fp: str) -> None:
+    # Ensure the cache dir exists. We're called BEFORE _flush_chunk on the
+    # first sweep (so a mid-sweep crash leaves a resumable cache — see
+    # run_sweep below), which means the parent dir may not exist yet on a
+    # clean checkout. Without this mkdir, fp_path.write_text raises
+    # FileNotFoundError on first use. (codex review iter-2 [P1])
+    results_path.parent.mkdir(parents=True, exist_ok=True)
     fp_path = results_path.with_suffix(".fingerprint.txt")
     tmp = fp_path.with_suffix(".txt.tmp")
     tmp.write_text(fp)

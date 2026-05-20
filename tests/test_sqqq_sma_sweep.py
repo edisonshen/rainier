@@ -317,6 +317,33 @@ def test_sweep_resumability(tmp_path: Path):
     assert not keys.duplicated().any()
 
 
+def test_sweep_fingerprint_works_on_fresh_checkout(tmp_path: Path):
+    """Regression: codex review iter-2 [P1].
+
+    The fix that stamps the fingerprint BEFORE the first flush would crash
+    with ``FileNotFoundError`` on a clean checkout where the cache dir
+    doesn't exist yet — the fingerprint write happens before any flush has
+    had a chance to mkdir the parent. `_write_sweep_fingerprint` must
+    create the parent itself for this to work.
+    """
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    # Deliberately nest into a non-existent dir to simulate fresh checkout.
+    nested_dir = tmp_path / "nonexistent" / "cache" / "sqqq_sma"
+    assert not nested_dir.exists()
+    results_path = nested_dir / "results.parquet"
+
+    run_sweep(
+        df, results_path=results_path, max_window=5, n_workers=1,
+        slippage_bp=5.0, flush_every=5,
+    )
+    assert results_path.exists()
+    assert results_path.with_suffix(".fingerprint.txt").exists()
+    out = pd.read_parquet(results_path)
+    assert len(out) == 25
+
+
 def test_sweep_fingerprint_stamped_before_first_flush(tmp_path: Path):
     """Regression: codex review iter-1 [P1].
 
