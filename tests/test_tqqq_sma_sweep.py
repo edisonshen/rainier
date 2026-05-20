@@ -22,6 +22,8 @@ from rainier.backtest.tqqq_sma_sweep import (
     LONG_TQQQ,
     SHORT_SQQQ,
     SweepInputMismatchError,
+    compute_strategy_id,
+    dedup_by_strategy_id,
     iter_phase1_combos,
     precompute_sma_signals,
     run_backtest,
@@ -406,3 +408,192 @@ def test_render_report_handles_missing_walkforward(tmp_path: Path):
     assert "top-50 winners" in html
     # Section 7 should show the missing-walkforward fallback
     assert "Walk-forward parquet not found" in html
+
+
+# ---------------------------------------------------------------------------
+# Phase-4 polish: strategy_id fingerprint + leaderboard dedup
+# ---------------------------------------------------------------------------
+
+
+def test_compute_strategy_id_deterministic_and_uint64():
+    """Identical inputs → identical id; small perturbations → different id."""
+    a = compute_strategy_id(4.02, 312, 0.5123, 0.2456)
+    b = compute_strategy_id(4.02, 312, 0.5123, 0.2456)
+    assert a == b
+    assert 0 <= a < 2**64
+    # 2-dp precision on final_value: 4.024 rounds to 4.02 → same id
+    assert compute_strategy_id(4.024, 312, 0.5123, 0.2456) == a
+    # Distinct trade count → distinct id
+    assert compute_strategy_id(4.02, 313, 0.5123, 0.2456) != a
+
+
+def test_dormant_short_legs_share_strategy_id(tmp_path: Path):
+    """Two combos with dormant short legs (buy_S=1 makes SQQQ entry condition
+    structurally False) must collapse to the same strategy_id when buy_T/sell_T
+    are held fixed and only sell_S varies.
+
+    With buy_S=1, the short-leg signal is ``QQQ_close < SMA(1) = QQQ_close``
+    — always False — so the short leg never fires regardless of sell_S. Two
+    combos that differ only in sell_S must produce identical equity curves
+    and therefore the same strategy_id.
+    """
+    n = 80
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # max_window=5 so combos (22,44,1,1) and (22,44,1,5) are out of reach;
+    # use max_window=10 with combos (3,5,1,1) and (3,5,1,5) instead. The
+    # spec's example used (22,44,1,1) and (22,44,1,5); same principle.
+    run_sweep(
+        df, results_path=results_path, max_window=10, n_workers=1,
+        slippage_bp=5.0, flush_every=50,
+    )
+    out = pd.read_parquet(results_path)
+    assert "strategy_id" in out.columns
+    a = out[(out.buy_T == 3) & (out.sell_T == 5) & (out.buy_S == 1) & (out.sell_S == 1)]
+    b = out[(out.buy_T == 3) & (out.sell_T == 5) & (out.buy_S == 1) & (out.sell_S == 5)]
+    assert len(a) == 1 and len(b) == 1
+    assert int(a.iloc[0]["strategy_id"]) == int(b.iloc[0]["strategy_id"])
+
+
+def test_dedup_by_strategy_id_returns_one_per_group(tmp_path: Path):
+    """Dedup returns exactly one row per unique strategy_id, and
+    n_equivalent sums back to the input row count."""
+    n = 80
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    run_sweep(
+        df, results_path=results_path, max_window=10, n_workers=1,
+        slippage_bp=5.0, flush_every=50,
+    )
+    raw = pd.read_parquet(results_path)
+    deduped = dedup_by_strategy_id(raw)
+    # One row per unique strategy_id
+    assert len(deduped) == raw["strategy_id"].nunique()
+    assert not deduped["strategy_id"].duplicated().any()
+    # n_equivalent is the size of each equivalence class
+    assert int(deduped["n_equivalent"].sum()) == len(raw)
+    # Representative tuple is the lexicographic min within each group
+    for sid, grp in raw.groupby("strategy_id"):
+        rep = deduped[deduped["strategy_id"] == sid].iloc[0]
+        keys = grp[["buy_T", "sell_T", "buy_S", "sell_S"]].apply(tuple, axis=1).tolist()
+        expected_min = min(keys)
+        actual = (int(rep.buy_T), int(rep.sell_T), int(rep.buy_S), int(rep.sell_S))
+        assert actual == expected_min, f"sid={sid}: rep {actual} != lex-min {expected_min}"
+
+
+def test_dedup_raises_when_strategy_id_missing():
+    """A v1-schema parquet (no strategy_id column) must be rejected with a
+    clear KeyError pointing at the migration path."""
+    import pytest
+
+    df = pd.DataFrame({
+        "buy_T": [1, 2], "sell_T": [1, 2], "buy_S": [1, 2], "sell_S": [1, 2],
+        "final_value": [1.0, 2.0], "n_trades": [0, 5],
+        "time_in_long": [0.0, 0.5], "time_in_short": [0.0, 0.3],
+    })
+    with pytest.raises(KeyError, match="strategy_id"):
+        dedup_by_strategy_id(df)
+
+
+def test_strategy_id_schema_version_invalidates_legacy_parquet(tmp_path: Path):
+    """A v1 results.parquet (no strategy_id column) must be rejected by the
+    sweep fingerprint even when prices/slippage/max_window are identical —
+    the schema version is part of the fingerprint.
+    """
+    import pytest
+
+    from rainier.backtest.tqqq_sma_sweep import _RESULTS_SCHEMA_VERSION
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Simulate a legacy v1-schema parquet on disk: write the file by hand
+    # with the OLD fingerprint string that did NOT include schema=...
+    import hashlib as _hashlib
+
+    legacy_fp = _hashlib.sha256()
+    legacy_fp.update(df[["qqq", "tqqq", "sqqq"]].sort_index().to_parquet())
+    legacy_fp.update(b"|slippage_bp=5.000000|max_window=3")
+    fp_str = legacy_fp.hexdigest()
+    # Write a minimal v1 parquet (no strategy_id) and the legacy fingerprint
+    legacy_df = pd.DataFrame({
+        "buy_T": [1], "sell_T": [1], "buy_S": [1], "sell_S": [1],
+        "final_value": [1.0], "sharpe": [0.0], "max_dd": [0.0], "calmar": [0.0],
+        "n_trades": [0], "time_in_long": [0.0], "time_in_short": [0.0],
+        "time_in_cash": [1.0],
+    })
+    legacy_df.to_parquet(results_path, index=False)
+    results_path.with_suffix(".fingerprint.txt").write_text(fp_str)
+
+    # New sweep with same inputs must refuse because the schema version flipped.
+    with pytest.raises(SweepInputMismatchError, match="different inputs"):
+        run_sweep(
+            df, results_path=results_path, max_window=3, n_workers=1,
+            slippage_bp=5.0, flush_every=10,
+        )
+    # Sanity: the schema version constant is non-empty (so a future change
+    # to it requires a deliberate bump, not an accidental empty string).
+    assert _RESULTS_SCHEMA_VERSION
+    assert "strategy_id" in _RESULTS_SCHEMA_VERSION
+
+
+def test_report_dormant_cells_render_as_dash(tmp_path: Path):
+    """For top-50 rows where ``time_in_short == 0``, the buy_S/sell_S cells
+    must render as the literal string ``-`` in the HTML output.
+
+    The synthetic universe in this test is a monotone uptrend, so every
+    combo's short leg should be dormant (time_in_short == 0). The resulting
+    HTML must contain rows with `-` in the buy_S/sell_S positions and the
+    `LONG-only` type label.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 200
+    qqq = 100.0 * (1.005 ** np.arange(n))  # strong uptrend → short leg dormant
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=50,
+    )
+
+    raw = pd.read_parquet(results_path)
+    # In this universe most combos should be LONG-only (time_in_short == 0)
+    long_only = raw[(raw["time_in_short"] == 0.0) & (raw["time_in_long"] > 0.0)]
+    assert len(long_only) > 0, "synthetic uptrend should produce LONG-only combos"
+
+    out_html = tmp_path / "report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",  # missing → graceful
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+    )
+    html = out_html.read_text(encoding="utf-8")
+    # Dormant-cell marker should appear in the table for buy_S/sell_S
+    assert "LONG-only" in html, "type column should label dormant-short rows"
+    # The literal "-" cell (right-aligned num class) should appear for the
+    # dormant short-leg columns; check at least one such row exists.
+    assert ">-</td>" in html or ">-<" in html
+
+
+def test_report_strategy_type_classifier():
+    """Direct unit test of the type classifier helper — keeps the
+    LONG-only / SHORT-only / BOTH-legs convention pinned even if the
+    rendering changes later."""
+    from rainier.backtest.tqqq_sma_report import _strategy_type
+
+    assert _strategy_type(0.0, 0.5) == "SHORT-only"
+    assert _strategy_type(0.5, 0.0) == "LONG-only"
+    assert _strategy_type(0.4, 0.4) == "BOTH-legs"
+    # Pure-cash (neither leg fired) is BOTH-legs, NOT LONG-only or SHORT-only
+    # — neither leg is structurally dormant, just no signal fired.
+    assert _strategy_type(0.0, 0.0) == "BOTH-legs"

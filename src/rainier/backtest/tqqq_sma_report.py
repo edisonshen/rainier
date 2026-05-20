@@ -33,8 +33,40 @@ import plotly.graph_objects as go
 from rainier.backtest.tqqq_sma_sweep import (
     LONG_TQQQ,
     SHORT_SQQQ,
+    dedup_by_strategy_id,
     precompute_sma_signals,
 )
+
+
+def _strategy_type(time_in_long: float, time_in_short: float) -> str:
+    """Classify a strategy by which legs actually fired.
+
+    A leg that never fires (time fraction == 0 exactly) is dormant. With
+    phase-1 constraints + validity gating this happens for entire sub-grids:
+    e.g. any combo with buy_S=1 has a structurally-false short-entry signal,
+    so the short leg never trades regardless of sell_S.
+
+    Returns one of: ``LONG-only`` | ``SHORT-only`` | ``BOTH-legs``.
+    A strategy that is 100% cash is reported as ``BOTH-legs`` since neither
+    leg's dormancy is structural — the call is "neither signal fired in this
+    universe", not "this leg can never fire".
+    """
+    if time_in_short == 0.0 and time_in_long > 0.0:
+        return "LONG-only"
+    if time_in_long == 0.0 and time_in_short > 0.0:
+        return "SHORT-only"
+    return "BOTH-legs"
+
+
+def _dormant_cell(value: int, dormant: bool) -> str:
+    """Render an integer param cell, or a literal ``-`` when the leg is dormant.
+
+    Used by the top-50 table to make it visually obvious that e.g. sell_S
+    has no effect on a LONG-only strategy. Pre-dedup the leaderboard could
+    show 50 rows whose differences were entirely cosmetic; post-dedup the
+    surviving row from each group must still telegraph that fact at a glance.
+    """
+    return "-" if dormant else f"{int(value)}"
 
 # Teal accent matches the design-doc template palette
 _TEAL = "#0f766e"
@@ -352,7 +384,14 @@ def _section(num: int, title: str, anchor: str, body: str) -> str:
 
 
 def _top50_table(top: pd.DataFrame, wf: pd.DataFrame) -> str:
-    """Top-50 table; highlight in-sample vs out-of-sample delta from walkforward."""
+    """Top-50 table; highlight in-sample vs out-of-sample delta from walkforward.
+
+    Each row is one DEDUPED strategy (unique equity curve). Dormant-leg cells
+    render as ``-`` instead of an arbitrary parameter value to make it obvious
+    that the SMA window is structurally irrelevant for that row (e.g. sell_S
+    on a LONG-only strategy). The ``type`` column classifies the row, and
+    ``n_equivalent`` shows how many grid combos collapsed into it.
+    """
     # Top-50 keyed by combo. Pull WF columns when present.
     # wf may be the empty `pd.DataFrame()` fallback when walkforward parquet is
     # missing — guard the indexing so the table still renders (just without
@@ -365,8 +404,11 @@ def _top50_table(top: pd.DataFrame, wf: pd.DataFrame) -> str:
     else:
         wf_indexed = {}
 
+    has_neq = "n_equivalent" in top.columns
+
     rows = ["<table class=\"data\"><thead><tr>"
-            "<th>#</th><th>buy_T</th><th>sell_T</th><th>buy_S</th><th>sell_S</th>"
+            "<th>#</th><th>type</th><th>buy_T</th><th>sell_T</th><th>buy_S</th><th>sell_S</th>"
+            "<th>n_eq</th>"
             "<th>final×</th><th>Sharpe</th><th>max_dd</th><th>Calmar</th>"
             "<th>trades</th><th>%long</th><th>%short</th>"
             "<th>train×</th><th>test×</th><th>delta</th>"
@@ -383,11 +425,23 @@ def _top50_table(top: pd.DataFrame, wf: pd.DataFrame) -> str:
         else:
             delta_cls = "num"
             delta_s = "—"
+
+        long_dormant = float(row.time_in_long) == 0.0
+        short_dormant = float(row.time_in_short) == 0.0
+        type_str = _strategy_type(float(row.time_in_long), float(row.time_in_short))
+        bT_s = _dormant_cell(row.buy_T, long_dormant)
+        sT_s = _dormant_cell(row.sell_T, long_dormant)
+        bS_s = _dormant_cell(row.buy_S, short_dormant)
+        sS_s = _dormant_cell(row.sell_S, short_dormant)
+        n_eq = int(getattr(row, "n_equivalent")) if has_neq else 1
+
         rows.append(
             f"<tr>"
             f"<td class=\"num\">{i}</td>"
-            f"<td class=\"num\">{int(row.buy_T)}</td><td class=\"num\">{int(row.sell_T)}</td>"
-            f"<td class=\"num\">{int(row.buy_S)}</td><td class=\"num\">{int(row.sell_S)}</td>"
+            f"<td>{type_str}</td>"
+            f"<td class=\"num\">{bT_s}</td><td class=\"num\">{sT_s}</td>"
+            f"<td class=\"num\">{bS_s}</td><td class=\"num\">{sS_s}</td>"
+            f"<td class=\"num\">{n_eq:,}</td>"
             f"<td class=\"num\">{row.final_value:.2f}×</td>"
             f"<td class=\"num\">{row.sharpe:.2f}</td>"
             f"<td class=\"num\">{row.max_dd*100:.1f}%</td>"
@@ -459,10 +513,21 @@ def render_report(
     walkforward_path = Path(walkforward_path)
     output_path = Path(output_path)
 
-    df = pd.read_parquet(results_path)
+    df_raw = pd.read_parquet(results_path)
     wf = pd.read_parquet(walkforward_path) if walkforward_path.exists() else pd.DataFrame()
 
-    n_combos = len(df)
+    n_combos = len(df_raw)
+    # Dedup by equity-curve fingerprint before any leaderboard slicing so the
+    # top-50 contains 50 truly-distinct strategies, not 50 copies of one
+    # underlying strategy with dormant parameters varying.
+    df = dedup_by_strategy_id(df_raw)
+    n_distinct = len(df)
+    # Sanity invariant: dedup preserves the total combo count via n_equivalent
+    # (one row per group, summed weights == input row count).
+    assert int(df["n_equivalent"].sum()) == n_combos, (
+        f"dedup lost rows: n_equivalent sum = {int(df['n_equivalent'].sum())}, "
+        f"expected {n_combos}"
+    )
     top50 = df.nlargest(50, "final_value").reset_index(drop=True)
     top_combos = [(int(r.buy_T), int(r.sell_T), int(r.buy_S), int(r.sell_S))
                   for r in top50.itertuples()]
@@ -484,12 +549,17 @@ def render_report(
         "_curve::1/N(QQQ, TQQQ, SQQQ)": one_n_curve,
     }
 
-    # Figures
+    # Figures. Heatmaps + distribution operate on the FULL undeduped grid
+    # (df_raw): slicing the 4-D grid by fixed buy_S/sell_S requires every
+    # combo to be present, and the distribution histogram is "what does the
+    # full search surface look like" — not "what does it look like after we
+    # collapse equivalents". Only the leaderboard tables and equity-curve
+    # replay use the deduped df.
     fig_equity = _equity_overlay(prices, top_combos, slippage_bp=slippage_bp, max_window=max_window)
-    fig_heatT = _heatmap_buyT_sellT(df, fixed_buyS=winner[2], fixed_sellS=winner[3])
-    fig_heatS = _heatmap_buyS_sellS(df, fixed_buyT=winner[0], fixed_sellT=winner[1])
+    fig_heatT = _heatmap_buyT_sellT(df_raw, fixed_buyS=winner[2], fixed_sellS=winner[3])
+    fig_heatS = _heatmap_buyS_sellS(df_raw, fixed_buyT=winner[0], fixed_sellT=winner[1])
     fig_dist = _distribution_hist(
-        df,
+        df_raw,
         baselines={k: v for k, v in baselines.items() if not k.startswith("_curve::")},
     )
     fig_wf = _walkforward_scatter(wf) if len(wf) else None
@@ -516,7 +586,8 @@ def render_report(
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     parts.append(
         f'<header><h1>TQQQ/SQQQ SMA-grid backtest</h1>'
-        f'<p class="subtitle">Phase 1 trend-following sweep · {n_combos:,} combos · '
+        f'<p class="subtitle">Phase 1 trend-following sweep · {n_combos:,} combos '
+        f'({n_distinct:,} distinct equity curves) · '
         f'data {prices.index[0].date()} → {prices.index[-1].date()} · {today}</p></header>'
     )
 
@@ -546,7 +617,15 @@ def render_report(
 
     # 2. Top-50
     top50_body = (
-        '<p>Sorted by final equity multiple. <code>delta</code> is the '
+        '<p>Sorted by final equity multiple. Each row is one DISTINCT equity '
+        'curve — combos sharing a curve (e.g. dormant short-leg parameters '
+        'varying freely when <code>buy_S=1</code> structurally never fires) '
+        'are collapsed by a deterministic equity-curve fingerprint. '
+        '<code>n_eq</code> is the size of the equivalence class; '
+        '<code>type</code> classifies which legs actually traded; dormant '
+        f'parameters render as <code>-</code>. Of the {n_combos:,} grid '
+        f'combos, {n_distinct:,} produce distinct equity curves.</p>'
+        '<p><code>delta</code> is the '
         '<code>(test − train) / train</code> ratio from the walk-forward in '
         '§7 — green = generalizes up, red = generalizes down.</p>'
         + _top50_table(top50, wf)
@@ -591,10 +670,11 @@ def render_report(
     # 7. Walk-forward
     if fig_wf is not None:
         wf_body = (
-            '<p>For each of the top-' + str(len(wf)) + ' combos by full-sample '
-            'final value, we re-ran the backtest on <em>train</em> (2010-02 → '
-            '2018-12) and <em>test</em> (2019-01 → today). Points hugging the '
-            'diagonal generalize; points dropping below it overfit.</p>'
+            '<p>For each of the top-' + str(len(wf)) + ' DEDUPED combos by '
+            'full-sample final value (one representative per equity-curve '
+            'equivalence class), we re-ran the backtest on <em>train</em> '
+            '(2010-02 → 2018-12) and <em>test</em> (2019-01 → today). Points '
+            'hugging the diagonal generalize; points dropping below it overfit.</p>'
             '<div class="figure">' + _fig_to_div(fig_wf, include_js=False) + '</div>'
         )
         # Quick generalization stat
@@ -654,6 +734,7 @@ def render_report(
         f'<tr><th>max_window</th><td>{max_window}</td></tr>'
         f'<tr><th>slippage</th><td>{slippage_bp:.2f} bp/transition</td></tr>'
         f'<tr><th>combos</th><td>{n_combos:,}</td></tr>'
+        f'<tr><th>distinct equity curves</th><td>{n_distinct:,}</td></tr>'
         '</tbody></table>'
         '<p class="meta">To reproduce: '
         '<code>uv run rainier sma-sweep --phase 1</code></p>'

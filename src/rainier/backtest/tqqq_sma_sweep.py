@@ -426,7 +426,41 @@ def _worker_init(
         run_backtest(above, valid, tqqq_ret, sqqq_ret, 1, 1, 1, 1, slippage_bp=slip)
 
 
-def _worker_run(combo: tuple[int, int, int, int]) -> tuple[int, int, int, int, float, float, float, float, int, float, float, float]:
+def compute_strategy_id(
+    final_value: float,
+    n_trades: int,
+    time_in_long: float,
+    time_in_short: float,
+) -> int:
+    """Deterministic uint64 fingerprint of an equity curve.
+
+    Two combos that produce the same final value, trade count, and time-in-leg
+    fractions (rounded to 2 dp on final_value and 4 dp on the time fractions)
+    almost certainly share the same equity curve — in practice this happens
+    whenever a dormant parameter varies freely (e.g. sell_S when buy_S=1
+    structurally never fires).
+
+    The hash is the SHA-256 of the canonical tuple representation, truncated
+    to 64 bits. Pure-python deterministic — does NOT rely on Python's runtime
+    hash randomization.
+
+    ASCII flow::
+
+        (fv≈, n, tL≈, tS≈) → repr → utf-8 → SHA-256 → first 8 bytes → uint64
+    """
+    key = (
+        round(float(final_value), 2),
+        int(n_trades),
+        round(float(time_in_long), 4),
+        round(float(time_in_short), 4),
+    )
+    digest = hashlib.sha256(repr(key).encode("utf-8")).digest()
+    # First 8 bytes interpreted big-endian → uint64. Plenty of entropy for
+    # leaderboard-level dedup; collisions on distinct curves are astronomical.
+    return int.from_bytes(digest[:8], "big", signed=False)
+
+
+def _worker_run(combo: tuple[int, int, int, int]) -> tuple[int, int, int, int, float, float, float, float, int, float, float, float, int]:
     ctx = _WORKER_CTX
     assert ctx is not None, "worker not initialized"
     bT, sT, bS, sS = combo
@@ -434,13 +468,16 @@ def _worker_run(combo: tuple[int, int, int, int]) -> tuple[int, int, int, int, f
         ctx.above, ctx.valid, ctx.tqqq_ret, ctx.sqqq_ret,
         bT, sT, bS, sS, slippage_bp=ctx.slippage_bp,
     )
-    return (bT, sT, bS, sS, *out)
+    final_value, _sharpe, _mdd, _calmar, n_trades, t_long, t_short, _t_cash = out
+    sid = compute_strategy_id(final_value, n_trades, t_long, t_short)
+    return (bT, sT, bS, sS, *out, sid)
 
 
 _RESULT_COLUMNS = [
     "buy_T", "sell_T", "buy_S", "sell_S",
     "final_value", "sharpe", "max_dd", "calmar",
     "n_trades", "time_in_long", "time_in_short", "time_in_cash",
+    "strategy_id",
 ]
 
 
@@ -452,6 +489,9 @@ def _flush_chunk(rows: list[tuple], results_path: Path) -> None:
     df_new = df_new.astype({
         "buy_T": np.int16, "sell_T": np.int16, "buy_S": np.int16, "sell_S": np.int16,
         "n_trades": np.int32,
+        # uint64 strategy_id — equity-curve fingerprint, used for leaderboard
+        # dedup downstream. Pandas/Arrow round-trips uint64 cleanly.
+        "strategy_id": np.uint64,
     })
     results_path.parent.mkdir(parents=True, exist_ok=True)
     if results_path.exists():
@@ -471,18 +511,29 @@ def _existing_combo_set(results_path: Path) -> set[tuple[int, int, int, int]]:
     return {(int(r.buy_T), int(r.sell_T), int(r.buy_S), int(r.sell_S)) for r in df.itertuples()}
 
 
+# Bumped whenever the results.parquet schema changes in a way that an old
+# parquet must be rejected (new column, changed dtype, changed semantics of
+# an existing column). Read into the sweep fingerprint so a stale parquet
+# from a prior schema is refused at sweep time.
+_RESULTS_SCHEMA_VERSION = "v2-strategy_id"
+
+
 def _sweep_fingerprint(prices: pd.DataFrame, slippage_bp: float, max_window: int) -> str:
     """SHA-256 of the sweep inputs that materially affect any combo's result.
 
     Used to invalidate ``results.parquet`` when the user reruns with different
-    prices (`--refresh-data`), slippage, or window bounds — otherwise the
-    resumability path would silently mix stale rows with new ones, poisoning
-    every downstream report.
+    prices (`--refresh-data`), slippage, window bounds, or the parquet schema
+    itself — otherwise the resumability path would silently mix stale rows
+    with new ones, poisoning every downstream report.
+
+    The schema version is part of the fingerprint so adding columns (e.g.
+    ``strategy_id``) automatically forces a clean rerun on existing caches.
     """
     h = hashlib.sha256()
     # Stable price hash: parquet bytes of qqq/tqqq/sqqq sorted by index
     h.update(prices[["qqq", "tqqq", "sqqq"]].sort_index().to_parquet())
     h.update(f"|slippage_bp={slippage_bp:.6f}|max_window={max_window}".encode())
+    h.update(f"|schema={_RESULTS_SCHEMA_VERSION}".encode())
     return h.hexdigest()
 
 
@@ -642,6 +693,42 @@ def run_sweep(
 # ---------------------------------------------------------------------------
 
 
+def dedup_by_strategy_id(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse equity-curve duplicates by ``strategy_id``.
+
+    For each unique ``strategy_id``, the representative row is the one with
+    the lexicographically smallest ``(buy_T, sell_T, buy_S, sell_S)`` tuple
+    — deterministic and independent of input row order. Adds an
+    ``n_equivalent`` column equal to the number of grid combos in each
+    group; the sum across the returned frame equals ``len(df)``.
+
+    Rationale: with phase-1 trend-following constraints, many grid combos
+    produce IDENTICAL equity curves because one or both legs are dormant
+    (e.g. buy_S=1 makes the SHORT_SQQQ entry condition
+    ``QQQ_close < SMA(1) = QQQ_close`` structurally False — sell_S varies
+    with zero effect on the curve). Without dedup, the top-50 leaderboard
+    can contain ~50 copies of one underlying strategy.
+
+    Raises
+    ------
+    KeyError
+        If ``strategy_id`` is missing — the caller must run the sweep with
+        the v2 schema first.
+    """
+    if "strategy_id" not in df.columns:
+        raise KeyError(
+            "strategy_id column missing — re-run `rainier sma-sweep` after "
+            "deleting the existing results.parquet to produce v2 schema rows."
+        )
+    counts = df.groupby("strategy_id", sort=False).size().rename("n_equivalent")
+    # Lexicographic min on the 4-tuple → pick the first row after a stable
+    # sort by (buy_T, sell_T, buy_S, sell_S).
+    sorted_df = df.sort_values(["buy_T", "sell_T", "buy_S", "sell_S"], kind="stable")
+    reps = sorted_df.drop_duplicates(subset="strategy_id", keep="first")
+    out = reps.merge(counts, on="strategy_id", how="left").reset_index(drop=True)
+    return out
+
+
 def walk_forward_top_n(
     prices: pd.DataFrame,
     results_path: Path = RESULTS_CACHE_PATH,
@@ -650,12 +737,16 @@ def walk_forward_top_n(
     slippage_bp: float = 5.0,
     max_window: int = 60,
 ) -> pd.DataFrame:
-    """Rerun the top-N by ``final_value`` on a train/test split.
+    """Rerun the deduped top-N by ``final_value`` on a train/test split.
 
-    Adds ``final_value_train`` and ``final_value_test`` columns to the
-    returned DataFrame (only for the top-N rows, not the whole 3.35M).
+    The dedup step is applied BEFORE the top-N selection so that the
+    walk-forward set is N truly distinct strategies (one per equity curve)
+    rather than N near-copies of the same strategy with dormant parameters
+    varying. Adds ``final_value_train`` and ``final_value_test`` columns to
+    the returned DataFrame (only for the top-N rows, not the whole 3.35M).
     """
     df = pd.read_parquet(results_path)
+    df = dedup_by_strategy_id(df)
     top = df.nlargest(top_n, "final_value").reset_index(drop=True)
 
     split = pd.Timestamp(split_date)
