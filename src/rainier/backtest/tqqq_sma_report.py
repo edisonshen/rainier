@@ -191,12 +191,20 @@ def _heatmap_buyS_sellS(df: pd.DataFrame, fixed_buyT: int, fixed_sellT: int) -> 
 
 
 def _distribution_hist(df: pd.DataFrame, baselines: dict[str, float]) -> go.Figure:
-    # final_value can span 0 → many thousands; log10 axis for readability
+    # final_value can span 0 → many thousands; log10 axis for readability.
+    # Pre-bin in numpy to keep the embedded plotly payload to ~120 floats
+    # (instead of 3.35M points). Without this the HTML file is ~50 MB.
     vals = df["final_value"].to_numpy()
     log_vals = np.log10(np.clip(vals, 1e-3, None))
+    counts, edges = np.histogram(log_vals, bins=120)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    width = float(edges[1] - edges[0])
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=log_vals, nbinsx=120, marker_color=_TEAL,
-                               name="3.35M combos", opacity=0.85))
+    fig.add_trace(go.Bar(
+        x=centers, y=counts, width=width,
+        marker_color=_TEAL, opacity=0.85, name="3.35M combos",
+        hovertemplate="log10(final)=%{x:.2f}<br>count=%{y:,}<extra></extra>",
+    ))
     for name, v in baselines.items():
         if v <= 0:
             continue
