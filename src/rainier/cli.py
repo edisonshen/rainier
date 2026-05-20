@@ -3187,3 +3187,131 @@ def sma_sweep(
             max_window=max_window,
         )
         click.echo("done.")
+
+
+# ---------------------------------------------------------------------------
+# sqqq-sma-sweep — SQQQ-only timing backtest (2-state, 60×60 grid)
+# ---------------------------------------------------------------------------
+
+
+@cli.command("sqqq-sma-sweep")
+@click.option("--max-window", type=int, default=60, show_default=True,
+              help="Largest SMA window to sweep over.")
+@click.option("--refresh-data", is_flag=True, default=False,
+              help="Force a fresh yfinance download via the TQQQ helper "
+                   "(this sweep shares the QQQ/SQQQ price cache).")
+@click.option("--n-workers", type=int, default=1, show_default=True,
+              help="Pool size. Default 1 — the 3,600-combo grid runs "
+                   "single-process in ~1 sec after JIT warm-up.")
+@click.option("--flush-every", type=int, default=1000, show_default=True,
+              help="Flush results to parquet every N completed combos.")
+@click.option("--slippage-bp", type=float, default=5.0, show_default=True,
+              help="Round-trip slippage per state transition, basis points.")
+@click.option("--report/--no-report", default=True, show_default=True,
+              help="Render the HTML report after the sweep completes.")
+@click.option("--report-path", type=click.Path(),
+              default="docs/sqqq-sma-backtest-report.html", show_default=True,
+              help="Output path for the HTML report.")
+@click.option("--top-n-walkforward", type=int, default=50, show_default=True,
+              help="How many top-by-final_value DEDUPED combos to walk-forward.")
+def sqqq_sma_sweep(
+    max_window: int,
+    refresh_data: bool,
+    n_workers: int,
+    flush_every: int,
+    slippage_bp: float,
+    report: bool,
+    report_path: str,
+    top_n_walkforward: int,
+) -> None:
+    """Sweep the SQQQ-only timing strategy over the QQQ-SMA grid.
+
+    2-state machine (CASH | LONG_SQQQ), 2 parameters (buy_S, sell_S), full
+    unconstrained 60×60 grid = 3,600 combos. Distinct from the TQQQ/SQQQ
+    rotation sweep (``rainier sma-sweep``) which uses a 4-parameter grid;
+    this is a standalone bet on "can timing SQQQ entry/exit beat cash
+    over 2010-2026, when SQQQ B&H goes to ~zero?"
+
+    Reuses the QQQ/SQQQ price cache populated by ``rainier sma-sweep``. If
+    that cache is missing, ``--refresh-data`` triggers a fresh fetch through
+    the TQQQ helper (which still downloads TQQQ alongside; we just drop it).
+    """
+    import time as _time
+
+    from rainier.backtest.sqqq_sma_sweep import (
+        SQQQ_PRICES_CACHE_PATH,
+        SQQQ_RESULTS_CACHE_PATH,
+        load_price_data,
+        run_sweep,
+        walk_forward_top_n,
+    )
+    from rainier.backtest.tqqq_sma_sweep import fetch_prices
+
+    if refresh_data or not SQQQ_PRICES_CACHE_PATH.exists():
+        click.echo("Fetching prices (QQQ/SQQQ; TQQQ alongside, will be dropped)…")
+        fetch_prices(refresh=refresh_data)
+    prices = load_price_data()
+    click.echo(f"  rows: {len(prices)}  range: {prices.index[0].date()} → {prices.index[-1].date()}")
+
+    click.echo(f"Running SQQQ-only sweep "
+               f"(max_window={max_window}, slippage={slippage_bp} bp, {max_window**2} combos)…")
+    t0 = _time.time()
+    results_path = run_sweep(
+        prices,
+        results_path=SQQQ_RESULTS_CACHE_PATH,
+        max_window=max_window,
+        n_workers=n_workers,
+        slippage_bp=slippage_bp,
+        flush_every=flush_every,
+        progress=True,
+    )
+    elapsed = _time.time() - t0
+    click.echo(f"Sweep done in {elapsed:.2f} sec → {results_path}")
+
+    click.echo(f"Walk-forward top-{top_n_walkforward}…")
+    top_wf = walk_forward_top_n(
+        prices,
+        results_path=results_path,
+        top_n=top_n_walkforward,
+        slippage_bp=slippage_bp,
+        max_window=max_window,
+    )
+    top_wf_path = results_path.parent / "top_walkforward.parquet"
+    top_wf.to_parquet(top_wf_path, index=False)
+    click.echo(f"  → {top_wf_path}")
+
+    if report:
+        from rainier.backtest.sqqq_sma_report import render_report
+
+        # Best-effort lookup of the TQQQ Phase-1 winner for §3 baseline context.
+        # If the parquet isn't present we just skip the row (the report handles None).
+        tqqq_phase1_winner_final: float | None = None
+        try:
+            from rainier.backtest.tqqq_sma_sweep import (
+                RESULTS_CACHE_PATH as TQQQ_RESULTS,
+            )
+            from rainier.backtest.tqqq_sma_sweep import (
+                dedup_by_strategy_id as tqqq_dedup,
+            )
+            if TQQQ_RESULTS.exists():
+                tdf = pd.read_parquet(TQQQ_RESULTS)
+                # Phase-1 subset: sell >= buy on both legs
+                p1 = tdf[(tdf["sell_T"] >= tdf["buy_T"]) & (tdf["sell_S"] >= tdf["buy_S"])]
+                if len(p1):
+                    p1d = tqqq_dedup(p1)
+                    tqqq_phase1_winner_final = float(p1d.nlargest(1, "final_value").iloc[0]["final_value"])
+        except Exception:
+            tqqq_phase1_winner_final = None
+
+        click.echo(f"Rendering report → {report_path}")
+        render_report(
+            prices=prices,
+            results_path=results_path,
+            walkforward_path=top_wf_path,
+            output_path=Path(report_path),
+            sweep_wall_seconds=elapsed,
+            slippage_bp=slippage_bp,
+            max_window=max_window,
+            tqqq_phase1_winner_final=tqqq_phase1_winner_final,
+        )
+        click.echo("done.")

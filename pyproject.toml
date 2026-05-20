@@ -90,6 +90,10 @@ ignore = ["E501", "E741", "N806"]
 "src/rainier/backtest/tqqq_sma_sweep.py" = ["N802", "N803"]
 "src/rainier/backtest/tqqq_sma_report.py" = ["N802", "N803"]
 "tests/test_tqqq_sma_sweep.py" = ["N802", "N803", "N806"]
+# SQQQ-only sweep — same spec-named identifiers (buy_S, sell_S).
+"src/rainier/backtest/sqqq_sma_sweep.py" = ["N802", "N803"]
+"src/rainier/backtest/sqqq_sma_report.py" = ["N802", "N803"]
+"tests/test_sqqq_sma_sweep.py" = ["N802", "N803", "N806"]
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.30,<2"]
