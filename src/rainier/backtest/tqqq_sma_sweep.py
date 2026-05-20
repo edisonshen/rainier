@@ -187,12 +187,18 @@ def run_backtest(
         ``calmar`` = annualized return / max_dd (NaN if no drawdown observed).
 
         ``curve_hash`` is a uint64 polynomial rolling hash of the daily
-        end-of-day state sequence (CASH/LONG/SHORT). Two combos that produce
-        IDENTICAL state sequences (and therefore identical equity curves on
-        the same input returns) have the same hash; distinct sequences
-        collide with probability ~2**-64. This is the load-bearing input
-        to ``compute_strategy_id`` — it's a true path-equivalence signal,
-        not a rounded-summary heuristic.
+        (end-of-day state, cumulative n_trades) pair sequence. Two combos
+        that produce IDENTICAL (state, trade-count) trajectories — and
+        therefore identical equity curves on the same input returns —
+        have the same hash; distinct trajectories collide with probability
+        ~2**-64. This is the load-bearing input to ``compute_strategy_id``
+        — a true path-equivalence signal, not a rounded-summary heuristic.
+
+        Mixing ``n_trades`` into the hash matters because a combo can
+        exit and re-enter the same side on the same bar (e.g. sell_T
+        triggers then buy_T triggers within day d), producing the same
+        end-of-day state as a no-exit combo but paying 2× slippage. The
+        cumulative trade count captures that divergence.
     """
     n_days = above.shape[0]
     slip = slippage_bp * 1e-4  # bps → fraction of equity per transition
@@ -220,13 +226,23 @@ def run_backtest(
     daily = np.empty(n_days, dtype=np.float64)
     daily[0] = 0.0
 
-    # Polynomial rolling hash over the end-of-day state sequence. uint64
+    # Polynomial rolling hash over the daily (state, n_trades) pair. uint64
     # arithmetic wraps naturally in numba; xor-then-multiply by an
     # odd prime gives ~uniform distribution over distinct sequences.
     # FNV-1a prime is 0x100000001b3 = 1099511628211 — battle-tested choice
-    # for byte-stream hashing; we treat the per-day state (0/1/2) as a byte.
-    # Two combos with identical state sequences → identical curve_hash;
-    # distinct sequences collide with probability ~2**-64.
+    # for byte-stream hashing.
+    #
+    # Why (state, n_trades) and not just state? Codex review iter-2 [P1]:
+    # a combo can exit and re-enter the same side on the same bar (e.g.
+    # sell_T fires then buy_T fires within day d), producing the same
+    # end-of-day state as a no-exit combo but paying 2× slippage. End-of-day
+    # state alone is NOT sufficient to distinguish these equity curves;
+    # the cumulative n_trades at end of day captures the missing transition
+    # count and therefore the slippage drag. Together (state, n_trades) is
+    # a true path-identity signal for the equity curve given fixed inputs.
+    #
+    # Two combos with identical (state, n_trades) sequences → identical
+    # curve_hash; distinct sequences collide with probability ~2**-64.
     curve_hash = np.uint64(0xcbf29ce484222325)  # FNV-1a 64-bit offset basis
     _fnv_prime = np.uint64(0x100000001b3)
 
@@ -249,8 +265,10 @@ def run_backtest(
         short_days += 1
     else:
         cash_days += 1
-    # FNV-1a step: xor state byte, then multiply by prime (uint64 wraps).
+    # FNV-1a steps on (state, n_trades). Mixing n_trades after state captures
+    # same-bar exit+re-entry churn that end-of-day state alone misses.
     curve_hash = (curve_hash ^ np.uint64(state)) * _fnv_prime
+    curve_hash = (curve_hash ^ np.uint64(n_trades)) * _fnv_prime
 
     for d in range(1, n_days):
         prev_equity = equity
@@ -303,8 +321,11 @@ def run_backtest(
             short_days += 1
         else:
             cash_days += 1
-        # FNV-1a step on end-of-day state.
+        # FNV-1a steps on (end-of-day state, cumulative n_trades). The
+        # n_trades mix-in distinguishes same-bar churn from no-exit (see
+        # codex iter-2 [P1] notes above where curve_hash is initialized).
         curve_hash = (curve_hash ^ np.uint64(state)) * _fnv_prime
+        curve_hash = (curve_hash ^ np.uint64(n_trades)) * _fnv_prime
 
     # Sharpe (annualized, rf=0)
     mean = 0.0
@@ -531,7 +552,7 @@ def _existing_combo_set(results_path: Path) -> set[tuple[int, int, int, int]]:
 # parquet must be rejected (new column, changed dtype, changed semantics of
 # an existing column). Read into the sweep fingerprint so a stale parquet
 # from a prior schema is refused at sweep time.
-_RESULTS_SCHEMA_VERSION = "v3-curve-hash-strategy_id"
+_RESULTS_SCHEMA_VERSION = "v4-curve-hash-with-trades-strategy_id"
 
 
 def _sweep_fingerprint(prices: pd.DataFrame, slippage_bp: float, max_window: int) -> str:

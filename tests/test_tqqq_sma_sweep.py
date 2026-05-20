@@ -478,6 +478,46 @@ def test_curve_hash_distinguishes_different_paths():
     assert compute_strategy_id(curve_hash_a) != compute_strategy_id(curve_hash_b)
 
 
+def test_curve_hash_distinguishes_same_bar_churn():
+    """codex iter-2 [P1] regression: end-of-day state alone is NOT sufficient
+    to distinguish equity curves when a combo exits and re-enters the same
+    side on the same bar.
+
+    Two combos in this test are constructed to produce different n_trades
+    even when the daily end-of-day state sequence is similar. If the hash
+    mixed only state and not n_trades, churning combos could collide with
+    quieter ones. With n_trades mixed in, the curve_hashes diverge.
+
+    We use a price universe that crosses an SMA threshold frequently so that
+    short sell_T windows produce same-day exit/re-entry churn relative to
+    longer sell_T windows.
+    """
+    n = 400
+    t = np.arange(n)
+    # Whipsaw universe: rapid oscillation crosses SMA(3) and SMA(20)
+    # at very different rates → very different trade counts even though
+    # both end up long for most of the run.
+    qqq = 100.0 + 8.0 * np.sin(t / 3.0) + 0.02 * t
+    df = _frame_with_qqq(qqq)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
+    tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
+    sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
+
+    # Short sell_T (3) → many quick exits & re-entries
+    out_churn = run_backtest(above, valid, tqqq_ret, sqqq_ret, 3, 3, 3, 3, slippage_bp=5.0)
+    # Long sell_T (30) → patient strategy, fewer trades
+    out_patient = run_backtest(above, valid, tqqq_ret, sqqq_ret, 3, 30, 3, 30, slippage_bp=5.0)
+
+    n_trades_churn = int(out_churn[4])
+    n_trades_patient = int(out_patient[4])
+    # Sanity: churn strategy must trade more than patient one
+    assert n_trades_churn > n_trades_patient, (
+        f"expected churn > patient trades, got churn={n_trades_churn}, patient={n_trades_patient}"
+    )
+    # Different trade counts → different curve_hashes (n_trades mixed in)
+    assert int(out_churn[-1]) != int(out_patient[-1])
+
+
 def test_curve_hash_identical_combos_match():
     """Same combo, same inputs → same curve_hash (deterministic FNV-1a)."""
     n = 200
