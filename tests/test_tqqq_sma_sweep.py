@@ -809,6 +809,88 @@ def test_sweep_phase2_emits_full_grid(tmp_path: Path):
                     for sS in range(1, 5)}
 
 
+def test_phase2_report_includes_comparison_section(tmp_path: Path):
+    """Phase 2 reports must contain the Phase 1 vs Phase 2 comparison section
+    with a clear YES/NO headline answering 'does any anti-trend combo beat
+    the trend-following winner?'.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 200
+    # Mixed regime: an up-then-down-then-up oscillation so both trend-following
+    # and anti-trend combos can have non-trivial behavior.
+    t = np.arange(n)
+    qqq = 100.0 + 20.0 * np.sin(t / 25.0) + 0.05 * t
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Phase 2 sweep on a small grid so the test is fast (max_window=4 → 256 combos)
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+
+    out_html = tmp_path / "phase2_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=2,
+    )
+    assert out_html.exists()
+    html = out_html.read_text(encoding="utf-8")
+    # Headline section anchor + title present
+    assert 'id="compare"' in html
+    assert "Phase 1 vs Phase 2 comparison" in html
+    # The headline must be a clear YES or NO
+    assert ("headline" in html.lower())
+    assert ("YES — best anti-trend combo" in html or "NO — trend-following winner" in html)
+    # The comparison table must show all three rows
+    assert "Phase 1 (trend-following" in html
+    assert "Phase 2 only (anti-trend" in html
+    assert "Phase 2 (full grid)" in html
+    # TOC must list 10 entries (extra Phase-2 section)
+    assert "10. reproducibility" in html
+
+
+def test_phase1_report_unchanged_no_comparison_section(tmp_path: Path):
+    """Phase 1 reports (default) must NOT contain the comparison section —
+    we don't want to clobber the Phase 1 deliverable.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=1,
+    )
+
+    out_html = tmp_path / "phase1_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        # phase defaults to 1
+    )
+    html = out_html.read_text(encoding="utf-8")
+    assert 'id="compare"' not in html
+    assert "Phase 1 vs Phase 2 comparison" not in html
+    # Phase 1 TOC ends at 9. reproducibility
+    assert "9. reproducibility" in html
+    assert "10. reproducibility" not in html
+
+
 def test_sweep_phase2_extends_phase1_parquet(tmp_path: Path):
     """A Phase-1 parquet on disk + a Phase-2 rerun on the same inputs must
     extend (not rebuild) the parquet to the full grid. Resumability across
