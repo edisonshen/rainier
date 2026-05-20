@@ -234,16 +234,23 @@ def _heatmap_buyS_sellS(df: pd.DataFrame, fixed_buyT: int, fixed_sellT: int) -> 
 def _distribution_hist(df: pd.DataFrame, baselines: dict[str, float]) -> go.Figure:
     # final_value can span 0 → many thousands; log10 axis for readability.
     # Pre-bin in numpy to keep the embedded plotly payload to ~120 floats
-    # (instead of 3.35M points). Without this the HTML file is ~50 MB.
+    # (instead of 3.35M / 12.96M points). Without this the HTML file is
+    # ~50 MB (Phase 1) or ~200 MB (Phase 2).
     vals = df["final_value"].to_numpy()
     log_vals = np.log10(np.clip(vals, 1e-3, None))
     counts, edges = np.histogram(log_vals, bins=120)
     centers = 0.5 * (edges[:-1] + edges[1:])
     width = float(edges[1] - edges[0])
+    n_combos = len(df)
+    # Pretty-print combo count: "3.35M combos" or "12.96M combos"
+    if n_combos >= 1_000_000:
+        combo_label = f"{n_combos / 1_000_000:.2f}M combos"
+    else:
+        combo_label = f"{n_combos:,} combos"
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=centers, y=counts, width=width,
-        marker_color=_TEAL, opacity=0.85, name="3.35M combos",
+        marker_color=_TEAL, opacity=0.85, name=combo_label,
         hovertemplate="log10(final)=%{x:.2f}<br>count=%{y:,}<extra></extra>",
     ))
     for name, v in baselines.items():
