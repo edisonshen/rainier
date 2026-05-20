@@ -471,6 +471,40 @@ def _existing_combo_set(results_path: Path) -> set[tuple[int, int, int, int]]:
     return {(int(r.buy_T), int(r.sell_T), int(r.buy_S), int(r.sell_S)) for r in df.itertuples()}
 
 
+def _sweep_fingerprint(prices: pd.DataFrame, slippage_bp: float, max_window: int) -> str:
+    """SHA-256 of the sweep inputs that materially affect any combo's result.
+
+    Used to invalidate ``results.parquet`` when the user reruns with different
+    prices (`--refresh-data`), slippage, or window bounds — otherwise the
+    resumability path would silently mix stale rows with new ones, poisoning
+    every downstream report.
+    """
+    h = hashlib.sha256()
+    # Stable price hash: parquet bytes of qqq/tqqq/sqqq sorted by index
+    h.update(prices[["qqq", "tqqq", "sqqq"]].sort_index().to_parquet())
+    h.update(f"|slippage_bp={slippage_bp:.6f}|max_window={max_window}".encode())
+    return h.hexdigest()
+
+
+def _read_sweep_fingerprint(results_path: Path) -> str | None:
+    fp_path = results_path.with_suffix(".fingerprint.txt")
+    if not fp_path.exists():
+        return None
+    return fp_path.read_text().strip() or None
+
+
+def _write_sweep_fingerprint(results_path: Path, fp: str) -> None:
+    fp_path = results_path.with_suffix(".fingerprint.txt")
+    tmp = fp_path.with_suffix(".txt.tmp")
+    tmp.write_text(fp)
+    os.replace(tmp, fp_path)
+
+
+class SweepInputMismatchError(RuntimeError):
+    """Raised when ``results.parquet`` exists but was produced from different
+    prices, slippage, or max_window than the current call."""
+
+
 def run_sweep(
     prices: pd.DataFrame,
     results_path: Path = RESULTS_CACHE_PATH,
@@ -485,6 +519,13 @@ def run_sweep(
 
     Resumable: if ``results_path`` already has rows for some combos, those are
     skipped. On crash mid-sweep, the most recent completed flush is on disk.
+
+    Cache safety: a SHA-256 fingerprint of ``(prices, slippage_bp, max_window)``
+    is written alongside ``results_path`` as ``<name>.fingerprint.txt``. If a
+    pre-existing ``results.parquet`` was produced from different inputs, the
+    sweep aborts with :class:`SweepInputMismatchError` — never silently mixes
+    rows. Delete the parquet (and its companion fingerprint) to force a clean
+    rerun, or write to a different path.
 
     Parameters
     ----------
@@ -517,6 +558,26 @@ def run_sweep(
     if qqq.shape[0] < max_window + 2:
         raise ValueError(f"need at least {max_window + 2} bars; got {qqq.shape[0]}")
 
+    # Cache-key the sweep on (prices, slippage, max_window). If an existing
+    # results parquet was produced with different inputs, refuse to mix rows.
+    fp = _sweep_fingerprint(prices, slippage_bp=slippage_bp, max_window=max_window)
+    if results_path.exists():
+        prior_fp = _read_sweep_fingerprint(results_path)
+        if prior_fp is None:
+            # Legacy parquet without a fingerprint companion — refuse to
+            # extend it; the user must opt in by deleting it.
+            raise SweepInputMismatchError(
+                f"{results_path} exists but has no fingerprint file. "
+                "Delete it (or write to a different --results-path) to start fresh."
+            )
+        if prior_fp != fp:
+            raise SweepInputMismatchError(
+                f"{results_path} was produced from different inputs (prices, "
+                f"slippage_bp, or max_window). Delete it (and its companion "
+                f"{results_path.with_suffix('.fingerprint.txt').name}) to start fresh, "
+                "or write to a different --results-path."
+            )
+
     above, valid = precompute_sma_signals(qqq, max_window=max_window)
     tqqq_ret = (tqqq[1:] / tqqq[:-1]) - 1.0
     sqqq_ret = (sqqq[1:] / sqqq[:-1]) - 1.0
@@ -530,6 +591,8 @@ def run_sweep(
         if max_combos is not None and len(todo) >= max_combos:
             break
     if not todo:
+        # Still write/refresh the fingerprint so a later resume catches drift
+        _write_sweep_fingerprint(results_path, fp)
         return results_path
 
     n_workers = n_workers if n_workers is not None else (os.cpu_count() or 1)
@@ -568,6 +631,9 @@ def run_sweep(
                         print(f"  swept {done_count}/{len(todo)} ({rate:,.0f}/s)")
 
     _flush_chunk(pending, results_path)
+    # Stamp the parquet with the input fingerprint so future runs can detect
+    # parameter drift instead of silently mixing stale rows.
+    _write_sweep_fingerprint(results_path, fp)
     return results_path
 
 

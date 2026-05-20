@@ -21,6 +21,7 @@ from rainier.backtest.tqqq_sma_sweep import (
     CASH,
     LONG_TQQQ,
     SHORT_SQQQ,
+    SweepInputMismatchError,
     iter_phase1_combos,
     precompute_sma_signals,
     run_backtest,
@@ -196,6 +197,77 @@ def test_no_spurious_short_during_sma_warmup():
     # 59..79 (~26% of the run) and CASH before then.
     assert t_long > 0.20
     assert t_cash > 0.65
+
+
+def test_sweep_refuses_to_mix_rows_when_slippage_changes(tmp_path: Path):
+    """Regression for codex iter-2: cache invalidation on input drift.
+
+    Pre-fix, rerunning with a different slippage would silently reuse rows
+    computed at the prior slippage (skipping by combo key), then merge them
+    with rows at the new slippage. The fix: stamp the parquet with a
+    fingerprint of (prices, slippage_bp, max_window) and refuse to extend
+    a mismatched parquet.
+    """
+    import pytest
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "out.parquet"
+
+    # First sweep: slippage 5 bp
+    run_sweep(
+        df, results_path=results_path, max_window=3, n_workers=1,
+        slippage_bp=5.0, flush_every=10,
+    )
+    assert results_path.exists()
+    assert results_path.with_suffix(".fingerprint.txt").exists()
+
+    # Second sweep with different slippage must refuse to extend
+    with pytest.raises(SweepInputMismatchError, match="different inputs"):
+        run_sweep(
+            df, results_path=results_path, max_window=3, n_workers=1,
+            slippage_bp=10.0, flush_every=10,
+        )
+
+    # Second sweep with different prices must refuse to extend
+    qqq2 = 100.0 + 2.0 * np.linspace(0, 50, n)
+    df2 = _frame_with_qqq(qqq2)
+    with pytest.raises(SweepInputMismatchError, match="different inputs"):
+        run_sweep(
+            df2, results_path=results_path, max_window=3, n_workers=1,
+            slippage_bp=5.0, flush_every=10,
+        )
+
+    # Same inputs as the original → should succeed as no-op resume
+    run_sweep(
+        df, results_path=results_path, max_window=3, n_workers=1,
+        slippage_bp=5.0, flush_every=10,
+    )
+
+
+def test_sweep_refuses_legacy_parquet_without_fingerprint(tmp_path: Path):
+    """A pre-existing parquet without a fingerprint file is treated as
+    suspect — the user must explicitly delete it to start fresh."""
+    import pytest
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "out.parquet"
+
+    # Run once, then delete just the fingerprint to simulate a pre-v0.x parquet
+    run_sweep(
+        df, results_path=results_path, max_window=3, n_workers=1,
+        slippage_bp=5.0, flush_every=10,
+    )
+    results_path.with_suffix(".fingerprint.txt").unlink()
+
+    with pytest.raises(SweepInputMismatchError, match="no fingerprint"):
+        run_sweep(
+            df, results_path=results_path, max_window=3, n_workers=1,
+            slippage_bp=5.0, flush_every=10,
+        )
 
 
 def test_sma1_column_is_never_tradable():
