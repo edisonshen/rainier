@@ -716,9 +716,13 @@ def test_iter_phase2_combos_count_full_grid():
     For max_window=60 this is 60^4 = 12,960,000. The set is exactly Phase 1
     (1830*1830 = 3,348,900 trend-following) ∪ Phase 2-only anti-trend
     (9,611,100 combos where sell_T < buy_T OR sell_S < buy_S).
+
+    We count via the generator instead of materializing a 12.96M-tuple list
+    (codex review iter-1 [P2]) — sum(1 for _ in ...) is O(1) memory and
+    keeps pytest from chewing ~1GB on small CI runners.
     """
-    combos = list(iter_phase2_combos(max_window=60))
-    assert len(combos) == 60 * 60 * 60 * 60 == 12_960_000
+    count = sum(1 for _ in iter_phase2_combos(max_window=60))
+    assert count == 60 * 60 * 60 * 60 == 12_960_000
 
 
 def test_iter_phase2_combos_no_constraint_small_window():
@@ -861,6 +865,91 @@ def test_phase2_report_includes_comparison_section(tmp_path: Path):
     assert "Phase 2 (full grid)" in html
     # TOC must list 10 entries (extra Phase-2 section)
     assert "10. reproducibility" in html
+
+
+def test_phase2_report_uses_max_window_derived_counts(tmp_path: Path):
+    """Codex review iter-1 [P2]: hard-coded 60-derived combo counts
+    (12,960,000 / 3,348,900 / 9,611,100) in the framing and comparison
+    sections would be wrong for any --max-window != 60. The text must derive
+    counts from the actual ``max_window`` argument.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # max_window=4 → Phase-2 grid is 4^4 = 256, Phase-1 subset is T(4)^2 = 100
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+    out_html = tmp_path / "phase2_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=2,
+    )
+    html = out_html.read_text(encoding="utf-8")
+    # Correct counts must appear (256 total, 100 trend-following, 156 anti)
+    assert "256" in html
+    assert "100" in html
+    assert "{1..4}^4" in html
+    assert "{1..4}" in html
+    # WRONG counts must NOT appear
+    assert "12,960,000" not in html
+    assert "3,348,900" not in html
+    assert "9,611,100" not in html
+    assert "{1..60}" not in html
+
+
+def test_phase1_report_ignores_phase2_rows_on_disk(tmp_path: Path):
+    """Codex review iter-1 [P2] (cache contamination): the same parquet is
+    shared across phases (Phase 2 is a superset of Phase 1 by design). If a
+    Phase-2 sweep has populated the parquet and the user then re-renders
+    --phase 1, the resulting report MUST contain only the trend-following
+    subset — not the full 4^4 grid masquerading as Phase 1.
+
+    We run Phase 2 first (256 combos) and then render a Phase-1 report. The
+    Phase-1 report's subtitle must claim ``T(4)^2 = 100 combos``, not 256.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Populate the parquet with the full Phase-2 grid first.
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+    assert len(pd.read_parquet(results_path)) == 256
+
+    out_html = tmp_path / "phase1_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=1,
+    )
+    html = out_html.read_text(encoding="utf-8")
+    # Subtitle must report 100 combos (Phase-1 subset), not 256
+    assert "100 combos" in html
+    assert "256 combos" not in html
+    # No Phase-2 comparison section in a Phase-1 report
+    assert 'id="compare"' not in html
 
 
 def test_phase1_report_unchanged_no_comparison_section(tmp_path: Path):

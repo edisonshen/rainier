@@ -489,7 +489,7 @@ def _baseline_kv_table(prices: pd.DataFrame, baselines: dict[str, float]) -> str
     return "\n".join(rows)
 
 
-def _phase1_vs_phase2_section(df_raw: pd.DataFrame) -> str:
+def _phase1_vs_phase2_section(df_raw: pd.DataFrame, max_window: int = 60) -> str:
     """Build the headline comparison: does any anti-trend combo beat the
     trend-following winner?
 
@@ -682,13 +682,21 @@ def _phase1_vs_phase2_section(df_raw: pd.DataFrame) -> str:
             f'column in §3 shows how many grid combos collapse to each curve.</p>'
         )
 
+    # Counts derived from the actual data (codex review iter-1 [P2]): the
+    # tests render Phase-2 reports with max_window=4, where the analytic
+    # 60-derived counts (12,960,000 / 3,348,900 / 9,611,100) would be wildly
+    # wrong. Use n_total/n_p1/n_anti from the DataFrame, and quote the
+    # analytic relation in terms of max_window so it stays correct.
+    p1_count_analytic = (max_window * (max_window + 1) // 2) ** 2
     return (
-        '<p>Phase 2 drops the <code>sell ≥ buy</code> trend-following '
-        'constraint and explores the full 4-D <code>{1..60}^4</code> grid. '
-        'Of the 12,960,000 combos, 3,348,900 are the original trend-following '
-        'set; the remaining 9,611,100 are anti-trend regions where one or '
-        'both legs use a shorter exit-SMA than entry-SMA — i.e. mean-reversion '
-        'rather than momentum.</p>'
+        f'<p>Phase 2 drops the <code>sell ≥ buy</code> trend-following '
+        f'constraint and explores the full 4-D '
+        f'<code>{{1..{max_window}}}^4</code> grid. Of the {n_total:,} combos, '
+        f'{n_p1:,} are the original trend-following set '
+        f'(<code>T({max_window})^2 = {p1_count_analytic:,}</code> when the '
+        f'grid is complete); the remaining {n_anti:,} are anti-trend regions '
+        f'where one or both legs use a shorter exit-SMA than entry-SMA — '
+        f'i.e. mean-reversion rather than momentum.</p>'
         f'<div class="qbox" style="border-left-color: {qbox_color};">'
         f'<strong>headline.</strong> <span class="{headline_class}">'
         f'{headline_text}</span></div>'
@@ -735,6 +743,21 @@ def render_report(
 
     df_raw = pd.read_parquet(results_path)
     wf = pd.read_parquet(walkforward_path) if walkforward_path.exists() else pd.DataFrame()
+
+    # Cache-contamination guard (codex review iter-1 [P2]): the same parquet
+    # is reused across phases (Phase 2 is a strict superset of Phase 1's
+    # combo set), so a Phase-1 report rendered against a parquet that already
+    # contains Phase-2 anti-trend rows would silently include the anti-trend
+    # grid in its leaderboard and heatmaps while labeling itself "Phase 1".
+    # Filter the raw grid down to the Phase-1 subset at read time so the
+    # invariant "phase=1 → only trend-following rows" holds regardless of
+    # what's on disk. Phase 2 reads the full grid as before.
+    if phase == 1:
+        p1_mask = (
+            (df_raw["sell_T"] >= df_raw["buy_T"])
+            & (df_raw["sell_S"] >= df_raw["buy_S"])
+        )
+        df_raw = df_raw[p1_mask].reset_index(drop=True)
 
     n_combos = len(df_raw)
     # Dedup by equity-curve fingerprint before any leaderboard slicing so the
@@ -838,24 +861,34 @@ def render_report(
         f'<p class="subtitle">{subtitle}</p></header>'
     )
 
-    # 1. Framing — phase-aware constraint description
+    # 1. Framing — phase-aware constraint description. Counts are derived
+    # from max_window (codex review iter-1 [P2]) so non-default --max-window
+    # runs and the test suite (which uses max_window=4) get accurate numbers.
+    _p1_ordered_pairs = max_window * (max_window + 1) // 2  # T(max_window)
+    _p1_combo_count = _p1_ordered_pairs ** 2
+    _p2_combo_count = max_window ** 4
+    _anti_combo_count = _p2_combo_count - _p1_combo_count
     if phase == 1:
         constraint_para = (
-            '<p>Phase 1 of this sweep enforces <code>sell_T ≥ buy_T</code> and '
-            '<code>sell_S ≥ buy_S</code> — trend-following only. Each SMA window '
-            'is drawn from <code>{1..60}</code>, so the constrained grid has '
-            '<code>1830 × 1830 = 3,348,900</code> combos.</p>'
+            f'<p>Phase 1 of this sweep enforces <code>sell_T ≥ buy_T</code> '
+            f'and <code>sell_S ≥ buy_S</code> — trend-following only. Each '
+            f'SMA window is drawn from <code>{{1..{max_window}}}</code>, so '
+            f'the constrained grid has '
+            f'<code>{_p1_ordered_pairs} × {_p1_ordered_pairs} = '
+            f'{_p1_combo_count:,}</code> combos.</p>'
         )
     else:
         constraint_para = (
-            '<p>Phase 2 of this sweep drops the trend-following constraint and '
-            'explores the full <code>{1..60}^4 = 12,960,000</code> combo grid. '
-            'This adds 9,611,100 anti-trend combos (<code>sell &lt; buy</code> on '
-            'one or both legs) on top of the 3,348,900 trend-following combos '
-            'from Phase 1. Anti-trend regions correspond to mean-reversion '
-            'strategies: a tighter exit SMA than entry SMA implies the strategy '
-            'exits the position as soon as the trend confirms — only useful in '
-            'a regime where short-horizon momentum is reverting, not '
+            f'<p>Phase 2 of this sweep drops the trend-following constraint '
+            f'and explores the full <code>{{1..{max_window}}}^4 = '
+            f'{_p2_combo_count:,}</code> combo grid. This adds '
+            f'{_anti_combo_count:,} anti-trend combos '
+            f'(<code>sell &lt; buy</code> on one or both legs) on top of the '
+            f'{_p1_combo_count:,} trend-following combos from Phase 1. '
+            'Anti-trend regions correspond to mean-reversion strategies: a '
+            'tighter exit SMA than entry SMA implies the strategy exits the '
+            'position as soon as the trend confirms — only useful in a '
+            'regime where short-horizon momentum is reverting, not '
             'continuing.</p>'
         )
     framing_body = (
@@ -883,7 +916,7 @@ def render_report(
 
     # 2. Phase 1 vs Phase 2 (only in Phase 2 reports)
     if phase == 2:
-        compare_body = _phase1_vs_phase2_section(df_raw)
+        compare_body = _phase1_vs_phase2_section(df_raw, max_window=max_window)
         parts.append(_section(2, "Phase 1 vs Phase 2 comparison", "compare", compare_body))
 
     # 2/3. Top-50
@@ -922,7 +955,12 @@ def render_report(
     parts.append(_section(4 + sec_off, "heatmaps", "heatmaps", heatmap_body))
 
     # 5/6. Distribution
-    dist_label = "3.35M-combo" if phase == 1 else "12.96M-combo"
+    # Combo-count label derived from the actual data (codex review iter-1 [P2])
+    # so non-default max_window runs report the real count.
+    if n_combos >= 1_000_000:
+        dist_label = f"{n_combos / 1_000_000:.2f}M-combo"
+    else:
+        dist_label = f"{n_combos:,}-combo"
     dist_body = (
         f'<p>Where do the buy-and-hold baselines sit in the {dist_label} '
         'final-value distribution? Most of the mass is mediocre; the long '
@@ -965,17 +1003,29 @@ def render_report(
     parts.append(_section(7 + sec_off, "walk-forward delta", "walkforward", wf_body))
 
     # 8/9. Honest discussion
-    discussion_combo_label = "3.35M combos" if phase == 1 else "12.96M combos"
+    # Combo labels derived from data (codex review iter-1 [P2]) so smaller
+    # max_window runs report accurate numbers in the discussion qboxes.
+    if n_combos >= 1_000_000:
+        discussion_combo_label = f"{n_combos / 1_000_000:.2f}M combos"
+    else:
+        discussion_combo_label = f"{n_combos:,} combos"
     extra_qbox = ""
     if phase == 2:
+        # _anti_combo_count was computed earlier from max_window
+        if _anti_combo_count >= 1_000_000:
+            anti_label = f"{_anti_combo_count / 1_000_000:.2f}M"
+        else:
+            anti_label = f"{_anti_combo_count:,}"
+        ratio = _p2_combo_count / max(_p1_combo_count, 1)
         extra_qbox = (
-            '<div class="qbox"><strong>anti-trend regions are noisy.</strong> '
-            'Dropping <code>sell ≥ buy</code> adds 9.61M combos where the exit '
-            'SMA is tighter than the entry SMA. Most of these correspond to '
-            'high-churn mean-reversion strategies that fall apart out-of-sample. '
-            'The walk-forward delta is the honest test — full-sample winners '
-            'in anti-trend territory are especially suspect because the '
-            'optimizer has 3× more grid to lottery-pick from.</div>'
+            f'<div class="qbox"><strong>anti-trend regions are noisy.</strong> '
+            f'Dropping <code>sell ≥ buy</code> adds {anti_label} combos where '
+            f'the exit SMA is tighter than the entry SMA. Most of these '
+            f'correspond to high-churn mean-reversion strategies that fall '
+            f'apart out-of-sample. The walk-forward delta is the honest test '
+            f'— full-sample winners in anti-trend territory are especially '
+            f'suspect because the optimizer has {ratio:.1f}× more grid to '
+            f'lottery-pick from.</div>'
         )
     discussion_body = (
         '<div class="qbox"><strong>survivorship bias.</strong> QQQ, TQQQ, and '
