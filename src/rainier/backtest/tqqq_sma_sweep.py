@@ -97,6 +97,32 @@ def iter_phase1_combos(max_window: int = 60) -> Iterator[tuple[int, int, int, in
             yield (bT, sT, bS, sS)
 
 
+def iter_phase2_combos(max_window: int = 60) -> Iterator[tuple[int, int, int, int]]:
+    """Yield EVERY ``(buy_T, sell_T, buy_S, sell_S)`` in ``{1..max_window}^4``.
+
+    Phase 2 = unconstrained: explores all 4-tuples regardless of sell vs buy
+    ordering. This is a strict superset of :func:`iter_phase1_combos` — the
+    additional ``max_window**4 - (T(max_window))**2`` combos (where
+    ``T(n) = n*(n+1)/2``) are the anti-trend combos with ``sell_T < buy_T``
+    OR ``sell_S < buy_S``.
+
+    For ``max_window=60`` the count is ``60**4 = 12_960_000`` total,
+    which is 9_611_100 more than Phase 1's 3_348_900.
+
+    Iteration order: same nested ``(bT, sT) -> (bS, sS)`` lexicographic
+    structure as Phase 1 so the trend-following combos appear in the same
+    relative order; the anti-trend additions are interleaved naturally.
+    Order matters for resumability — :func:`run_sweep` skips combos already
+    present in ``results.parquet``, so a Phase-2 rerun after a Phase-1 run
+    fills exactly the missing 9.61M rows without recomputing.
+    """
+    for bT in range(1, max_window + 1):
+        for sT in range(1, max_window + 1):
+            for bS in range(1, max_window + 1):
+                for sS in range(1, max_window + 1):
+                    yield (bT, sT, bS, sS)
+
+
 # ---------------------------------------------------------------------------
 # Precomputed signal matrix
 # ---------------------------------------------------------------------------
@@ -602,18 +628,23 @@ def run_sweep(
     flush_every: int = 50_000,
     max_combos: int | None = None,
     progress: bool = False,
+    phase: int = 1,
 ) -> Path:
-    """Run the Phase-1 sweep, appending results to a parquet cache.
+    """Run the SMA sweep, appending results to a parquet cache.
 
     Resumable: if ``results_path`` already has rows for some combos, those are
     skipped. On crash mid-sweep, the most recent completed flush is on disk.
 
-    Cache safety: a SHA-256 fingerprint of ``(prices, slippage_bp, max_window)``
-    is written alongside ``results_path`` as ``<name>.fingerprint.txt``. If a
-    pre-existing ``results.parquet`` was produced from different inputs, the
-    sweep aborts with :class:`SweepInputMismatchError` — never silently mixes
-    rows. Delete the parquet (and its companion fingerprint) to force a clean
-    rerun, or write to a different path.
+    Cache safety: a SHA-256 fingerprint of ``(prices, slippage_bp, max_window,
+    schema_version)`` is written alongside ``results_path`` as
+    ``<name>.fingerprint.txt``. If a pre-existing ``results.parquet`` was
+    produced from different inputs, the sweep aborts with
+    :class:`SweepInputMismatchError` — never silently mixes rows. Delete the
+    parquet (and its companion fingerprint) to force a clean rerun, or write
+    to a different path. Note: ``phase`` is intentionally NOT part of the
+    fingerprint — Phase 2 is a strict superset of Phase 1's combo set, so a
+    Phase-1 parquet can be extended by a Phase-2 sweep on the SAME prices /
+    slippage / max_window without re-running the Phase-1 rows.
 
     Parameters
     ----------
@@ -622,7 +653,7 @@ def run_sweep(
     results_path:
         Output parquet. Parent dir created if missing.
     max_window:
-        Top SMA window. Phase 1 default 60.
+        Top SMA window. Default 60.
     n_workers:
         Pool size. ``None`` → ``os.cpu_count()``. ``1`` runs in-process for
         easy debugging.
@@ -632,6 +663,9 @@ def run_sweep(
         Flush rows to disk every N completed backtests. Crash-safety knob.
     max_combos:
         For testing — cap the total combo count. ``None`` runs the whole grid.
+    phase:
+        1 (trend-following only, ``T(60)^2 = 3_348_900`` combos) or 2
+        (full grid, ``60^4 = 12_960_000`` combos). Phase 2 is a superset.
 
     Returns
     -------
@@ -670,9 +704,16 @@ def run_sweep(
     tqqq_ret = (tqqq[1:] / tqqq[:-1]) - 1.0
     sqqq_ret = (sqqq[1:] / sqqq[:-1]) - 1.0
 
+    if phase == 1:
+        combo_iter = iter_phase1_combos(max_window=max_window)
+    elif phase == 2:
+        combo_iter = iter_phase2_combos(max_window=max_window)
+    else:
+        raise ValueError(f"phase must be 1 or 2, got {phase}")
+
     done = _existing_combo_set(results_path)
     todo: list[tuple[int, int, int, int]] = []
-    for combo in iter_phase1_combos(max_window=max_window):
+    for combo in combo_iter:
         if combo in done:
             continue
         todo.append(combo)

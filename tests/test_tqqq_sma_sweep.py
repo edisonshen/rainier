@@ -25,6 +25,7 @@ from rainier.backtest.tqqq_sma_sweep import (
     compute_strategy_id,
     dedup_by_strategy_id,
     iter_phase1_combos,
+    iter_phase2_combos,
     precompute_sma_signals,
     run_backtest,
     run_sweep,
@@ -701,3 +702,139 @@ def test_report_strategy_type_classifier():
     # Pure-cash (neither leg fired) is BOTH-legs, NOT LONG-only or SHORT-only
     # — neither leg is structurally dormant, just no signal fired.
     assert _strategy_type(0.0, 0.0) == "BOTH-legs"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: unconstrained 12.96M grid (adds anti-trend combos to Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def test_iter_phase2_combos_count_full_grid():
+    """Phase 2 enumerates ALL (buy_T, sell_T, buy_S, sell_S) with each in
+    {1..max_window}, no constraint. Count = max_window**4.
+
+    For max_window=60 this is 60^4 = 12,960,000. The set is exactly Phase 1
+    (1830*1830 = 3,348,900 trend-following) ∪ Phase 2-only anti-trend
+    (9,611,100 combos where sell_T < buy_T OR sell_S < buy_S).
+    """
+    combos = list(iter_phase2_combos(max_window=60))
+    assert len(combos) == 60 * 60 * 60 * 60 == 12_960_000
+
+
+def test_iter_phase2_combos_no_constraint_small_window():
+    """max_window=3 → 3^4 = 81 combos vs Phase 1's 36 (trend-following only)."""
+    combos = list(iter_phase2_combos(max_window=3))
+    assert len(combos) == 81
+    # Every tuple is in range
+    for bT, sT, bS, sS in combos:
+        assert 1 <= bT <= 3
+        assert 1 <= sT <= 3
+        assert 1 <= bS <= 3
+        assert 1 <= sS <= 3
+
+
+def test_iter_phase2_combos_are_unique():
+    """No duplicates — the generator emits each (bT, sT, bS, sS) exactly once."""
+    combos = list(iter_phase2_combos(max_window=5))
+    assert len(combos) == 5 ** 4
+    assert len(set(combos)) == len(combos)
+
+
+def test_iter_phase2_superset_of_phase1():
+    """Phase 2 strictly contains Phase 1; the difference is the anti-trend set.
+
+    Anti-trend set = combos where sell_T < buy_T OR sell_S < buy_S.
+    For max_window=60: |Phase 2| - |Phase 1| = 12_960_000 - 3_348_900 = 9_611_100.
+    """
+    mw = 6  # small enough to enumerate both sets
+    p1 = set(iter_phase1_combos(max_window=mw))
+    p2 = set(iter_phase2_combos(max_window=mw))
+    # Phase 1 ⊆ Phase 2
+    assert p1.issubset(p2)
+    # The difference is anti-trend (sell < buy on at least one leg)
+    anti = p2 - p1
+    for bT, sT, bS, sS in anti:
+        assert (sT < bT) or (sS < bS), (
+            f"({bT},{sT},{bS},{sS}) is in p2 - p1 but is trend-following"
+        )
+    # Cardinality check for max_window=60 case (analytic count)
+    p1_60 = 1830 * 1830  # 3,348,900
+    p2_60 = 60 ** 4       # 12,960,000
+    assert p2_60 - p1_60 == 9_611_100
+
+
+def test_iter_phase2_emits_anti_trend_examples():
+    """Spot-check that classic anti-trend combos (sell < buy) are emitted."""
+    combos = set(iter_phase2_combos(max_window=10))
+    # Anti-trend long leg only
+    assert (5, 3, 5, 5) in combos
+    # Anti-trend short leg only
+    assert (5, 5, 5, 3) in combos
+    # Anti-trend both legs
+    assert (8, 2, 8, 2) in combos
+    # And the trend-following examples are still in there
+    assert (3, 5, 3, 5) in combos
+    assert (1, 10, 1, 10) in combos
+
+
+def test_sweep_phase2_emits_full_grid(tmp_path: Path):
+    """run_sweep with phase=2 must emit max_window**4 rows on a small grid.
+
+    Uses max_window=4 → 4^4 = 256 combos (vs Phase 1's 100), entirely
+    enumerable in-process. Verifies the resulting parquet contains every
+    (bT, sT, bS, sS) tuple in {1..4}^4 exactly once.
+    """
+    n = 80
+    qqq = 100.0 + 10.0 * np.sin(np.linspace(0, 6.28, n))
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "phase2.parquet"
+
+    run_sweep(
+        df,
+        results_path=results_path,
+        max_window=4,
+        n_workers=1,
+        slippage_bp=5.0,
+        flush_every=64,
+        phase=2,
+    )
+    out = pd.read_parquet(results_path)
+    assert len(out) == 4 ** 4 == 256
+    keys = {(int(r.buy_T), int(r.sell_T), int(r.buy_S), int(r.sell_S))
+            for r in out.itertuples()}
+    assert keys == {(bT, sT, bS, sS)
+                    for bT in range(1, 5)
+                    for sT in range(1, 5)
+                    for bS in range(1, 5)
+                    for sS in range(1, 5)}
+
+
+def test_sweep_phase2_extends_phase1_parquet(tmp_path: Path):
+    """A Phase-1 parquet on disk + a Phase-2 rerun on the same inputs must
+    extend (not rebuild) the parquet to the full grid. Resumability across
+    phases is the key property — we don't want to re-run the 3.35M Phase-1
+    combos when the user asks for Phase 2 on top.
+    """
+    n = 80
+    qqq = 100.0 + 10.0 * np.sin(np.linspace(0, 6.28, n))
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Phase 1 first: 10*10 = 100 combos at max_window=4
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=1,
+    )
+    phase1 = pd.read_parquet(results_path)
+    assert len(phase1) == 100
+
+    # Phase 2 extends with the remaining 156 anti-trend combos → total 256
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+    phase2 = pd.read_parquet(results_path)
+    assert len(phase2) == 256
+    # No duplicate combo keys
+    keys = phase2[["buy_T", "sell_T", "buy_S", "sell_S"]]
+    assert not keys.duplicated().any()
