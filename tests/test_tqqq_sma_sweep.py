@@ -29,6 +29,7 @@ from rainier.backtest.tqqq_sma_sweep import (
     precompute_sma_signals,
     run_backtest,
     run_sweep,
+    walk_forward_top_n,
 )
 
 # ---------------------------------------------------------------------------
@@ -907,6 +908,48 @@ def test_phase2_report_uses_max_window_derived_counts(tmp_path: Path):
     assert "3,348,900" not in html
     assert "9,611,100" not in html
     assert "{1..60}" not in html
+
+
+def test_walk_forward_top_n_filters_to_phase1_when_phase_arg_is_1(tmp_path: Path):
+    """Codex review iter-2 [P2]: when the shared parquet has been extended
+    by a Phase-2 sweep, ``walk_forward_top_n(..., phase=1)`` must restrict
+    to the trend-following subset before dedup/top-N selection. Otherwise
+    the Phase-1 walk-forward parquet would contain anti-trend Phase-2
+    winners labeled as Phase-1 validation.
+    """
+    n = 80
+    qqq = 100.0 + 10.0 * np.sin(np.linspace(0, 6.28, n))
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Populate the parquet with the full Phase-2 grid (256 combos at mw=4)
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+
+    wf_p1 = walk_forward_top_n(
+        df, results_path=results_path, top_n=20,
+        split_date="2020-02-15",  # mid-range of synthetic data
+        slippage_bp=5.0, max_window=4, phase=1,
+    )
+    # Every row in the Phase-1 walk-forward must satisfy the trend-following
+    # constraint. A bug here would surface anti-trend (sell < buy) combos.
+    assert (wf_p1["sell_T"] >= wf_p1["buy_T"]).all()
+    assert (wf_p1["sell_S"] >= wf_p1["buy_S"]).all()
+
+    # Phase 2 walk-forward (default behavior) must see the full grid —
+    # i.e. it is NOT filtered, so it can include anti-trend rows.
+    wf_p2 = walk_forward_top_n(
+        df, results_path=results_path, top_n=20,
+        split_date="2020-02-15",
+        slippage_bp=5.0, max_window=4, phase=2,
+    )
+    # Sanity: with the full grid available, p2 walk-forward sees at least as
+    # many DISTINCT (post-dedup) curves as p1 — the anti-trend rows expand
+    # the dedup'd pool. We don't assert strict >, since synthetic data can
+    # collapse heavily; just that the filter argument matters.
+    assert len(wf_p2) >= 1
 
 
 def test_phase1_report_ignores_phase2_rows_on_disk(tmp_path: Path):

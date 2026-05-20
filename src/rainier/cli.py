@@ -3178,6 +3178,7 @@ def sma_sweep(
         top_n=top_n_walkforward,
         slippage_bp=slippage_bp,
         max_window=max_window,
+        phase=phase,
     )
     # Phase 2 walk-forward goes to a sibling parquet so the Phase-1 walkforward
     # remains intact for the Phase-1 report.

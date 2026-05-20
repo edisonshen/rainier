@@ -711,6 +711,17 @@ def run_sweep(
     else:
         raise ValueError(f"phase must be 1 or 2, got {phase}")
 
+    # Materializing the full combo list into ``todo`` keeps the worker-pool
+    # feed simple (Pool.imap_unordered needs a sized iterable for chunksize
+    # accounting + progress) at the cost of memory: a fresh Phase-2 default
+    # sweep allocates ~12.96M 4-tuples (~600MB of Python objects). On the
+    # worker machine that ran this sweep, peak RSS was ~3GB which fit
+    # comfortably; on a memory-constrained CI runner this could OOM.
+    # Codex review iter-2 [P2] noted this — deferred: chunked iteration
+    # would require rethinking the resume/done tracking + the progress
+    # reporting, and the empirical memory fit at default scale doesn't
+    # justify that complexity yet. Tracking issue: see TODOS.md if it
+    # becomes a problem on smaller hosts.
     done = _existing_combo_set(results_path)
     todo: list[tuple[int, int, int, int]] = []
     for combo in combo_iter:
@@ -814,6 +825,7 @@ def walk_forward_top_n(
     split_date: str = "2019-01-01",
     slippage_bp: float = 5.0,
     max_window: int = 60,
+    phase: int = 1,
 ) -> pd.DataFrame:
     """Rerun the deduped top-N by ``final_value`` on a train/test split.
 
@@ -821,9 +833,20 @@ def walk_forward_top_n(
     walk-forward set is N truly distinct strategies (one per equity curve)
     rather than N near-copies of the same strategy with dormant parameters
     varying. Adds ``final_value_train`` and ``final_value_test`` columns to
-    the returned DataFrame (only for the top-N rows, not the whole 3.35M).
+    the returned DataFrame (only for the top-N rows, not the whole grid).
+
+    ``phase`` argument (codex review iter-2 [P2]): when ``phase=1`` we filter
+    the parquet to the trend-following subset BEFORE dedup/top-N selection.
+    This is the cache-contamination guard's walk-forward analog — if a
+    Phase-2 sweep has populated the parquet on disk and the user then runs
+    ``rainier sma-sweep --phase 1``, the walk-forward parquet must contain
+    only Phase-1 (trend-following) winners, not anti-trend rows masquerading
+    as Phase 1 validation. ``phase=2`` reads the full grid as before.
     """
     df = pd.read_parquet(results_path)
+    if phase == 1:
+        p1_mask = (df["sell_T"] >= df["buy_T"]) & (df["sell_S"] >= df["buy_S"])
+        df = df[p1_mask].reset_index(drop=True)
     df = dedup_by_strategy_id(df)
     top = df.nlargest(top_n, "final_value").reset_index(drop=True)
 
