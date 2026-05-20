@@ -85,20 +85,27 @@ def test_iter_phase1_max_window_small():
 def test_precompute_sma_signals_shape():
     n_days = 100
     qqq = np.linspace(100.0, 200.0, n_days)
-    above = precompute_sma_signals(qqq, max_window=60)
+    above, valid = precompute_sma_signals(qqq, max_window=60)
     assert above.shape == (n_days, 60)
+    assert valid.shape == (n_days, 60)
     assert above.dtype == np.bool_
-    # SMA1 is the price itself → strictly equal → never strictly above
+    assert valid.dtype == np.bool_
+    # SMA1 is the price itself → not a meaningful signal → valid=False always
     assert not above[:, 0].any()
+    assert not valid[:, 0].any()
+    # SMA(w) validity: days 0..w-2 invalid, w-1..end valid
+    for w in range(2, 8):
+        assert not valid[: w - 1, w - 1].any(), f"warmup days for w={w} should be invalid"
+        assert valid[w - 1:, w - 1].all(), f"post-warmup days for w={w} should be valid"
 
 
 def test_run_backtest_deterministic():
     df = _frame_with_qqq(np.linspace(100.0, 300.0, 200))
-    above = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
     tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
     sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
-    a = run_backtest(above, tqqq_ret, sqqq_ret, 5, 20, 5, 20, slippage_bp=5.0)
-    b = run_backtest(above, tqqq_ret, sqqq_ret, 5, 20, 5, 20, slippage_bp=5.0)
+    a = run_backtest(above, valid, tqqq_ret, sqqq_ret, 5, 20, 5, 20, slippage_bp=5.0)
+    b = run_backtest(above, valid, tqqq_ret, sqqq_ret, 5, 20, 5, 20, slippage_bp=5.0)
     for x, y in zip(a, b, strict=True):
         if isinstance(x, float) and np.isnan(x):
             assert np.isnan(y)
@@ -111,7 +118,7 @@ def test_monotone_up_qqq_long_tqqq_wins():
     n = 300
     qqq = 100.0 * (1.005 ** np.arange(n))  # ~0.5%/day → strong uptrend
     df = _frame_with_qqq(qqq)
-    above = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
     tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
     sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
 
@@ -119,7 +126,7 @@ def test_monotone_up_qqq_long_tqqq_wins():
     # near day-2 and basically never exit. buy_S/sell_S are short-leg knobs
     # that don't fire here.
     final, sharpe, mdd, calmar, n_trades, t_long, t_short, t_cash = run_backtest(
-        above, tqqq_ret, sqqq_ret, buy_T=2, sell_T=2, buy_S=2, sell_S=2, slippage_bp=5.0
+        above, valid, tqqq_ret, sqqq_ret, buy_T=2, sell_T=2, buy_S=2, sell_S=2, slippage_bp=5.0
     )
     # Should spend almost all time long, retain most of TQQQ buy-and-hold
     # (some drag from waiting for SMA(2) to warm up + entry slippage).
@@ -139,18 +146,85 @@ def test_monotone_down_qqq_short_sqqq_wins():
     n = 300
     qqq = 100.0 * (0.995 ** np.arange(n))  # ~0.5%/day downtrend
     df = _frame_with_qqq(qqq)
-    above = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
     tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
     sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
 
     final, sharpe, mdd, calmar, n_trades, t_long, t_short, t_cash = run_backtest(
-        above, tqqq_ret, sqqq_ret, buy_T=2, sell_T=2, buy_S=2, sell_S=2, slippage_bp=5.0
+        above, valid, tqqq_ret, sqqq_ret, buy_T=2, sell_T=2, buy_S=2, sell_S=2, slippage_bp=5.0
     )
     # Should spend almost all time short
     assert t_short > 0.90
     assert t_long < 0.01
     # And beat cash by a lot (SQQQ compounds positively when QQQ falls)
     assert final > 5.0
+
+
+def test_no_spurious_short_during_sma_warmup():
+    """Regression for codex iter-1: invalid SMA must not fire the SHORT entry.
+
+    Previously `not above[d, w-1]` evaluated True for days 0..w-2 (SMA window
+    not yet filled), so every combo entered SHORT_SQQQ on day 0 and during
+    the warmup period regardless of price action — a systematic bias that
+    poisoned the entire 3.35M-combo sweep.
+
+    Set up a strong uptrend with a long buy_S window: day-0 to day buy_S-2
+    have no valid short-leg SMA, so the strategy must stay CASH (or enter
+    LONG once buy_T warms up) rather than entering SHORT_SQQQ.
+    """
+    n = 80
+    qqq = 100.0 * (1.01 ** np.arange(n))  # strong uptrend → SQQQ would lose
+    df = _frame_with_qqq(qqq)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
+    tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
+    sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
+
+    # buy_T = sell_T = 60: long-leg warm-up takes 59 days. buy_S = sell_S = 50:
+    # short-leg warm-up takes 49 days. During days 0..48, BOTH legs are
+    # invalid — the strategy must stay CASH. The bug pre-fix would short
+    # SQQQ on day 0 (col_bS[0]=False, validity ignored).
+    final, _, _, _, n_trades, t_long, t_short, t_cash = run_backtest(
+        above, valid, tqqq_ret, sqqq_ret,
+        buy_T=60, sell_T=60, buy_S=50, sell_S=50, slippage_bp=5.0,
+    )
+    # All 80 days are within the warmup of one or both legs; the strategy
+    # must never enter SHORT_SQQQ in an uptrending universe with no valid
+    # short signal.
+    assert t_short == 0.0, f"expected no short days during warmup, got {t_short}"
+    # And since the long leg only warms up at day 59 (and uptrend never
+    # crosses below SMA(60)), strategy should be in LONG_TQQQ for days
+    # 59..79 (~26% of the run) and CASH before then.
+    assert t_long > 0.20
+    assert t_cash > 0.65
+
+
+def test_sma1_column_is_never_tradable():
+    """Regression for codex iter-1: SMA(1) is structurally False / invalid.
+
+    The cumsum path skips w=1 and column 0 stays all-False. Pre-fix, the
+    backtest treated `not above[d, 0]` as a valid SHORT_SQQQ trigger, so a
+    combo with buy_S=1 would short on every day where the strategy was in
+    CASH — equivalent to a "permanent short" strategy. Post-fix, valid[:, 0]
+    is all False, so SMA(1) windows produce zero trades.
+    """
+    n = 100
+    qqq = 100.0 + np.linspace(0, 50, n)  # uptrend, can't matter what the trend is
+    df = _frame_with_qqq(qqq)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=10)
+    tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
+    sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
+
+    # All four legs at window=1 → all four signal columns are valid=False.
+    # Strategy must stay 100% CASH the whole run (no trades, equity=1.0).
+    final, _, _, _, n_trades, t_long, t_short, t_cash = run_backtest(
+        above, valid, tqqq_ret, sqqq_ret,
+        buy_T=1, sell_T=1, buy_S=1, sell_S=1, slippage_bp=5.0,
+    )
+    assert n_trades == 0
+    assert t_cash == 1.0
+    assert t_long == 0.0
+    assert t_short == 0.0
+    assert final == 1.0
 
 
 def test_sweep_resumability(tmp_path: Path):

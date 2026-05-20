@@ -65,11 +65,16 @@ def _file_sha256(path: Path) -> str:
 
 def _equity_curve_for(prices: pd.DataFrame, combo: tuple[int, int, int, int],
                       slippage_bp: float, max_window: int) -> pd.Series:
-    """Replay one combo in-Python (slow but only called for top-5) and return an equity series."""
+    """Replay one combo in-Python (slow but only called for top-5) and return an equity series.
+
+    Must mirror :func:`rainier.backtest.tqqq_sma_sweep.run_backtest` exactly,
+    including the validity gating on entry/exit signals — otherwise the
+    equity curve drawn in the report diverges from the sweep's final_value.
+    """
     qqq = prices["qqq"].to_numpy(dtype=np.float64)
     tqqq = prices["tqqq"].to_numpy(dtype=np.float64)
     sqqq = prices["sqqq"].to_numpy(dtype=np.float64)
-    above = precompute_sma_signals(qqq, max_window=max_window)
+    above, valid = precompute_sma_signals(qqq, max_window=max_window)
     tqqq_ret = (tqqq[1:] / tqqq[:-1]) - 1.0
     sqqq_ret = (sqqq[1:] / sqqq[:-1]) - 1.0
     bT, sT, bS, sS = combo
@@ -84,11 +89,15 @@ def _equity_curve_for(prices: pd.DataFrame, combo: tuple[int, int, int, int],
     col_sT = above[:, sT - 1]
     col_bS = above[:, bS - 1]
     col_sS = above[:, sS - 1]
+    v_bT = valid[:, bT - 1]
+    v_sT = valid[:, sT - 1]
+    v_bS = valid[:, bS - 1]
+    v_sS = valid[:, sS - 1]
 
-    if col_bT[0]:
+    if v_bT[0] and col_bT[0]:
         state = LONG_TQQQ
         equity *= 1.0 - slip
-    elif not col_bS[0]:
+    elif v_bS[0] and not col_bS[0]:
         state = SHORT_SQQQ
         equity *= 1.0 - slip
     eq[0] = equity
@@ -98,17 +107,17 @@ def _equity_curve_for(prices: pd.DataFrame, combo: tuple[int, int, int, int],
             equity *= 1.0 + tqqq_ret[d - 1]
         elif state == SHORT_SQQQ:
             equity *= 1.0 + sqqq_ret[d - 1]
-        if state == LONG_TQQQ and not col_sT[d]:
+        if state == LONG_TQQQ and v_sT[d] and not col_sT[d]:
             state = 0
             equity *= 1.0 - slip
-        elif state == SHORT_SQQQ and col_sS[d]:
+        elif state == SHORT_SQQQ and v_sS[d] and col_sS[d]:
             state = 0
             equity *= 1.0 - slip
         if state == 0:
-            if col_bT[d]:
+            if v_bT[d] and col_bT[d]:
                 state = LONG_TQQQ
                 equity *= 1.0 - slip
-            elif not col_bS[d]:
+            elif v_bS[d] and not col_bS[d]:
                 state = SHORT_SQQQ
                 equity *= 1.0 - slip
         eq[d] = equity

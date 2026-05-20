@@ -102,22 +102,31 @@ def iter_phase1_combos(max_window: int = 60) -> Iterator[tuple[int, int, int, in
 # ---------------------------------------------------------------------------
 
 
-def precompute_sma_signals(qqq_close: np.ndarray, max_window: int = 60) -> np.ndarray:
-    """Return a ``(n_days, max_window)`` bool matrix: ``QQQ_close > SMA_n`` per day.
+def precompute_sma_signals(qqq_close: np.ndarray, max_window: int = 60) -> tuple[np.ndarray, np.ndarray]:
+    """Return two ``(n_days, max_window)`` bool matrices: ``(above, valid)``.
+
+    ``above[d, w-1]`` = ``QQQ_close[d] > SMA_w[d]`` (long-signal truthy / short-signal falsy).
+    ``valid[d, w-1]`` = the SMA for window ``w`` is computable at day ``d``.
 
     SMA is implemented with a cumulative-sum trick so the cost is O(n_days)
     per window, vectorized across windows. Days where the SMA cannot be
-    computed (window not yet filled) yield ``False`` in both directions, i.e.
-    no signal — the inner backtest treats them as "stay in current state".
+    computed (window not yet filled) yield ``above = False`` AND
+    ``valid = False`` — the inner backtest must check ``valid`` before
+    interpreting either polarity of ``above`` as a tradable signal.
+    Without the ``valid`` mask, ``not above[...]`` would spuriously fire the
+    SHORT_SQQQ entry during warmup and on the SMA(1) column (where the
+    signal is structurally False, not "QQQ below SMA").
     """
     qqq_close = np.ascontiguousarray(qqq_close, dtype=np.float64)
     n = qqq_close.shape[0]
     above = np.zeros((n, max_window), dtype=np.bool_)
+    valid = np.zeros((n, max_window), dtype=np.bool_)
     if max_window < 1:
-        return above
-    # SMA1 = the price itself → "above" is the trivially-false signal. We
-    # leave column 0 as zeros explicitly (rather than going through the
-    # cumsum path) so floating-point rounding can't flicker the signal.
+        return above, valid
+    # SMA1 = the price itself → "above" is the trivially-false signal AND
+    # the signal is not meaningful (price never strictly above itself), so
+    # column 0 stays valid=False — callers must not use buy_T/sell_T/buy_S/
+    # sell_S = 1 expecting a real signal.
     # Cumulative sum with a leading zero so SMA_n[d] = (csum[d+1] - csum[d+1-n]) / n
     csum = np.concatenate([[0.0], np.cumsum(qqq_close)])
     for w in range(2, max_window + 1):
@@ -125,9 +134,9 @@ def precompute_sma_signals(qqq_close: np.ndarray, max_window: int = 60) -> np.nd
             break
         sma = (csum[w:] - csum[:-w]) / w
         # First valid index is w-1 (days 0..w-2 don't have a full window)
-        valid = qqq_close[w - 1:] > sma
-        above[w - 1:, w - 1] = valid
-    return above
+        above[w - 1:, w - 1] = qqq_close[w - 1:] > sma
+        valid[w - 1:, w - 1] = True
+    return above, valid
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +147,7 @@ def precompute_sma_signals(qqq_close: np.ndarray, max_window: int = 60) -> np.nd
 @njit(cache=True, fastmath=False)
 def run_backtest(
     above: np.ndarray,
+    valid: np.ndarray,
     tqqq_ret: np.ndarray,
     sqqq_ret: np.ndarray,
     buy_T: int,
@@ -150,13 +160,18 @@ def run_backtest(
 
     Parameters
     ----------
-    above:
-        Bool matrix from :func:`precompute_sma_signals`, shape ``(n_days, W)``.
+    above, valid:
+        Bool matrices from :func:`precompute_sma_signals`, shape ``(n_days, W)``.
+        ``valid[d, w-1]`` is True when SMA(w) is computable at day d. The
+        backtest treats ``valid=False`` as "no signal" — neither a long
+        trigger nor a short trigger fires. Without this check, the negated
+        long-signal ``not above[...]`` would spuriously enter SHORT_SQQQ
+        during warmup or on the structural-False SMA(1) column.
     tqqq_ret, sqqq_ret:
         Daily simple returns of TQQQ and SQQQ, shape ``(n_days - 1,)``.
         Element ``i`` is the return from day ``i`` close to day ``i+1`` close.
     buy_T, sell_T, buy_S, sell_S:
-        1-based SMA windows. Indexed into ``above`` as ``w - 1``.
+        1-based SMA windows. Indexed into ``above``/``valid`` as ``w - 1``.
     slippage_bp:
         Round-trip slippage in basis points, paid on each state transition.
         5 bp = 0.0005 of equity per transition.
@@ -174,11 +189,15 @@ def run_backtest(
     n_days = above.shape[0]
     slip = slippage_bp * 1e-4  # bps → fraction of equity per transition
 
-    # State columns
+    # State columns. v_bT/v_sT/... mask the warmup period and SMA(1).
     col_bT = above[:, buy_T - 1]
     col_sT = above[:, sell_T - 1]
     col_bS = above[:, buy_S - 1]
     col_sS = above[:, sell_S - 1]
+    v_bT = valid[:, buy_T - 1]
+    v_sT = valid[:, sell_T - 1]
+    v_bS = valid[:, buy_S - 1]
+    v_sS = valid[:, sell_S - 1]
 
     state = CASH
     equity = 1.0
@@ -193,14 +212,14 @@ def run_backtest(
     daily = np.empty(n_days, dtype=np.float64)
     daily[0] = 0.0
 
-    # Day 0: no prior return; just enter on day-0 signals (we don't have a
-    # "prior" carry yet, but we do start with equity = 1.0). On day 0 we
-    # only attempt entry, not exit (nothing to exit).
-    if col_bT[0]:
+    # Day 0: no prior return; just attempt entry on day-0 signals (we only
+    # attempt entry, not exit). Entries gated on validity — an SMA that
+    # hasn't warmed up is "no signal", not "signal-false".
+    if v_bT[0] and col_bT[0]:
         state = LONG_TQQQ
         equity *= 1.0 - slip
         n_trades += 1
-    elif not col_bS[0]:
+    elif v_bS[0] and not col_bS[0]:
         state = SHORT_SQQQ
         equity *= 1.0 - slip
         n_trades += 1
@@ -223,23 +242,25 @@ def run_backtest(
             equity *= 1.0 + sqqq_ret[d - 1]
         # CASH: no change
 
-        # 2) Exit signal
-        if state == LONG_TQQQ and not col_sT[d]:
+        # 2) Exit signal — only fire when the exit SMA is computable.
+        # Treat an invalid exit SMA as "stay in position" (we'd rather hold
+        # than exit on a non-signal).
+        if state == LONG_TQQQ and v_sT[d] and not col_sT[d]:
             state = CASH
             equity *= 1.0 - slip
             n_trades += 1
-        elif state == SHORT_SQQQ and col_sS[d]:
+        elif state == SHORT_SQQQ and v_sS[d] and col_sS[d]:
             state = CASH
             equity *= 1.0 - slip
             n_trades += 1
 
-        # 3) Entry signal if now flat
+        # 3) Entry signal if now flat — entry SMAs must be computable.
         if state == CASH:
-            if col_bT[d]:
+            if v_bT[d] and col_bT[d]:
                 state = LONG_TQQQ
                 equity *= 1.0 - slip
                 n_trades += 1
-            elif not col_bS[d]:
+            elif v_bS[d] and not col_bS[d]:
                 state = SHORT_SQQQ
                 equity *= 1.0 - slip
                 n_trades += 1
@@ -378,6 +399,7 @@ class _PoolCtx:
     """Read-only context shared with worker processes via initializer."""
 
     above: np.ndarray
+    valid: np.ndarray
     tqqq_ret: np.ndarray
     sqqq_ret: np.ndarray
     slippage_bp: float
@@ -388,12 +410,20 @@ class _PoolCtx:
 _WORKER_CTX: _PoolCtx | None = None
 
 
-def _worker_init(above: np.ndarray, tqqq_ret: np.ndarray, sqqq_ret: np.ndarray, slip: float) -> None:
+def _worker_init(
+    above: np.ndarray,
+    valid: np.ndarray,
+    tqqq_ret: np.ndarray,
+    sqqq_ret: np.ndarray,
+    slip: float,
+) -> None:
     global _WORKER_CTX
-    _WORKER_CTX = _PoolCtx(above=above, tqqq_ret=tqqq_ret, sqqq_ret=sqqq_ret, slippage_bp=slip)
+    _WORKER_CTX = _PoolCtx(
+        above=above, valid=valid, tqqq_ret=tqqq_ret, sqqq_ret=sqqq_ret, slippage_bp=slip
+    )
     # Warm up the JIT once per worker by running on a 1x1 combo
     if above.shape[0] >= 2:
-        run_backtest(above, tqqq_ret, sqqq_ret, 1, 1, 1, 1, slippage_bp=slip)
+        run_backtest(above, valid, tqqq_ret, sqqq_ret, 1, 1, 1, 1, slippage_bp=slip)
 
 
 def _worker_run(combo: tuple[int, int, int, int]) -> tuple[int, int, int, int, float, float, float, float, int, float, float, float]:
@@ -401,7 +431,8 @@ def _worker_run(combo: tuple[int, int, int, int]) -> tuple[int, int, int, int, f
     assert ctx is not None, "worker not initialized"
     bT, sT, bS, sS = combo
     out = run_backtest(
-        ctx.above, ctx.tqqq_ret, ctx.sqqq_ret, bT, sT, bS, sS, slippage_bp=ctx.slippage_bp
+        ctx.above, ctx.valid, ctx.tqqq_ret, ctx.sqqq_ret,
+        bT, sT, bS, sS, slippage_bp=ctx.slippage_bp,
     )
     return (bT, sT, bS, sS, *out)
 
@@ -486,7 +517,7 @@ def run_sweep(
     if qqq.shape[0] < max_window + 2:
         raise ValueError(f"need at least {max_window + 2} bars; got {qqq.shape[0]}")
 
-    above = precompute_sma_signals(qqq, max_window=max_window)
+    above, valid = precompute_sma_signals(qqq, max_window=max_window)
     tqqq_ret = (tqqq[1:] / tqqq[:-1]) - 1.0
     sqqq_ret = (sqqq[1:] / sqqq[:-1]) - 1.0
 
@@ -508,7 +539,7 @@ def run_sweep(
 
     if n_workers == 1:
         # In-process — simpler stack trace for debugging tests
-        _worker_init(above, tqqq_ret, sqqq_ret, slippage_bp)
+        _worker_init(above, valid, tqqq_ret, sqqq_ret, slippage_bp)
         for combo in todo:
             pending.append(_worker_run(combo))
             done_count += 1
@@ -523,7 +554,7 @@ def run_sweep(
         with ctx.Pool(
             processes=n_workers,
             initializer=_worker_init,
-            initargs=(above, tqqq_ret, sqqq_ret, slippage_bp),
+            initargs=(above, valid, tqqq_ret, sqqq_ret, slippage_bp),
         ) as pool:
             # imap_unordered to surface progress as workers complete
             for row in pool.imap_unordered(_worker_run, todo, chunksize=256):
@@ -571,11 +602,13 @@ def walk_forward_top_n(
         qqq = slice_df["qqq"].to_numpy(dtype=np.float64)
         tqqq = slice_df["tqqq"].to_numpy(dtype=np.float64)
         sqqq = slice_df["sqqq"].to_numpy(dtype=np.float64)
-        above = precompute_sma_signals(qqq, max_window=max_window)
+        above, valid = precompute_sma_signals(qqq, max_window=max_window)
         tqqq_ret = (tqqq[1:] / tqqq[:-1]) - 1.0
         sqqq_ret = (sqqq[1:] / sqqq[:-1]) - 1.0
         bT, sT, bS, sS = combo
-        return run_backtest(above, tqqq_ret, sqqq_ret, bT, sT, bS, sS, slippage_bp=slippage_bp)[0]
+        return run_backtest(
+            above, valid, tqqq_ret, sqqq_ret, bT, sT, bS, sS, slippage_bp=slippage_bp
+        )[0]
 
     train_vals = []
     test_vals = []
