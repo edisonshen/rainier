@@ -214,3 +214,49 @@ def test_sweep_pool_size_one_works(tmp_path: Path):
         "n_trades", "time_in_long", "time_in_short", "time_in_cash",
     }
     assert required_cols.issubset(set(out.columns))
+
+
+def test_render_report_handles_missing_walkforward(tmp_path: Path):
+    """Regression: report should render even if walkforward parquet doesn't exist.
+
+    The docstring on `render_report` and the `pd.DataFrame()` fallback at the
+    top of the function both promise graceful degradation when the walkforward
+    file is missing. Previously `_top50_table` would crash with KeyError on
+    `set_index(['buy_T', ...])` because the empty fallback DataFrame has no
+    columns.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    # Build a real (tiny) sweep so results.parquet has the expected schema
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    run_sweep(
+        df,
+        results_path=results_path,
+        max_window=4,
+        n_workers=1,
+        slippage_bp=5.0,
+        flush_every=25,
+    )
+
+    # Intentionally point at a nonexistent walkforward file
+    missing_wf = tmp_path / "does_not_exist.parquet"
+    out_html = tmp_path / "report.html"
+
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=missing_wf,
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+    )
+    assert out_html.exists()
+    html = out_html.read_text(encoding="utf-8")
+    # Should still render the top-50 table (with empty train/test/delta cells)
+    assert "top-50 winners" in html
+    # Section 7 should show the missing-walkforward fallback
+    assert "Walk-forward parquet not found" in html

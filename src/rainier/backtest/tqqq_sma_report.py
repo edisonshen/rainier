@@ -345,9 +345,16 @@ def _section(num: int, title: str, anchor: str, body: str) -> str:
 def _top50_table(top: pd.DataFrame, wf: pd.DataFrame) -> str:
     """Top-50 table; highlight in-sample vs out-of-sample delta from walkforward."""
     # Top-50 keyed by combo. Pull WF columns when present.
-    wf_indexed = wf.set_index(["buy_T", "sell_T", "buy_S", "sell_S"])[
-        ["final_value_train", "final_value_test"]
-    ].to_dict("index")
+    # wf may be the empty `pd.DataFrame()` fallback when walkforward parquet is
+    # missing — guard the indexing so the table still renders (just without
+    # train/test/delta columns populated).
+    required = {"buy_T", "sell_T", "buy_S", "sell_S", "final_value_train", "final_value_test"}
+    if not wf.empty and required.issubset(wf.columns):
+        wf_indexed = wf.set_index(["buy_T", "sell_T", "buy_S", "sell_S"])[
+            ["final_value_train", "final_value_test"]
+        ].to_dict("index")
+    else:
+        wf_indexed = {}
 
     rows = ["<table class=\"data\"><thead><tr>"
             "<th>#</th><th>buy_T</th><th>sell_T</th><th>buy_S</th><th>sell_S</th>"
