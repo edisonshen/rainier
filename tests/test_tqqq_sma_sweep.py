@@ -128,7 +128,7 @@ def test_monotone_up_qqq_long_tqqq_wins():
     # Very loose buy_T (small window), tight sell_T (also small) so we go long
     # near day-2 and basically never exit. buy_S/sell_S are short-leg knobs
     # that don't fire here.
-    final, sharpe, mdd, calmar, n_trades, t_long, t_short, t_cash = run_backtest(
+    final, sharpe, mdd, calmar, n_trades, t_long, t_short, t_cash, _curve_hash = run_backtest(
         above, valid, tqqq_ret, sqqq_ret, buy_T=2, sell_T=2, buy_S=2, sell_S=2, slippage_bp=5.0
     )
     # Should spend almost all time long, retain most of TQQQ buy-and-hold
@@ -153,7 +153,7 @@ def test_monotone_down_qqq_short_sqqq_wins():
     tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
     sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
 
-    final, sharpe, mdd, calmar, n_trades, t_long, t_short, t_cash = run_backtest(
+    final, sharpe, mdd, calmar, n_trades, t_long, t_short, t_cash, _curve_hash = run_backtest(
         above, valid, tqqq_ret, sqqq_ret, buy_T=2, sell_T=2, buy_S=2, sell_S=2, slippage_bp=5.0
     )
     # Should spend almost all time short
@@ -186,7 +186,7 @@ def test_no_spurious_short_during_sma_warmup():
     # short-leg warm-up takes 49 days. During days 0..48, BOTH legs are
     # invalid — the strategy must stay CASH. The bug pre-fix would short
     # SQQQ on day 0 (col_bS[0]=False, validity ignored).
-    final, _, _, _, n_trades, t_long, t_short, t_cash = run_backtest(
+    final, _, _, _, n_trades, t_long, t_short, t_cash, _curve_hash = run_backtest(
         above, valid, tqqq_ret, sqqq_ret,
         buy_T=60, sell_T=60, buy_S=50, sell_S=50, slippage_bp=5.0,
     )
@@ -290,7 +290,7 @@ def test_sma1_column_is_never_tradable():
 
     # All four legs at window=1 → all four signal columns are valid=False.
     # Strategy must stay 100% CASH the whole run (no trades, equity=1.0).
-    final, _, _, _, n_trades, t_long, t_short, t_cash = run_backtest(
+    final, _, _, _, n_trades, t_long, t_short, t_cash, _curve_hash = run_backtest(
         above, valid, tqqq_ret, sqqq_ret,
         buy_T=1, sell_T=1, buy_S=1, sell_S=1, slippage_bp=5.0,
     )
@@ -416,15 +416,79 @@ def test_render_report_handles_missing_walkforward(tmp_path: Path):
 
 
 def test_compute_strategy_id_deterministic_and_uint64():
-    """Identical inputs → identical id; small perturbations → different id."""
-    a = compute_strategy_id(4.02, 312, 0.5123, 0.2456)
-    b = compute_strategy_id(4.02, 312, 0.5123, 0.2456)
+    """compute_strategy_id is a passthrough on the path-identity curve_hash
+    emitted by run_backtest. Identical hash → identical id; distinct hash
+    → distinct id; result fits in uint64.
+
+    Post codex iter-3: the old summary-metric heuristic was replaced with
+    a true path-equivalence signal (FNV-1a over the daily state sequence).
+    This test now exercises the new contract.
+    """
+    a = compute_strategy_id(0x123456789ABCDEF0)
+    b = compute_strategy_id(0x123456789ABCDEF0)
     assert a == b
     assert 0 <= a < 2**64
-    # 2-dp precision on final_value: 4.024 rounds to 4.02 → same id
-    assert compute_strategy_id(4.024, 312, 0.5123, 0.2456) == a
-    # Distinct trade count → distinct id
-    assert compute_strategy_id(4.02, 313, 0.5123, 0.2456) != a
+    # Distinct hash → distinct id
+    assert compute_strategy_id(0x123456789ABCDEF1) != a
+    # Zero is a valid (though unlikely) id
+    assert compute_strategy_id(0) == 0
+    # Top of range: uint64 max wraps cleanly
+    assert compute_strategy_id(2**64 - 1) == 2**64 - 1
+
+
+def test_curve_hash_distinguishes_different_paths():
+    """codex iter-3 regression: the strategy_id MUST be path-sensitive, not a
+    rounded-summary heuristic.
+
+    Pre-fix, compute_strategy_id hashed (final_value, n_trades, time_in_long,
+    time_in_short) rounded to 2-4 dp. Two combos with genuinely-different
+    equity curves could land on the same rounded tuple and get collapsed.
+
+    Post-fix, the strategy_id is derived from a path-identity hash (FNV-1a
+    over the daily end-of-day state sequence) computed inside run_backtest.
+    Distinct state sequences MUST produce distinct curve_hashes.
+
+    Here we construct two combos in a varied-price universe where the long
+    and short legs are both active. Different SMA windows produce different
+    entry/exit timings → different state sequences → must produce different
+    curve_hashes. The pre-fix heuristic would not reliably catch this
+    distinction if the summary stats happened to round the same way.
+    """
+    # Oscillating universe so both legs are active and different SMA windows
+    # produce genuinely different state sequences.
+    n = 300
+    t = np.arange(n)
+    qqq = 100.0 + 30.0 * np.sin(t / 15.0) + 0.05 * t  # oscillating + drift
+    df = _frame_with_qqq(qqq)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
+    tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
+    sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
+
+    out_a = run_backtest(above, valid, tqqq_ret, sqqq_ret, 5, 10, 5, 10, slippage_bp=5.0)
+    out_b = run_backtest(above, valid, tqqq_ret, sqqq_ret, 7, 12, 7, 12, slippage_bp=5.0)
+
+    # 9-tuple now: last field is the curve_hash.
+    curve_hash_a = int(out_a[-1])
+    curve_hash_b = int(out_b[-1])
+    assert curve_hash_a != curve_hash_b, (
+        f"different SMA windows produced same curve_hash — fingerprint isn't path-sensitive\n"
+        f"  a (5,10,5,10): {curve_hash_a}\n  b (7,12,7,12): {curve_hash_b}"
+    )
+    # compute_strategy_id passthrough must preserve the distinction.
+    assert compute_strategy_id(curve_hash_a) != compute_strategy_id(curve_hash_b)
+
+
+def test_curve_hash_identical_combos_match():
+    """Same combo, same inputs → same curve_hash (deterministic FNV-1a)."""
+    n = 200
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    above, valid = precompute_sma_signals(df["qqq"].to_numpy(), max_window=60)
+    tqqq_ret = (df["tqqq"].to_numpy()[1:] / df["tqqq"].to_numpy()[:-1]) - 1.0
+    sqqq_ret = (df["sqqq"].to_numpy()[1:] / df["sqqq"].to_numpy()[:-1]) - 1.0
+    out_a = run_backtest(above, valid, tqqq_ret, sqqq_ret, 4, 8, 4, 8, slippage_bp=5.0)
+    out_b = run_backtest(above, valid, tqqq_ret, sqqq_ret, 4, 8, 4, 8, slippage_bp=5.0)
+    assert int(out_a[-1]) == int(out_b[-1])
 
 
 def test_dormant_short_legs_share_strategy_id(tmp_path: Path):

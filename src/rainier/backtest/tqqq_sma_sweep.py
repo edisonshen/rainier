@@ -155,7 +155,7 @@ def run_backtest(
     buy_S: int,
     sell_S: int,
     slippage_bp: float = 5.0,
-) -> tuple[float, float, float, float, int, float, float, float]:
+) -> tuple[float, float, float, float, int, float, float, float, int]:
     """Run one (buy_T, sell_T, buy_S, sell_S) combo on the precomputed signals.
 
     Parameters
@@ -179,12 +179,20 @@ def run_backtest(
     Returns
     -------
     tuple
-        ``(final_value, sharpe, max_dd, calmar, n_trades, time_long, time_short, time_cash)``
+        ``(final_value, sharpe, max_dd, calmar, n_trades, time_long, time_short, time_cash, curve_hash)``
         where ``time_*`` are in [0, 1].
 
         ``sharpe`` is annualized using sqrt(252) on daily strategy returns;
         ``max_dd`` is in [0, 1] (e.g. 0.42 == 42% peak-to-trough drawdown);
         ``calmar`` = annualized return / max_dd (NaN if no drawdown observed).
+
+        ``curve_hash`` is a uint64 polynomial rolling hash of the daily
+        end-of-day state sequence (CASH/LONG/SHORT). Two combos that produce
+        IDENTICAL state sequences (and therefore identical equity curves on
+        the same input returns) have the same hash; distinct sequences
+        collide with probability ~2**-64. This is the load-bearing input
+        to ``compute_strategy_id`` — it's a true path-equivalence signal,
+        not a rounded-summary heuristic.
     """
     n_days = above.shape[0]
     slip = slippage_bp * 1e-4  # bps → fraction of equity per transition
@@ -212,6 +220,16 @@ def run_backtest(
     daily = np.empty(n_days, dtype=np.float64)
     daily[0] = 0.0
 
+    # Polynomial rolling hash over the end-of-day state sequence. uint64
+    # arithmetic wraps naturally in numba; xor-then-multiply by an
+    # odd prime gives ~uniform distribution over distinct sequences.
+    # FNV-1a prime is 0x100000001b3 = 1099511628211 — battle-tested choice
+    # for byte-stream hashing; we treat the per-day state (0/1/2) as a byte.
+    # Two combos with identical state sequences → identical curve_hash;
+    # distinct sequences collide with probability ~2**-64.
+    curve_hash = np.uint64(0xcbf29ce484222325)  # FNV-1a 64-bit offset basis
+    _fnv_prime = np.uint64(0x100000001b3)
+
     # Day 0: no prior return; just attempt entry on day-0 signals (we only
     # attempt entry, not exit). Entries gated on validity — an SMA that
     # hasn't warmed up is "no signal", not "signal-false".
@@ -231,6 +249,8 @@ def run_backtest(
         short_days += 1
     else:
         cash_days += 1
+    # FNV-1a step: xor state byte, then multiply by prime (uint64 wraps).
+    curve_hash = (curve_hash ^ np.uint64(state)) * _fnv_prime
 
     for d in range(1, n_days):
         prev_equity = equity
@@ -283,6 +303,8 @@ def run_backtest(
             short_days += 1
         else:
             cash_days += 1
+        # FNV-1a step on end-of-day state.
+        curve_hash = (curve_hash ^ np.uint64(state)) * _fnv_prime
 
     # Sharpe (annualized, rf=0)
     mean = 0.0
@@ -321,6 +343,7 @@ def run_backtest(
         long_days * inv_n,
         short_days * inv_n,
         cash_days * inv_n,
+        curve_hash,
     )
 
 
@@ -426,38 +449,28 @@ def _worker_init(
         run_backtest(above, valid, tqqq_ret, sqqq_ret, 1, 1, 1, 1, slippage_bp=slip)
 
 
-def compute_strategy_id(
-    final_value: float,
-    n_trades: int,
-    time_in_long: float,
-    time_in_short: float,
-) -> int:
+def compute_strategy_id(curve_hash: int) -> int:
     """Deterministic uint64 fingerprint of an equity curve.
 
-    Two combos that produce the same final value, trade count, and time-in-leg
-    fractions (rounded to 2 dp on final_value and 4 dp on the time fractions)
-    almost certainly share the same equity curve — in practice this happens
-    whenever a dormant parameter varies freely (e.g. sell_S when buy_S=1
-    structurally never fires).
+    Trivial passthrough on the path-identity hash emitted by
+    :func:`run_backtest`. Two combos with identical end-of-day state
+    sequences (and therefore identical equity curves on the same input
+    returns) produce the same ``curve_hash`` from the FNV-1a polynomial
+    rolling hash in the njit-compiled backtest loop — see ``run_backtest``
+    for the construction. Distinct sequences collide with probability
+    ~2**-64.
 
-    The hash is the SHA-256 of the canonical tuple representation, truncated
-    to 64 bits. Pure-python deterministic — does NOT rely on Python's runtime
-    hash randomization.
-
-    ASCII flow::
-
-        (fv≈, n, tL≈, tS≈) → repr → utf-8 → SHA-256 → first 8 bytes → uint64
+    Codex review iter-3 superseded an earlier implementation that hashed
+    rounded summary metrics (``final_value, n_trades, time_in_long,
+    time_in_short``). That heuristic could conflate genuinely-distinct
+    strategies whose summary stats happened to round to the same tuple —
+    e.g. two combos with identical final value but different intermediate
+    paths. The fix is a TRUE path-equivalence signal computed inside the
+    backtest, not a post-hoc summary hash. Keep this function as the
+    public API so callers (`_worker_run`, future leaderboard tools)
+    don't reach into the backtest return tuple directly.
     """
-    key = (
-        round(float(final_value), 2),
-        int(n_trades),
-        round(float(time_in_long), 4),
-        round(float(time_in_short), 4),
-    )
-    digest = hashlib.sha256(repr(key).encode("utf-8")).digest()
-    # First 8 bytes interpreted big-endian → uint64. Plenty of entropy for
-    # leaderboard-level dedup; collisions on distinct curves are astronomical.
-    return int.from_bytes(digest[:8], "big", signed=False)
+    return int(np.uint64(curve_hash))
 
 
 def _worker_run(combo: tuple[int, int, int, int]) -> tuple[int, int, int, int, float, float, float, float, int, float, float, float, int]:
@@ -468,9 +481,12 @@ def _worker_run(combo: tuple[int, int, int, int]) -> tuple[int, int, int, int, f
         ctx.above, ctx.valid, ctx.tqqq_ret, ctx.sqqq_ret,
         bT, sT, bS, sS, slippage_bp=ctx.slippage_bp,
     )
-    final_value, _sharpe, _mdd, _calmar, n_trades, t_long, t_short, _t_cash = out
-    sid = compute_strategy_id(final_value, n_trades, t_long, t_short)
-    return (bT, sT, bS, sS, *out, sid)
+    # run_backtest returns 9 values ending with curve_hash; pull curve_hash off
+    # and feed it to compute_strategy_id (currently a passthrough). The row
+    # written to parquet has 13 columns: 4 grid params + 8 metrics + strategy_id.
+    *metrics, curve_hash = out
+    sid = compute_strategy_id(curve_hash)
+    return (bT, sT, bS, sS, *metrics, sid)
 
 
 _RESULT_COLUMNS = [
@@ -515,7 +531,7 @@ def _existing_combo_set(results_path: Path) -> set[tuple[int, int, int, int]]:
 # parquet must be rejected (new column, changed dtype, changed semantics of
 # an existing column). Read into the sweep fingerprint so a stale parquet
 # from a prior schema is refused at sweep time.
-_RESULTS_SCHEMA_VERSION = "v2-strategy_id"
+_RESULTS_SCHEMA_VERSION = "v3-curve-hash-strategy_id"
 
 
 def _sweep_fingerprint(prices: pd.DataFrame, slippage_bp: float, max_window: int) -> str:
