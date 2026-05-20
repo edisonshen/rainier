@@ -846,9 +846,15 @@ def test_phase2_report_includes_comparison_section(tmp_path: Path):
     # Headline section anchor + title present
     assert 'id="compare"' in html
     assert "Phase 1 vs Phase 2 comparison" in html
-    # The headline must be a clear YES or NO
+    # The headline must be one of YES / NO / DEGENERATE (see
+    # _phase1_vs_phase2_section — DEGENERATE fires when the anti-trend
+    # winner has n_trades=1, i.e. is effective buy-and-hold).
     assert ("headline" in html.lower())
-    assert ("YES — best anti-trend combo" in html or "NO — trend-following winner" in html)
+    assert (
+        "YES — best anti-trend combo" in html
+        or "NO — trend-following winner" in html
+        or "DEGENERATE — best anti-trend combo" in html
+    )
     # The comparison table must show all three rows
     assert "Phase 1 (trend-following" in html
     assert "Phase 2 only (anti-trend" in html
@@ -889,6 +895,103 @@ def test_phase1_report_unchanged_no_comparison_section(tmp_path: Path):
     # Phase 1 TOC ends at 9. reproducibility
     assert "9. reproducibility" in html
     assert "10. reproducibility" not in html
+
+
+def test_phase2_headline_flags_degenerate_buy_and_hold_winner(tmp_path: Path):
+    """Regression for the suspicious (2,1,1,1) headline finding.
+
+    The unconstrained Phase-2 grid surfaces combos like (2,1,1,1) where
+    ``sell_T=1`` makes the long-exit signal structurally dormant (the SMA(1)
+    validity mask in :func:`precompute_sma_signals` prevents the exit firing),
+    so the strategy enters LONG_TQQQ once on the first ``QQQ > SMA2`` bar and
+    never exits. The resulting equity curve is essentially leveraged
+    buy-and-hold TQQQ with one slippage hit — NOT a discovered anti-trend
+    strategy.
+
+    The headline must disclose this rather than dressing it up as a winning
+    anti-trend combo. The disclosure is gated on ``n_trades == 1`` for the
+    anti-trend winner row. We construct a monotonically rising price series
+    so the (2,1,1,1)-like combo enters early and rides up forever, producing
+    n_trades=1.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 120
+    # Monotonic upward drift → QQQ > SMA always after warmup, never exits.
+    # TQQQ rides up; SQQQ never used since short leg is dormant (buy_S=1).
+    qqq = 100.0 + np.arange(n, dtype=np.float64) * 0.5
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+
+    # Verify the suspect combo (2,1,1,1) really did produce n_trades=1
+    out = pd.read_parquet(results_path)
+    row = out[
+        (out["buy_T"] == 2)
+        & (out["sell_T"] == 1)
+        & (out["buy_S"] == 1)
+        & (out["sell_S"] == 1)
+    ].iloc[0]
+    assert int(row.n_trades) == 1, (
+        "(2,1,1,1) on monotonic-up data must enter once and never exit — "
+        "this is the buy-and-hold-equivalent scenario the headline must flag."
+    )
+
+    out_html = tmp_path / "phase2_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=2,
+    )
+    html = out_html.read_text(encoding="utf-8")
+    # The DEGENERATE headline must fire (the anti-trend winner has n_trades=1)
+    assert "DEGENERATE — best anti-trend combo" in html
+    # The supporting explanatory note must call out SMA(1) validity gating
+    assert "SMA(1) validity mask" in html
+    # The buy-and-hold flag must appear in the trades column
+    assert "(buy-and-hold)" in html
+    # The qbox must use the warn (not accent) color since this is NOT a win
+    assert "border-left-color: var(--warn)" in html
+
+
+def test_phase2_headline_celebrates_meaningful_anti_trend_winner(tmp_path: Path):
+    """When the anti-trend winner has n_trades > 1, it's a real comparator
+    and the headline should say YES (positive framing). Sanity check that we
+    only suppress to DEGENERATE for the n_trades=1 case.
+    """
+    from rainier.backtest.tqqq_sma_report import _phase1_vs_phase2_section
+
+    # Hand-build a tiny frame with one anti-trend row that has n_trades > 1
+    # and beats the trend-following winner. We bypass the sweep entirely so
+    # the test is independent of the inner backtest's stochasticity on
+    # synthetic data.
+    rows = [
+        # Trend-following winner (sell >= buy on both legs), n_trades=10
+        {"buy_T": 2, "sell_T": 5, "buy_S": 2, "sell_S": 5,
+         "final_value": 100.0, "sharpe": 0.8, "max_dd": 0.3, "calmar": 1.5,
+         "n_trades": 10, "time_in_long": 0.7, "time_in_short": 0.0,
+         "time_in_cash": 0.3, "strategy_id": np.uint64(1)},
+        # Anti-trend winner (sell_T < buy_T), n_trades=20 — meaningful churn
+        {"buy_T": 5, "sell_T": 2, "buy_S": 2, "sell_S": 5,
+         "final_value": 200.0, "sharpe": 1.0, "max_dd": 0.4, "calmar": 1.2,
+         "n_trades": 20, "time_in_long": 0.5, "time_in_short": 0.3,
+         "time_in_cash": 0.2, "strategy_id": np.uint64(2)},
+    ]
+    df = pd.DataFrame(rows)
+    html = _phase1_vs_phase2_section(df)
+    assert "YES — best anti-trend combo" in html
+    assert "DEGENERATE" not in html
+    # qbox uses accent (positive) color
+    assert "border-left-color: var(--accent)" in html
 
 
 def test_sweep_phase2_extends_phase1_parquet(tmp_path: Path):

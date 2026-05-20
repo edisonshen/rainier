@@ -498,6 +498,17 @@ def _phase1_vs_phase2_section(df_raw: pd.DataFrame) -> str:
     anti-trend additions only Phase 2 explores), then reports the best
     final_value in each. The headline answer is whether the anti-trend best
     exceeds the trend-following best.
+
+    Degenerate-winner disclosure (review iter-1): a combo with ``n_trades == 1``
+    entered the market once and never exited — it is effectively leveraged
+    buy-and-hold with a one-time slippage hit, not a "strategy". The
+    unconstrained Phase 2 grid surfaces these (e.g. ``sell_T=1`` with the
+    SMA(1) validity mask makes the long-exit signal structurally never fire,
+    so the inner backtest never exits LONG_TQQQ). When the headline winner is
+    of this shape, the section calls it out explicitly instead of presenting
+    it as a discovered strategy that beats trend-following — the user needs
+    to know they are looking at "buy and hold TQQQ" wearing an SMA mask, not
+    a real mean-reversion strategy.
     """
     p1_mask = (df_raw["sell_T"] >= df_raw["buy_T"]) & (df_raw["sell_S"] >= df_raw["buy_S"])
     p1 = df_raw[p1_mask]
@@ -515,18 +526,21 @@ def _phase1_vs_phase2_section(df_raw: pd.DataFrame) -> str:
                 int(p1_best.buy_S), int(p1_best.sell_S))
     p1_final = float(p1_best.final_value)
     p1_sharpe = float(p1_best.sharpe)
+    p1_trades = int(p1_best.n_trades)
 
     if anti_best is not None:
         anti_combo = (int(anti_best.buy_T), int(anti_best.sell_T),
                       int(anti_best.buy_S), int(anti_best.sell_S))
         anti_final = float(anti_best.final_value)
         anti_sharpe = float(anti_best.sharpe)
+        anti_trades = int(anti_best.n_trades)
         anti_beats_p1 = anti_final > p1_final
         delta_pct = (anti_final - p1_final) / p1_final * 100.0
     else:
         anti_combo = None
         anti_final = float("nan")
         anti_sharpe = float("nan")
+        anti_trades = 0
         anti_beats_p1 = False
         delta_pct = float("nan")
 
@@ -540,42 +554,133 @@ def _phase1_vs_phase2_section(df_raw: pd.DataFrame) -> str:
         if anti_best is not None else float("nan")
     )
 
-    headline_class = "delta-pos" if anti_beats_p1 else "delta-neg"
-    headline_text = (
-        f"YES — best anti-trend combo {anti_combo} returns "
-        f"{anti_final:.2f}×, beating trend-following winner {p1_combo} "
-        f"({p1_final:.2f}×) by {delta_pct:+.1f}%."
-        if anti_beats_p1 else
-        f"NO — trend-following winner {p1_combo} ({p1_final:.2f}×) "
-        f"remains the overall best. Best anti-trend combo {anti_combo} "
-        f"lands at {anti_final:.2f}× ({delta_pct:+.1f}% vs trend-following "
-        f"winner), in the {anti_pctile_in_p1:.1f}th percentile of "
-        f"trend-following combos."
-    )
+    # Degenerate detection: n_trades == 1 means the strategy entered once and
+    # never exited — effective buy-and-hold (TQQQ-only if it entered LONG, or
+    # SQQQ-short if it entered the short leg). Report this honestly rather
+    # than dressing it up as a discovered anti-trend strategy.
+    anti_is_degenerate = anti_best is not None and anti_trades == 1
+    p1_is_degenerate = p1_trades == 1
+
+    # DEGENERATE banner fires whenever the anti-trend representative has
+    # n_trades=1 — entered once and never exited. This is the buy-and-hold
+    # equivalent we want to surface honestly, regardless of whether it
+    # nominally "beats" the Phase-1 winner. (On real data anti beats Phase 1
+    # by the slippage-on-entry gap; on monotonic synthetic data they tie
+    # because P1's winner also enters once and never exits. Either way the
+    # reader needs to know the headline is buy-and-hold-equivalent.)
+    if anti_is_degenerate:
+        headline_class = "delta-neg"
+        comparator = (
+            f"Trend-following winner {p1_combo} ({p1_final:.2f}×, "
+            f"n_trades={p1_trades}) is the meaningful comparator."
+            if not p1_is_degenerate else
+            f"Phase-1 winner {p1_combo} is ALSO n_trades=1 — both regimes' "
+            f"top rows are buy-and-hold-equivalents."
+        )
+        if anti_beats_p1:
+            beat_clause = (
+                f"nominally beats trend-following winner {p1_combo} "
+                f"({p1_final:.2f}×) by {delta_pct:+.1f}%, but"
+            )
+        else:
+            beat_clause = (
+                f"matches/trails trend-following winner {p1_combo} "
+                f"({p1_final:.2f}×) by {delta_pct:+.1f}% and"
+            )
+        headline_text = (
+            f"DEGENERATE — best anti-trend combo {anti_combo} returns "
+            f"{anti_final:.2f}×; it {beat_clause} has n_trades=1 (entered "
+            f"once and never exited). This is effectively buy-and-hold TQQQ "
+            f"with a single slippage hit, not a real anti-trend strategy. "
+            f"The exit signal is structurally dormant (e.g. sell_T=1 → "
+            f"SMA(1) validity mask prevents the exit firing). {comparator} "
+            f"Phase 2's unconstrained grid surfaces these "
+            f"buy-and-hold-equivalents — interpret the headline accordingly."
+        )
+    elif anti_beats_p1:
+        headline_class = "delta-pos"
+        headline_text = (
+            f"YES — best anti-trend combo {anti_combo} returns "
+            f"{anti_final:.2f}× (n_trades={anti_trades}), beating "
+            f"trend-following winner {p1_combo} ({p1_final:.2f}×, "
+            f"n_trades={p1_trades}) by {delta_pct:+.1f}%."
+        )
+    else:
+        headline_class = "delta-neg"
+        headline_text = (
+            f"NO — trend-following winner {p1_combo} ({p1_final:.2f}×) "
+            f"remains the overall best. Best anti-trend combo {anti_combo} "
+            f"lands at {anti_final:.2f}× ({delta_pct:+.1f}% vs trend-following "
+            f"winner), in the {anti_pctile_in_p1:.1f}th percentile of "
+            f"trend-following combos."
+        )
+
+    def _trade_cell(n: int) -> str:
+        if n == 1:
+            return f'{n} <span style="color: var(--warn);">(buy-and-hold)</span>'
+        return f'{n}'
 
     table = (
         '<table class="data"><thead><tr>'
         '<th>regime</th><th class="num">combos</th>'
         '<th>best combo</th><th class="num">final×</th>'
-        '<th class="num">Sharpe</th>'
+        '<th class="num">Sharpe</th><th class="num">trades</th>'
         '</tr></thead><tbody>'
         f'<tr><td>Phase 1 (trend-following: sell ≥ buy)</td>'
         f'<td class="num">{n_p1:,}</td>'
         f'<td><code>{p1_combo}</code></td>'
         f'<td class="num">{p1_final:.2f}×</td>'
-        f'<td class="num">{p1_sharpe:.2f}</td></tr>'
+        f'<td class="num">{p1_sharpe:.2f}</td>'
+        f'<td class="num">{_trade_cell(p1_trades)}</td></tr>'
         f'<tr><td>Phase 2 only (anti-trend: sell &lt; buy on at least one leg)</td>'
         f'<td class="num">{n_anti:,}</td>'
         f'<td><code>{anti_combo}</code></td>'
         f'<td class="num">{anti_final:.2f}×</td>'
-        f'<td class="num">{anti_sharpe:.2f}</td></tr>'
+        f'<td class="num">{anti_sharpe:.2f}</td>'
+        f'<td class="num">{_trade_cell(anti_trades)}</td></tr>'
         f'<tr><td><strong>Phase 2 (full grid)</strong></td>'
         f'<td class="num"><strong>{n_total:,}</strong></td>'
         f'<td><code>{overall_combo}</code></td>'
         f'<td class="num"><strong>{overall_final:.2f}×</strong></td>'
-        f'<td class="num">{float(overall_best.sharpe):.2f}</td></tr>'
+        f'<td class="num">{float(overall_best.sharpe):.2f}</td>'
+        f'<td class="num">{_trade_cell(int(overall_best.n_trades))}</td></tr>'
         '</tbody></table>'
     )
+
+    # Border color: green only when anti-trend strictly beats AND isn't
+    # degenerate; otherwise warn — either anti-trend lost OR the "winner" is
+    # a buy-and-hold-equivalent that shouldn't be celebrated. We also warn
+    # when the Phase-1 winner itself is degenerate (the leaderboard is being
+    # led by a buy-and-hold-equivalent), so the reader doesn't take the
+    # comparison at face value.
+    is_meaningful_win = (
+        anti_beats_p1 and not anti_is_degenerate and not p1_is_degenerate
+    )
+    qbox_color = "var(--accent)" if is_meaningful_win else "var(--warn)"
+
+    # Optional supporting paragraph called out when the winners are degenerate
+    # — gives the reader the cause (SMA(1) validity gating) without burying it
+    # in the discussion section.
+    degenerate_note = ""
+    if anti_is_degenerate or p1_is_degenerate:
+        legs = []
+        if p1_is_degenerate:
+            legs.append(f"the Phase-1 winner {p1_combo}")
+        if anti_is_degenerate:
+            legs.append(f"the anti-trend winner {anti_combo}")
+        legs_phrase = " and ".join(legs)
+        degenerate_note = (
+            f'<p class="meta"><strong>note.</strong> {legs_phrase} '
+            f'shows n_trades=1 — entered once, never exited. The exit leg is '
+            f'structurally dormant (typically <code>sell_T=1</code> or '
+            f'<code>sell_S=1</code>, where the SMA(1) validity mask in '
+            f'<code>precompute_sma_signals</code> prevents the exit signal '
+            f'from firing). The result is equivalent to leveraged buy-and-hold '
+            f'starting from the first entry signal, with one slippage hit. '
+            f'These rows are visible on the leaderboard because the dedup pass '
+            f'keeps one representative per equity curve; the <code>n_eq</code> '
+            f'column in §3 shows how many grid combos collapse to each curve.</p>'
+        )
 
     return (
         '<p>Phase 2 drops the <code>sell ≥ buy</code> trend-following '
@@ -584,10 +689,11 @@ def _phase1_vs_phase2_section(df_raw: pd.DataFrame) -> str:
         'set; the remaining 9,611,100 are anti-trend regions where one or '
         'both legs use a shorter exit-SMA than entry-SMA — i.e. mean-reversion '
         'rather than momentum.</p>'
-        f'<div class="qbox" style="border-left-color: {"var(--accent)" if anti_beats_p1 else "var(--warn)"};">'
+        f'<div class="qbox" style="border-left-color: {qbox_color};">'
         f'<strong>headline.</strong> <span class="{headline_class}">'
         f'{headline_text}</span></div>'
         + table +
+        degenerate_note +
         '<p class="meta">Walk-forward generalization for these comparisons '
         'lives in §8 (the in-sample / out-of-sample scatter); the headline '
         'above is the FULL-sample top combo from each regime, not the '
