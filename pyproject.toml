@@ -42,6 +42,11 @@ dependencies = [
     "scikit-learn>=1.8.0",
     # Stats — Mann-Whitney U for per-signal contribution test in eval.py
     "scipy>=1.11",
+    # JIT — TQQQ/SQQQ SMA sweep inner loop (~3.35M backtests, ~0.3ms each).
+    # 0.59 is the floor that supports our @njit(cache=True) usage; 0.64+ ships
+    # on every platform we actually run on, and we let shap's tighter pin win
+    # on python 3.14 + x86_64-darwin (a platform combo we never use).
+    "numba>=0.59",
     # Round-trip YAML for the auto-research accept handler — preserves
     # comments + key order when ACTION_EXECUTORS mutate config/settings.yaml.
     "ruamel.yaml>=0.18",
@@ -77,6 +82,14 @@ select = ["E", "F", "I", "N", "W"]
 # - E741 (ambiguous var name like `l`/`I`): 18 hits, scientific code convention
 # - N806 (lowercase var name): 10 hits, ditto
 ignore = ["E501", "E741", "N806"]
+
+[tool.ruff.lint.per-file-ignores]
+# Spec-named identifiers `buy_T`, `sell_T`, `buy_S`, `sell_S` (long/short legs).
+# Renaming to ruff-friendly lowercase would diverge from the task spec + the
+# parquet column names; keep the casing and waive N802/N803 here.
+"src/rainier/backtest/tqqq_sma_sweep.py" = ["N802", "N803"]
+"src/rainier/backtest/tqqq_sma_report.py" = ["N802", "N803"]
+"tests/test_tqqq_sma_sweep.py" = ["N802", "N803", "N806"]
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.30,<2"]

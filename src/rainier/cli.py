@@ -3084,3 +3084,106 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
         )
 
     click.echo("done.")
+
+
+# ---------------------------------------------------------------------------
+# sma-sweep — TQQQ/SQQQ rotation backtest grid
+# ---------------------------------------------------------------------------
+
+
+@cli.command("sma-sweep")
+@click.option("--phase", type=click.IntRange(1, 2), default=1, show_default=True,
+              help="1 = trend-following (sell >= buy). 2 = anti-trend (out of scope for v1).")
+@click.option("--max-window", type=int, default=60, show_default=True,
+              help="Largest SMA window to sweep over.")
+@click.option("--refresh-data", is_flag=True, default=False,
+              help="Force a fresh yfinance download even if the parquet cache is valid.")
+@click.option("--n-workers", type=int, default=None,
+              help="Pool size. Defaults to os.cpu_count().")
+@click.option("--flush-every", type=int, default=50_000, show_default=True,
+              help="Flush results to parquet every N completed combos (crash safety).")
+@click.option("--slippage-bp", type=float, default=5.0, show_default=True,
+              help="Round-trip slippage per state transition, basis points.")
+@click.option("--report/--no-report", default=True, show_default=True,
+              help="Render the HTML report after the sweep completes.")
+@click.option("--report-path", type=click.Path(), default="docs/tqqq-sma-backtest-report.html",
+              show_default=True, help="Output path for the HTML report.")
+@click.option("--top-n-walkforward", type=int, default=100, show_default=True,
+              help="How many top-by-final_value combos to walk-forward.")
+def sma_sweep(
+    phase: int,
+    max_window: int,
+    refresh_data: bool,
+    n_workers: int | None,
+    flush_every: int,
+    slippage_bp: float,
+    report: bool,
+    report_path: str,
+    top_n_walkforward: int,
+) -> None:
+    """Sweep the TQQQ/SQQQ rotation strategy over the QQQ-SMA grid.
+
+    Phase 1 enforces sell >= buy on both legs (trend-following). Phase 2
+    (anti-trend) is intentionally not implemented in v1 — the design supports
+    it via a follow-up command, but it is out of scope for this task.
+    """
+    import time as _time
+
+    from rainier.backtest.tqqq_sma_sweep import (
+        RESULTS_CACHE_PATH,
+        fetch_prices,
+        run_sweep,
+        walk_forward_top_n,
+    )
+
+    if phase != 1:
+        raise click.ClickException(
+            "Phase 2 (anti-trend) is not implemented in v1. "
+            "The parquet schema is forward-compatible; a Phase-2 sweep "
+            "will be a separate dispatch."
+        )
+
+    click.echo("Fetching prices (QQQ/TQQQ/SQQQ)…")
+    prices = fetch_prices(refresh=refresh_data)
+    click.echo(f"  rows: {len(prices)}  range: {prices.index[0].date()} → {prices.index[-1].date()}")
+
+    click.echo(f"Running Phase-1 sweep (max_window={max_window}, slippage={slippage_bp} bp)…")
+    t0 = _time.time()
+    results_path = run_sweep(
+        prices,
+        results_path=RESULTS_CACHE_PATH,
+        max_window=max_window,
+        n_workers=n_workers,
+        slippage_bp=slippage_bp,
+        flush_every=flush_every,
+        progress=True,
+    )
+    elapsed = _time.time() - t0
+    click.echo(f"Sweep done in {elapsed/60:.1f} min → {results_path}")
+
+    click.echo(f"Walk-forward top-{top_n_walkforward}…")
+    top_wf = walk_forward_top_n(
+        prices,
+        results_path=results_path,
+        top_n=top_n_walkforward,
+        slippage_bp=slippage_bp,
+        max_window=max_window,
+    )
+    top_wf_path = results_path.parent / "top_walkforward.parquet"
+    top_wf.to_parquet(top_wf_path, index=False)
+    click.echo(f"  → {top_wf_path}")
+
+    if report:
+        from rainier.backtest.tqqq_sma_report import render_report
+
+        click.echo(f"Rendering report → {report_path}")
+        render_report(
+            prices=prices,
+            results_path=results_path,
+            walkforward_path=top_wf_path,
+            output_path=Path(report_path),
+            sweep_wall_seconds=elapsed,
+            slippage_bp=slippage_bp,
+            max_window=max_window,
+        )
+        click.echo("done.")
