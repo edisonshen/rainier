@@ -97,6 +97,32 @@ def iter_phase1_combos(max_window: int = 60) -> Iterator[tuple[int, int, int, in
             yield (bT, sT, bS, sS)
 
 
+def iter_phase2_combos(max_window: int = 60) -> Iterator[tuple[int, int, int, int]]:
+    """Yield EVERY ``(buy_T, sell_T, buy_S, sell_S)`` in ``{1..max_window}^4``.
+
+    Phase 2 = unconstrained: explores all 4-tuples regardless of sell vs buy
+    ordering. This is a strict superset of :func:`iter_phase1_combos` — the
+    additional ``max_window**4 - (T(max_window))**2`` combos (where
+    ``T(n) = n*(n+1)/2``) are the anti-trend combos with ``sell_T < buy_T``
+    OR ``sell_S < buy_S``.
+
+    For ``max_window=60`` the count is ``60**4 = 12_960_000`` total,
+    which is 9_611_100 more than Phase 1's 3_348_900.
+
+    Iteration order: same nested ``(bT, sT) -> (bS, sS)`` lexicographic
+    structure as Phase 1 so the trend-following combos appear in the same
+    relative order; the anti-trend additions are interleaved naturally.
+    Order matters for resumability — :func:`run_sweep` skips combos already
+    present in ``results.parquet``, so a Phase-2 rerun after a Phase-1 run
+    fills exactly the missing 9.61M rows without recomputing.
+    """
+    for bT in range(1, max_window + 1):
+        for sT in range(1, max_window + 1):
+            for bS in range(1, max_window + 1):
+                for sS in range(1, max_window + 1):
+                    yield (bT, sT, bS, sS)
+
+
 # ---------------------------------------------------------------------------
 # Precomputed signal matrix
 # ---------------------------------------------------------------------------
@@ -602,18 +628,23 @@ def run_sweep(
     flush_every: int = 50_000,
     max_combos: int | None = None,
     progress: bool = False,
+    phase: int = 1,
 ) -> Path:
-    """Run the Phase-1 sweep, appending results to a parquet cache.
+    """Run the SMA sweep, appending results to a parquet cache.
 
     Resumable: if ``results_path`` already has rows for some combos, those are
     skipped. On crash mid-sweep, the most recent completed flush is on disk.
 
-    Cache safety: a SHA-256 fingerprint of ``(prices, slippage_bp, max_window)``
-    is written alongside ``results_path`` as ``<name>.fingerprint.txt``. If a
-    pre-existing ``results.parquet`` was produced from different inputs, the
-    sweep aborts with :class:`SweepInputMismatchError` — never silently mixes
-    rows. Delete the parquet (and its companion fingerprint) to force a clean
-    rerun, or write to a different path.
+    Cache safety: a SHA-256 fingerprint of ``(prices, slippage_bp, max_window,
+    schema_version)`` is written alongside ``results_path`` as
+    ``<name>.fingerprint.txt``. If a pre-existing ``results.parquet`` was
+    produced from different inputs, the sweep aborts with
+    :class:`SweepInputMismatchError` — never silently mixes rows. Delete the
+    parquet (and its companion fingerprint) to force a clean rerun, or write
+    to a different path. Note: ``phase`` is intentionally NOT part of the
+    fingerprint — Phase 2 is a strict superset of Phase 1's combo set, so a
+    Phase-1 parquet can be extended by a Phase-2 sweep on the SAME prices /
+    slippage / max_window without re-running the Phase-1 rows.
 
     Parameters
     ----------
@@ -622,7 +653,7 @@ def run_sweep(
     results_path:
         Output parquet. Parent dir created if missing.
     max_window:
-        Top SMA window. Phase 1 default 60.
+        Top SMA window. Default 60.
     n_workers:
         Pool size. ``None`` → ``os.cpu_count()``. ``1`` runs in-process for
         easy debugging.
@@ -632,6 +663,9 @@ def run_sweep(
         Flush rows to disk every N completed backtests. Crash-safety knob.
     max_combos:
         For testing — cap the total combo count. ``None`` runs the whole grid.
+    phase:
+        1 (trend-following only, ``T(60)^2 = 3_348_900`` combos) or 2
+        (full grid, ``60^4 = 12_960_000`` combos). Phase 2 is a superset.
 
     Returns
     -------
@@ -670,9 +704,27 @@ def run_sweep(
     tqqq_ret = (tqqq[1:] / tqqq[:-1]) - 1.0
     sqqq_ret = (sqqq[1:] / sqqq[:-1]) - 1.0
 
+    if phase == 1:
+        combo_iter = iter_phase1_combos(max_window=max_window)
+    elif phase == 2:
+        combo_iter = iter_phase2_combos(max_window=max_window)
+    else:
+        raise ValueError(f"phase must be 1 or 2, got {phase}")
+
+    # Materializing the full combo list into ``todo`` keeps the worker-pool
+    # feed simple (Pool.imap_unordered needs a sized iterable for chunksize
+    # accounting + progress) at the cost of memory: a fresh Phase-2 default
+    # sweep allocates ~12.96M 4-tuples (~600MB of Python objects). On the
+    # worker machine that ran this sweep, peak RSS was ~3GB which fit
+    # comfortably; on a memory-constrained CI runner this could OOM.
+    # Codex review iter-2 [P2] noted this — deferred: chunked iteration
+    # would require rethinking the resume/done tracking + the progress
+    # reporting, and the empirical memory fit at default scale doesn't
+    # justify that complexity yet. Tracking issue: see TODOS.md if it
+    # becomes a problem on smaller hosts.
     done = _existing_combo_set(results_path)
     todo: list[tuple[int, int, int, int]] = []
-    for combo in iter_phase1_combos(max_window=max_window):
+    for combo in combo_iter:
         if combo in done:
             continue
         todo.append(combo)
@@ -773,6 +825,7 @@ def walk_forward_top_n(
     split_date: str = "2019-01-01",
     slippage_bp: float = 5.0,
     max_window: int = 60,
+    phase: int = 1,
 ) -> pd.DataFrame:
     """Rerun the deduped top-N by ``final_value`` on a train/test split.
 
@@ -780,9 +833,20 @@ def walk_forward_top_n(
     walk-forward set is N truly distinct strategies (one per equity curve)
     rather than N near-copies of the same strategy with dormant parameters
     varying. Adds ``final_value_train`` and ``final_value_test`` columns to
-    the returned DataFrame (only for the top-N rows, not the whole 3.35M).
+    the returned DataFrame (only for the top-N rows, not the whole grid).
+
+    ``phase`` argument (codex review iter-2 [P2]): when ``phase=1`` we filter
+    the parquet to the trend-following subset BEFORE dedup/top-N selection.
+    This is the cache-contamination guard's walk-forward analog — if a
+    Phase-2 sweep has populated the parquet on disk and the user then runs
+    ``rainier sma-sweep --phase 1``, the walk-forward parquet must contain
+    only Phase-1 (trend-following) winners, not anti-trend rows masquerading
+    as Phase 1 validation. ``phase=2`` reads the full grid as before.
     """
     df = pd.read_parquet(results_path)
+    if phase == 1:
+        p1_mask = (df["sell_T"] >= df["buy_T"]) & (df["sell_S"] >= df["buy_S"])
+        df = df[p1_mask].reset_index(drop=True)
     df = dedup_by_strategy_id(df)
     top = df.nlargest(top_n, "final_value").reset_index(drop=True)
 

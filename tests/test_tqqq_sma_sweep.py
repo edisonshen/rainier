@@ -25,9 +25,11 @@ from rainier.backtest.tqqq_sma_sweep import (
     compute_strategy_id,
     dedup_by_strategy_id,
     iter_phase1_combos,
+    iter_phase2_combos,
     precompute_sma_signals,
     run_backtest,
     run_sweep,
+    walk_forward_top_n,
 )
 
 # ---------------------------------------------------------------------------
@@ -701,3 +703,455 @@ def test_report_strategy_type_classifier():
     # Pure-cash (neither leg fired) is BOTH-legs, NOT LONG-only or SHORT-only
     # — neither leg is structurally dormant, just no signal fired.
     assert _strategy_type(0.0, 0.0) == "BOTH-legs"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: unconstrained 12.96M grid (adds anti-trend combos to Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def test_iter_phase2_combos_count_full_grid():
+    """Phase 2 enumerates ALL (buy_T, sell_T, buy_S, sell_S) with each in
+    {1..max_window}, no constraint. Count = max_window**4.
+
+    For max_window=60 this is 60^4 = 12,960,000. The set is exactly Phase 1
+    (1830*1830 = 3,348,900 trend-following) ∪ Phase 2-only anti-trend
+    (9,611,100 combos where sell_T < buy_T OR sell_S < buy_S).
+
+    We count via the generator instead of materializing a 12.96M-tuple list
+    (codex review iter-1 [P2]) — sum(1 for _ in ...) is O(1) memory and
+    keeps pytest from chewing ~1GB on small CI runners.
+    """
+    count = sum(1 for _ in iter_phase2_combos(max_window=60))
+    assert count == 60 * 60 * 60 * 60 == 12_960_000
+
+
+def test_iter_phase2_combos_no_constraint_small_window():
+    """max_window=3 → 3^4 = 81 combos vs Phase 1's 36 (trend-following only)."""
+    combos = list(iter_phase2_combos(max_window=3))
+    assert len(combos) == 81
+    # Every tuple is in range
+    for bT, sT, bS, sS in combos:
+        assert 1 <= bT <= 3
+        assert 1 <= sT <= 3
+        assert 1 <= bS <= 3
+        assert 1 <= sS <= 3
+
+
+def test_iter_phase2_combos_are_unique():
+    """No duplicates — the generator emits each (bT, sT, bS, sS) exactly once."""
+    combos = list(iter_phase2_combos(max_window=5))
+    assert len(combos) == 5 ** 4
+    assert len(set(combos)) == len(combos)
+
+
+def test_iter_phase2_superset_of_phase1():
+    """Phase 2 strictly contains Phase 1; the difference is the anti-trend set.
+
+    Anti-trend set = combos where sell_T < buy_T OR sell_S < buy_S.
+    For max_window=60: |Phase 2| - |Phase 1| = 12_960_000 - 3_348_900 = 9_611_100.
+    """
+    mw = 6  # small enough to enumerate both sets
+    p1 = set(iter_phase1_combos(max_window=mw))
+    p2 = set(iter_phase2_combos(max_window=mw))
+    # Phase 1 ⊆ Phase 2
+    assert p1.issubset(p2)
+    # The difference is anti-trend (sell < buy on at least one leg)
+    anti = p2 - p1
+    for bT, sT, bS, sS in anti:
+        assert (sT < bT) or (sS < bS), (
+            f"({bT},{sT},{bS},{sS}) is in p2 - p1 but is trend-following"
+        )
+    # Cardinality check for max_window=60 case (analytic count)
+    p1_60 = 1830 * 1830  # 3,348,900
+    p2_60 = 60 ** 4       # 12,960,000
+    assert p2_60 - p1_60 == 9_611_100
+
+
+def test_iter_phase2_emits_anti_trend_examples():
+    """Spot-check that classic anti-trend combos (sell < buy) are emitted."""
+    combos = set(iter_phase2_combos(max_window=10))
+    # Anti-trend long leg only
+    assert (5, 3, 5, 5) in combos
+    # Anti-trend short leg only
+    assert (5, 5, 5, 3) in combos
+    # Anti-trend both legs
+    assert (8, 2, 8, 2) in combos
+    # And the trend-following examples are still in there
+    assert (3, 5, 3, 5) in combos
+    assert (1, 10, 1, 10) in combos
+
+
+def test_sweep_phase2_emits_full_grid(tmp_path: Path):
+    """run_sweep with phase=2 must emit max_window**4 rows on a small grid.
+
+    Uses max_window=4 → 4^4 = 256 combos (vs Phase 1's 100), entirely
+    enumerable in-process. Verifies the resulting parquet contains every
+    (bT, sT, bS, sS) tuple in {1..4}^4 exactly once.
+    """
+    n = 80
+    qqq = 100.0 + 10.0 * np.sin(np.linspace(0, 6.28, n))
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "phase2.parquet"
+
+    run_sweep(
+        df,
+        results_path=results_path,
+        max_window=4,
+        n_workers=1,
+        slippage_bp=5.0,
+        flush_every=64,
+        phase=2,
+    )
+    out = pd.read_parquet(results_path)
+    assert len(out) == 4 ** 4 == 256
+    keys = {(int(r.buy_T), int(r.sell_T), int(r.buy_S), int(r.sell_S))
+            for r in out.itertuples()}
+    assert keys == {(bT, sT, bS, sS)
+                    for bT in range(1, 5)
+                    for sT in range(1, 5)
+                    for bS in range(1, 5)
+                    for sS in range(1, 5)}
+
+
+def test_phase2_report_includes_comparison_section(tmp_path: Path):
+    """Phase 2 reports must contain the Phase 1 vs Phase 2 comparison section
+    with a clear YES/NO headline answering 'does any anti-trend combo beat
+    the trend-following winner?'.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 200
+    # Mixed regime: an up-then-down-then-up oscillation so both trend-following
+    # and anti-trend combos can have non-trivial behavior.
+    t = np.arange(n)
+    qqq = 100.0 + 20.0 * np.sin(t / 25.0) + 0.05 * t
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Phase 2 sweep on a small grid so the test is fast (max_window=4 → 256 combos)
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+
+    out_html = tmp_path / "phase2_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=2,
+    )
+    assert out_html.exists()
+    html = out_html.read_text(encoding="utf-8")
+    # Headline section anchor + title present
+    assert 'id="compare"' in html
+    assert "Phase 1 vs Phase 2 comparison" in html
+    # The headline must be one of YES / NO / DEGENERATE (see
+    # _phase1_vs_phase2_section — DEGENERATE fires when the anti-trend
+    # winner has n_trades=1, i.e. is effective buy-and-hold).
+    assert ("headline" in html.lower())
+    assert (
+        "YES — best anti-trend combo" in html
+        or "NO — trend-following winner" in html
+        or "DEGENERATE — best anti-trend combo" in html
+    )
+    # The comparison table must show all three rows
+    assert "Phase 1 (trend-following" in html
+    assert "Phase 2 only (anti-trend" in html
+    assert "Phase 2 (full grid)" in html
+    # TOC must list 10 entries (extra Phase-2 section)
+    assert "10. reproducibility" in html
+
+
+def test_phase2_report_uses_max_window_derived_counts(tmp_path: Path):
+    """Codex review iter-1 [P2]: hard-coded 60-derived combo counts
+    (12,960,000 / 3,348,900 / 9,611,100) in the framing and comparison
+    sections would be wrong for any --max-window != 60. The text must derive
+    counts from the actual ``max_window`` argument.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # max_window=4 → Phase-2 grid is 4^4 = 256, Phase-1 subset is T(4)^2 = 100
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+    out_html = tmp_path / "phase2_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=2,
+    )
+    html = out_html.read_text(encoding="utf-8")
+    # Correct counts must appear (256 total, 100 trend-following, 156 anti)
+    assert "256" in html
+    assert "100" in html
+    assert "{1..4}^4" in html
+    assert "{1..4}" in html
+    # WRONG counts must NOT appear
+    assert "12,960,000" not in html
+    assert "3,348,900" not in html
+    assert "9,611,100" not in html
+    assert "{1..60}" not in html
+
+
+def test_walk_forward_top_n_filters_to_phase1_when_phase_arg_is_1(tmp_path: Path):
+    """Codex review iter-2 [P2]: when the shared parquet has been extended
+    by a Phase-2 sweep, ``walk_forward_top_n(..., phase=1)`` must restrict
+    to the trend-following subset before dedup/top-N selection. Otherwise
+    the Phase-1 walk-forward parquet would contain anti-trend Phase-2
+    winners labeled as Phase-1 validation.
+    """
+    n = 80
+    qqq = 100.0 + 10.0 * np.sin(np.linspace(0, 6.28, n))
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Populate the parquet with the full Phase-2 grid (256 combos at mw=4)
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+
+    wf_p1 = walk_forward_top_n(
+        df, results_path=results_path, top_n=20,
+        split_date="2020-02-15",  # mid-range of synthetic data
+        slippage_bp=5.0, max_window=4, phase=1,
+    )
+    # Every row in the Phase-1 walk-forward must satisfy the trend-following
+    # constraint. A bug here would surface anti-trend (sell < buy) combos.
+    assert (wf_p1["sell_T"] >= wf_p1["buy_T"]).all()
+    assert (wf_p1["sell_S"] >= wf_p1["buy_S"]).all()
+
+    # Phase 2 walk-forward (default behavior) must see the full grid —
+    # i.e. it is NOT filtered, so it can include anti-trend rows.
+    wf_p2 = walk_forward_top_n(
+        df, results_path=results_path, top_n=20,
+        split_date="2020-02-15",
+        slippage_bp=5.0, max_window=4, phase=2,
+    )
+    # Sanity: with the full grid available, p2 walk-forward sees at least as
+    # many DISTINCT (post-dedup) curves as p1 — the anti-trend rows expand
+    # the dedup'd pool. We don't assert strict >, since synthetic data can
+    # collapse heavily; just that the filter argument matters.
+    assert len(wf_p2) >= 1
+
+
+def test_phase1_report_ignores_phase2_rows_on_disk(tmp_path: Path):
+    """Codex review iter-1 [P2] (cache contamination): the same parquet is
+    shared across phases (Phase 2 is a superset of Phase 1 by design). If a
+    Phase-2 sweep has populated the parquet and the user then re-renders
+    --phase 1, the resulting report MUST contain only the trend-following
+    subset — not the full 4^4 grid masquerading as Phase 1.
+
+    We run Phase 2 first (256 combos) and then render a Phase-1 report. The
+    Phase-1 report's subtitle must claim ``T(4)^2 = 100 combos``, not 256.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Populate the parquet with the full Phase-2 grid first.
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+    assert len(pd.read_parquet(results_path)) == 256
+
+    out_html = tmp_path / "phase1_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=1,
+    )
+    html = out_html.read_text(encoding="utf-8")
+    # Subtitle must report 100 combos (Phase-1 subset), not 256
+    assert "100 combos" in html
+    assert "256 combos" not in html
+    # No Phase-2 comparison section in a Phase-1 report
+    assert 'id="compare"' not in html
+
+
+def test_phase1_report_unchanged_no_comparison_section(tmp_path: Path):
+    """Phase 1 reports (default) must NOT contain the comparison section —
+    we don't want to clobber the Phase 1 deliverable.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=1,
+    )
+
+    out_html = tmp_path / "phase1_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        # phase defaults to 1
+    )
+    html = out_html.read_text(encoding="utf-8")
+    assert 'id="compare"' not in html
+    assert "Phase 1 vs Phase 2 comparison" not in html
+    # Phase 1 TOC ends at 9. reproducibility
+    assert "9. reproducibility" in html
+    assert "10. reproducibility" not in html
+
+
+def test_phase2_headline_flags_degenerate_buy_and_hold_winner(tmp_path: Path):
+    """Regression for the suspicious (2,1,1,1) headline finding.
+
+    The unconstrained Phase-2 grid surfaces combos like (2,1,1,1) where
+    ``sell_T=1`` makes the long-exit signal structurally dormant (the SMA(1)
+    validity mask in :func:`precompute_sma_signals` prevents the exit firing),
+    so the strategy enters LONG_TQQQ once on the first ``QQQ > SMA2`` bar and
+    never exits. The resulting equity curve is essentially leveraged
+    buy-and-hold TQQQ with one slippage hit — NOT a discovered anti-trend
+    strategy.
+
+    The headline must disclose this rather than dressing it up as a winning
+    anti-trend combo. The disclosure is gated on ``n_trades == 1`` for the
+    anti-trend winner row. We construct a monotonically rising price series
+    so the (2,1,1,1)-like combo enters early and rides up forever, producing
+    n_trades=1.
+    """
+    from rainier.backtest.tqqq_sma_report import render_report
+
+    n = 120
+    # Monotonic upward drift → QQQ > SMA always after warmup, never exits.
+    # TQQQ rides up; SQQQ never used since short leg is dormant (buy_S=1).
+    qqq = 100.0 + np.arange(n, dtype=np.float64) * 0.5
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+
+    # Verify the suspect combo (2,1,1,1) really did produce n_trades=1
+    out = pd.read_parquet(results_path)
+    row = out[
+        (out["buy_T"] == 2)
+        & (out["sell_T"] == 1)
+        & (out["buy_S"] == 1)
+        & (out["sell_S"] == 1)
+    ].iloc[0]
+    assert int(row.n_trades) == 1, (
+        "(2,1,1,1) on monotonic-up data must enter once and never exit — "
+        "this is the buy-and-hold-equivalent scenario the headline must flag."
+    )
+
+    out_html = tmp_path / "phase2_report.html"
+    render_report(
+        prices=df,
+        results_path=results_path,
+        walkforward_path=tmp_path / "no_wf.parquet",
+        output_path=out_html,
+        sweep_wall_seconds=1.0,
+        slippage_bp=5.0,
+        max_window=4,
+        phase=2,
+    )
+    html = out_html.read_text(encoding="utf-8")
+    # The DEGENERATE headline must fire (the anti-trend winner has n_trades=1)
+    assert "DEGENERATE — best anti-trend combo" in html
+    # The supporting explanatory note must call out SMA(1) validity gating
+    assert "SMA(1) validity mask" in html
+    # The buy-and-hold flag must appear in the trades column
+    assert "(buy-and-hold)" in html
+    # The qbox must use the warn (not accent) color since this is NOT a win
+    assert "border-left-color: var(--warn)" in html
+
+
+def test_phase2_headline_celebrates_meaningful_anti_trend_winner(tmp_path: Path):
+    """When the anti-trend winner has n_trades > 1, it's a real comparator
+    and the headline should say YES (positive framing). Sanity check that we
+    only suppress to DEGENERATE for the n_trades=1 case.
+    """
+    from rainier.backtest.tqqq_sma_report import _phase1_vs_phase2_section
+
+    # Hand-build a tiny frame with one anti-trend row that has n_trades > 1
+    # and beats the trend-following winner. We bypass the sweep entirely so
+    # the test is independent of the inner backtest's stochasticity on
+    # synthetic data.
+    rows = [
+        # Trend-following winner (sell >= buy on both legs), n_trades=10
+        {"buy_T": 2, "sell_T": 5, "buy_S": 2, "sell_S": 5,
+         "final_value": 100.0, "sharpe": 0.8, "max_dd": 0.3, "calmar": 1.5,
+         "n_trades": 10, "time_in_long": 0.7, "time_in_short": 0.0,
+         "time_in_cash": 0.3, "strategy_id": np.uint64(1)},
+        # Anti-trend winner (sell_T < buy_T), n_trades=20 — meaningful churn
+        {"buy_T": 5, "sell_T": 2, "buy_S": 2, "sell_S": 5,
+         "final_value": 200.0, "sharpe": 1.0, "max_dd": 0.4, "calmar": 1.2,
+         "n_trades": 20, "time_in_long": 0.5, "time_in_short": 0.3,
+         "time_in_cash": 0.2, "strategy_id": np.uint64(2)},
+    ]
+    df = pd.DataFrame(rows)
+    html = _phase1_vs_phase2_section(df)
+    assert "YES — best anti-trend combo" in html
+    assert "DEGENERATE" not in html
+    # qbox uses accent (positive) color
+    assert "border-left-color: var(--accent)" in html
+
+
+def test_sweep_phase2_extends_phase1_parquet(tmp_path: Path):
+    """A Phase-1 parquet on disk + a Phase-2 rerun on the same inputs must
+    extend (not rebuild) the parquet to the full grid. Resumability across
+    phases is the key property — we don't want to re-run the 3.35M Phase-1
+    combos when the user asks for Phase 2 on top.
+    """
+    n = 80
+    qqq = 100.0 + 10.0 * np.sin(np.linspace(0, 6.28, n))
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+
+    # Phase 1 first: 10*10 = 100 combos at max_window=4
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=1,
+    )
+    phase1 = pd.read_parquet(results_path)
+    assert len(phase1) == 100
+
+    # Phase 2 extends with the remaining 156 anti-trend combos → total 256
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64, phase=2,
+    )
+    phase2 = pd.read_parquet(results_path)
+    assert len(phase2) == 256
+    # No duplicate combo keys
+    keys = phase2[["buy_T", "sell_T", "buy_S", "sell_S"]]
+    assert not keys.duplicated().any()

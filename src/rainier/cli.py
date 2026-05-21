@@ -3093,7 +3093,7 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
 
 @cli.command("sma-sweep")
 @click.option("--phase", type=click.IntRange(1, 2), default=1, show_default=True,
-              help="1 = trend-following (sell >= buy). 2 = anti-trend (out of scope for v1).")
+              help="1 = trend-following (sell >= buy). 2 = full grid (adds anti-trend).")
 @click.option("--max-window", type=int, default=60, show_default=True,
               help="Largest SMA window to sweep over.")
 @click.option("--refresh-data", is_flag=True, default=False,
@@ -3106,8 +3106,10 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
               help="Round-trip slippage per state transition, basis points.")
 @click.option("--report/--no-report", default=True, show_default=True,
               help="Render the HTML report after the sweep completes.")
-@click.option("--report-path", type=click.Path(), default="docs/tqqq-sma-backtest-report.html",
-              show_default=True, help="Output path for the HTML report.")
+@click.option("--report-path", type=click.Path(), default=None,
+              help="Output path for the HTML report. Defaults: Phase 1 → "
+                   "docs/tqqq-sma-backtest-report.html, Phase 2 → "
+                   "docs/tqqq-sma-backtest-phase2-report.html.")
 @click.option("--top-n-walkforward", type=int, default=100, show_default=True,
               help="How many top-by-final_value combos to walk-forward.")
 def sma_sweep(
@@ -3118,14 +3120,18 @@ def sma_sweep(
     flush_every: int,
     slippage_bp: float,
     report: bool,
-    report_path: str,
+    report_path: str | None,
     top_n_walkforward: int,
 ) -> None:
     """Sweep the TQQQ/SQQQ rotation strategy over the QQQ-SMA grid.
 
     Phase 1 enforces sell >= buy on both legs (trend-following). Phase 2
-    (anti-trend) is intentionally not implemented in v1 — the design supports
-    it via a follow-up command, but it is out of scope for this task.
+    drops the constraint and explores the full 4-D grid (60^4 = 12.96M combos
+    at default max_window), adding the anti-trend regions on top of Phase 1.
+
+    Phase 2 extends an existing Phase-1 parquet in place — the resumability
+    skip-set in run_sweep ensures already-completed trend-following combos
+    aren't recomputed.
     """
     import time as _time
 
@@ -3136,18 +3142,21 @@ def sma_sweep(
         walk_forward_top_n,
     )
 
-    if phase != 1:
-        raise click.ClickException(
-            "Phase 2 (anti-trend) is not implemented in v1. "
-            "The parquet schema is forward-compatible; a Phase-2 sweep "
-            "will be a separate dispatch."
+    # Default report paths differ by phase so a Phase-2 run doesn't clobber
+    # the Phase-1 report.
+    if report_path is None:
+        report_path = (
+            "docs/tqqq-sma-backtest-report.html" if phase == 1
+            else "docs/tqqq-sma-backtest-phase2-report.html"
         )
 
     click.echo("Fetching prices (QQQ/TQQQ/SQQQ)…")
     prices = fetch_prices(refresh=refresh_data)
     click.echo(f"  rows: {len(prices)}  range: {prices.index[0].date()} → {prices.index[-1].date()}")
 
-    click.echo(f"Running Phase-1 sweep (max_window={max_window}, slippage={slippage_bp} bp)…")
+    label = "trend-following" if phase == 1 else "full grid (incl. anti-trend)"
+    click.echo(f"Running Phase-{phase} sweep — {label} "
+               f"(max_window={max_window}, slippage={slippage_bp} bp)…")
     t0 = _time.time()
     results_path = run_sweep(
         prices,
@@ -3157,6 +3166,7 @@ def sma_sweep(
         slippage_bp=slippage_bp,
         flush_every=flush_every,
         progress=True,
+        phase=phase,
     )
     elapsed = _time.time() - t0
     click.echo(f"Sweep done in {elapsed/60:.1f} min → {results_path}")
@@ -3168,8 +3178,12 @@ def sma_sweep(
         top_n=top_n_walkforward,
         slippage_bp=slippage_bp,
         max_window=max_window,
+        phase=phase,
     )
-    top_wf_path = results_path.parent / "top_walkforward.parquet"
+    # Phase 2 walk-forward goes to a sibling parquet so the Phase-1 walkforward
+    # remains intact for the Phase-1 report.
+    wf_name = "top_walkforward.parquet" if phase == 1 else "top_walkforward_phase2.parquet"
+    top_wf_path = results_path.parent / wf_name
     top_wf.to_parquet(top_wf_path, index=False)
     click.echo(f"  → {top_wf_path}")
 
@@ -3177,6 +3191,9 @@ def sma_sweep(
         from rainier.backtest.tqqq_sma_report import render_report
 
         click.echo(f"Rendering report → {report_path}")
+        # Phase-2 report adds the Phase 1 vs Phase 2 comparison section. The
+        # path-1 parquet (if it exists) is loaded internally for the headline
+        # comparison; no extra CLI args needed.
         render_report(
             prices=prices,
             results_path=results_path,
@@ -3185,5 +3202,6 @@ def sma_sweep(
             sweep_wall_seconds=elapsed,
             slippage_bp=slippage_bp,
             max_window=max_window,
+            phase=phase,
         )
         click.echo("done.")

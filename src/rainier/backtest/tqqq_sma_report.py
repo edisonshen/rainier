@@ -234,16 +234,23 @@ def _heatmap_buyS_sellS(df: pd.DataFrame, fixed_buyT: int, fixed_sellT: int) -> 
 def _distribution_hist(df: pd.DataFrame, baselines: dict[str, float]) -> go.Figure:
     # final_value can span 0 → many thousands; log10 axis for readability.
     # Pre-bin in numpy to keep the embedded plotly payload to ~120 floats
-    # (instead of 3.35M points). Without this the HTML file is ~50 MB.
+    # (instead of 3.35M / 12.96M points). Without this the HTML file is
+    # ~50 MB (Phase 1) or ~200 MB (Phase 2).
     vals = df["final_value"].to_numpy()
     log_vals = np.log10(np.clip(vals, 1e-3, None))
     counts, edges = np.histogram(log_vals, bins=120)
     centers = 0.5 * (edges[:-1] + edges[1:])
     width = float(edges[1] - edges[0])
+    n_combos = len(df)
+    # Pretty-print combo count: "3.35M combos" or "12.96M combos"
+    if n_combos >= 1_000_000:
+        combo_label = f"{n_combos / 1_000_000:.2f}M combos"
+    else:
+        combo_label = f"{n_combos:,} combos"
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=centers, y=counts, width=width,
-        marker_color=_TEAL, opacity=0.85, name="3.35M combos",
+        marker_color=_TEAL, opacity=0.85, name=combo_label,
         hovertemplate="log10(final)=%{x:.2f}<br>count=%{y:,}<extra></extra>",
     ))
     for name, v in baselines.items():
@@ -482,6 +489,226 @@ def _baseline_kv_table(prices: pd.DataFrame, baselines: dict[str, float]) -> str
     return "\n".join(rows)
 
 
+def _phase1_vs_phase2_section(df_raw: pd.DataFrame, max_window: int = 60) -> str:
+    """Build the headline comparison: does any anti-trend combo beat the
+    trend-following winner?
+
+    Splits the full Phase-2 grid into the trend-following subset
+    (``sell_T >= buy_T`` AND ``sell_S >= buy_S``) and its complement (the
+    anti-trend additions only Phase 2 explores), then reports the best
+    final_value in each. The headline answer is whether the anti-trend best
+    exceeds the trend-following best.
+
+    Degenerate-winner disclosure (review iter-1): a combo with ``n_trades == 1``
+    entered the market once and never exited — it is effectively leveraged
+    buy-and-hold with a one-time slippage hit, not a "strategy". The
+    unconstrained Phase 2 grid surfaces these (e.g. ``sell_T=1`` with the
+    SMA(1) validity mask makes the long-exit signal structurally never fire,
+    so the inner backtest never exits LONG_TQQQ). When the headline winner is
+    of this shape, the section calls it out explicitly instead of presenting
+    it as a discovered strategy that beats trend-following — the user needs
+    to know they are looking at "buy and hold TQQQ" wearing an SMA mask, not
+    a real mean-reversion strategy.
+    """
+    p1_mask = (df_raw["sell_T"] >= df_raw["buy_T"]) & (df_raw["sell_S"] >= df_raw["buy_S"])
+    p1 = df_raw[p1_mask]
+    anti = df_raw[~p1_mask]
+
+    n_p1 = len(p1)
+    n_anti = len(anti)
+    n_total = len(df_raw)
+
+    p1_best = p1.nlargest(1, "final_value").iloc[0]
+    anti_best = anti.nlargest(1, "final_value").iloc[0] if n_anti else None
+    overall_best = df_raw.nlargest(1, "final_value").iloc[0]
+
+    p1_combo = (int(p1_best.buy_T), int(p1_best.sell_T),
+                int(p1_best.buy_S), int(p1_best.sell_S))
+    p1_final = float(p1_best.final_value)
+    p1_sharpe = float(p1_best.sharpe)
+    p1_trades = int(p1_best.n_trades)
+
+    if anti_best is not None:
+        anti_combo = (int(anti_best.buy_T), int(anti_best.sell_T),
+                      int(anti_best.buy_S), int(anti_best.sell_S))
+        anti_final = float(anti_best.final_value)
+        anti_sharpe = float(anti_best.sharpe)
+        anti_trades = int(anti_best.n_trades)
+        anti_beats_p1 = anti_final > p1_final
+        delta_pct = (anti_final - p1_final) / p1_final * 100.0
+    else:
+        anti_combo = None
+        anti_final = float("nan")
+        anti_sharpe = float("nan")
+        anti_trades = 0
+        anti_beats_p1 = False
+        delta_pct = float("nan")
+
+    overall_combo = (int(overall_best.buy_T), int(overall_best.sell_T),
+                     int(overall_best.buy_S), int(overall_best.sell_S))
+    overall_final = float(overall_best.final_value)
+
+    # Quantile placement: how does anti-trend best rank among trend-following?
+    anti_pctile_in_p1 = (
+        100.0 * (p1["final_value"] < anti_final).mean()
+        if anti_best is not None else float("nan")
+    )
+
+    # Degenerate detection: n_trades == 1 means the strategy entered once and
+    # never exited — effective buy-and-hold (TQQQ-only if it entered LONG, or
+    # SQQQ-short if it entered the short leg). Report this honestly rather
+    # than dressing it up as a discovered anti-trend strategy.
+    anti_is_degenerate = anti_best is not None and anti_trades == 1
+    p1_is_degenerate = p1_trades == 1
+
+    # DEGENERATE banner fires whenever the anti-trend representative has
+    # n_trades=1 — entered once and never exited. This is the buy-and-hold
+    # equivalent we want to surface honestly, regardless of whether it
+    # nominally "beats" the Phase-1 winner. (On real data anti beats Phase 1
+    # by the slippage-on-entry gap; on monotonic synthetic data they tie
+    # because P1's winner also enters once and never exits. Either way the
+    # reader needs to know the headline is buy-and-hold-equivalent.)
+    if anti_is_degenerate:
+        headline_class = "delta-neg"
+        comparator = (
+            f"Trend-following winner {p1_combo} ({p1_final:.2f}×, "
+            f"n_trades={p1_trades}) is the meaningful comparator."
+            if not p1_is_degenerate else
+            f"Phase-1 winner {p1_combo} is ALSO n_trades=1 — both regimes' "
+            f"top rows are buy-and-hold-equivalents."
+        )
+        if anti_beats_p1:
+            beat_clause = (
+                f"nominally beats trend-following winner {p1_combo} "
+                f"({p1_final:.2f}×) by {delta_pct:+.1f}%, but"
+            )
+        else:
+            beat_clause = (
+                f"matches/trails trend-following winner {p1_combo} "
+                f"({p1_final:.2f}×) by {delta_pct:+.1f}% and"
+            )
+        headline_text = (
+            f"DEGENERATE — best anti-trend combo {anti_combo} returns "
+            f"{anti_final:.2f}×; it {beat_clause} has n_trades=1 (entered "
+            f"once and never exited). This is effectively buy-and-hold TQQQ "
+            f"with a single slippage hit, not a real anti-trend strategy. "
+            f"The exit signal is structurally dormant (e.g. sell_T=1 → "
+            f"SMA(1) validity mask prevents the exit firing). {comparator} "
+            f"Phase 2's unconstrained grid surfaces these "
+            f"buy-and-hold-equivalents — interpret the headline accordingly."
+        )
+    elif anti_beats_p1:
+        headline_class = "delta-pos"
+        headline_text = (
+            f"YES — best anti-trend combo {anti_combo} returns "
+            f"{anti_final:.2f}× (n_trades={anti_trades}), beating "
+            f"trend-following winner {p1_combo} ({p1_final:.2f}×, "
+            f"n_trades={p1_trades}) by {delta_pct:+.1f}%."
+        )
+    else:
+        headline_class = "delta-neg"
+        headline_text = (
+            f"NO — trend-following winner {p1_combo} ({p1_final:.2f}×) "
+            f"remains the overall best. Best anti-trend combo {anti_combo} "
+            f"lands at {anti_final:.2f}× ({delta_pct:+.1f}% vs trend-following "
+            f"winner), in the {anti_pctile_in_p1:.1f}th percentile of "
+            f"trend-following combos."
+        )
+
+    def _trade_cell(n: int) -> str:
+        if n == 1:
+            return f'{n} <span style="color: var(--warn);">(buy-and-hold)</span>'
+        return f'{n}'
+
+    table = (
+        '<table class="data"><thead><tr>'
+        '<th>regime</th><th class="num">combos</th>'
+        '<th>best combo</th><th class="num">final×</th>'
+        '<th class="num">Sharpe</th><th class="num">trades</th>'
+        '</tr></thead><tbody>'
+        f'<tr><td>Phase 1 (trend-following: sell ≥ buy)</td>'
+        f'<td class="num">{n_p1:,}</td>'
+        f'<td><code>{p1_combo}</code></td>'
+        f'<td class="num">{p1_final:.2f}×</td>'
+        f'<td class="num">{p1_sharpe:.2f}</td>'
+        f'<td class="num">{_trade_cell(p1_trades)}</td></tr>'
+        f'<tr><td>Phase 2 only (anti-trend: sell &lt; buy on at least one leg)</td>'
+        f'<td class="num">{n_anti:,}</td>'
+        f'<td><code>{anti_combo}</code></td>'
+        f'<td class="num">{anti_final:.2f}×</td>'
+        f'<td class="num">{anti_sharpe:.2f}</td>'
+        f'<td class="num">{_trade_cell(anti_trades)}</td></tr>'
+        f'<tr><td><strong>Phase 2 (full grid)</strong></td>'
+        f'<td class="num"><strong>{n_total:,}</strong></td>'
+        f'<td><code>{overall_combo}</code></td>'
+        f'<td class="num"><strong>{overall_final:.2f}×</strong></td>'
+        f'<td class="num">{float(overall_best.sharpe):.2f}</td>'
+        f'<td class="num">{_trade_cell(int(overall_best.n_trades))}</td></tr>'
+        '</tbody></table>'
+    )
+
+    # Border color: green only when anti-trend strictly beats AND isn't
+    # degenerate; otherwise warn — either anti-trend lost OR the "winner" is
+    # a buy-and-hold-equivalent that shouldn't be celebrated. We also warn
+    # when the Phase-1 winner itself is degenerate (the leaderboard is being
+    # led by a buy-and-hold-equivalent), so the reader doesn't take the
+    # comparison at face value.
+    is_meaningful_win = (
+        anti_beats_p1 and not anti_is_degenerate and not p1_is_degenerate
+    )
+    qbox_color = "var(--accent)" if is_meaningful_win else "var(--warn)"
+
+    # Optional supporting paragraph called out when the winners are degenerate
+    # — gives the reader the cause (SMA(1) validity gating) without burying it
+    # in the discussion section.
+    degenerate_note = ""
+    if anti_is_degenerate or p1_is_degenerate:
+        legs = []
+        if p1_is_degenerate:
+            legs.append(f"the Phase-1 winner {p1_combo}")
+        if anti_is_degenerate:
+            legs.append(f"the anti-trend winner {anti_combo}")
+        legs_phrase = " and ".join(legs)
+        degenerate_note = (
+            f'<p class="meta"><strong>note.</strong> {legs_phrase} '
+            f'shows n_trades=1 — entered once, never exited. The exit leg is '
+            f'structurally dormant (typically <code>sell_T=1</code> or '
+            f'<code>sell_S=1</code>, where the SMA(1) validity mask in '
+            f'<code>precompute_sma_signals</code> prevents the exit signal '
+            f'from firing). The result is equivalent to leveraged buy-and-hold '
+            f'starting from the first entry signal, with one slippage hit. '
+            f'These rows are visible on the leaderboard because the dedup pass '
+            f'keeps one representative per equity curve; the <code>n_eq</code> '
+            f'column in §3 shows how many grid combos collapse to each curve.</p>'
+        )
+
+    # Counts derived from the actual data (codex review iter-1 [P2]): the
+    # tests render Phase-2 reports with max_window=4, where the analytic
+    # 60-derived counts (12,960,000 / 3,348,900 / 9,611,100) would be wildly
+    # wrong. Use n_total/n_p1/n_anti from the DataFrame, and quote the
+    # analytic relation in terms of max_window so it stays correct.
+    p1_count_analytic = (max_window * (max_window + 1) // 2) ** 2
+    return (
+        f'<p>Phase 2 drops the <code>sell ≥ buy</code> trend-following '
+        f'constraint and explores the full 4-D '
+        f'<code>{{1..{max_window}}}^4</code> grid. Of the {n_total:,} combos, '
+        f'{n_p1:,} are the original trend-following set '
+        f'(<code>T({max_window})^2 = {p1_count_analytic:,}</code> when the '
+        f'grid is complete); the remaining {n_anti:,} are anti-trend regions '
+        f'where one or both legs use a shorter exit-SMA than entry-SMA — '
+        f'i.e. mean-reversion rather than momentum.</p>'
+        f'<div class="qbox" style="border-left-color: {qbox_color};">'
+        f'<strong>headline.</strong> <span class="{headline_class}">'
+        f'{headline_text}</span></div>'
+        + table +
+        degenerate_note +
+        '<p class="meta">Walk-forward generalization for these comparisons '
+        'lives in §8 (the in-sample / out-of-sample scatter); the headline '
+        'above is the FULL-sample top combo from each regime, not the '
+        'cross-validated one.</p>'
+    )
+
+
 def render_report(
     prices: pd.DataFrame,
     results_path: Path,
@@ -490,6 +717,7 @@ def render_report(
     sweep_wall_seconds: float,
     slippage_bp: float = 5.0,
     max_window: int = 60,
+    phase: int = 1,
 ) -> Path:
     """Write the design-doc style HTML report to ``output_path``.
 
@@ -515,6 +743,21 @@ def render_report(
 
     df_raw = pd.read_parquet(results_path)
     wf = pd.read_parquet(walkforward_path) if walkforward_path.exists() else pd.DataFrame()
+
+    # Cache-contamination guard (codex review iter-1 [P2]): the same parquet
+    # is reused across phases (Phase 2 is a strict superset of Phase 1's
+    # combo set), so a Phase-1 report rendered against a parquet that already
+    # contains Phase-2 anti-trend rows would silently include the anti-trend
+    # grid in its leaderboard and heatmaps while labeling itself "Phase 1".
+    # Filter the raw grid down to the Phase-1 subset at read time so the
+    # invariant "phase=1 → only trend-following rows" holds regardless of
+    # what's on disk. Phase 2 reads the full grid as before.
+    if phase == 1:
+        p1_mask = (
+            (df_raw["sell_T"] >= df_raw["buy_T"])
+            & (df_raw["sell_S"] >= df_raw["buy_S"])
+        )
+        df_raw = df_raw[p1_mask].reset_index(drop=True)
 
     n_combos = len(df_raw)
     # Dedup by equity-curve fingerprint before any leaderboard slicing so the
@@ -567,31 +810,87 @@ def render_report(
     # Compose
     parts = [_HTML_HEAD]
 
-    # TOC
-    parts.append(
-        '<nav class="toc"><strong>contents</strong><ol>'
-        '<li><a href="#framing">1. framing</a></li>'
-        '<li><a href="#top50">2. top-50 winners</a></li>'
-        '<li><a href="#baselines">3. buy-and-hold baselines</a></li>'
-        '<li><a href="#heatmaps">4. heatmaps</a></li>'
-        '<li><a href="#distribution">5. distribution of outcomes</a></li>'
-        '<li><a href="#equity">6. equity curves</a></li>'
-        '<li><a href="#walkforward">7. walk-forward delta</a></li>'
-        '<li><a href="#discussion">8. honest discussion</a></li>'
-        '<li><a href="#repro">9. reproducibility</a></li>'
-        '</ol></nav>'
-    )
+    # TOC — Phase 2 inserts an extra "Phase 1 vs Phase 2 comparison" section
+    # between framing and top-50, renumbering subsequent sections.
+    if phase == 1:
+        parts.append(
+            '<nav class="toc"><strong>contents</strong><ol>'
+            '<li><a href="#framing">1. framing</a></li>'
+            '<li><a href="#top50">2. top-50 winners</a></li>'
+            '<li><a href="#baselines">3. buy-and-hold baselines</a></li>'
+            '<li><a href="#heatmaps">4. heatmaps</a></li>'
+            '<li><a href="#distribution">5. distribution of outcomes</a></li>'
+            '<li><a href="#equity">6. equity curves</a></li>'
+            '<li><a href="#walkforward">7. walk-forward delta</a></li>'
+            '<li><a href="#discussion">8. honest discussion</a></li>'
+            '<li><a href="#repro">9. reproducibility</a></li>'
+            '</ol></nav>'
+        )
+    else:
+        parts.append(
+            '<nav class="toc"><strong>contents</strong><ol>'
+            '<li><a href="#framing">1. framing</a></li>'
+            '<li><a href="#compare">2. Phase 1 vs Phase 2</a></li>'
+            '<li><a href="#top50">3. top-50 winners</a></li>'
+            '<li><a href="#baselines">4. buy-and-hold baselines</a></li>'
+            '<li><a href="#heatmaps">5. heatmaps</a></li>'
+            '<li><a href="#distribution">6. distribution of outcomes</a></li>'
+            '<li><a href="#equity">7. equity curves</a></li>'
+            '<li><a href="#walkforward">8. walk-forward delta</a></li>'
+            '<li><a href="#discussion">9. honest discussion</a></li>'
+            '<li><a href="#repro">10. reproducibility</a></li>'
+            '</ol></nav>'
+        )
 
     # Header
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if phase == 1:
+        subtitle = (
+            f'Phase 1 trend-following sweep · {n_combos:,} combos '
+            f'({n_distinct:,} distinct equity curves) · '
+            f'data {prices.index[0].date()} → {prices.index[-1].date()} · {today}'
+        )
+    else:
+        subtitle = (
+            f'Phase 2 unconstrained sweep · {n_combos:,} combos '
+            f'({n_distinct:,} distinct equity curves) · '
+            f'data {prices.index[0].date()} → {prices.index[-1].date()} · {today}'
+        )
     parts.append(
         f'<header><h1>TQQQ/SQQQ SMA-grid backtest</h1>'
-        f'<p class="subtitle">Phase 1 trend-following sweep · {n_combos:,} combos '
-        f'({n_distinct:,} distinct equity curves) · '
-        f'data {prices.index[0].date()} → {prices.index[-1].date()} · {today}</p></header>'
+        f'<p class="subtitle">{subtitle}</p></header>'
     )
 
-    # 1. Framing
+    # 1. Framing — phase-aware constraint description. Counts are derived
+    # from max_window (codex review iter-1 [P2]) so non-default --max-window
+    # runs and the test suite (which uses max_window=4) get accurate numbers.
+    _p1_ordered_pairs = max_window * (max_window + 1) // 2  # T(max_window)
+    _p1_combo_count = _p1_ordered_pairs ** 2
+    _p2_combo_count = max_window ** 4
+    _anti_combo_count = _p2_combo_count - _p1_combo_count
+    if phase == 1:
+        constraint_para = (
+            f'<p>Phase 1 of this sweep enforces <code>sell_T ≥ buy_T</code> '
+            f'and <code>sell_S ≥ buy_S</code> — trend-following only. Each '
+            f'SMA window is drawn from <code>{{1..{max_window}}}</code>, so '
+            f'the constrained grid has '
+            f'<code>{_p1_ordered_pairs} × {_p1_ordered_pairs} = '
+            f'{_p1_combo_count:,}</code> combos.</p>'
+        )
+    else:
+        constraint_para = (
+            f'<p>Phase 2 of this sweep drops the trend-following constraint '
+            f'and explores the full <code>{{1..{max_window}}}^4 = '
+            f'{_p2_combo_count:,}</code> combo grid. This adds '
+            f'{_anti_combo_count:,} anti-trend combos '
+            f'(<code>sell &lt; buy</code> on one or both legs) on top of the '
+            f'{_p1_combo_count:,} trend-following combos from Phase 1. '
+            'Anti-trend regions correspond to mean-reversion strategies: a '
+            'tighter exit SMA than entry SMA implies the strategy exits the '
+            'position as soon as the trend confirms — only useful in a '
+            'regime where short-horizon momentum is reverting, not '
+            'continuing.</p>'
+        )
     framing_body = (
         '<p>The strategy is a three-state rotation driven by a single signal '
         'instrument (QQQ) against four simple-moving-average windows. On every '
@@ -601,21 +900,26 @@ def render_report(
         'LONG_TQQQ   → CASH         when QQQ &lt; SMA(sell_T)\n'
         'CASH        → SHORT_SQQQ   when QQQ &lt; SMA(buy_S)\n'
         'SHORT_SQQQ  → CASH         when QQQ &gt; SMA(sell_S)</pre>'
-        '<p>Phase 1 of this sweep enforces <code>sell_T ≥ buy_T</code> and '
-        '<code>sell_S ≥ buy_S</code> — trend-following only. Each SMA window '
-        'is drawn from <code>{1..60}</code>, so the constrained grid has '
-        '<code>1830 × 1830 = 3,348,900</code> combos.</p>'
+        + constraint_para +
         f'<p class="meta">Sweep wall-clock: {sweep_wall_seconds/60:.1f} min · '
         f'~{n_combos / max(sweep_wall_seconds, 1e-3):,.0f} backtests/sec. '
         f'Slippage: {slippage_bp:.1f} bp per state transition; $0 commission; '
         f'adjusted-close prices.</p>'
         '<blockquote>This document tells you what the search surface actually '
-        'looks like — not just the single best combo. The histogram in §5 is '
-        'the antidote to the table in §2.</blockquote>'
+        'looks like — not just the single best combo. The histogram further '
+        'down is the antidote to the leaderboard above it.</blockquote>'
     )
     parts.append(_section(1, "framing", "framing", framing_body))
 
-    # 2. Top-50
+    # Numbering offset: Phase 2 inserts a new section at index 2.
+    sec_off = 1 if phase == 2 else 0
+
+    # 2. Phase 1 vs Phase 2 (only in Phase 2 reports)
+    if phase == 2:
+        compare_body = _phase1_vs_phase2_section(df_raw, max_window=max_window)
+        parts.append(_section(2, "Phase 1 vs Phase 2 comparison", "compare", compare_body))
+
+    # 2/3. Top-50
     top50_body = (
         '<p>Sorted by final equity multiple. Each row is one DISTINCT equity '
         'curve — combos sharing a curve (e.g. dormant short-leg parameters '
@@ -626,48 +930,54 @@ def render_report(
         f'parameters render as <code>-</code>. Of the {n_combos:,} grid '
         f'combos, {n_distinct:,} produce distinct equity curves.</p>'
         '<p><code>delta</code> is the '
-        '<code>(test − train) / train</code> ratio from the walk-forward in '
-        '§7 — green = generalizes up, red = generalizes down.</p>'
+        '<code>(test − train) / train</code> ratio from the walk-forward — '
+        'green = generalizes up, red = generalizes down.</p>'
         + _top50_table(top50, wf)
     )
-    parts.append(_section(2, "top-50 winners", "top50", top50_body))
+    parts.append(_section(2 + sec_off, "top-50 winners", "top50", top50_body))
 
-    # 3. Baselines
+    # 3/4. Baselines
     baseline_body = (
         '<p>The four passive baselines a strategy must beat to be interesting:</p>'
         + _baseline_kv_table(prices, baselines)
     )
-    parts.append(_section(3, "buy-and-hold baselines", "baselines", baseline_body))
+    parts.append(_section(3 + sec_off, "buy-and-hold baselines", "baselines", baseline_body))
 
-    # 4. Heatmaps
+    # 4/5. Heatmaps
     heatmap_body = (
         f'<p>Two 2-D slices through the 4-D grid. The winner combo is '
         f'<code>{winner}</code>.</p>'
-        '<h3>4a. (buy_T, sell_T) with short-leg fixed at the winner</h3>'
+        f'<h3>{4 + sec_off}a. (buy_T, sell_T) with short-leg fixed at the winner</h3>'
         '<div class="figure">' + _fig_to_div(fig_heatT, include_js=True) + '</div>'
-        '<h3>4b. (buy_S, sell_S) with long-leg fixed at the winner</h3>'
+        f'<h3>{4 + sec_off}b. (buy_S, sell_S) with long-leg fixed at the winner</h3>'
         '<div class="figure">' + _fig_to_div(fig_heatS, include_js=False) + '</div>'
     )
-    parts.append(_section(4, "heatmaps", "heatmaps", heatmap_body))
+    parts.append(_section(4 + sec_off, "heatmaps", "heatmaps", heatmap_body))
 
-    # 5. Distribution
+    # 5/6. Distribution
+    # Combo-count label derived from the actual data (codex review iter-1 [P2])
+    # so non-default max_window runs report the real count.
+    if n_combos >= 1_000_000:
+        dist_label = f"{n_combos / 1_000_000:.2f}M-combo"
+    else:
+        dist_label = f"{n_combos:,}-combo"
     dist_body = (
-        '<p>Where do the buy-and-hold baselines sit in the 3.35M-combo '
+        f'<p>Where do the buy-and-hold baselines sit in the {dist_label} '
         'final-value distribution? Most of the mass is mediocre; the long '
         'right tail is where the headline numbers live.</p>'
         '<div class="figure">' + _fig_to_div(fig_dist, include_js=False) + '</div>'
     )
-    parts.append(_section(5, "distribution of outcomes", "distribution", dist_body))
+    parts.append(_section(5 + sec_off, "distribution of outcomes", "distribution", dist_body))
 
-    # 6. Equity
+    # 6/7. Equity
     equity_body = (
         '<p>Top-5 strategies vs the three buy-and-hold baselines. Log scale '
         'on the y-axis so the leveraged baselines don\'t flatten the rest.</p>'
         '<div class="figure">' + _fig_to_div(fig_equity, include_js=False) + '</div>'
     )
-    parts.append(_section(6, "equity curves", "equity", equity_body))
+    parts.append(_section(6 + sec_off, "equity curves", "equity", equity_body))
 
-    # 7. Walk-forward
+    # 7/8. Walk-forward
     if fig_wf is not None:
         wf_body = (
             '<p>For each of the top-' + str(len(wf)) + ' DEDUPED combos by '
@@ -690,9 +1000,33 @@ def render_report(
                 )
     else:
         wf_body = '<p class="meta">Walk-forward parquet not found — re-run with --top-n-walkforward&nbsp;&gt;&nbsp;0.</p>'
-    parts.append(_section(7, "walk-forward delta", "walkforward", wf_body))
+    parts.append(_section(7 + sec_off, "walk-forward delta", "walkforward", wf_body))
 
-    # 8. Honest discussion
+    # 8/9. Honest discussion
+    # Combo labels derived from data (codex review iter-1 [P2]) so smaller
+    # max_window runs report accurate numbers in the discussion qboxes.
+    if n_combos >= 1_000_000:
+        discussion_combo_label = f"{n_combos / 1_000_000:.2f}M combos"
+    else:
+        discussion_combo_label = f"{n_combos:,} combos"
+    extra_qbox = ""
+    if phase == 2:
+        # _anti_combo_count was computed earlier from max_window
+        if _anti_combo_count >= 1_000_000:
+            anti_label = f"{_anti_combo_count / 1_000_000:.2f}M"
+        else:
+            anti_label = f"{_anti_combo_count:,}"
+        ratio = _p2_combo_count / max(_p1_combo_count, 1)
+        extra_qbox = (
+            f'<div class="qbox"><strong>anti-trend regions are noisy.</strong> '
+            f'Dropping <code>sell ≥ buy</code> adds {anti_label} combos where '
+            f'the exit SMA is tighter than the entry SMA. Most of these '
+            f'correspond to high-churn mean-reversion strategies that fall '
+            f'apart out-of-sample. The walk-forward delta is the honest test '
+            f'— full-sample winners in anti-trend territory are especially '
+            f'suspect because the optimizer has {ratio:.1f}× more grid to '
+            f'lottery-pick from.</div>'
+        )
     discussion_body = (
         '<div class="qbox"><strong>survivorship bias.</strong> QQQ, TQQQ, and '
         'SQQQ all survived the sweep period. A real strategy needs to handle '
@@ -705,24 +1039,26 @@ def render_report(
         'transition is generous for retail liquidity in these tickers, but '
         'optimistic during market stress. Combos with thousands of trades '
         'feel the slippage more than the headline number suggests.</div>'
-        '<div class="qbox"><strong>3.35M combos guarantee lucky picks.</strong> '
+        f'<div class="qbox"><strong>{discussion_combo_label} guarantee lucky picks.</strong> '
         'Even pure noise generates extreme outliers at this sample size. The '
-        'walk-forward in §7 is the honest filter; the headline table in §2 '
-        'is the seduction.</div>'
+        'walk-forward is the honest filter; the headline table is the '
+        'seduction.</div>'
+        + extra_qbox +
         '<div class="qbox"><strong>signal source ≠ traded instrument.</strong> '
         'We trigger on QQQ but trade TQQQ/SQQQ — there is an implicit '
         'assumption that the leveraged-fund tracking error stays small. '
         'Historically true on a daily basis; not guaranteed in a stressed '
         'market.</div>'
     )
-    parts.append(_section(8, "honest discussion", "discussion", discussion_body))
+    parts.append(_section(8 + sec_off, "honest discussion", "discussion", discussion_body))
 
-    # 9. Reproducibility
+    # 9/10. Reproducibility
     git_sha = _git_sha(Path(__file__).resolve().parent)
     parquet_hash = _file_sha256(results_path)
     wf_hash = _file_sha256(walkforward_path) if walkforward_path.exists() else "missing"
     # Dataset hash derived from the qqq column to stay independent of pyarrow buffer layout
     ds_hash = hashlib.sha256(prices.to_csv().encode()).hexdigest()
+    repro_cmd = f"uv run rainier sma-sweep --phase {phase}"
     repro_body = (
         '<table class="kv"><tbody>'
         f'<tr><th>git SHA</th><td><code>{git_sha}</code></td></tr>'
@@ -733,13 +1069,13 @@ def render_report(
         f'<tr><th>sweep wall-clock</th><td>{sweep_wall_seconds/60:.2f} min</td></tr>'
         f'<tr><th>max_window</th><td>{max_window}</td></tr>'
         f'<tr><th>slippage</th><td>{slippage_bp:.2f} bp/transition</td></tr>'
+        f'<tr><th>phase</th><td>{phase}</td></tr>'
         f'<tr><th>combos</th><td>{n_combos:,}</td></tr>'
         f'<tr><th>distinct equity curves</th><td>{n_distinct:,}</td></tr>'
         '</tbody></table>'
-        '<p class="meta">To reproduce: '
-        '<code>uv run rainier sma-sweep --phase 1</code></p>'
+        f'<p class="meta">To reproduce: <code>{repro_cmd}</code></p>'
     )
-    parts.append(_section(9, "reproducibility", "repro", repro_body))
+    parts.append(_section(9 + sec_off, "reproducibility", "repro", repro_body))
 
     parts.append(
         f'<footer>Generated {today} UTC · git <code>{git_sha[:12]}</code> · '
