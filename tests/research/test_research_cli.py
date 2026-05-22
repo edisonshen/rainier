@@ -140,3 +140,37 @@ def test_cost_pilot_fixture_rejects_invalid_shape(tmp_path):
     assert result.exit_code != 0
     # The click error message names the supported shapes.
     assert "list" in result.output.lower() or "object" in result.output.lower()
+
+
+def test_cost_pilot_honors_n_below_fixture_size(tmp_path):
+    """Regression: codex iter-2 [P2] — `--n 2` against a 5-call fixture
+    must replay only the first 2 calls (not all 5). Pre-fix the CLI
+    passed the whole fixture into run_calls and emitted a calls_total=2
+    summary block while persisting 5 rows + summarizing 5 calls.
+    """
+    calls = [
+        {"call_id": f"c{i}", "provider": "anthropic", "model": "opus-4.7",
+         "cost_usd": 0.01, "schema_retries": 0, "cache_hit": False,
+         "outcome": "filled"}
+        for i in range(5)
+    ]
+    fixture = tmp_path / "five_calls.json"
+    fixture.write_text(json.dumps(calls))
+    out_parquet = tmp_path / "out.parquet"
+    result = _run([
+        "llm-research", "cost-pilot",
+        "--fixture", str(fixture),
+        "--n", "2",
+        "--out", str(out_parquet),
+        "--report-html", str(tmp_path / "out.html"),
+    ])
+    assert result.exit_code == 0, result.output
+    from rainier.research import output_schema
+    parsed = output_schema.parse_block(result.output)
+    assert parsed["calls_total"] == 2
+    assert parsed["calls_completed"] == 2
+    # The parquet should also reflect the bounded replay (2 rows).
+    import pandas as pd
+    df = pd.read_parquet(out_parquet)
+    # No budget_aborted row in this case — cap is not exceeded.
+    assert len(df) == 2

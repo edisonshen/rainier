@@ -185,8 +185,13 @@ def cost_pilot_command(skill_id: str, n: int, provider_list: str,
             f"{type(raw).__name__}."
         )
 
+    # Bound the replay to the operator's requested call count. The fixture
+    # may contain more records than --n (e.g., reusing a 500-call recording
+    # for a 50-call smoke run); without this truncation we'd process the
+    # entire fixture while still reporting calls_total=n in the summary.
+    bounded_calls = list(calls)[: max(0, int(n))]
     materialized = cost_pilot_mod.run_calls(
-        calls,
+        bounded_calls,
         hard_cap_usd=hard_cap_usd,
         out_parquet=out_parquet,
         skill_id=skill_id,
