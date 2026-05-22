@@ -8,7 +8,12 @@
 #   entries: list of per-(dataset, symbol) records:
 #     dataset: string identifier for the cache (e.g., macro_context).
 #     symbol: normalized ticker (no ^-prefix; matches the parquet column).
-#     fields: list of fields covered.
+#     fields: list of fields the L3 evaluator may read AS-OF the
+#       observability_timestamp_rule. The parquet may contain additional
+#       columns (notably `adjusted_close`) that are NOT in this list — those
+#       are back-adjusted for future splits/dividends and CANNOT be used in
+#       look-ahead-controlled backtests. Code consuming the ledger MUST
+#       restrict reads to fields[]. Per codex iter-6.
 #     observability_timestamp_rule: one of:
 #       - end_of_trading_day  (T close fully observable at market-close T)
 #     revision_immutability: bool. true means the cache writer never
@@ -32,7 +37,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: VIX
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -43,7 +48,7 @@ entries:
 
   - dataset: macro_context
     symbol: VIX9D
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -54,7 +59,7 @@ entries:
 
   - dataset: macro_context
     symbol: VIX3M
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -64,7 +69,7 @@ entries:
 
   - dataset: macro_context
     symbol: UVXY
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -77,7 +82,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: SPY
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -86,7 +91,7 @@ entries:
 
   - dataset: macro_context
     symbol: QQQ
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -95,7 +100,7 @@ entries:
 
   - dataset: macro_context
     symbol: DIA
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -104,7 +109,7 @@ entries:
 
   - dataset: macro_context
     symbol: IWM
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -116,7 +121,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: XLK
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -125,7 +130,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLF
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -134,7 +139,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLE
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -143,7 +148,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLV
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -152,7 +157,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLI
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -161,7 +166,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLY
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -170,7 +175,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLP
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -179,7 +184,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLU
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -188,7 +193,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLB
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -197,7 +202,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLRE
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -206,7 +211,7 @@ entries:
 
   - dataset: macro_context
     symbol: XLC
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -218,7 +223,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: SMH
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -227,7 +232,7 @@ entries:
 
   - dataset: macro_context
     symbol: XBI
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -236,7 +241,7 @@ entries:
 
   - dataset: macro_context
     symbol: KRE
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -248,7 +253,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: EEM
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -257,7 +262,7 @@ entries:
 
   - dataset: macro_context
     symbol: FXI
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -266,7 +271,7 @@ entries:
 
   - dataset: macro_context
     symbol: KWEB
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -278,7 +283,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: USO
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -287,7 +292,7 @@ entries:
 
   - dataset: macro_context
     symbol: GDX
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -296,7 +301,7 @@ entries:
 
   - dataset: macro_context
     symbol: SLV
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -308,7 +313,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: TLT
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -317,7 +322,7 @@ entries:
 
   - dataset: macro_context
     symbol: HYG
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -326,7 +331,7 @@ entries:
 
   - dataset: macro_context
     symbol: IEF
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -335,7 +340,7 @@ entries:
 
   - dataset: macro_context
     symbol: TIP
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -347,7 +352,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: UUP
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -359,7 +364,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: IBIT
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -371,7 +376,7 @@ entries:
 
   - dataset: macro_context
     symbol: IREN
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance
@@ -383,7 +388,7 @@ entries:
   # ------------------------------------------------------------------
   - dataset: macro_context
     symbol: ARKK
-    fields: [open, high, low, close, volume, adjusted_close]
+    fields: [open, high, low, close, volume]
     observability_timestamp_rule: end_of_trading_day
     revision_immutability: true
     source: yfinance

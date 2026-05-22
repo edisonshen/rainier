@@ -17,7 +17,14 @@ ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "src" / "rainier" / "research" / "data_availability.yaml"
 BACKFILL_SCRIPT = ROOT / "scripts" / "backfill_macro_context.py"
 
-REQUIRED_FIELDS = {"open", "high", "low", "close", "volume", "adjusted_close"}
+REQUIRED_FIELDS = {"open", "high", "low", "close", "volume"}
+# adjusted_close is INTENTIONALLY excluded from the ledger because yfinance
+# back-adjusts it for future splits/dividends — i.e., the value at parquet
+# read-time is NOT what was observable at the historical date's close.
+# Registering it under end_of_trading_day would leak look-ahead. The column
+# still exists in the parquet for non-look-ahead analyses, but the L3
+# evaluator MUST restrict reads to REQUIRED_FIELDS. Per codex iter-6.
+LOOK_AHEAD_LEAKY_FIELDS = {"adjusted_close"}
 
 
 def _load_backfill_symbols() -> list[str]:
@@ -104,4 +111,24 @@ def test_provenance_fields_present(ledger):
         # minimum compatible version pinned at fetch time.
         assert "yfinance_version_at_backfill" in entry, (
             f"entry {entry['symbol']} missing yfinance_version_at_backfill"
+        )
+
+
+def test_no_look_ahead_leaky_fields_registered(ledger):
+    """No entry may register a field that violates the observability rule.
+
+    yfinance's ``Adj Close`` is back-adjusted for future splits/dividends,
+    so the value at parquet read-time is NOT what was observable at the
+    historical date's close. Registering it under ``end_of_trading_day``
+    would let the L3 evaluator silently consume look-ahead-adjusted data.
+    See codex iter-6 [P1].
+    """
+    for entry in ledger["entries"]:
+        if entry.get("dataset") != "macro_context":
+            continue
+        leaky = set(entry["fields"]) & LOOK_AHEAD_LEAKY_FIELDS
+        assert not leaky, (
+            f"entry {entry['symbol']} registers look-ahead-leaky field(s) "
+            f"{sorted(leaky)} under {entry['observability_timestamp_rule']!r}. "
+            f"Remove from `fields:` or use a distinct non-as-of rule."
         )
