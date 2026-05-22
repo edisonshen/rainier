@@ -21,7 +21,10 @@ Determinism pinning, in order of execution:
      `tIME` timestamp; this scrub is the belt-and-suspenders defense.
   4. `CHART_RENDER_VERSION` (re-exported from chart_render_version) is the
      cache-bust SHA — bumping any render-path source byte or any pinned
-     dep version shifts the SHA and forces an LLM cache miss.
+     dep version shifts the SHA. The constant is exposed here for the
+     follow-on Slice-1 cache-key contract (TASK-PLAN §followups, line 280);
+     wiring it into `compute_input_hash` lives with the L3 evaluator
+     harness and is intentionally NOT done in this task.
 
 Raises on kaleido / Plotly export failures so the caller can choose to skip
 the ticker (per the per-ticker try/except in service.compute_theses_and_persist).

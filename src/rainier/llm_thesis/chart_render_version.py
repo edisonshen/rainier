@@ -1,8 +1,8 @@
 """CHART_RENDER_VERSION — SHA pinning the chart-render code path.
 
-Bumping the SHA invalidates every cached LLM output that depended on a
-previous chart render. This is intentional: a render-code change means the
-LLM saw a different image, so the cache must miss.
+Bumping the SHA is the *intended* cache-bust signal for any future caller
+that records render-path identity alongside its inputs: a render-code change
+means the LLM saw a different image, so a downstream cache must miss.
 
 Per docs/DESIGN-qu100-llm-backtest.md [D-025] and
 docs/TASK-PLAN-chart-export-determinism-3c8e.md §5, the SHA is computed once
@@ -13,9 +13,14 @@ at module-import time over:
   2. the installed `plotly` version string,
   3. the installed `kaleido` version string.
 
-A change to any of those inputs shifts the SHA, which propagates through the
-L3 evaluator's compute_input_hash and forces a cache miss on the next LLM
-call — exactly the semantics required for the byte-determinism contract.
+Scope of THIS task (chart-export-determinism-3c8e): expose the constant. The
+wiring of `CHART_RENDER_VERSION` into `compute_input_hash` / the Tier-1 cache
+lookup is an explicit follow-on (TASK-PLAN §"Out of scope / followups",
+line 225 + 280) that ships with the L3 evaluator harness. Until that slice
+lands, bumping this SHA has no runtime side effect — it is a pure marker for
+the upcoming Slice-1 cache-key contract. The byte-determinism contract
+itself (two-process PNG identity, metadata scrub, pinned font) is fully in
+effect in this task; only the cache-key plumbing is deferred.
 
 Public surface:
   * `CHART_RENDER_VERSION` — `str`, 64 hex chars.
