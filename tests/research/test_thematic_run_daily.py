@@ -341,3 +341,52 @@ def test_run_daily_stale_ohlcv_surfaces_diagnostic(fake_cache):
     assert " mv " in result.output, (
         f"diagnostic must include cohort-swap mv step; got: {result.output!r}"
     )
+
+
+def test_run_daily_partial_universe_coverage_fails(fake_cache, tmp_path):
+    """Regression — codex iter-6 [P1]: ranks are cross-sectional, so if a
+    partial backfill leaves the panel without close rows for >25% of the
+    YAML universe on asof, run-daily must surface that gap rather than
+    silently rendering a shrunken dashboard.
+    """
+    from rainier.cli import cli
+
+    # Read the fake panel and drop 3 of 5 tickers on the chosen asof to
+    # simulate a partial yfinance run. 3/5 = 60% missing -> well above 25%.
+    panel = pd.read_parquet(fake_cache["panel"])
+    asof_dt = date(2024, 11, 8)
+    drop_mask = (panel["date"] == asof_dt) & panel["symbol"].isin(
+        ["AAA", "BBB", "CCC"]
+    )
+    partial = panel.loc[~drop_mask].reset_index(drop=True)
+    partial_path = tmp_path / "partial_universe.parquet"
+    partial.to_parquet(partial_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "thematic",
+            "run-daily",
+            "--asof",
+            asof_dt.isoformat(),
+            "--ohlcv",
+            str(partial_path),
+            "--yaml",
+            str(fake_cache["yaml"]),
+            "--features-out",
+            str(fake_cache["features_out"]),
+            "--labels-out",
+            str(fake_cache["labels_out"]),
+            "--ticker-registry",
+            str(fake_cache["ticker_registry"]),
+            "--sector-registry",
+            str(fake_cache["sector_registry"]),
+            "--html-out",
+            str(fake_cache["html_out"]),
+        ],
+    )
+    assert result.exit_code != 0, "partial-coverage backfill should fail fast"
+    assert "partial coverage" in result.output.lower(), (
+        f"diagnostic should mention partial coverage; got: {result.output!r}"
+    )

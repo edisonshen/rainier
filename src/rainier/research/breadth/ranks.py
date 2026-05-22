@@ -217,8 +217,12 @@ def compute_thematic_features(
     # Per [D-013] — fixed N=20 vol denominator for all relvol_N.
     if asof_idx >= _VOL_WINDOW:
         # Use simple returns (close/close.shift - 1) over the window.
+        # fill_method=None: do NOT forward-fill internal NaNs before pct_change.
+        # The default 'pad' behaviour silently turns gap days into 0% returns,
+        # under-estimating vol_20 for sparse thematic ETFs (codex iter-6 [P2]).
+        # NaN returns propagate to std() which is what we want.
         window_close = wide_close.iloc[asof_idx - _VOL_WINDOW : asof_idx + 1]
-        rets = window_close.pct_change().iloc[1:]
+        rets = window_close.pct_change(fill_method=None).iloc[1:]
         vol_20 = rets.std(ddof=0)  # population std, deterministic
     else:
         vol_20 = pd.Series(np.nan, index=symbols_asof)
@@ -489,10 +493,14 @@ def compute_forward_labels(panel: pd.DataFrame) -> pd.DataFrame:
     n_days = len(all_days)
 
     # Determine label_complete_through: last asof_idx such that
-    # asof_idx + max_horizon < n_days.
+    # asof_idx + max_horizon < n_days. When the panel is shorter than the
+    # longest forward horizon, NO row has a complete fwd_30d_ret — represent
+    # that as None rather than `all_days[0]`, otherwise downstream consumers
+    # that filter on this metadata would treat incomplete rows as trainable
+    # (codex iter-6 [P2]).
     max_h = max(_FORWARD_RETURN_HORIZONS)
     if n_days <= max_h:
-        label_complete_through = all_days[0] if all_days else None
+        label_complete_through = None
     else:
         label_complete_through = all_days[n_days - max_h - 1]
 

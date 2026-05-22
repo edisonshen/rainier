@@ -3798,6 +3798,41 @@ def thematic_run_daily(
                 f"  3. uv run rainier thematic run-daily  # retry"
             )
 
+        # Partial-coverage guard. Ranks are cross-sectional: if a partial
+        # backfill leaves the panel without an asof close for most of the
+        # YAML universe, `compute_thematic_features` silently drops missing
+        # symbols and ranks over a shrunken universe. Surface the gap so the
+        # operator runs a full re-backfill rather than rendering a misleading
+        # dashboard (codex iter-6 [P1] + memory feedback_surface_dont_silo).
+        expected_syms = {
+            sym for syms in spec.sectors.values() for sym in syms
+        }
+        asof_rows = panel.loc[panel["date"] == asof_dt]
+        present = set(asof_rows["symbol"].dropna().unique()) if not asof_rows.empty else set()
+        missing = expected_syms - present
+        # Threshold: warn when >10% missing; fail when >25% missing. 10%
+        # absorbs typical NYSE-holiday + late-listing noise without false
+        # alarms; >25% indicates a botched backfill that should not silently
+        # ship a dashboard.
+        if expected_syms:
+            missing_frac = len(missing) / len(expected_syms)
+            if missing_frac > 0.25:
+                example = sorted(missing)[:8]
+                raise click.ClickException(
+                    f"OHLCV cache has partial coverage on asof={asof_dt}: "
+                    f"{len(missing)}/{len(expected_syms)} YAML symbols missing "
+                    f"({missing_frac:.0%}). Examples: {example}. "
+                    f"Re-run the backfill --force flow above before computing."
+                )
+            if missing_frac > 0.10:
+                example = sorted(missing)[:8]
+                click.echo(
+                    f"warning: {len(missing)}/{len(expected_syms)} YAML "
+                    f"symbols missing on asof={asof_dt} ({missing_frac:.0%}). "
+                    f"Examples: {example}. Proceeding; consider refreshing OHLCV.",
+                    err=True,
+                )
+
     # Layer A: idempotent compute.
     features_path = Path(features_out)
     skip_compute = False

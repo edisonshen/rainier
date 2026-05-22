@@ -228,6 +228,22 @@ def test_max_runup_positive_for_steady_riser():
 # ---------------------------------------------------------------------------
 
 
+def test_label_complete_through_is_none_for_short_panel():
+    """Regression — codex iter-6 [P2]: when the panel is shorter than the
+    longest forward horizon (30 trading days), NO row has a complete
+    fwd_30d_ret. ``label_complete_through`` must be None, not the first
+    asof_date (which would mislead consumers filtering on completeness).
+    """
+    panel = _build_panel_constant_returns(
+        symbols=["AAA"], n_days=10, daily_returns={"AAA": 0.01}
+    )
+    out = compute_forward_labels(panel=panel)
+    assert (out["label_complete_through"].isna()).all(), (
+        "label_complete_through must be None when panel < max_horizon; "
+        f"got unique values {out['label_complete_through'].unique()}"
+    )
+
+
 def test_label_dtypes(panel_5x60):
     out = compute_forward_labels(panel=panel_5x60)
     for col in (

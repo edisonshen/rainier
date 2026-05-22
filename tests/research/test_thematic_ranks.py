@@ -413,6 +413,79 @@ def test_top15_streak_increments_and_resets(
 # ---------------------------------------------------------------------------
 
 
+def test_vol_window_no_pad_on_internal_gaps(
+    sector_map, ticker_registry, sector_registry
+):
+    """Regression — codex iter-6 [P2]: pct_change with default `fill_method='pad'`
+    silently turns missing internal close days into 0% returns, under-
+    estimating vol_20 for sparse symbols. With fill_method=None, gap days
+    propagate NaN through std() — the returned vol/relvol is NaN instead
+    of an artificially-low value.
+    """
+    # Build a base 5-ticker panel + one extra ticker SPARSE with a gap mid-window.
+    symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+    daily_returns = {
+        "AAA": [0.01] * 29,
+        "BBB": [0.005] * 29,
+        "CCC": [0.0] * 29,
+        "DDD": [-0.005] * 29,
+        "EEE": [-0.01] * 29,
+    }
+    panel = _build_panel(symbols, 30, daily_returns)
+
+    # Add SPARSE with a hole on a specific mid-window date so the wide pivot
+    # has an internal NaN for SPARSE on that day.
+    sparse_rows = []
+    sparse_close = 100.0
+    days_seen = panel["date"].drop_duplicates().sort_values().tolist()
+    gap_day = days_seen[10]  # mid-window
+    for i, day in enumerate(days_seen):
+        if i > 0:
+            sparse_close *= 1.002
+        if day == gap_day:
+            continue  # leave a hole — wide pivot will have NaN for SPARSE here
+        sparse_rows.append(
+            {
+                "symbol": "SPARSE",
+                "date": day,
+                "open": sparse_close,
+                "high": sparse_close,
+                "low": sparse_close,
+                "close": sparse_close,
+                "volume": 1_000_000,
+            }
+        )
+    panel = pd.concat([panel, pd.DataFrame(sparse_rows)], ignore_index=True)
+
+    smap = dict(sector_map)
+    smap["SPARSE"] = "tech"
+    treg = dict(ticker_registry)
+    treg["SPARSE"] = 6
+
+    out = compute_thematic_features(
+        panel=panel,
+        asof=date(2024, 11, 8),
+        sector_map=smap,
+        ticker_registry=treg,
+        sector_registry=sector_registry,
+        universe_yaml_sha="abc123",
+    )
+    sparse_row = out.loc[out["symbol"] == "SPARSE"]
+    if sparse_row.empty:
+        # SPARSE got dropped because it had no close on asof. The fixture
+        # placement should keep SPARSE present on asof — but if not, the
+        # test is moot.
+        pytest.skip("SPARSE not present on asof; gap placement skipped row")
+    # With fill_method=None, the internal-gap return is NaN -> vol_20 is NaN
+    # -> relvol_* are NaN (the safe behaviour). Without the fix, vol_20 would
+    # be artificially low (zero-return injected) and relvol would be finite.
+    relvol_5 = sparse_row.iloc[0]["relvol_5"]
+    assert pd.isna(relvol_5), (
+        f"vol window must NOT pad over internal gaps; relvol_5 should be NaN "
+        f"for SPARSE but got {relvol_5}"
+    )
+
+
 def test_rank_delta_1d_treats_sentinel_prev_rank_as_missing(
     panel_5x30, sector_map, ticker_registry, sector_registry
 ):
