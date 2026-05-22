@@ -1,0 +1,391 @@
+# Data-availability ledger — look-ahead control surface for the LLM-backtest
+# L3 evaluator. Every (symbol, field) pair the evaluator can read must be
+# registered here with an observability timestamp rule + revision-immutability
+# claim per DESIGN-qu100-llm-backtest.md [D-014].
+#
+# Schema:
+#   schema_version: integer; bump on any breaking shape change.
+#   entries: list of per-(dataset, symbol) records:
+#     dataset: string identifier for the cache (e.g., macro_context).
+#     symbol: normalized ticker (no ^-prefix; matches the parquet column).
+#     fields: list of fields covered.
+#     observability_timestamp_rule: one of:
+#       - end_of_trading_day  (T close fully observable at market-close T)
+#     revision_immutability: bool. true means the cache writer never
+#       UPDATE/DELETEs a historical row in place; --force cuts a new cohort
+#       file alongside the prior one.
+#     source: data provider (yfinance for macro_context Phase 0).
+#     yfinance_version_at_backfill: minimum yfinance version that the
+#       backfill script was developed/tested against. Per-row provenance is
+#       additionally recorded in the parquet's `yfinance_version` column.
+#     notes: free-form per-entry context (gaps, half-days, listing dates).
+#
+# Adding/removing a symbol from scripts/backfill_macro_context.py SYMBOLS
+# requires a matching update here in the same commit. The
+# tests/test_data_availability_yaml.py schema test enforces lockstep.
+
+schema_version: 1
+
+entries:
+  # ------------------------------------------------------------------
+  # Volatility / risk regime (4)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: VIX
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: >
+      CBOE VIX index. yfinance wire ticker `^VIX`; normalized to `VIX` in the
+      stored `symbol` column. Volume is 0 for indices.
+
+  - dataset: macro_context
+    symbol: VIX9D
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: >
+      9-day volatility; short end of VIX term structure. Wire `^VIX9D`.
+      Occasional missing dates (early-close half-days); gaps left absent.
+
+  - dataset: macro_context
+    symbol: VIX3M
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: >
+      3-month volatility; long end of VIX term structure. Wire `^VIX3M`.
+
+  - dataset: macro_context
+    symbol: UVXY
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: >
+      Leveraged VIX short-term futures ETF; regime-shift detector.
+
+  # ------------------------------------------------------------------
+  # Benchmarks / size buckets (4)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: SPY
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Large-cap broad-market benchmark.
+
+  - dataset: macro_context
+    symbol: QQQ
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Nasdaq-100 large-cap growth benchmark.
+
+  - dataset: macro_context
+    symbol: DIA
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Dow Jones 30 blue-chip benchmark.
+
+  - dataset: macro_context
+    symbol: IWM
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Russell 2000 small-cap benchmark.
+
+  # ------------------------------------------------------------------
+  # Sector SPDR ETFs (11)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: XLK
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Technology SPDR.
+
+  - dataset: macro_context
+    symbol: XLF
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Financials SPDR.
+
+  - dataset: macro_context
+    symbol: XLE
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Energy SPDR.
+
+  - dataset: macro_context
+    symbol: XLV
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Health Care SPDR.
+
+  - dataset: macro_context
+    symbol: XLI
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Industrials SPDR.
+
+  - dataset: macro_context
+    symbol: XLY
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Consumer Discretionary SPDR.
+
+  - dataset: macro_context
+    symbol: XLP
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Consumer Staples SPDR.
+
+  - dataset: macro_context
+    symbol: XLU
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Utilities SPDR.
+
+  - dataset: macro_context
+    symbol: XLB
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Materials SPDR.
+
+  - dataset: macro_context
+    symbol: XLRE
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Real Estate SPDR.
+
+  - dataset: macro_context
+    symbol: XLC
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Communication Services SPDR.
+
+  # ------------------------------------------------------------------
+  # Theme / sub-sector (3) — operator-flagged priority for trending
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: SMH
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: VanEck Semiconductor; operator-flagged very important for current trend.
+
+  - dataset: macro_context
+    symbol: XBI
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: SPDR S&P Biotech; operator-flagged top priority.
+
+  - dataset: macro_context
+    symbol: KRE
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: SPDR Regional Banking; stress proxy.
+
+  # ------------------------------------------------------------------
+  # International (3)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: EEM
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: iShares MSCI Emerging Markets (broad EM).
+
+  - dataset: macro_context
+    symbol: FXI
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: iShares China Large-Cap.
+
+  - dataset: macro_context
+    symbol: KWEB
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: KraneShares CSI China Internet.
+
+  # ------------------------------------------------------------------
+  # Commodities / hard assets (3)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: USO
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: United States Oil Fund (crude oil).
+
+  - dataset: macro_context
+    symbol: GDX
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: VanEck Gold Miners.
+
+  - dataset: macro_context
+    symbol: SLV
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: iShares Silver Trust.
+
+  # ------------------------------------------------------------------
+  # Fixed income / rates (4)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: TLT
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: iShares 20+ Year Treasury (long duration).
+
+  - dataset: macro_context
+    symbol: HYG
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: iShares iBoxx HY Corporate Bond (credit spread proxy).
+
+  - dataset: macro_context
+    symbol: IEF
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: iShares 7-10 Year Treasury (mid-curve duration).
+
+  - dataset: macro_context
+    symbol: TIP
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: iShares TIPS (inflation-protected; with IEF gives real-yield regime).
+
+  # ------------------------------------------------------------------
+  # Currency (1)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: UUP
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Invesco US Dollar Index Fund (dollar-strength regime).
+
+  # ------------------------------------------------------------------
+  # Crypto / digital assets (2)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: IBIT
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: >
+      iShares Bitcoin Trust (spot BTC). Listed 2024-01-11; data may start
+      mid-window for very early backfill dates — acceptance criterion allows
+      per-symbol gaps for newer listings.
+
+  - dataset: macro_context
+    symbol: IREN
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: Iris Energy (single-stock; bitcoin-mining proxy).
+
+  # ------------------------------------------------------------------
+  # Innovation / risk appetite (1)
+  # ------------------------------------------------------------------
+  - dataset: macro_context
+    symbol: ARKK
+    fields: [open, high, low, close, volume, adjusted_close]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: ARK Innovation (speculative-growth / risk-on).
