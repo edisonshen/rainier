@@ -228,10 +228,14 @@ def compute_thematic_features(
         # fill_method=None: do NOT forward-fill internal NaNs before pct_change.
         # The default 'pad' behaviour silently turns gap days into 0% returns,
         # under-estimating vol_20 for sparse thematic ETFs (codex iter-6 [P2]).
-        # NaN returns propagate to std() which is what we want.
+        # skipna=False: codex iter-9 [P2] — pandas std() skips NaN by default,
+        # so a sparse symbol with even one missing close in the window would
+        # still emit a finite vol from a shrunken sample. Propagating NaN
+        # here forces the symbol's relvol_* to NaN, which is the safe
+        # behaviour for an incomplete window.
         window_close = wide_close.iloc[asof_idx - _VOL_WINDOW : asof_idx + 1]
         rets = window_close.pct_change(fill_method=None).iloc[1:]
-        vol_20 = rets.std(ddof=0)  # population std, deterministic
+        vol_20 = rets.std(ddof=0, skipna=False)  # population std, deterministic
     else:
         vol_20 = pd.Series(np.nan, index=symbols_asof)
     vol_20 = vol_20.reindex(symbols_asof)
@@ -543,9 +547,16 @@ def compute_forward_labels(panel: pd.DataFrame) -> pd.DataFrame:
         base = slice_.iloc[0]
         # Pct vs base for each day in [1..W]
         rel = slice_.iloc[1:].div(base, axis=1) - 1.0
+        # codex iter-9 [P2]: pandas min()/max() skip NaN by default, so a
+        # symbol with even one missing close inside the window would emit a
+        # drawdown/runup computed from a partial path. Mark symbols missing
+        # any forward close in [T+1..T+10] as NaN.
+        complete = rel.notna().all(axis=0)
         # max drawdown = absolute value of most-negative; clipped to >=0
         dd = (-rel.min(axis=0)).clip(lower=0)
         ru = rel.max(axis=0).clip(lower=0)
+        dd = dd.where(complete, np.nan)
+        ru = ru.where(complete, np.nan)
         drawdown.iloc[i] = dd
         runup.iloc[i] = ru
 

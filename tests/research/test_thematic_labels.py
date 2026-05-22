@@ -228,6 +228,44 @@ def test_max_runup_positive_for_steady_riser():
 # ---------------------------------------------------------------------------
 
 
+def test_drawdown_runup_nan_for_incomplete_forward_window():
+    """Regression — codex iter-9 [P2]: if a symbol has a missing close
+    anywhere in the T+1..T+10 window, fwd_10d_max_drawdown / fwd_10d_max_runup
+    must be NaN rather than computed from the partial path. Otherwise
+    consumers treat partial labels as complete.
+    """
+    # Build a 60d panel for SPARSE with a gap mid-window.
+    base = _build_panel_constant_returns(
+        symbols=["UP"], n_days=60, daily_returns={"UP": 0.01}
+    )
+    sparse = _build_panel_constant_returns(
+        symbols=["SPARSE"], n_days=60, daily_returns={"SPARSE": 0.002}
+    )
+    # Punch a hole at the 25th trading day for SPARSE.
+    gap_day = sorted(sparse["date"].unique())[25]
+    sparse = sparse.loc[~((sparse["symbol"] == "SPARSE") & (sparse["date"] == gap_day))]
+    panel = pd.concat([base, sparse], ignore_index=True)
+
+    out = compute_forward_labels(panel=panel)
+    # An asof T whose [T+1..T+10] window covers gap_day should have NaN dd/ru.
+    # gap_day is at idx 25; affected asofs are 15..24 (inclusive).
+    affected_asofs = sorted(panel["date"].unique())[15:25]
+    for asof_dt in affected_asofs:
+        sparse_row = out.loc[
+            (out["symbol"] == "SPARSE") & (out["asof_date"] == asof_dt)
+        ]
+        if sparse_row.empty:
+            continue
+        dd = sparse_row.iloc[0]["fwd_10d_max_drawdown"]
+        ru = sparse_row.iloc[0]["fwd_10d_max_runup"]
+        assert pd.isna(dd), (
+            f"SPARSE asof={asof_dt}: dd should be NaN (gap in window) but got {dd}"
+        )
+        assert pd.isna(ru), (
+            f"SPARSE asof={asof_dt}: ru should be NaN (gap in window) but got {ru}"
+        )
+
+
 def test_label_complete_through_is_none_for_short_panel():
     """Regression — codex iter-6 [P2]: when the panel is shorter than the
     longest forward horizon (30 trading days), NO row has a complete
