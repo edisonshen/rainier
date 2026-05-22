@@ -91,14 +91,23 @@ class ThematicTradingEnv:
 
         if action_space != "long_short_topk":
             raise ValueError(f"unknown action_space: {action_space}")
+        # `_after_cost` reward variants are reserved for a future cost-model
+        # injection. Accepting them today and silently stripping the suffix
+        # would alias them to the pre-cost label and hide that no cost is
+        # applied (codex iter-3 / iter-5 [P2]). Reject explicitly until the
+        # cost-adjusted labels land.
         if reward not in (
             "fwd_5d_excess_ret",
             "fwd_10d_excess_ret",
             "fwd_20d_excess_ret",
-            "fwd_5d_excess_ret_after_cost",
-            "fwd_10d_excess_ret_after_cost",
-            "fwd_20d_excess_ret_after_cost",
         ):
+            if reward.endswith("_after_cost"):
+                raise NotImplementedError(
+                    f"reward={reward!r} is reserved for cost-adjusted "
+                    f"labels which are not yet implemented. Use the "
+                    f"pre-cost variant (e.g. 'fwd_5d_excess_ret') or "
+                    f"inject a cost model in a follow-up PR."
+                )
             raise ValueError(f"unknown reward: {reward}")
 
         self.features = features.copy()
@@ -129,8 +138,10 @@ class ThematicTradingEnv:
         if self._step_idx >= len(self._dates):
             return self._observation(), 0.0, True, False, {}
         cur_date = self._dates[self._step_idx]
-        # Lookup excess returns on the labels frame for cur_date.
-        reward_col = self.reward.removesuffix("_after_cost")
+        # Lookup excess returns on the labels frame for cur_date. The
+        # constructor rejects `_after_cost` reward variants until cost-
+        # adjusted labels exist, so `self.reward` is always a real column.
+        reward_col = self.reward
         sub = self.labels.loc[self.labels["asof_date"] == cur_date]
         if not sub.empty and reward_col in sub.columns:
             # Align action to symbol order.
