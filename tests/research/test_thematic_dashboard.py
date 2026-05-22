@@ -120,6 +120,27 @@ def test_render_byte_identical_on_identical_input(features_df, tmp_path: Path):
     )
 
 
+def test_render_sort_js_groups_by_sector(features_df, tmp_path: Path):
+    """Regression — codex iter-2 [P2]: the per-column sort JS must preserve
+    sector grouping. The earlier implementation filtered headers out of the
+    row list and appended only data rows, leaving headers detached at the
+    top of the tbody after any sort click. The new sort walks tbody once,
+    partitions into per-sector groups, re-appends header then sorted data
+    inside each group.
+    """
+    out = tmp_path / "dashboard.html"
+    render_dashboard(features_df, out_path=out, asof=date(2024, 11, 8))
+    html = out.read_text()
+    # Group-aware sort: must build a `groups` array AND re-append header
+    # then data rows inside the forEach. Stale impl had no `groups` var.
+    assert "const groups = []" in html, "sort JS missing per-sector grouping"
+    assert "g.header" in html, "sort JS missing header re-append"
+    # Belt-and-braces: the old filter-then-append shape must not be present.
+    assert "rows.forEach(r => tbody.appendChild(r));" not in html, (
+        "old filter-then-append sort shape detected — sector headers will detach"
+    )
+
+
 def test_render_self_contained_no_external_assets(features_df, tmp_path: Path):
     """No <script src=...>, no <link href=...> — fully self-contained.
 

@@ -80,10 +80,29 @@ _SORT_JS = """
 function sortTable(idx) {
   const table = document.getElementById('ranks');
   const tbody = table.tBodies[0];
-  const rows = Array.from(tbody.rows).filter(r => !r.classList.contains('sector-header'));
   const dir = table.dataset.sortDir === 'asc' ? 'desc' : 'asc';
   table.dataset.sortDir = dir;
-  rows.sort((a, b) => {
+
+  // Walk tbody rows once, partitioning into sector groups. Each group is
+  // {header: <tr.sector-header or null>, data: [<tr>, ...]}. We preserve
+  // group order from the rendered DOM and only re-sort the data rows
+  // within each group — keeps headers stuck to their rows on every click.
+  const groups = [];
+  let current = null;
+  Array.from(tbody.rows).forEach(r => {
+    if (r.classList.contains('sector-header')) {
+      current = { header: r, data: [] };
+      groups.push(current);
+    } else {
+      if (current === null) {
+        current = { header: null, data: [] };
+        groups.push(current);
+      }
+      current.data.push(r);
+    }
+  });
+
+  const cmp = (a, b) => {
     const va = a.cells[idx].dataset.sort || a.cells[idx].textContent;
     const vb = b.cells[idx].dataset.sort || b.cells[idx].textContent;
     const na = parseFloat(va);
@@ -92,8 +111,13 @@ function sortTable(idx) {
       return dir === 'asc' ? na - nb : nb - na;
     }
     return dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  };
+
+  // Re-append in group order: header then sorted data rows.
+  groups.forEach(g => {
+    if (g.header) tbody.appendChild(g.header);
+    g.data.sort(cmp).forEach(r => tbody.appendChild(r));
   });
-  rows.forEach(r => tbody.appendChild(r));
 }
 """
 
