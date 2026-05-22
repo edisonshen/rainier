@@ -18,7 +18,6 @@ import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "backfill_thematic_universe.py"
 
@@ -233,8 +232,9 @@ def test_dry_run_does_not_write(backfill_mod, tmp_path):
 
 def test_load_symbols_from_yaml(backfill_mod):
     """`load_symbols_from_yaml(path)` returns the flat ticker list from YAML."""
-    import yaml as _yaml
     from io import StringIO
+
+    import yaml as _yaml
 
     sample = """\
 version: 1

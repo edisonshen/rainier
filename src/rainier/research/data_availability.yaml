@@ -497,3 +497,801 @@ entries:
       is already persisted (qu100_history); the per-ticker detail awaits a
       separate backfill task. Field is registered as pending so the L3
       evaluator rejects look-ups until the backfill lands. See D-024.
+
+  # ==================================================================
+  # thematic_universe dataset — operator-owned universe loaded from
+  # config/thematic_universe.yaml. Per DESIGN-thematic-ranks-dashboard.md
+  # §5.5: registers OHLCV observability for the ~94-ticker sector/theme
+  # ETF universe ranked by the dashboard (Phase B will compute Layer A
+  # features and add the thematic_features_daily + thematic_labels_daily
+  # blocks). adjusted_close intentionally NOT in fields[] — yfinance
+  # back-adjusts and the cache does not store it (see §5.0).
+  # ==================================================================
+  # ------------------------------------------------------------------
+  # communication_service (4)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLC
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: communication_service
+  - dataset: thematic_universe
+    symbol: IYZ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: communication_service
+  - dataset: thematic_universe
+    symbol: SOCL
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: communication_service
+  - dataset: thematic_universe
+    symbol: HERO
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: communication_service
+  # ------------------------------------------------------------------
+  # consumer_discretionary (6)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLY
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_discretionary
+  - dataset: thematic_universe
+    symbol: ITB
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_discretionary
+  - dataset: thematic_universe
+    symbol: XHB
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_discretionary
+  - dataset: thematic_universe
+    symbol: IBUY
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_discretionary
+  - dataset: thematic_universe
+    symbol: ONLN
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_discretionary
+  - dataset: thematic_universe
+    symbol: PEJ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_discretionary
+  # ------------------------------------------------------------------
+  # consumer_staples (2)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLP
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_staples
+  - dataset: thematic_universe
+    symbol: XRT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: consumer_staples
+  # ------------------------------------------------------------------
+  # energy (9)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLE
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: GUNR
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: FCG
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: XOP
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: ICLN
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: QCLN
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: OIH
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: TAN
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  - dataset: thematic_universe
+    symbol: NLR
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: energy
+  # ------------------------------------------------------------------
+  # finance (7)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLF
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: finance
+  - dataset: thematic_universe
+    symbol: VFH
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: finance
+  - dataset: thematic_universe
+    symbol: KRE
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: finance
+  - dataset: thematic_universe
+    symbol: KBE
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: finance
+  - dataset: thematic_universe
+    symbol: IAI
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: finance
+  - dataset: thematic_universe
+    symbol: KIE
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: finance
+  - dataset: thematic_universe
+    symbol: IPAY
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: finance
+  # ------------------------------------------------------------------
+  # healthcare (8)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLV
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  - dataset: thematic_universe
+    symbol: IBB
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  - dataset: thematic_universe
+    symbol: XBI
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  - dataset: thematic_universe
+    symbol: IHI
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  - dataset: thematic_universe
+    symbol: IHF
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  - dataset: thematic_universe
+    symbol: XHE
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  - dataset: thematic_universe
+    symbol: XPH
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  - dataset: thematic_universe
+    symbol: MJ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: healthcare
+  # ------------------------------------------------------------------
+  # industrials (10)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLI
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: ITA
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: ROKT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: UFO
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: SHLD
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: BOTZ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: IYT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: JETS
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: SNSR
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  - dataset: thematic_universe
+    symbol: DRIV
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: industrials
+  # ------------------------------------------------------------------
+  # materials (9)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLB
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: GDX
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: SIL
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: COPX
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: XME
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: LIT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: IYM
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: URA
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  - dataset: thematic_universe
+    symbol: REMX
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: materials
+  # ------------------------------------------------------------------
+  # real_estate (5)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLRE
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: real_estate
+  - dataset: thematic_universe
+    symbol: VNQ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: real_estate
+  - dataset: thematic_universe
+    symbol: VNQI
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: real_estate
+  - dataset: thematic_universe
+    symbol: REET
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: real_estate
+  - dataset: thematic_universe
+    symbol: REM
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: real_estate
+  # ------------------------------------------------------------------
+  # technology (19)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLK
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: CHAT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: AIQ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: IXN
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: QTEC
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: QTUM
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: VGT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: SOXX
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: SMH
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: DRAM
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: IGV
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: FDN
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: KWEB
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: CIBR
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: HACK
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: SKYY
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: METV
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: FINX
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  - dataset: thematic_universe
+    symbol: XT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: technology
+  # ------------------------------------------------------------------
+  # utilities (4)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: XLU
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: utilities
+  - dataset: thematic_universe
+    symbol: IGF
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: utilities
+  - dataset: thematic_universe
+    symbol: PAVE
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: utilities
+  - dataset: thematic_universe
+    symbol: GRID
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: utilities
+  # ------------------------------------------------------------------
+  # thematic (11)
+  # ------------------------------------------------------------------
+  - dataset: thematic_universe
+    symbol: MEME
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: DXYZ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: BLOK
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: IPO
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: MOAT
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: MOO
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: ARKK
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: ARKW
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: ARKF
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: ARKX
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic
+  - dataset: thematic_universe
+    symbol: ARKQ
+    fields: [open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    sector: thematic

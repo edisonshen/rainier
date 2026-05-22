@@ -1,0 +1,127 @@
+# Industry / Thematic ranks universe (Phase A).
+#
+# Operator-owned. Adding/removing a ticker is a one-line edit; the backfill
+# and ranking pipeline re-read this file each run and the universe-state log
+# captures the SHA so historical centile ranks remain reproducible.
+#
+# Tickers are normalized — no BATS:/NYSE:/NASDAQ: prefixes; yfinance is
+# symbol-only. Section bucket names are display-only; ranking is
+# universe-global per DESIGN [D-002]/[D-003].
+#
+# Design refs:
+#   docs/DESIGN-thematic-ranks-dashboard.md §4 ([D-001])
+#   docs/TASK-PLAN-thematic-backfill-fd88.md §3
+#
+# Seed source: TheMarketMemo Industry/Thematic sheet snapshot 2026-05-22.
+# Edits ship as a single commit with no code changes needed.
+version: 1
+schema: thematic_universe.v1
+asof_seeded: 2026-05-22
+
+universe:
+  communication_service:
+    - XLC
+    - IYZ
+    - SOCL
+    - HERO
+  consumer_discretionary:
+    - XLY
+    - ITB
+    - XHB
+    - IBUY
+    - ONLN
+    - PEJ
+  consumer_staples:
+    - XLP
+    - XRT
+  energy:
+    - XLE
+    - GUNR
+    - FCG
+    - XOP
+    - ICLN
+    - QCLN
+    - OIH
+    - TAN
+    - NLR
+  finance:
+    - XLF
+    - VFH
+    - KRE
+    - KBE
+    - IAI
+    - KIE
+    - IPAY
+  healthcare:
+    - XLV
+    - IBB
+    - XBI
+    - IHI
+    - IHF
+    - XHE
+    - XPH
+    - MJ
+  industrials:
+    - XLI
+    - ITA
+    - ROKT
+    - UFO
+    - SHLD
+    - BOTZ
+    - IYT
+    - JETS
+    - SNSR
+    - DRIV
+  materials:
+    - XLB
+    - GDX
+    - SIL
+    - COPX
+    - XME
+    - LIT
+    - IYM
+    - URA
+    - REMX
+  real_estate:
+    - XLRE
+    - VNQ
+    - VNQI
+    - REET
+    - REM
+  technology:
+    - XLK
+    - CHAT
+    - AIQ
+    - IXN
+    - QTEC
+    - QTUM
+    - VGT
+    - SOXX
+    - SMH
+    - DRAM
+    - IGV
+    - FDN
+    - KWEB
+    - CIBR
+    - HACK
+    - SKYY
+    - METV
+    - FINX
+    - XT
+  utilities:
+    - XLU
+    - IGF
+    - PAVE
+    - GRID
+  thematic:
+    - MEME
+    - DXYZ
+    - BLOK
+    - IPO
+    - MOAT
+    - MOO
+    - ARKK
+    - ARKW
+    - ARKF
+    - ARKX
+    - ARKQ

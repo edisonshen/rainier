@@ -18,7 +18,6 @@ import pandas as pd
 
 from rainier.research.breadth import universe_loader as ul
 
-
 SAMPLE_YAML_V1 = """\
 version: 1
 schema: thematic_universe.v1

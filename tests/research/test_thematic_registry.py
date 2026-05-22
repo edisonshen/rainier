@@ -20,7 +20,6 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from rainier.research.breadth import registry as reg
 
