@@ -189,7 +189,19 @@ def cost_pilot_command(skill_id: str, n: int, provider_list: str,
     # may contain more records than --n (e.g., reusing a 500-call recording
     # for a 50-call smoke run); without this truncation we'd process the
     # entire fixture while still reporting calls_total=n in the summary.
-    bounded_calls = list(calls)[: max(0, int(n))]
+    #
+    # Conversely, if the fixture is SHORTER than --n we fail-fast rather
+    # than silently emit a "calls_total: 500" summary backed by 10 calls.
+    # The operator should either lower --n or supply a larger fixture.
+    calls_list = list(calls)
+    if len(calls_list) < n:
+        raise click.ClickException(
+            f"fixture has {len(calls_list)} call records but --n is {n}; "
+            f"either lower --n to {len(calls_list)} or supply a larger "
+            f"fixture. Refusing to emit a calls_total={n} summary backed "
+            f"by {len(calls_list)} real calls."
+        )
+    bounded_calls = calls_list[: max(0, int(n))]
     materialized = cost_pilot_mod.run_calls(
         bounded_calls,
         hard_cap_usd=hard_cap_usd,
