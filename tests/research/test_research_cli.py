@@ -33,9 +33,12 @@ def test_llm_research_help_lists_all_subcommands():
 
 
 def test_providers_test_subcommand_runs(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
+    # Force-clear via empty string so the project's .env-loader (which respects
+    # existing env vars and only fills missing ones) doesn't re-populate keys
+    # under us. The provider adapters treat "" the same as missing.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "")
     result = _run(["llm-research", "providers", "test", "--json"])
     assert result.exit_code == 0, result.output
     # JSON output is a list of provider records.

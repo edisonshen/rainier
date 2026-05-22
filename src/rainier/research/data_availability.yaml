@@ -394,3 +394,106 @@ entries:
     source: yfinance
     yfinance_version_at_backfill: "1.2.0"
     notes: ARK Innovation (speculative-growth / risk-on).
+
+  # ------------------------------------------------------------------
+  # Slice 0 — QU100 historical universe (D-001, D-016)
+  # ------------------------------------------------------------------
+  # qu100_history rotates the universe daily; every (data_date, symbol) row
+  # is the QU rank for that ticker on that scrape session. Insert-only
+  # writes preserve delisted tickers per D-009 / D-016. The symbol column
+  # is null at the ledger level because the dataset is per-day, not
+  # per-ticker; survivorship-check / L3 evaluator query by data_date.
+  - dataset: qu100_history
+    symbol: null
+    fields: [data_date, ranking_type, symbol, rank, sector, industry, long_short]
+    observability_timestamp_rule: qu_session_close
+    revision_immutability: true
+    source: quantunicorn
+    notes: >
+      money_flow_snapshots filtered to ranking_type='top100'. Daily refresh
+      at QU close session; older rows never UPDATE/DELETE. Survivorship
+      gate (CLI: `llm-research survivorship-check`) validates this property.
+
+  # ------------------------------------------------------------------
+  # Slice 0 — Per-ticker daily OHLCV (D-004)
+  # ------------------------------------------------------------------
+  - dataset: qu100_ohlcv
+    symbol: null
+    fields: [date, open, high, low, close, volume]
+    observability_timestamp_rule: end_of_trading_day
+    revision_immutability: true
+    source: yfinance
+    yfinance_version_at_backfill: "1.2.0"
+    notes: >
+      Per-symbol daily candles for each QU100 member, cached under
+      data/cache/stocks/<SYMBOL>.parquet. yfinance back-adjustment risk for
+      splits/dividends is handled by the loader (adjusted_close excluded
+      from the look-ahead ledger; raw OHLC is point-in-time).
+
+  # ------------------------------------------------------------------
+  # Slice 0 — Chart image fingerprint (D-004, D-025)
+  # ------------------------------------------------------------------
+  - dataset: chart_image
+    symbol: null
+    fields: [ticker, date, sha256, chart_render_version]
+    observability_timestamp_rule: derived_from_t_minus_1_close
+    revision_immutability: true
+    source: chart_export
+    notes: >
+      Deterministic chart PNG per (ticker, date). Same inputs → byte-identical
+      output (D-025 contract). Cache key includes chart_render_version SHA so
+      bumping the renderer invalidates downstream LLM cache hits.
+
+  # ------------------------------------------------------------------
+  # Slice 0 — Per-symbol price-action signals (D-004)
+  # ------------------------------------------------------------------
+  # The signals/* outputs are computed as a pure function of OHLCV up to
+  # and including T-1 close. The ledger registers each signal family so the
+  # L3 evaluator can grep-match EvidencePack fields against the registry.
+  - dataset: signals_pinbar
+    symbol: null
+    fields: [ticker, date, direction, body_ratio, wick_ratio, confidence]
+    observability_timestamp_rule: derived_from_t_minus_1_close
+    revision_immutability: true
+    source: rainier.analysis.pinbar
+    notes: Pinbar detector output for the T-1 daily bar.
+
+  - dataset: signals_sr
+    symbol: null
+    fields: [ticker, date, level, touches, sr_type, source_tf]
+    observability_timestamp_rule: derived_from_t_minus_1_close
+    revision_immutability: true
+    source: rainier.analysis.sr_horizontal
+    notes: Support/resistance levels computed from history up to T-1 close.
+
+  - dataset: signals_pivots
+    symbol: null
+    fields: [ticker, date, kind, index, price]
+    observability_timestamp_rule: derived_from_t_minus_1_close
+    revision_immutability: true
+    source: rainier.analysis.pivots
+    notes: Swing-pivot output (high/low/HH/LH/HL/LL).
+
+  - dataset: signals_bias
+    symbol: null
+    fields: [ticker, date, bias]
+    observability_timestamp_rule: derived_from_t_minus_1_close
+    revision_immutability: true
+    source: rainier.analysis.bias
+    notes: Up/down/neutral bias derived from S/R + pivots.
+
+  # ------------------------------------------------------------------
+  # Slice 0 — QU per-ticker money-flow (D-024 deferred to backfill)
+  # ------------------------------------------------------------------
+  - dataset: money_flow_net
+    symbol: null
+    fields: [ticker, date, net_flow_5d]
+    observability_timestamp_rule: pending_sibling_task
+    revision_immutability: true
+    source: quantunicorn
+    pending: true
+    notes: >
+      Per-ticker net institutional inflow/outflow over last 5d. Daily QU rank
+      is already persisted (qu100_history); the per-ticker detail awaits a
+      separate backfill task. Field is registered as pending so the L3
+      evaluator rejects look-ups until the backfill lands. See D-024.
