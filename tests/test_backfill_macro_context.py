@@ -620,6 +620,7 @@ def test_anchor_calendar_gap_above_threshold_raises(backfill_mod, tmp_path):
             force=False,
             fetch_fn=calendar_gappy_fetch,
             min_coverage=0.5,  # explicitly disable tier-2 so tier-3 is the gate
+            min_anchor_coverage=0.0,  # SPY 10/11 = 90.9% trips tier-2.5; bypass
         )
     assert not out.exists()
 
@@ -694,6 +695,7 @@ def test_allow_empty_does_not_exempt_partial_coverage(backfill_mod, tmp_path):
             fetch_fn=partial_fetch,
             min_coverage=0.4,  # allow tier-2 to pass; tier-3 is the gate
             allow_empty=["VIX"],  # this should NOT exempt partial coverage
+            min_anchor_coverage=0.0,  # SPY 10/11 = 90.9% trips tier-2.5; bypass
         )
     assert not out.exists()
 
@@ -730,5 +732,82 @@ def test_anchor_calendar_allow_gaps_overrides(backfill_mod, tmp_path):
         fetch_fn=fetch,
         min_coverage=0.5,
         allow_gaps=["VIX9D"],  # known-sparse term-structure index
+        min_anchor_coverage=0.0,  # SPY 10/11 = 90.9% trips tier-2.5; bypass
+    )
+    assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Codex iter-6 regression — tier-2.5 anchor-sanity check
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_below_min_coverage_raises(backfill_mod, tmp_path):
+    """Tier-2.5: common-mode truncation where the anchor is itself only
+    92% complete must fail BEFORE tier-3 can use the clipped calendar as
+    "ground truth." Per codex iter-6.
+    """
+    days = pd.date_range("2024-10-01", periods=10, freq="B").date.tolist()
+
+    def truncated_fetch(symbols, start, end):
+        # Every symbol clipped at day-7 of the 10-bday window (70% coverage).
+        # That's below the default 95% tier-2.5 threshold for SPY AND below
+        # 90% tier-2 — but raise min_coverage so only tier-2.5 is the gate.
+        out: dict[str, pd.DataFrame] = {}
+        for sym in symbols:
+            rows = [
+                {
+                    "date": d,
+                    "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+                }
+                for d in days[:7]
+            ]
+            out[sym] = pd.DataFrame(rows)
+        return out
+
+    out = tmp_path / "macro.parquet"
+    with pytest.raises(ValueError, match="anchor 'SPY' coverage"):
+        backfill_mod.backfill(
+            symbols=["SPY", "VIX"],
+            start="2024-10-01",
+            end="2024-10-15",
+            out_path=out,
+            force=False,
+            fetch_fn=truncated_fetch,
+            min_coverage=0.5,  # 7/11 = 64% would trip tier-2; lower the gate
+            # min_anchor_coverage stays default 0.95 — SPY 7/11 = 64% must fail
+        )
+    assert not out.exists()
+
+
+def test_anchor_at_full_coverage_passes_tier_25(backfill_mod, tmp_path):
+    """Legit full coverage (anchor present every bday) clears tier-2.5."""
+    days = pd.date_range("2024-10-01", periods=11, freq="B").date.tolist()
+    # 2024-10-01..2024-10-15 inclusive = 11 bdays. All present → 100%.
+
+    def full_fetch(symbols, start, end):
+        out: dict[str, pd.DataFrame] = {}
+        for sym in symbols:
+            rows = [
+                {
+                    "date": d,
+                    "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+                }
+                for d in days
+            ]
+            out[sym] = pd.DataFrame(rows)
+        return out
+
+    out = tmp_path / "macro.parquet"
+    backfill_mod.backfill(
+        symbols=["SPY", "VIX"],
+        start="2024-10-01",
+        end="2024-10-15",
+        out_path=out,
+        force=False,
+        fetch_fn=full_fetch,
+        # default tier-2.5 threshold 95% — 100% clears it
     )
     assert out.exists()
