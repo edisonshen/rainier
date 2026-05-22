@@ -642,6 +642,20 @@ document.getElementById('theme-toggle').addEventListener('click', function() {{
 # Static stock chart for LLM consumption (PR1)
 # ---------------------------------------------------------------------------
 
+# Pinned font family for the LLM-research static chart path. Used by
+# `create_static_stock_chart` only — the interactive futures chart in
+# `_build_figure` keeps its system-font cascade for terminal display.
+#
+# Why "Arial, sans-serif": kaleido 0.2.1 ships its own headless Chromium and
+# does NOT resolve fonts from the host system at render time — it falls back
+# to its bundled DejaVu / Liberation set when an unknown family is requested.
+# Pinning "Arial, sans-serif" makes the request explicit; kaleido resolves it
+# to the same bundled glyph set on every machine, removing the macOS-vs-Linux
+# drift hazard that "Inter, -apple-system, BlinkMacSystemFont, sans-serif"
+# would introduce here. See TASK-PLAN §4.3.
+_LLM_CHART_FONT = "Arial, sans-serif"
+
+
 def create_static_stock_chart(
     symbol: str,
     df: pd.DataFrame,
@@ -653,17 +667,25 @@ def create_static_stock_chart(
     60 daily candles + horizontal lines for entry/stop_loss/target if a 蔡森
     pattern fired + pattern label annotation. No tabs, no interactivity. Stock
     side; the existing `create_chart()` is futures-only.
+
+    Determinism contract (see docs/TASK-PLAN-chart-export-determinism-3c8e.md):
+    the returned figure's `to_json()` is identical across processes for the
+    same `(symbol, df, pattern)`. Callers in the LLM-research path consume
+    `render_chart_png` (in `llm_thesis/chart_export.py`), which feeds this
+    figure to kaleido and post-strips PNG metadata — together they yield
+    byte-identical PNG output.
     """
     if df is None or df.empty:
         fig = go.Figure()
         fig.add_annotation(
             text=f"{symbol} — no data",
             xref="paper", yref="paper", x=0.5, y=0.5,
-            showarrow=False, font=dict(size=20, color="#888"),
+            showarrow=False, font=dict(family=_LLM_CHART_FONT, size=20, color="#888"),
         )
         fig.update_layout(
             template="plotly_dark", height=800, width=1280,
             paper_bgcolor="#000000", plot_bgcolor="#000000",
+            font=dict(family=_LLM_CHART_FONT),
         )
         return fig
 
@@ -713,18 +735,18 @@ def create_static_stock_chart(
             fig.add_annotation(
                 x=x1, y=price, text=f"{label} {price:.2f}",
                 showarrow=False, xanchor="right", xshift=-4,
-                font=dict(size=10, color=color),
+                font=dict(family=_LLM_CHART_FONT, size=10, color=color),
             )
         fig.add_annotation(
             x=0, y=1.04, xref="x", yref="paper",
             text=f"Pattern: {pattern.pattern_type} ({pattern.direction})",
             showarrow=False, xanchor="left",
-            font=dict(size=12, color="#FFD54F"),
+            font=dict(family=_LLM_CHART_FONT, size=12, color="#FFD54F"),
         )
 
     fig.update_layout(
         title=dict(text=symbol, x=0.02, y=0.98, xanchor="left",
-                   font=dict(size=18, color="#fff")),
+                   font=dict(family=_LLM_CHART_FONT, size=18, color="#fff")),
         template="plotly_dark",
         xaxis=dict(rangeslider=dict(visible=False), showgrid=False),
         yaxis=dict(side="right", gridcolor="rgba(255,255,255,0.1)"),
@@ -732,5 +754,7 @@ def create_static_stock_chart(
         height=800, width=1280,
         paper_bgcolor="#000000", plot_bgcolor="#000000",
         showlegend=False,
+        # Pin font family for byte-determinism — see _LLM_CHART_FONT.
+        font=dict(family=_LLM_CHART_FONT),
     )
     return fig

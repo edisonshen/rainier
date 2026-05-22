@@ -18,7 +18,6 @@ import sys
 import textwrap
 from datetime import datetime, timedelta
 
-import pandas as pd
 import pytest
 
 # Render script executed in subprocess. Reads a JSON-serialized OHLCV slice from
@@ -147,12 +146,9 @@ def test_chart_render_version_is_module_attribute():
 
 def test_chart_render_version_re_exported_from_chart_export():
     """The chart_export module also re-exports CHART_RENDER_VERSION for convenience."""
-    from rainier.llm_thesis.chart_export import CHART_RENDER_VERSION as exported
-    from rainier.llm_thesis.chart_render_version import (
-        CHART_RENDER_VERSION as canonical,
-    )
+    from rainier.llm_thesis import chart_export, chart_render_version
 
-    assert exported == canonical
+    assert chart_export.CHART_RENDER_VERSION == chart_render_version.CHART_RENDER_VERSION
 
 
 def test_chart_render_version_changes_when_render_file_changes(tmp_path, monkeypatch):
