@@ -3207,6 +3207,212 @@ def sma_sweep(
         click.echo("done.")
 
 
+# ---------------------------------------------------------------------------
+# thematic — Industry/Thematic ranks substrate (Phase A: data only)
+# ---------------------------------------------------------------------------
+#
+# Phase A surface: `backfill` and `snapshot-universe`. The compute / render /
+# run-daily subcommands ship in Phase B (`thematic-ranks-dashboard-d245`).
+#
+# ASCII flow:
+#     thematic backfill         -> load YAML -> yfinance OHLCV -> parquet cache
+#                                  + seed ticker_registry + sector_registry
+#     thematic snapshot-universe -> SHA-diff YAML vs log -> append row if changed
+
+
+@cli.group()
+def thematic() -> None:
+    """Industry / Thematic ranks dashboard substrate (DESIGN §5)."""
+
+
+@thematic.command("backfill")
+@click.option(
+    "--yaml",
+    "yaml_path",
+    type=click.Path(exists=True),
+    default="config/thematic_universe.yaml",
+    show_default=True,
+    help="Path to the thematic universe YAML.",
+)
+@click.option("--start", default=None, help="Window start (YYYY-MM-DD).")
+@click.option("--end", default=None, help="Window end (YYYY-MM-DD, inclusive).")
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(),
+    default="data/cache/thematic_universe.parquet",
+    show_default=True,
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="When the cache exists, write a timestamped sibling cohort.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print the planned ticker x date matrix; do not fetch or write.",
+)
+@click.option(
+    "--allow-empty",
+    default="",
+    help="Comma-separated symbols permitted to return zero rows.",
+)
+@click.option(
+    "--allow-gaps",
+    default="",
+    help="Comma-separated symbols permitted to return partial coverage.",
+)
+@click.option(
+    "--min-coverage",
+    type=float,
+    default=None,
+    help="Per-symbol minimum row count as a fraction of business days.",
+)
+@click.option(
+    "--ticker-registry",
+    type=click.Path(),
+    default="data/cache/ticker_registry.parquet",
+    show_default=True,
+)
+@click.option(
+    "--sector-registry",
+    type=click.Path(),
+    default="data/cache/sector_registry.parquet",
+    show_default=True,
+)
+def thematic_backfill(
+    yaml_path: str,
+    start: str | None,
+    end: str | None,
+    out_path: str,
+    force: bool,
+    dry_run: bool,
+    allow_empty: str,
+    allow_gaps: str,
+    min_coverage: float | None,
+    ticker_registry: str,
+    sector_registry: str,
+) -> None:
+    """Backfill the OHLCV cache + seed ticker/sector registries.
+
+    Operator-run, not CI-run. Hits the yfinance network.
+    """
+    import importlib.util
+    from datetime import date as _date
+
+    from rainier.research.breadth import registry as _reg
+    from rainier.research.breadth import universe_loader as _ul
+
+    # Load the script as a module — it lives in `scripts/`, not under `src/`,
+    # because it's a one-off operator tool (same pattern as macro_context).
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "backfill_thematic_universe",
+        root / "scripts" / "backfill_thematic_universe.py",
+    )
+    if spec is None or spec.loader is None:
+        raise click.ClickException(
+            "could not load scripts/backfill_thematic_universe.py"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    yaml_p = Path(yaml_path)
+    symbols = module.load_symbols_from_yaml(yaml_p)
+    spec_obj = _ul.load_universe(yaml_p)
+
+    start_eff = start or module.DEFAULT_START
+    end_eff = end or module.DEFAULT_END
+    coverage = (
+        min_coverage if min_coverage is not None else module.DEFAULT_MIN_COVERAGE_RATIO
+    )
+
+    result = module.backfill(
+        symbols=symbols,
+        start=start_eff,
+        end=end_eff,
+        out_path=Path(out_path),
+        force=force,
+        dry_run=dry_run,
+        allow_empty=[s.strip() for s in allow_empty.split(",") if s.strip()],
+        allow_gaps=[s.strip() for s in allow_gaps.split(",") if s.strip()],
+        min_coverage=coverage,
+    )
+
+    if dry_run:
+        plan = result
+        click.echo(
+            f"DRY-RUN: would fetch {len(symbols)} symbols "
+            f"{start_eff}..{end_eff} -> {plan['planned_out']}"
+        )
+        for sym in symbols:
+            click.echo(f"  {sym}")
+        return
+
+    written_path = result
+    click.echo(f"wrote OHLCV cache -> {written_path}")
+
+    # Seed registries with the just-fetched universe. Idempotent — re-running
+    # backfill does not change existing IDs (per [D-015]).
+    today = _date.today()
+    _reg.seed_registries_from_universe(
+        spec_obj.sectors,
+        asof=today,
+        ticker_registry_path=Path(ticker_registry),
+        sector_registry_path=Path(sector_registry),
+    )
+    click.echo(f"seeded ticker registry  -> {ticker_registry}")
+    click.echo(f"seeded sector registry  -> {sector_registry}")
+
+
+@thematic.command("snapshot-universe")
+@click.option(
+    "--yaml",
+    "yaml_path",
+    type=click.Path(exists=True),
+    default="config/thematic_universe.yaml",
+    show_default=True,
+)
+@click.option(
+    "--log",
+    "log_path",
+    type=click.Path(),
+    default="data/cache/thematic_universe_log.parquet",
+    show_default=True,
+)
+@click.option(
+    "--effective-from",
+    default=None,
+    help="First asof_date the universe applies to (YYYY-MM-DD). Default: today.",
+)
+@click.option("--note", default="", help="Free-form change note.")
+def thematic_snapshot_universe(
+    yaml_path: str,
+    log_path: str,
+    effective_from: str | None,
+    note: str,
+) -> None:
+    """Append a row to thematic_universe_log if the YAML SHA changed."""
+    from datetime import date as _date
+
+    from rainier.research.breadth import universe_loader as _ul
+
+    eff = _date.fromisoformat(effective_from) if effective_from else _date.today()
+    appended = _ul.snapshot_universe(
+        yaml_path=Path(yaml_path),
+        log_path=Path(log_path),
+        effective_from=eff,
+        note=note,
+    )
+    if appended:
+        click.echo(f"appended new row -> {log_path}")
+    else:
+        click.echo(f"no-op: yaml SHA unchanged; {log_path} untouched")
+
+
 # Composition root — wire the research engine's `llm-research` subgroup
 # onto the root `rainier` command. Per project CLAUDE.md the research
 # package never reaches into production CLI plumbing; we register it here
