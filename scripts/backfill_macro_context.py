@@ -278,9 +278,30 @@ def _write_parquet_atomic(df: pd.DataFrame, out_path: Path) -> None:
 
 
 def _cohort_path(out_path: Path, fetched_at: datetime) -> Path:
-    """`--force` writes a sibling cohort file, not in-place."""
-    stamp = fetched_at.strftime("%Y%m%d_%H%M%S")
-    return out_path.with_name(f"{out_path.stem}_{stamp}{out_path.suffix}")
+    """`--force` writes a sibling cohort file, not in-place.
+
+    Uses microsecond resolution + a collision-avoidance suffix so two
+    ``--force`` runs in the same second (automation / fast operator retry)
+    cannot silently overwrite each other and violate the ledger's
+    ``revision_immutability: true`` claim. Per codex iter-2.
+    """
+    stamp = fetched_at.strftime("%Y%m%d_%H%M%S_%f")
+    candidate = out_path.with_name(f"{out_path.stem}_{stamp}{out_path.suffix}")
+    if not candidate.exists():
+        return candidate
+    # Microsecond collision (rare but possible in tight test loops). Append a
+    # deterministic suffix until we land on a free name. We refuse to
+    # overwrite an existing cohort; immutability is the load-bearing claim.
+    for n in range(1, 1000):
+        bumped = out_path.with_name(
+            f"{out_path.stem}_{stamp}_{n}{out_path.suffix}"
+        )
+        if not bumped.exists():
+            return bumped
+    raise RuntimeError(
+        f"could not find an unused cohort path next to {out_path} after 1000 "
+        "attempts; refusing to overwrite existing cohort (revision_immutability)."
+    )
 
 
 def backfill(

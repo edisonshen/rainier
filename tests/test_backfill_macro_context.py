@@ -354,6 +354,63 @@ def test_empty_symbol_allowed_via_allowlist(backfill_mod, tmp_path):
     assert set(df["symbol"].unique()) == {"VIX"}
 
 
+def test_force_cohort_paths_never_collide(backfill_mod, tmp_path, monkeypatch):
+    """Two --force runs in the same second must NOT overwrite each other.
+
+    The ledger declares ``revision_immutability: true`` for every cohort. If
+    two ``--force`` invocations land on the same per-second timestamp, the
+    older cohort would be silently replaced by ``os.replace`` — violating the
+    invariant. See codex iter-2.
+    """
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    # Freeze fetched_at so both runs hit the same SECOND but the cohort path
+    # must still differ (microsecond resolution + collision suffix).
+    frozen = _dt(2026, 5, 22, 12, 0, 0, 0, tzinfo=_tz.utc)
+
+    class _FrozenDT:
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(backfill_mod, "datetime", _FrozenDT)
+
+    out = tmp_path / "macro.parquet"
+    # Initial backfill creates the base cache.
+    backfill_mod.backfill(
+        symbols=["VIX"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=_stub_fetch,
+    )
+    # Two --force runs at the exact same fetched_at.
+    cohort1 = backfill_mod.backfill(
+        symbols=["VIX"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=True,
+        fetch_fn=_stub_fetch,
+    )
+    cohort2 = backfill_mod.backfill(
+        symbols=["VIX"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=True,
+        fetch_fn=_stub_fetch,
+    )
+
+    assert cohort1 != cohort2, "force cohorts must not share a path"
+    assert cohort1.exists()
+    assert cohort2.exists()
+    # Original untouched.
+    assert out.exists()
+
+
 def test_yfinance_end_is_bumped_for_inclusive_semantics(backfill_mod, monkeypatch):
     """yfinance treats ``end`` as exclusive; loader treats it as inclusive.
 
