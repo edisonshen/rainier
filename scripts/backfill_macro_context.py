@@ -304,6 +304,89 @@ def _cohort_path(out_path: Path, fetched_at: datetime) -> Path:
     )
 
 
+DEFAULT_MIN_COVERAGE_RATIO = 0.90
+"""Per-symbol minimum row count relative to ``pd.bdate_range(start, end)``.
+
+NYSE has ~9 holidays/year + early closes; 0.90 absorbs ~37 days/year of legal
+gaps in a 252-day calendar with margin. Anything below this signals a
+provider outage / rate-limit partial / publication gap that should NOT be
+silently committed to a cache whose ledger claims observability. Tunable per
+backfill via ``min_coverage`` kwarg or ``--min-coverage`` CLI flag.
+"""
+
+
+def _validate_coverage(
+    fetched: dict[str, pd.DataFrame],
+    symbols: list[str],
+    start: str,
+    end: str,
+    allow_empty: set[str],
+    allow_gaps: set[str],
+    min_coverage: float,
+) -> None:
+    """Fail-fast on empty or partial per-symbol coverage.
+
+    Two-tier validation:
+      1. Any requested symbol with **zero** rows → ``ValueError`` (unless in
+         ``allow_empty``). Catches outright outages / bad tickers.
+      2. Any symbol with row_count / bdays < ``min_coverage`` → ``ValueError``
+         (unless in ``allow_gaps``). Catches transient provider gaps /
+         rate-limit partial responses where yfinance returned a non-empty
+         frame missing trading days. The ledger declares end_of_trading_day
+         observability for the full window; partial coverage would silently
+         mislead the L3 evaluator.
+
+    ``bdate_range`` is a conservative *upper bound* on NYSE trading days (it
+    includes US federal holidays). Using it as the denominator means the
+    threshold is biased toward false-negatives, never false-positives —
+    legitimate full coverage will always clear 0.90.
+    """
+    # Tier 1: empty symbols.
+    empty_missing = [
+        sym
+        for sym in symbols
+        if sym not in allow_empty
+        and (sym not in fetched or fetched[sym].empty)
+    ]
+    if empty_missing:
+        raise ValueError(
+            f"backfill returned zero rows for {len(empty_missing)} symbol(s): "
+            f"{sorted(empty_missing)}. Re-run when the provider is healthy or "
+            f"pass --allow-empty SYMBOL[,SYMBOL...] to permit known gaps."
+        )
+
+    # Tier 2: partial-coverage symbols. Skip empties (already raised above) and
+    # explicitly allow_gaps tickers (operator-acknowledged sparse data).
+    bdays = len(pd.bdate_range(start=start, end=end))
+    if bdays == 0:
+        # Degenerate window — coverage check is meaningless, skip.
+        return
+
+    partial: list[tuple[str, int, float]] = []
+    for sym in symbols:
+        if sym in allow_empty or sym in allow_gaps:
+            continue
+        df = fetched.get(sym)
+        if df is None or df.empty:
+            continue  # tier-1 covered it
+        ratio = len(df) / bdays
+        if ratio < min_coverage:
+            partial.append((sym, len(df), ratio))
+
+    if partial:
+        details = ", ".join(
+            f"{sym} ({n_rows} rows, {ratio:.0%} coverage)"
+            for sym, n_rows, ratio in sorted(partial)
+        )
+        raise ValueError(
+            f"backfill coverage below threshold {min_coverage:.0%} for "
+            f"{len(partial)} symbol(s) in window {start}..{end} "
+            f"({bdays} business days): {details}. Re-run when the provider "
+            f"is healthy or pass --allow-gaps SYMBOL[,SYMBOL...] to permit "
+            f"known-sparse tickers."
+        )
+
+
 def backfill(
     symbols: Iterable[str],
     start: str,
@@ -314,6 +397,8 @@ def backfill(
     fetch_fn: Callable[[Iterable[str], str, str], dict[str, pd.DataFrame]]
     | None = None,
     allow_empty: Iterable[str] | None = None,
+    allow_gaps: Iterable[str] | None = None,
+    min_coverage: float = DEFAULT_MIN_COVERAGE_RATIO,
 ) -> Path | dict[str, object]:
     """Run the backfill.
 
@@ -322,15 +407,20 @@ def backfill(
     returns the planned ticker × date matrix without touching the network or
     the filesystem.
 
-    Raises ``ValueError`` if any requested symbol comes back with zero rows
-    AND is not listed in ``allow_empty``. Silent partial backfills produce a
-    cache the L3 evaluator cannot distinguish from "symbol observable, no
-    data in this window" — fail fast so the operator re-runs.
+    Coverage validation (see ``_validate_coverage`` for the two-tier rule):
+      - Empty symbols (zero rows) raise ``ValueError`` unless in ``allow_empty``.
+      - Partial-coverage symbols (< ``min_coverage`` × business days) raise
+        ``ValueError`` unless in ``allow_gaps``.
+
+    Silent partial backfills produce a cache the L3 evaluator cannot
+    distinguish from "symbol observable, no data in this window" — fail fast
+    so the operator re-runs.
     """
     symbols = list(symbols)
     fetch_fn = fetch_fn or _yfinance_fetch
     out_path = Path(out_path)
     allow_empty_set: set[str] = set(allow_empty or ())
+    allow_gaps_set: set[str] = set(allow_gaps or ())
 
     if dry_run:
         return {
@@ -356,20 +446,15 @@ def backfill(
 
     fetched = fetch_fn(symbols, start, end)
 
-    # Fail-fast validation: every requested symbol must have rows unless
-    # explicitly allowlisted (e.g., delisted ticker, known data gap).
-    missing: list[str] = [
-        sym
-        for sym in symbols
-        if sym not in allow_empty_set
-        and (sym not in fetched or fetched[sym].empty)
-    ]
-    if missing:
-        raise ValueError(
-            f"backfill returned zero rows for {len(missing)} symbol(s): "
-            f"{sorted(missing)}. Re-run when the provider is healthy or pass "
-            f"--allow-empty SYMBOL[,SYMBOL...] to permit known gaps."
-        )
+    _validate_coverage(
+        fetched=fetched,
+        symbols=symbols,
+        start=start,
+        end=end,
+        allow_empty=allow_empty_set,
+        allow_gaps=allow_gaps_set,
+        min_coverage=min_coverage,
+    )
 
     df = _to_normalized_frame(fetched, yfinance_version, fetched_at)
 
@@ -416,6 +501,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "causes backfill to abort before writing."
         ),
     )
+    p.add_argument(
+        "--allow-gaps",
+        default="",
+        help=(
+            "Comma-separated allowlist of symbols permitted to return partial "
+            "coverage (below --min-coverage). Use for tickers with known "
+            "publication gaps; the cache will silently include only the "
+            "available rows."
+        ),
+    )
+    p.add_argument(
+        "--min-coverage",
+        type=float,
+        default=DEFAULT_MIN_COVERAGE_RATIO,
+        help=(
+            "Per-symbol minimum row count as a fraction of business days in "
+            "the window. Default %(default).2f absorbs ~9 NYSE holidays/year. "
+            "Lower this for short windows or noisy providers."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -423,6 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     ns = _parse_args(argv)
     symbols = [s.strip() for s in ns.symbols.split(",") if s.strip()]
     allow_empty = [s.strip() for s in ns.allow_empty.split(",") if s.strip()]
+    allow_gaps = [s.strip() for s in ns.allow_gaps.split(",") if s.strip()]
     out_path = Path(ns.out)
     result = backfill(
         symbols=symbols,
@@ -432,6 +538,8 @@ def main(argv: list[str] | None = None) -> int:
         force=ns.force,
         dry_run=ns.dry_run,
         allow_empty=allow_empty,
+        allow_gaps=allow_gaps,
+        min_coverage=ns.min_coverage,
     )
     if ns.dry_run:
         plan = result  # type: ignore[assignment]

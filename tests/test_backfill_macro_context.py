@@ -75,6 +75,7 @@ def test_stub_determinism(backfill_mod, tmp_path):
         out_path=out_a,
         force=False,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
     backfill_mod.backfill(
         symbols=["VIX", "QQQ", "XLK"],
@@ -83,6 +84,7 @@ def test_stub_determinism(backfill_mod, tmp_path):
         out_path=out_b,
         force=False,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
 
     df_a = pd.read_parquet(out_a)
@@ -113,6 +115,7 @@ def test_refuses_overwrite_without_force(backfill_mod, tmp_path):
         out_path=out,
         force=False,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
 
     with pytest.raises(FileExistsError):
@@ -136,6 +139,7 @@ def test_force_writes_dated_cohort(backfill_mod, tmp_path):
         out_path=out,
         force=False,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
     cohort_path = backfill_mod.backfill(
         symbols=["VIX"],
@@ -144,6 +148,7 @@ def test_force_writes_dated_cohort(backfill_mod, tmp_path):
         out_path=out,
         force=True,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
 
     # Original untouched.
@@ -179,6 +184,7 @@ def test_atomic_write_no_tmp_leak(backfill_mod, tmp_path):
         out_path=out,
         force=False,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
     # No .tmp sibling left behind.
     leftovers = list(tmp_path.glob("*.tmp"))
@@ -194,6 +200,7 @@ def test_parquet_schema_columns(backfill_mod, tmp_path):
         out_path=out,
         force=False,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
 
     schema = pq.read_schema(out)
@@ -281,6 +288,7 @@ def test_symbol_normalization_strips_caret(backfill_mod, tmp_path):
         out_path=out,
         force=False,
         fetch_fn=caret_fetch,
+        min_coverage=0.0,
     )
 
     df = pd.read_parquet(out)
@@ -347,6 +355,7 @@ def test_empty_symbol_allowed_via_allowlist(backfill_mod, tmp_path):
         force=False,
         fetch_fn=partial_fetch,
         allow_empty=["DEAD"],
+        min_coverage=0.0,
     )
     assert out.exists()
     df = pd.read_parquet(out)
@@ -385,6 +394,7 @@ def test_force_cohort_paths_never_collide(backfill_mod, tmp_path, monkeypatch):
         out_path=out,
         force=False,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
     # Two --force runs at the exact same fetched_at.
     cohort1 = backfill_mod.backfill(
@@ -394,6 +404,7 @@ def test_force_cohort_paths_never_collide(backfill_mod, tmp_path, monkeypatch):
         out_path=out,
         force=True,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
     cohort2 = backfill_mod.backfill(
         symbols=["VIX"],
@@ -402,6 +413,7 @@ def test_force_cohort_paths_never_collide(backfill_mod, tmp_path, monkeypatch):
         out_path=out,
         force=True,
         fetch_fn=_stub_fetch,
+        min_coverage=0.0,
     )
 
     assert cohort1 != cohort2, "force cohorts must not share a path"
@@ -452,3 +464,111 @@ def test_yfinance_end_is_bumped_for_inclusive_semantics(backfill_mod, monkeypatc
     assert captured["end"] == "2024-10-09", (
         f"expected end bumped to 2024-10-09 (inclusive bridge), got {captured['end']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Codex iter-3 regression — partial coverage validation
+# ---------------------------------------------------------------------------
+
+
+def test_partial_coverage_below_threshold_raises(backfill_mod, tmp_path):
+    """A non-empty but mid-window-gappy symbol must abort before write.
+
+    yfinance can return a non-empty frame with missing trading days (transient
+    provider gap, rate-limit partial response, publication gap). The ledger
+    declares end_of_trading_day observability for the full window, so a cache
+    with 50% coverage would silently lie to the L3 evaluator. See codex iter-3.
+    """
+    days = pd.date_range("2024-10-01", periods=5, freq="B").date.tolist()
+
+    def gappy_fetch(symbols, start, end):
+        out: dict[str, pd.DataFrame] = {}
+        for sym in symbols:
+            # Only 2 rows — well under any reasonable threshold for a 6-bday window.
+            rows = [
+                {
+                    "date": days[0],
+                    "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+                },
+                {
+                    "date": days[1],
+                    "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+                },
+            ]
+            out[sym] = pd.DataFrame(rows)
+        return out
+
+    out = tmp_path / "macro.parquet"
+    with pytest.raises(ValueError, match="coverage below threshold"):
+        backfill_mod.backfill(
+            symbols=["VIX"],
+            start="2024-10-01",
+            end="2024-10-08",
+            out_path=out,
+            force=False,
+            fetch_fn=gappy_fetch,
+            # Use default min_coverage=0.90; 2/6=33% trips it.
+        )
+    # No cache written on partial-coverage failure.
+    assert not out.exists()
+
+
+def test_partial_coverage_allowed_via_allow_gaps(backfill_mod, tmp_path):
+    """Operator can opt-in to known-sparse tickers via --allow-gaps."""
+    days = pd.date_range("2024-10-01", periods=5, freq="B").date.tolist()
+
+    def gappy_fetch(symbols, start, end):
+        rows = [
+            {
+                "date": days[0],
+                "open": 100.0, "high": 101.0, "low": 99.0,
+                "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+            }
+        ]
+        return {sym: pd.DataFrame(rows) for sym in symbols}
+
+    out = tmp_path / "macro.parquet"
+    backfill_mod.backfill(
+        symbols=["VIX9D"],  # short end of VIX term structure — gappy in practice
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=gappy_fetch,
+        allow_gaps=["VIX9D"],
+    )
+    assert out.exists()
+    df = pd.read_parquet(out)
+    # Single sparse row landed in the cache.
+    assert len(df) == 1
+    assert df["symbol"].iloc[0] == "VIX9D"
+
+
+def test_min_coverage_threshold_is_tunable(backfill_mod, tmp_path):
+    """--min-coverage 0.30 lets a 33%-coverage symbol through."""
+    days = pd.date_range("2024-10-01", periods=5, freq="B").date.tolist()
+
+    def gappy_fetch(symbols, start, end):
+        rows = [
+            {
+                "date": days[i],
+                "open": 100.0 + i, "high": 101.0 + i, "low": 99.0 + i,
+                "close": 100.5 + i, "volume": 1000, "adjusted_close": 100.5 + i,
+            }
+            for i in range(2)  # 2/6 = 33%
+        ]
+        return {sym: pd.DataFrame(rows) for sym in symbols}
+
+    out = tmp_path / "macro.parquet"
+    backfill_mod.backfill(
+        symbols=["VIX"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=gappy_fetch,
+        min_coverage=0.30,  # explicitly tolerate 33%
+    )
+    assert out.exists()
