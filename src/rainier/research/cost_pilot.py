@@ -18,6 +18,7 @@ the fixture and live modes share the same surface.
 from __future__ import annotations
 
 import html
+import math
 import statistics
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -44,7 +45,13 @@ class CostSummary:
 
 
 def _percentile(values: Sequence[float], pct: float) -> float:
-    """Nearest-rank percentile (deterministic; no numpy)."""
+    """Nearest-rank percentile (deterministic; no numpy).
+
+    Uses the canonical nearest-rank formula: rank = ceil(pct/100 * n).
+    Python's `round` does banker's rounding (rounds .5 to even) which
+    under-reports p95/p99 for some n (e.g., n=30 → round(28.5) = 28 vs
+    the canonical 29). codex iter-3 [P2].
+    """
     if not values:
         return 0.0
     sorted_vals = sorted(values)
@@ -52,8 +59,8 @@ def _percentile(values: Sequence[float], pct: float) -> float:
         return sorted_vals[0]
     if pct >= 100:
         return sorted_vals[-1]
-    # 1-indexed nearest-rank.
-    rank = max(1, int(round(pct / 100.0 * len(sorted_vals))))
+    # 1-indexed nearest-rank with explicit ceil; clamp to len for safety.
+    rank = max(1, min(len(sorted_vals), math.ceil(pct / 100.0 * len(sorted_vals))))
     return sorted_vals[rank - 1]
 
 

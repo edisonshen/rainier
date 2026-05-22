@@ -123,6 +123,26 @@ def test_summary_block_parses_against_output_schema(cost_pilot_10call_fixture, t
     output_schema.validate("cost_pilot", parsed)
 
 
+def test_percentile_uses_ceil_not_bankers_round():
+    """Regression: codex iter-3 [P2] — nearest-rank percentile uses
+    ceil(pct/100 * n), not Python's banker's-rounding `round`. For
+    n=30, p95 = sorted_vals[ceil(0.95*30)-1] = sorted_vals[28]; the
+    pre-fix code returned sorted_vals[27] (banker's round of 28.5 → 28).
+    Underreports p95/p99 on common fixture / per-provider bucket sizes.
+    """
+    # Constructed values where rank-28 vs rank-29 disagree: 0.0..29.0
+    # ascending so the percentile equals (rank - 1).
+    vals = [float(i) for i in range(30)]
+    # nearest-rank: ceil(0.95 * 30) = 29 → sorted[28] = 28.0
+    assert cost_pilot._percentile(vals, 95) == 28.0
+    # ceil(0.99 * 30) = 30 → sorted[29] = 29.0
+    assert cost_pilot._percentile(vals, 99) == 29.0
+    # Edge cases stay correct.
+    assert cost_pilot._percentile(vals, 100) == 29.0
+    assert cost_pilot._percentile(vals, 0) == 0.0
+    assert cost_pilot._percentile([], 95) == 0.0
+
+
 def test_budget_aborted_row_written_on_hard_cap(tmp_path):
     """`run_fixture` with a hard-cap that trips part-way writes the budget_aborted row."""
     calls = [
