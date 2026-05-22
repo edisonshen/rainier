@@ -286,3 +286,112 @@ def test_symbol_normalization_strips_caret(backfill_mod, tmp_path):
     df = pd.read_parquet(out)
     # No ^-prefixed symbols in the stored column.
     assert not any(s.startswith("^") for s in df["symbol"].unique())
+
+
+# ---------------------------------------------------------------------------
+# Codex iter-1 regressions
+# ---------------------------------------------------------------------------
+
+
+def test_empty_symbol_raises_unless_allowlisted(backfill_mod, tmp_path):
+    """Silent partial backfill is a correctness bug — see codex iter-1.
+
+    When the provider returns zero rows for a requested symbol (outage, bad
+    ticker, rate limit), the backfill MUST raise before writing the cache so
+    the L3 evaluator cannot consume a partial backfill that the ledger claims
+    is complete. ``--allow-empty`` is the explicit operator-opt-out.
+    """
+    def partial_fetch(symbols, start, end):
+        # VIX returns data; QQQ returns empty.
+        full = _stub_fetch(["VIX"], start, end)
+        full["QQQ"] = pd.DataFrame(
+            columns=[
+                "date", "open", "high", "low", "close",
+                "volume", "adjusted_close",
+            ]
+        )
+        return full
+
+    out = tmp_path / "macro.parquet"
+    with pytest.raises(ValueError, match="QQQ"):
+        backfill_mod.backfill(
+            symbols=["VIX", "QQQ"],
+            start="2024-10-01",
+            end="2024-10-08",
+            out_path=out,
+            force=False,
+            fetch_fn=partial_fetch,
+        )
+    # Cache must NOT be written when validation fails.
+    assert not out.exists()
+
+
+def test_empty_symbol_allowed_via_allowlist(backfill_mod, tmp_path):
+    """Explicit allowlist lets the operator permit known-stale tickers."""
+    def partial_fetch(symbols, start, end):
+        full = _stub_fetch(["VIX"], start, end)
+        full["DEAD"] = pd.DataFrame(
+            columns=[
+                "date", "open", "high", "low", "close",
+                "volume", "adjusted_close",
+            ]
+        )
+        return full
+
+    out = tmp_path / "macro.parquet"
+    backfill_mod.backfill(
+        symbols=["VIX", "DEAD"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=partial_fetch,
+        allow_empty=["DEAD"],
+    )
+    assert out.exists()
+    df = pd.read_parquet(out)
+    # DEAD silently absent; VIX rows present.
+    assert set(df["symbol"].unique()) == {"VIX"}
+
+
+def test_yfinance_end_is_bumped_for_inclusive_semantics(backfill_mod, monkeypatch):
+    """yfinance treats ``end`` as exclusive; loader treats it as inclusive.
+
+    The fetcher MUST add +1 day to the wire ``end`` so an operator-facing
+    request like ``--end 2026-05-01`` includes 2026-05-01 trading-day rows
+    (matching ``read_range(..., end='2026-05-01')`` inclusive semantics).
+    See codex iter-1.
+    """
+    captured: dict[str, str] = {}
+
+    class _StubYF:
+        __version__ = "stub-test"
+
+        @staticmethod
+        def download(*args, **kwargs):
+            captured["end"] = kwargs["end"]
+            captured["start"] = kwargs["start"]
+            # Return a non-empty single-row frame so the fetcher's downstream
+            # processing doesn't take the empty-frame branch.
+            df = pd.DataFrame(
+                {
+                    "Open": [100.0],
+                    "High": [101.0],
+                    "Low": [99.0],
+                    "Close": [100.5],
+                    "Adj Close": [100.5],
+                    "Volume": [1000],
+                },
+                index=pd.DatetimeIndex(["2024-10-01"], name="Date"),
+            )
+            return df
+
+    monkeypatch.setitem(__import__("sys").modules, "yfinance", _StubYF)
+
+    backfill_mod._yfinance_fetch(["VIX"], "2024-10-01", "2024-10-08")
+
+    # start passes through unchanged; end is bumped by +1 calendar day.
+    assert captured["start"] == "2024-10-01"
+    assert captured["end"] == "2024-10-09", (
+        f"expected end bumped to 2024-10-09 (inclusive bridge), got {captured['end']}"
+    )

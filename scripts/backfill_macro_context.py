@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -139,8 +139,19 @@ _COLUMN_ORDER: tuple[str, ...] = (
 def _yfinance_fetch(
     symbols: Iterable[str], start: str, end: str
 ) -> dict[str, pd.DataFrame]:
-    """Production fetcher. Hits the network. Not used in tests."""
+    """Production fetcher. Hits the network. Not used in tests.
+
+    NOTE on end-bound semantics:
+        ``yfinance.download(..., end=X)`` treats ``end`` as EXCLUSIVE while the
+        loader (``macro_context_loader.read_range``) treats it as INCLUSIVE on
+        both sides. To keep the operator-facing contract single-sided
+        (``--end 2026-05-01`` should include 2026-05-01 if it's a trading day),
+        we bump the wire ``end`` by +1 calendar day before the call.
+    """
     import yfinance as yf  # local import — keeps test collection offline-safe
+
+    # Inclusive-end: yfinance is exclusive, so add 1 day to match loader semantics.
+    end_wire = (pd.to_datetime(end).date() + timedelta(days=1)).isoformat()
 
     out: dict[str, pd.DataFrame] = {}
     for sym in symbols:
@@ -149,7 +160,7 @@ def _yfinance_fetch(
         df = yf.download(
             wire,
             start=start,
-            end=end,
+            end=end_wire,
             progress=False,
             auto_adjust=False,
             actions=False,
@@ -281,6 +292,7 @@ def backfill(
     dry_run: bool = False,
     fetch_fn: Callable[[Iterable[str], str, str], dict[str, pd.DataFrame]]
     | None = None,
+    allow_empty: Iterable[str] | None = None,
 ) -> Path | dict[str, object]:
     """Run the backfill.
 
@@ -288,10 +300,16 @@ def backfill(
     ``force=True`` and the destination already exists). In ``dry_run`` mode
     returns the planned ticker × date matrix without touching the network or
     the filesystem.
+
+    Raises ``ValueError`` if any requested symbol comes back with zero rows
+    AND is not listed in ``allow_empty``. Silent partial backfills produce a
+    cache the L3 evaluator cannot distinguish from "symbol observable, no
+    data in this window" — fail fast so the operator re-runs.
     """
     symbols = list(symbols)
     fetch_fn = fetch_fn or _yfinance_fetch
     out_path = Path(out_path)
+    allow_empty_set: set[str] = set(allow_empty or ())
 
     if dry_run:
         return {
@@ -316,6 +334,22 @@ def backfill(
         yfinance_version = "stub"
 
     fetched = fetch_fn(symbols, start, end)
+
+    # Fail-fast validation: every requested symbol must have rows unless
+    # explicitly allowlisted (e.g., delisted ticker, known data gap).
+    missing: list[str] = [
+        sym
+        for sym in symbols
+        if sym not in allow_empty_set
+        and (sym not in fetched or fetched[sym].empty)
+    ]
+    if missing:
+        raise ValueError(
+            f"backfill returned zero rows for {len(missing)} symbol(s): "
+            f"{sorted(missing)}. Re-run when the provider is healthy or pass "
+            f"--allow-empty SYMBOL[,SYMBOL...] to permit known gaps."
+        )
+
     df = _to_normalized_frame(fetched, yfinance_version, fetched_at)
 
     target = _cohort_path(out_path, fetched_at) if (out_path.exists() and force) else out_path
@@ -352,12 +386,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the planned ticker × date matrix; do not fetch or write.",
     )
+    p.add_argument(
+        "--allow-empty",
+        default="",
+        help=(
+            "Comma-separated allowlist of symbols permitted to return zero "
+            "rows (e.g., known delistings). Without this, any empty symbol "
+            "causes backfill to abort before writing."
+        ),
+    )
     return p.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     ns = _parse_args(argv)
     symbols = [s.strip() for s in ns.symbols.split(",") if s.strip()]
+    allow_empty = [s.strip() for s in ns.allow_empty.split(",") if s.strip()]
     out_path = Path(ns.out)
     result = backfill(
         symbols=symbols,
@@ -366,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         out_path=out_path,
         force=ns.force,
         dry_run=ns.dry_run,
+        allow_empty=allow_empty,
     )
     if ns.dry_run:
         plan = result  # type: ignore[assignment]
