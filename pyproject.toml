@@ -69,6 +69,7 @@ asyncio_mode = "auto"
 markers = [
     "llm_integration: real-LLM end-to-end (skipped unless RAINIER_LLM_INTEGRATION_TEST=1)",
     "requires_postgres: tests that need a live Postgres DB",
+    "slow: spawns subprocesses or takes >1s (selectable with -m slow / -m 'not slow')",
 ]
 
 [tool.ruff]
