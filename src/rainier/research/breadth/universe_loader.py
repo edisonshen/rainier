@@ -143,14 +143,17 @@ def snapshot_universe(
     effective_from: date,
     note: str = "",
 ) -> bool:
-    """Append a row to the universe-state log if the YAML SHA changed.
+    """Append a row to the universe-state log if the YAML SHA is new.
 
-    Returns ``True`` if a new row was appended, ``False`` if the SHA matched
-    the most recent log entry (no-op).
+    Returns ``True`` if a new row was appended, ``False`` if the SHA is
+    already present anywhere in the log (no-op). Matching any historical
+    row — not just the most recent — handles accidental YAML revert /
+    cherry-pick scenarios deterministically: re-applying an old universe
+    state does NOT append a duplicate row.
 
     The log is append-only — never updates or deletes existing rows. Historical
     centile ranks can be reproduced by looking up the YAML state in force at
-    any given ``asof_date``.
+    any given ``asof_date`` via ``yaml_sha``.
 
     Parameters
     ----------
