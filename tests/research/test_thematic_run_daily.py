@@ -280,3 +280,54 @@ def test_thematic_run_daily_is_idempotent(fake_cache):
     assert rows_1 == rows_2, (
         f"non-idempotent: row count grew {rows_1} -> {rows_2}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Stale-OHLCV diagnostic — surface-don't-silo (review iter-1 / codex iter-1)
+# ---------------------------------------------------------------------------
+
+
+def test_run_daily_stale_ohlcv_surfaces_diagnostic(fake_cache):
+    """When the OHLCV cache's max date is before --asof, run-daily must fail
+    fast with a diagnostic that names the next-step backfill command rather
+    than silently producing an empty Layer A and missing render.
+
+    Per DESIGN-thematic-ranks-dashboard.md §7 + memory feedback_surface_dont_silo.
+    """
+    from rainier.cli import cli
+
+    runner = CliRunner()
+    # fake_cache panel ends at the synthesized last weekday in the 60-day
+    # window; asof set well past that.
+    asof_stale = date(2030, 1, 2)
+    result = runner.invoke(
+        cli,
+        [
+            "thematic",
+            "run-daily",
+            "--asof",
+            asof_stale.isoformat(),
+            "--ohlcv",
+            str(fake_cache["panel"]),
+            "--yaml",
+            str(fake_cache["yaml"]),
+            "--features-out",
+            str(fake_cache["features_out"]),
+            "--labels-out",
+            str(fake_cache["labels_out"]),
+            "--ticker-registry",
+            str(fake_cache["ticker_registry"]),
+            "--sector-registry",
+            str(fake_cache["sector_registry"]),
+            "--html-out",
+            str(fake_cache["html_out"]),
+        ],
+    )
+    # ClickException returns exit_code=1 with a clean diagnostic.
+    assert result.exit_code != 0, "stale OHLCV should fail fast"
+    assert "stale" in result.output.lower(), (
+        f"diagnostic should mention 'stale'; got: {result.output!r}"
+    )
+    assert "backfill_thematic_universe" in result.output, (
+        f"diagnostic should name the next-step backfill command; got: {result.output!r}"
+    )

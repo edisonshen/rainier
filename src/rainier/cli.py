@@ -3774,6 +3774,20 @@ def thematic_run_daily(
     if "date" in panel.columns:
         panel["date"] = pd.to_datetime(panel["date"]).dt.date
 
+    # Stale-OHLCV guard. Per DESIGN §7: "If OHLCV is stale, backfill
+    # incrementally first." We don't auto-fetch (yfinance side effect inside
+    # a cron run is too magical). Instead surface clearly with the exact
+    # next-step command per the operator's surface-don't-silo discipline.
+    if not panel.empty and "date" in panel.columns:
+        panel_max = panel["date"].max()
+        if panel_max < asof_dt:
+            raise click.ClickException(
+                f"OHLCV cache stale: max(date)={panel_max} < asof={asof_dt}. "
+                f"Run `uv run python scripts/backfill_thematic_universe.py "
+                f"--start {panel_max} --end {asof_dt} --out {ohlcv_path}` to "
+                f"refresh, then retry `rainier thematic run-daily`."
+            )
+
     # Layer A: idempotent compute.
     features_path = Path(features_out)
     skip_compute = False
@@ -3822,7 +3836,15 @@ def thematic_run_daily(
     os.replace(tmp, labels_path)
     click.echo(f"layer B: wrote {len(label_df)} rows -> {labels_path}")
 
-    # Render dashboard.
+    # Render dashboard. Guard against a missing features parquet (would only
+    # happen if the OHLCV panel had zero rows AND no prior features had ever
+    # been written — surface a useful diagnostic instead of FileNotFoundError).
+    if not features_path.exists():
+        click.echo(
+            f"render: features parquet missing at {features_path}; nothing "
+            f"to render. Confirm OHLCV cache contains rows for asof={asof_dt}."
+        )
+        return
     features = pd.read_parquet(features_path)
     if "asof_date" in features.columns:
         features["asof_date"] = pd.to_datetime(features["asof_date"]).dt.date
