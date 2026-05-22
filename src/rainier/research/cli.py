@@ -166,9 +166,24 @@ def cost_pilot_command(skill_id: str, n: int, provider_list: str,
             "summary / report / verdict math here in Slice 0."
         )
     raw = json.loads(Path(fixture_path).read_text())
-    calls = raw.get("calls", raw if isinstance(raw, list) else [])
-    ledger_sha = raw.get("ledger_sha") or _resolve_ledger_sha()
-    skill_id = raw.get("skill_id", skill_id)
+    # Two supported fixture shapes per the cost_pilot_10call fixture +
+    # the hand-recorded list shape: either {calls, ledger_sha, skill_id}
+    # or a bare top-level list of call records. Dispatch by type first;
+    # `raw.get` against a list would AttributeError, hiding the bug
+    # behind a confusing traceback.
+    if isinstance(raw, list):
+        calls = raw
+        ledger_sha = _resolve_ledger_sha()
+    elif isinstance(raw, dict):
+        calls = raw.get("calls", [])
+        ledger_sha = raw.get("ledger_sha") or _resolve_ledger_sha()
+        skill_id = raw.get("skill_id", skill_id)
+    else:
+        raise click.ClickException(
+            f"--fixture must be a JSON list of call records or a "
+            f"{{calls: [...], ledger_sha, skill_id}} object; got "
+            f"{type(raw).__name__}."
+        )
 
     materialized = cost_pilot_mod.run_calls(
         calls,

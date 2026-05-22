@@ -69,19 +69,32 @@ def _is_sqlite(session: Session) -> bool:
 
 
 def _trading_days(start: date, end: date) -> list[date]:
-    """All weekdays (Mon-Fri) between start and end inclusive.
+    """All NYSE trading sessions between start and end inclusive.
 
-    Survivorship cares about market trading days; weekends are obvious
-    gaps. We approximate with Mon-Fri (good enough for the gate check;
-    half-day holidays would surface as legitimate concerns).
+    Survivorship cares about market trading days. We use the NYSE
+    exchange calendar (XNYS) to filter weekends AND holidays — the
+    earlier weekday-only approximation reported NYE/MLK/Presidents
+    Day/Good Friday/Memorial Day/etc. as "missing" against healthy
+    insert-only data, flipping PASS to CONDITIONAL on first run.
+
+    Falls back to weekday-only if exchange_calendars isn't importable
+    (keeps the test path hermetic when the dep is unavailable); the
+    fallback over-reports gaps but never under-reports — safer default.
     """
-    out = []
-    cur = start
-    while cur <= end:
-        if cur.weekday() < 5:
-            out.append(cur)
-        cur += timedelta(days=1)
-    return out
+    try:
+        import exchange_calendars as xcals
+    except ImportError:
+        out = []
+        cur = start
+        while cur <= end:
+            if cur.weekday() < 5:
+                out.append(cur)
+            cur += timedelta(days=1)
+        return out
+
+    nyse = xcals.get_calendar("XNYS")
+    sessions = nyse.sessions_in_range(start.isoformat(), end.isoformat())
+    return [s.date() for s in sessions]
 
 
 def seed_snapshots(

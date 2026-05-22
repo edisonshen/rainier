@@ -92,3 +92,51 @@ def test_survivorship_check_json_shape(tmp_path, monkeypatch):
     assert "to_date" in data and data["to_date"] == "2026-05-01"
     assert "delisted_tickers" in data
     assert "next_step" in data
+
+
+def test_cost_pilot_fixture_accepts_bare_list_shape(tmp_path):
+    """Regression: codex iter-1 [P2] — `--fixture` must accept either
+    `{calls: [...], ledger_sha, skill_id}` OR a bare top-level JSON list
+    of call records. The pre-fix code called `raw.get("calls", ...)`
+    unconditionally, which AttributeErrors when `raw` is a list.
+    """
+    calls = [
+        {"call_id": "c0", "provider": "anthropic", "model": "opus-4.7",
+         "cost_usd": 0.01, "schema_retries": 0, "cache_hit": False,
+         "outcome": "filled"},
+        {"call_id": "c1", "provider": "deepseek", "model": "v4-pro",
+         "cost_usd": 0.005, "schema_retries": 0, "cache_hit": True,
+         "outcome": "filled"},
+    ]
+    fixture = tmp_path / "bare_list.json"
+    fixture.write_text(json.dumps(calls))
+    result = _run([
+        "llm-research", "cost-pilot",
+        "--fixture", str(fixture),
+        "--out", str(tmp_path / "out.parquet"),
+        "--report-html", str(tmp_path / "out.html"),
+        "--skill", "test_skill",
+    ])
+    assert result.exit_code == 0, result.output
+    # Summary block should round-trip — verdict is one of the three legal values.
+    from rainier.research import output_schema
+    parsed = output_schema.parse_block(result.output)
+    assert parsed["verdict"] in {"PASS", "CONDITIONAL", "FAIL"}
+    assert parsed["calls_completed"] == 2
+
+
+def test_cost_pilot_fixture_rejects_invalid_shape(tmp_path):
+    """Non-dict, non-list JSON should raise a ClickException with a
+    helpful next-step rather than crashing with a cryptic AttributeError.
+    """
+    fixture = tmp_path / "scalar.json"
+    fixture.write_text(json.dumps("not-a-list-or-dict"))
+    result = _run([
+        "llm-research", "cost-pilot",
+        "--fixture", str(fixture),
+        "--out", str(tmp_path / "out.parquet"),
+        "--report-html", str(tmp_path / "out.html"),
+    ])
+    assert result.exit_code != 0
+    # The click error message names the supported shapes.
+    assert "list" in result.output.lower() or "object" in result.output.lower()
