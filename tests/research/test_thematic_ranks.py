@@ -413,6 +413,48 @@ def test_top15_streak_increments_and_resets(
 # ---------------------------------------------------------------------------
 
 
+def test_compute_excludes_symbols_not_in_yaml_sector_map(
+    sector_map, ticker_registry, sector_registry
+):
+    """Regression — codex iter-7 [P2]: cached panel may contain tickers no
+    longer in the active YAML universe (e.g. one removed in a YAML edit).
+    Cross-sectional ranks must be computed only over the active universe,
+    not every symbol still in the parquet.
+    """
+    symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+    daily_returns = {
+        "AAA": [0.01] * 29,
+        "BBB": [0.005] * 29,
+        "CCC": [0.0] * 29,
+        "DDD": [-0.005] * 29,
+        "EEE": [-0.01] * 29,
+    }
+    panel = _build_panel(symbols, 30, daily_returns)
+
+    # Add a STALE symbol that's still in the OHLCV cache but NOT in sector_map
+    # (simulating a YAML removal). It must be excluded from ranks/universe.
+    stale = _build_panel(["STALE"], 30, {"STALE": [0.02] * 29})
+    panel = pd.concat([panel, stale], ignore_index=True)
+
+    # sector_map does NOT include STALE — i.e. operator removed it from YAML.
+    out = compute_thematic_features(
+        panel=panel,
+        asof=date(2024, 11, 8),
+        sector_map=sector_map,  # 5-ticker universe
+        ticker_registry=ticker_registry,
+        sector_registry=sector_registry,
+        universe_yaml_sha="abc123",
+    )
+    out_syms = set(out["symbol"].tolist())
+    assert "STALE" not in out_syms, (
+        "removed-from-YAML symbol must not appear in features output"
+    )
+    assert (out["universe_size"] == 5).all(), (
+        f"universe_size must reflect active YAML universe (5), not cached "
+        f"panel symbol count; got: {out['universe_size'].unique()}"
+    )
+
+
 def test_vol_window_no_pad_on_internal_gaps(
     sector_map, ticker_registry, sector_registry
 ):

@@ -190,6 +190,14 @@ def compute_thematic_features(
     # Symbols present in the asof row (drop symbols without a close on asof).
     asof_close = wide_close.loc[asof].dropna()
     symbols_asof = asof_close.index.tolist()
+    # Restrict to the active YAML universe so a cached panel that retains
+    # removed tickers does NOT pollute cross-sectional ranks or universe_size
+    # (codex iter-7 [P2]). When sector_map is empty (defensive), keep all
+    # symbols — the explicit YAML cohort is the source of truth.
+    if sector_map:
+        active = set(sector_map.keys())
+        symbols_asof = [s for s in symbols_asof if s in active]
+        asof_close = asof_close.loc[symbols_asof]
 
     # ---- Raw returns and REL_N ----
     rows: list[dict] = []
