@@ -3205,3 +3205,12 @@ def sma_sweep(
             phase=phase,
         )
         click.echo("done.")
+
+
+# Composition root — wire the research engine's `llm-research` subgroup
+# onto the root `rainier` command. Per project CLAUDE.md the research
+# package never reaches into production CLI plumbing; we register it here
+# so research/cli.py stays free of imports from production modules.
+from rainier.research.cli import register as _register_llm_research  # noqa: E402
+
+_register_llm_research(cli)

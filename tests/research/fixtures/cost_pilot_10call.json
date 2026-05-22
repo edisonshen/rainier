@@ -1,0 +1,16 @@
+{
+  "skill_id": "cost_pilot_v0",
+  "ledger_sha": "0000000000000000000000000000000000000000",
+  "calls": [
+    {"call_id": "c0", "provider": "anthropic", "model": "opus-4.7", "cost_usd": 0.08, "schema_retries": 0, "cache_hit": false, "outcome": "filled"},
+    {"call_id": "c1", "provider": "anthropic", "model": "opus-4.7", "cost_usd": 0.07, "schema_retries": 0, "cache_hit": false, "outcome": "filled"},
+    {"call_id": "c2", "provider": "anthropic", "model": "opus-4.7", "cost_usd": 0.09, "schema_retries": 1, "cache_hit": false, "outcome": "rejected_schema"},
+    {"call_id": "c3", "provider": "deepseek", "model": "v4-pro", "cost_usd": 0.012, "schema_retries": 0, "cache_hit": false, "outcome": "filled"},
+    {"call_id": "c4", "provider": "deepseek", "model": "v4-pro", "cost_usd": 0.013, "schema_retries": 0, "cache_hit": true, "outcome": "filled"},
+    {"call_id": "c5", "provider": "deepseek", "model": "v4-pro", "cost_usd": 0.011, "schema_retries": 0, "cache_hit": false, "outcome": "no_setup"},
+    {"call_id": "c6", "provider": "deepseek", "model": "v4-flash", "cost_usd": 0.002, "schema_retries": 0, "cache_hit": false, "outcome": "filled"},
+    {"call_id": "c7", "provider": "deepseek", "model": "v4-flash", "cost_usd": 0.003, "schema_retries": 0, "cache_hit": true, "outcome": "filled"},
+    {"call_id": "c8", "provider": "deepseek", "model": "v4-flash", "cost_usd": 0.0025, "schema_retries": 0, "cache_hit": false, "outcome": "no_setup"},
+    {"call_id": "c9", "provider": "deepseek", "model": "v4-flash", "cost_usd": 0.0021, "schema_retries": 0, "cache_hit": false, "outcome": "filled"}
+  ]
+}

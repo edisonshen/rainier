@@ -1,0 +1,97 @@
+# Output-format contract — D-031 stdout summary blocks.
+#
+# Every llm-research <verb> that emits a summary block produces a YAML
+# document fenced by `---` ... `---` on stdout. The contents must match
+# one of the schemas below. CI tests validate every backtest run against
+# this file (per [D-031]).
+#
+# Schema entries declare each field's type and (optionally) an enum of
+# allowed values. Unknown verdicts / outcomes fail strict-mode validation
+# in the test suite; the runtime CLI uses non-strict mode so a forward-
+# compatible field doesn't blow up production stdout.
+
+schema_version: 1
+
+schemas:
+  # Slice 0 — cost-pilot summary, per TASK-PLAN §4.3.
+  cost_pilot:
+    fields:
+      slice:
+        type: int
+      skill_id:
+        type: str
+      calls_total:
+        type: int
+      calls_completed:
+        type: int
+      mean_cost_usd:
+        type: float
+      p95_cost_usd:
+        type: float
+      p99_cost_usd:
+        type: float
+      schema_retry_rate:
+        type: float
+      cache_hit_rate:
+        type: float
+      total_spend_usd:
+        type: float
+      verdict:
+        type: str
+        enum: [PASS, CONDITIONAL, FAIL]
+      report_html:
+        type: str
+      ledger_sha:
+        type: str
+
+  # Slice 0 — survivorship summary, per TASK-PLAN §4.4.
+  survivorship:
+    fields:
+      from_date:
+        type: str
+      to_date:
+        type: str
+      verdict:
+        type: str
+        enum: [PASS, CONDITIONAL, FAIL]
+      delisted_tickers:
+        type: list
+      missing_days:
+        type: list
+      next_step:
+        type: str
+        nullable: true
+
+  # Slice 1+ — L3 backtest summary, per [D-031] in DESIGN-qu100-llm-backtest.md.
+  # Declared here so subsequent slices don't drift on shape; not exercised
+  # in Slice 0 tests beyond shape parity.
+  backtest:
+    fields:
+      skill_id:
+        type: str
+      reward_fn:
+        type: str
+      filled_R:
+        type: float
+      all_call_R:
+        type: float
+      calls:
+        type: int
+      valid_thesis_rate:
+        type: float
+      filled_rate:
+        type: float
+      cost_usd:
+        type: float
+      tqqq_bh_R:
+        type: float
+      delta_vs_tqqq:
+        type: float
+      deflated_sharpe:
+        type: float
+      evaluator_sha:
+        type: str
+      skill_yaml_sha:
+        type: str
+      ledger_sha:
+        type: str
