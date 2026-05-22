@@ -1,0 +1,9 @@
+{
+  "alive": ["AAPL", "NVDA", "TSLA"],
+  "delisted_after": {
+    "OLDCO": "2025-06-30",
+    "GONECO": "2025-12-15"
+  },
+  "date_from": "2025-01-01",
+  "date_to": "2026-05-01"
+}
