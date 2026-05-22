@@ -657,6 +657,47 @@ def test_anchor_calendar_skipped_when_anchor_absent(backfill_mod, tmp_path):
     assert out.exists()
 
 
+def test_allow_empty_does_not_exempt_partial_coverage(backfill_mod, tmp_path):
+    """allow_empty exempts ONLY zero-row tier-1; partial coverage still requires
+    explicit allow_gaps. Per codex iter-5 P2.
+    """
+    days = pd.date_range("2024-10-01", periods=10, freq="B").date.tolist()
+
+    def partial_fetch(symbols, start, end):
+        out: dict[str, pd.DataFrame] = {}
+        for sym in symbols:
+            if sym == "SPY":
+                sym_days = days
+            else:
+                sym_days = days[:5]  # 50% calendar gap — way above tier-3
+            rows = [
+                {
+                    "date": d,
+                    "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+                }
+                for d in sym_days
+            ]
+            out[sym] = pd.DataFrame(rows)
+        return out
+
+    out = tmp_path / "macro.parquet"
+    # VIX is in allow_empty but returns partial (not empty) data.
+    # Expectation: tier-3 catches the calendar gap regardless of allow_empty.
+    with pytest.raises(ValueError, match="calendar-gap exceeds"):
+        backfill_mod.backfill(
+            symbols=["SPY", "VIX"],
+            start="2024-10-01",
+            end="2024-10-15",
+            out_path=out,
+            force=False,
+            fetch_fn=partial_fetch,
+            min_coverage=0.4,  # allow tier-2 to pass; tier-3 is the gate
+            allow_empty=["VIX"],  # this should NOT exempt partial coverage
+        )
+    assert not out.exists()
+
+
 def test_anchor_calendar_allow_gaps_overrides(backfill_mod, tmp_path):
     """Operator-acknowledged sparse tickers bypass tier-3 via --allow-gaps."""
     days = pd.date_range("2024-10-01", periods=10, freq="B").date.tolist()

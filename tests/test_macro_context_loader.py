@@ -120,3 +120,27 @@ def test_read_all_returns_all_symbols(tmp_path):
 
     df = loader.read_all(path=cache)
     assert set(df["symbol"].unique()) == {"VIX", "XLK", "QQQ"}
+
+
+def test_read_range_accepts_datetime_bounds(tmp_path):
+    """datetime is a subclass of date; passing one must NOT raise TypeError.
+
+    Per codex iter-5: ``_coerce_date(datetime(...))`` used to return the
+    datetime unchanged because ``isinstance(d, date)`` is true. Then the
+    parquet ``date`` column (loaded as ``datetime.date`` objects) couldn't be
+    compared against a ``datetime``, raising ``TypeError`` mid-query. Now we
+    truncate datetime → date defensively.
+    """
+    cache = tmp_path / "macro.parquet"
+    _make_cache(cache)
+
+    df = loader.read_range(
+        "VIX",
+        datetime(2024, 10, 7, 14, 30, 0),
+        datetime(2024, 10, 11, 23, 59, 59),
+        path=cache,
+    )
+    # 5 weekday rows in the inclusive range.
+    assert len(df) == 5
+    assert df["date"].min() == date(2024, 10, 7)
+    assert df["date"].max() == date(2024, 10, 11)

@@ -386,11 +386,15 @@ def _validate_coverage(
 
     partial: list[tuple[str, int, float]] = []
     for sym in symbols:
-        if sym in allow_empty or sym in allow_gaps:
+        # allow_empty exempts ONLY tier-1 (zero rows). Partial coverage still
+        # requires explicit allow_gaps opt-in. Codex iter-5.
+        if sym in allow_gaps:
             continue
         df = fetched.get(sym)
         if df is None or df.empty:
-            continue  # tier-1 covered it
+            # Symbol returned zero rows AND must be in allow_empty (else
+            # tier 1 would have raised). Don't double-flag.
+            continue
         ratio = len(df) / bdays
         if ratio < min_coverage:
             partial.append((sym, len(df), ratio))
@@ -421,10 +425,13 @@ def _validate_coverage(
 
     calendar_gaps: list[tuple[str, int, float]] = []
     for sym in symbols:
-        if sym == anchor_symbol or sym in allow_empty or sym in allow_gaps:
+        # allow_empty exempts ONLY tier-1 (zero rows); partial calendar gaps
+        # still require explicit allow_gaps opt-in. Codex iter-5.
+        if sym == anchor_symbol or sym in allow_gaps:
             continue
         df = fetched.get(sym)
         if df is None or df.empty:
+            # Allowed-empty symbols (their tier-1 was exempted upstream).
             continue
         sym_dates: set = set(df["date"].tolist())
         missing_dates = anchor_dates - sym_dates

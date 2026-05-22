@@ -18,7 +18,7 @@ Missing-data policy:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -45,8 +45,12 @@ def _empty_frame() -> pd.DataFrame:
     return pd.DataFrame({col: pd.Series(dtype="object") for col in _SCHEMA_COLUMNS})
 
 
-def _coerce_date(value: str | date | pd.Timestamp) -> date:
-    if isinstance(value, date) and not isinstance(value, pd.Timestamp):
+def _coerce_date(value: str | date | datetime | pd.Timestamp) -> date:
+    # ``datetime`` is a subclass of ``date``; treat it as a Timestamp-like and
+    # truncate to date (see codex iter-5). Pure ``date`` passes through.
+    if isinstance(value, datetime) or isinstance(value, pd.Timestamp):
+        return pd.to_datetime(value).date()
+    if isinstance(value, date):
         return value
     return pd.to_datetime(value).date()
 
@@ -63,8 +67,8 @@ def read_all(path: str | Path | None = None) -> pd.DataFrame:
 
 def read_range(
     symbol: str,
-    start: str | date | pd.Timestamp,
-    end: str | date | pd.Timestamp,
+    start: str | date | datetime | pd.Timestamp,
+    end: str | date | datetime | pd.Timestamp,
     path: str | Path | None = None,
 ) -> pd.DataFrame:
     """Rows for ``symbol`` with ``start <= date <= end``.
