@@ -346,6 +346,29 @@ def check(
             immutability_proof=proof,
         )
 
+    # codex iter-7 [P1]: PASS requires the immutability proof to actually
+    # check out. In the prod (postgres) path, _has_mutated_rows() returns
+    # False unconditionally because the audit column doesn't exist yet —
+    # which means the gate would otherwise greenlight production history
+    # without ever VERIFYING insert-only. Treat unverified proof as
+    # CONDITIONAL with a concrete next-step so the operator knows the
+    # gate hasn't actually run end-to-end.
+    if proof == "unverified":
+        return SurvivorshipResult(
+            from_date=from_date,
+            to_date=to_date,
+            verdict="CONDITIONAL",
+            delisted_tickers=delisted,
+            missing_days=[],
+            next_step=(
+                "Coverage looks complete but the insert-only / immutability "
+                "proof is unverified on this backend — no audit column or "
+                "trigger to read from. Ship the audit trigger (Slice 1) "
+                "before treating this as a D-016 PASS gate."
+            ),
+            immutability_proof=proof,
+        )
+
     return SurvivorshipResult(
         from_date=from_date,
         to_date=to_date,

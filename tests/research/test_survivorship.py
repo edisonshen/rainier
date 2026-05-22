@@ -113,6 +113,43 @@ def test_to_dict_shape(in_memory_session):
     assert isinstance(d["missing_days"], list)
 
 
+def test_unverified_proof_returns_conditional_not_pass(monkeypatch, in_memory_session):
+    """Regression: codex iter-7 [P1] — when the immutability proof is
+    `unverified` (prod path before the audit trigger lands), the gate
+    must return CONDITIONAL, not PASS. Pre-fix, complete coverage with
+    no mutated rows returned PASS even though _has_mutated_rows() never
+    actually ran on the prod (non-sqlite) backend.
+
+    We simulate the prod path on top of the in-memory SQLite session by
+    monkeypatching `_is_sqlite` → False.
+    """
+    start = date(2025, 1, 2)
+    end = date(2025, 1, 31)
+    _seed_alive(in_memory_session, ["AAPL"], start, end)
+    monkeypatch.setattr(survivorship, "_is_sqlite", lambda _s: False)
+    # Also stub the prod queries so they execute against the sqlite test
+    # table — _coverage_query / _delisted_tickers fall through to the
+    # `text(...)` path otherwise and would 404 on money_flow_snapshots.
+    monkeypatch.setattr(
+        survivorship, "_coverage_query",
+        lambda _s, s, e: {d: 1 for d in survivorship._trading_days(s, e)},
+    )
+    monkeypatch.setattr(
+        survivorship, "_delisted_tickers",
+        lambda _s, _s2, _e, **_k: [],
+    )
+    monkeypatch.setattr(
+        survivorship, "_has_mutated_rows",
+        lambda _s, _s2, _e: False,
+    )
+    result = survivorship.check(
+        session=in_memory_session, from_date=start, to_date=end,
+    )
+    assert result.verdict == "CONDITIONAL"
+    assert result.immutability_proof == "unverified"
+    assert result.next_step and "audit" in result.next_step.lower()
+
+
 def test_nyse_holidays_not_reported_as_missing(in_memory_session):
     """Regression: codex iter-1 [P1] — NYE / MLK / Presidents Day / Good
     Friday / Memorial Day are NYSE-closed sessions. The gate must not
