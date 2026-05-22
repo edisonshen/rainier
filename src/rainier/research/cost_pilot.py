@@ -155,7 +155,6 @@ def run_calls(
     """
     materialized: list[dict[str, Any]] = []
     running_total = 0.0
-    aborted = False
     for r in calls:
         cost = float(r["cost_usd"])
         materialized.append(dict(r))
@@ -175,11 +174,7 @@ def run_calls(
                     "outcome": "budget_aborted",
                 }
             )
-            aborted = True
             break
-    # Silence "unused variable" — `aborted` is part of the documented contract
-    # if a caller later wants the abort signal; keep it bound for readability.
-    del aborted
     persist_parquet(
         materialized, out_parquet, skill_id=skill_id, ledger_sha=ledger_sha
     )

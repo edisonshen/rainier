@@ -62,16 +62,6 @@ def _is_sqlite(session: Session) -> bool:
     return session.bind.dialect.name == "sqlite"
 
 
-def _table_for_session(session: Session) -> Table | str:
-    """Return the test Table or the prod table name based on the engine."""
-    if _is_sqlite(session):
-        return qu100_snapshot_test
-    # Production: query money_flow_snapshots directly. Returning the literal
-    # table name keeps the SQL minimal; we don't want a hard ORM dep that
-    # forces TimescaleDB-specific columns into this module.
-    return "money_flow_snapshots"
-
-
 # --------------------------------------------------------------------------- #
 # Public seeding / mutation helpers — used only by tests, exposed at module
 # level so the test suite doesn't reach into private state.

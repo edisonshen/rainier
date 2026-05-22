@@ -105,7 +105,7 @@ def test_to_dict_shape(in_memory_session):
     )
     d = result.as_dict()
     assert d["from_date"] == "2025-01-01"
-    assert d["to_date"] == "2026-02-01" or d["to_date"] == "2025-02-01"
+    assert d["to_date"] == "2025-02-01"
     assert d["verdict"] in {"PASS", "CONDITIONAL", "FAIL"}
     assert isinstance(d["delisted_tickers"], list)
     assert isinstance(d["missing_days"], list)
