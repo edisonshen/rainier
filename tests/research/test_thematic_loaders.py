@@ -10,8 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from rainier.research.breadth.loaders import (
@@ -19,7 +17,6 @@ from rainier.research.breadth.loaders import (
     load_thematic_features,
     load_thematic_panel,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixture builders — synthesize Layer A and Layer B parquets

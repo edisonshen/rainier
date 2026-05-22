@@ -8,11 +8,9 @@ Design ref: docs/DESIGN-thematic-ranks-dashboard.md §7 ([D-004]).
 
 from __future__ import annotations
 
-import os
 from datetime import date, timedelta
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 from click.testing import CliRunner

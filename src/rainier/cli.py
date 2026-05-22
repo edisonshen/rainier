@@ -3420,3 +3420,418 @@ def thematic_snapshot_universe(
 from rainier.research.cli import register as _register_llm_research  # noqa: E402
 
 _register_llm_research(cli)
+
+
+# ---------------------------------------------------------------------------
+# thematic — Phase B: compute, backfill-labels, render, run-daily
+# ---------------------------------------------------------------------------
+#
+# These build on Phase A's thematic_universe.parquet + ticker/sector
+# registries + universe log to produce:
+#   - Layer A features  -> data/cache/thematic_features_daily.parquet
+#   - Layer B labels    -> data/cache/thematic_labels_daily.parquet
+#   - Dashboard HTML    -> docs/thematic-ranks-<YYYY-MM-DD>.html
+#
+# Design ref: docs/DESIGN-thematic-ranks-dashboard.md §6 / §7.
+
+
+def _load_universe_for_compute(yaml_path: Path):
+    """Return ``(sector_map, ticker_registry, sector_registry, yaml_sha,
+    all_symbols)`` from the YAML at ``yaml_path``.
+
+    Registries are loaded if their parquets exist, else seeded from the YAML
+    so first-run compute always succeeds even before the operator has run
+    `thematic backfill` (which usually seeds them).
+    """
+    from rainier.research.breadth import universe_loader as _ul
+
+    spec = _ul.load_universe(yaml_path)
+    sector_map: dict[str, str] = {}
+    for sec, syms in spec.sectors.items():
+        for s in syms:
+            sector_map[s] = sec
+    return spec, sector_map
+
+
+@thematic.command("compute")
+@click.option("--asof", required=True, help="Compute date (YYYY-MM-DD).")
+@click.option(
+    "--ohlcv",
+    "ohlcv_path",
+    type=click.Path(exists=True),
+    default="data/cache/thematic_universe.parquet",
+    show_default=True,
+    help="Path to thematic_universe.parquet (Phase A OHLCV cache).",
+)
+@click.option(
+    "--yaml",
+    "yaml_path",
+    type=click.Path(exists=True),
+    default="config/thematic_universe.yaml",
+    show_default=True,
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(),
+    default="data/cache/thematic_features_daily.parquet",
+    show_default=True,
+)
+@click.option(
+    "--ticker-registry",
+    type=click.Path(),
+    default="data/cache/ticker_registry.parquet",
+    show_default=True,
+)
+@click.option(
+    "--sector-registry",
+    type=click.Path(),
+    default="data/cache/sector_registry.parquet",
+    show_default=True,
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Recompute even if asof_date already present in the output.",
+)
+def thematic_compute(
+    asof: str,
+    ohlcv_path: str,
+    yaml_path: str,
+    out_path: str,
+    ticker_registry: str,
+    sector_registry: str,
+    force: bool,
+) -> None:
+    """Compute Layer A features for one ``asof`` and insert into the parquet.
+
+    Idempotent: re-running for the same asof_date is a no-op unless ``--force``.
+    """
+    from datetime import date as _date
+
+    from rainier.research.breadth import registry as _reg
+    from rainier.research.breadth.ranks import compute_thematic_features
+
+    asof_dt = _date.fromisoformat(asof)
+    spec, sector_map = _load_universe_for_compute(Path(yaml_path))
+
+    # Seed registries from the YAML if they don't exist yet.
+    ticker_registry_path = Path(ticker_registry)
+    sector_registry_path = Path(sector_registry)
+    _reg.seed_registries_from_universe(
+        spec.sectors,
+        asof=asof_dt,
+        ticker_registry_path=ticker_registry_path,
+        sector_registry_path=sector_registry_path,
+    )
+    ticker_reg_map = _reg.load_ticker_registry(ticker_registry_path)
+    sector_reg_map = _reg.load_sector_registry(sector_registry_path)
+
+    out_p = Path(out_path)
+    # Idempotency check.
+    if out_p.exists() and not force:
+        existing = pd.read_parquet(out_p)
+        if "asof_date" in existing.columns:
+            existing_dates = pd.to_datetime(existing["asof_date"]).dt.date
+            if (existing_dates == asof_dt).any():
+                click.echo(f"no-op: asof={asof_dt} already in {out_p}")
+                return
+
+    panel = pd.read_parquet(ohlcv_path)
+    if "date" in panel.columns:
+        panel["date"] = pd.to_datetime(panel["date"]).dt.date
+
+    # Pull previous asof's row (if any) so deltas + streak chain correctly.
+    prev_features = None
+    if out_p.exists():
+        existing = pd.read_parquet(out_p)
+        if not existing.empty and "asof_date" in existing.columns:
+            existing["asof_date"] = pd.to_datetime(existing["asof_date"]).dt.date
+            prior = existing.loc[existing["asof_date"] < asof_dt]
+            if not prior.empty:
+                latest = prior["asof_date"].max()
+                prev_features = prior.loc[prior["asof_date"] == latest]
+
+    out_df = compute_thematic_features(
+        panel=panel,
+        asof=asof_dt,
+        sector_map=sector_map,
+        ticker_registry=ticker_reg_map,
+        sector_registry=sector_reg_map,
+        universe_yaml_sha=spec.yaml_sha,
+        prev_features=prev_features,
+    )
+    if out_df.empty:
+        click.echo(f"no rows computed for asof={asof_dt}; aborting write")
+        return
+
+    _append_features(out_df, out_p, asof_dt, force=force)
+    click.echo(f"wrote {len(out_df)} rows -> {out_p}")
+
+
+def _append_features(new_df: pd.DataFrame, path: Path, asof: date, force: bool) -> None:
+    """Append new_df to the parquet at path, replacing any existing rows for
+    the same asof_date if ``force``. Atomic write via tmp + os.replace.
+    """
+    import os
+
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = pd.read_parquet(path)
+        if not existing.empty and "asof_date" in existing.columns:
+            existing["asof_date"] = pd.to_datetime(existing["asof_date"]).dt.date
+            if force:
+                existing = existing.loc[existing["asof_date"] != asof]
+        combined = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        combined = new_df
+
+    combined = combined.sort_values(["symbol", "asof_date"]).reset_index(drop=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    combined.to_parquet(tmp, index=False)
+    os.replace(tmp, path)
+
+
+@thematic.command("backfill-labels")
+@click.option(
+    "--ohlcv",
+    "ohlcv_path",
+    type=click.Path(exists=True),
+    default="data/cache/thematic_universe.parquet",
+    show_default=True,
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(),
+    default="data/cache/thematic_labels_daily.parquet",
+    show_default=True,
+)
+def thematic_backfill_labels(ohlcv_path: str, out_path: str) -> None:
+    """Compute Layer B forward-return labels for every (asof_date, symbol)."""
+    import os
+
+    from rainier.research.breadth.ranks import compute_forward_labels
+
+    panel = pd.read_parquet(ohlcv_path)
+    if "date" in panel.columns:
+        panel["date"] = pd.to_datetime(panel["date"]).dt.date
+    out_df = compute_forward_labels(panel=panel)
+
+    out_p = Path(out_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_p.with_suffix(out_p.suffix + ".tmp")
+    out_df.to_parquet(tmp, index=False)
+    os.replace(tmp, out_p)
+    click.echo(f"wrote {len(out_df)} label rows -> {out_p}")
+
+
+@thematic.command("render")
+@click.option("--asof", required=True, help="Date to render (YYYY-MM-DD).")
+@click.option(
+    "--features",
+    "features_path",
+    type=click.Path(exists=True),
+    default="data/cache/thematic_features_daily.parquet",
+    show_default=True,
+)
+@click.option(
+    "--yaml",
+    "yaml_path",
+    type=click.Path(exists=True),
+    default="config/thematic_universe.yaml",
+    show_default=True,
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(),
+    default=None,
+    help="HTML path. Default: docs/thematic-ranks-<asof>.html.",
+)
+def thematic_render(
+    asof: str, features_path: str, yaml_path: str, out_path: str | None
+) -> None:
+    """Render the thematic ranks dashboard for ``asof`` to a self-contained HTML."""
+    from datetime import date as _date
+
+    from rainier.viz.thematic_dashboard import render_dashboard
+
+    asof_dt = _date.fromisoformat(asof)
+    features = pd.read_parquet(features_path)
+    if "asof_date" in features.columns:
+        features["asof_date"] = pd.to_datetime(features["asof_date"]).dt.date
+    sub = features.loc[features["asof_date"] == asof_dt]
+    if sub.empty:
+        raise click.ClickException(
+            f"no features for asof={asof_dt} in {features_path}; "
+            f"run `rainier thematic compute --asof {asof_dt}` first."
+        )
+
+    # Join sector_name from the YAML universe.
+    spec, sector_map = _load_universe_for_compute(Path(yaml_path))
+    sub = sub.copy()
+    sub["sector_name"] = sub["symbol"].map(sector_map).fillna("unknown")
+
+    target = Path(out_path) if out_path else Path(f"docs/thematic-ranks-{asof_dt}.html")
+    written = render_dashboard(sub, out_path=target, asof=asof_dt)
+    click.echo(f"wrote dashboard -> {written}")
+
+
+@thematic.command("run-daily")
+@click.option(
+    "--asof",
+    default=None,
+    help="Date to run for (YYYY-MM-DD). Default: today.",
+)
+@click.option(
+    "--ohlcv",
+    "ohlcv_path",
+    type=click.Path(exists=True),
+    default="data/cache/thematic_universe.parquet",
+    show_default=True,
+)
+@click.option(
+    "--yaml",
+    "yaml_path",
+    type=click.Path(exists=True),
+    default="config/thematic_universe.yaml",
+    show_default=True,
+)
+@click.option(
+    "--features-out",
+    type=click.Path(),
+    default="data/cache/thematic_features_daily.parquet",
+    show_default=True,
+)
+@click.option(
+    "--labels-out",
+    type=click.Path(),
+    default="data/cache/thematic_labels_daily.parquet",
+    show_default=True,
+)
+@click.option(
+    "--ticker-registry",
+    type=click.Path(),
+    default="data/cache/ticker_registry.parquet",
+    show_default=True,
+)
+@click.option(
+    "--sector-registry",
+    type=click.Path(),
+    default="data/cache/sector_registry.parquet",
+    show_default=True,
+)
+@click.option(
+    "--html-out",
+    type=click.Path(),
+    default=None,
+    help="HTML path. Default: docs/thematic-ranks-<asof>.html.",
+)
+def thematic_run_daily(
+    asof: str | None,
+    ohlcv_path: str,
+    yaml_path: str,
+    features_out: str,
+    labels_out: str,
+    ticker_registry: str,
+    sector_registry: str,
+    html_out: str | None,
+) -> None:
+    """One-shot daily flow: compute Layer A + Layer B + render dashboard.
+
+    Idempotent: if today's Layer A row already exists, the compute step is
+    a no-op. Label backfill always runs (it's cheap and the freshest rows
+    drift forward as new days arrive).
+    """
+    from datetime import date as _date
+
+    from rainier.research.breadth import registry as _reg
+    from rainier.research.breadth.ranks import (
+        compute_forward_labels,
+        compute_thematic_features,
+    )
+    from rainier.viz.thematic_dashboard import render_dashboard
+
+    asof_dt = _date.fromisoformat(asof) if asof else _date.today()
+    spec, sector_map = _load_universe_for_compute(Path(yaml_path))
+
+    # Seed registries.
+    ticker_registry_path = Path(ticker_registry)
+    sector_registry_path = Path(sector_registry)
+    _reg.seed_registries_from_universe(
+        spec.sectors,
+        asof=asof_dt,
+        ticker_registry_path=ticker_registry_path,
+        sector_registry_path=sector_registry_path,
+    )
+    ticker_reg_map = _reg.load_ticker_registry(ticker_registry_path)
+    sector_reg_map = _reg.load_sector_registry(sector_registry_path)
+
+    panel = pd.read_parquet(ohlcv_path)
+    if "date" in panel.columns:
+        panel["date"] = pd.to_datetime(panel["date"]).dt.date
+
+    # Layer A: idempotent compute.
+    features_path = Path(features_out)
+    skip_compute = False
+    if features_path.exists():
+        existing = pd.read_parquet(features_path)
+        if not existing.empty and "asof_date" in existing.columns:
+            existing["asof_date"] = pd.to_datetime(existing["asof_date"]).dt.date
+            if (existing["asof_date"] == asof_dt).any():
+                click.echo(f"layer A: no-op (asof={asof_dt} already present)")
+                skip_compute = True
+
+    if not skip_compute:
+        prev_features = None
+        if features_path.exists():
+            existing = pd.read_parquet(features_path)
+            if not existing.empty and "asof_date" in existing.columns:
+                existing["asof_date"] = pd.to_datetime(existing["asof_date"]).dt.date
+                prior = existing.loc[existing["asof_date"] < asof_dt]
+                if not prior.empty:
+                    latest = prior["asof_date"].max()
+                    prev_features = prior.loc[prior["asof_date"] == latest]
+
+        out_df = compute_thematic_features(
+            panel=panel,
+            asof=asof_dt,
+            sector_map=sector_map,
+            ticker_registry=ticker_reg_map,
+            sector_registry=sector_reg_map,
+            universe_yaml_sha=spec.yaml_sha,
+            prev_features=prev_features,
+        )
+        if out_df.empty:
+            click.echo(f"layer A: no rows for asof={asof_dt}; skipping")
+        else:
+            _append_features(out_df, features_path, asof_dt, force=False)
+            click.echo(f"layer A: wrote {len(out_df)} rows -> {features_path}")
+
+    # Layer B: always recompute (cheap + freshness drifts forward).
+    import os
+
+    labels_path = Path(labels_out)
+    labels_path.parent.mkdir(parents=True, exist_ok=True)
+    label_df = compute_forward_labels(panel=panel)
+    tmp = labels_path.with_suffix(labels_path.suffix + ".tmp")
+    label_df.to_parquet(tmp, index=False)
+    os.replace(tmp, labels_path)
+    click.echo(f"layer B: wrote {len(label_df)} rows -> {labels_path}")
+
+    # Render dashboard.
+    features = pd.read_parquet(features_path)
+    if "asof_date" in features.columns:
+        features["asof_date"] = pd.to_datetime(features["asof_date"]).dt.date
+    sub = features.loc[features["asof_date"] == asof_dt]
+    if sub.empty:
+        click.echo(f"render: no features for asof={asof_dt}; skipping HTML")
+        return
+    sub = sub.copy()
+    sub["sector_name"] = sub["symbol"].map(sector_map).fillna("unknown")
+    target = Path(html_out) if html_out else Path(f"docs/thematic-ranks-{asof_dt}.html")
+    written = render_dashboard(sub, out_path=target, asof=asof_dt)
+    click.echo(f"render: wrote dashboard -> {written}")

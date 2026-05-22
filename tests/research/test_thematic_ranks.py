@@ -10,14 +10,12 @@ Design ref: docs/DESIGN-thematic-ranks-dashboard.md §5.1 ([D-002] / [D-003] /
 from __future__ import annotations
 
 from datetime import date, timedelta
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from rainier.research.breadth.ranks import compute_thematic_features
-
 
 # ---------------------------------------------------------------------------
 # Fixture builder
@@ -82,7 +80,6 @@ def _universe_log_seed(yaml_sha: str) -> pd.DataFrame:
 @pytest.fixture
 def panel_5x30() -> pd.DataFrame:
     """Crafted 5-ticker x 30-day panel."""
-    rng = np.random.default_rng(42)
     symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
     # Per-ticker return profile to anchor expected ranks
     daily_returns = {
