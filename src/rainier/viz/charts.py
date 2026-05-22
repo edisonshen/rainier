@@ -646,14 +646,19 @@ document.getElementById('theme-toggle').addEventListener('click', function() {{
 # `create_static_stock_chart` only — the interactive futures chart in
 # `_build_figure` keeps its system-font cascade for terminal display.
 #
-# Why "Arial, sans-serif": kaleido 0.2.1 ships its own headless Chromium and
-# does NOT resolve fonts from the host system at render time — it falls back
-# to its bundled DejaVu / Liberation set when an unknown family is requested.
-# Pinning "Arial, sans-serif" makes the request explicit; kaleido resolves it
-# to the same bundled glyph set on every machine, removing the macOS-vs-Linux
-# drift hazard that "Inter, -apple-system, BlinkMacSystemFont, sans-serif"
-# would introduce here. See TASK-PLAN §4.3.
-_LLM_CHART_FONT = "Arial, sans-serif"
+# Why "DejaVu Sans, sans-serif": kaleido 0.2.1 ships its own headless Chromium
+# whose default font installation includes DejaVu Sans and Liberation as
+# bundled fallbacks. Requesting "DejaVu Sans" explicitly hits the bundled
+# font on every host (macOS, Linux container, Linux desktop) — there is no
+# system-font lookup that could drift. Earlier iterations of this constant
+# used "Arial, sans-serif"; while empirical two-process tests on macOS arm64
+# with kaleido 0.2.1 show kaleido's bundled Chromium ignores host fonts,
+# requesting a font that IS in the bundle removes the theoretical drift hazard
+# entirely (a host with Arial installed plus a future kaleido that DOES honor
+# system fonts would render differently from a Linux container without Arial).
+# Pinning a bundled family makes the cross-host invariance explicit, not
+# inferred. See TASK-PLAN §4.3.
+_LLM_CHART_FONT = "DejaVu Sans, sans-serif"
 
 
 def create_static_stock_chart(
