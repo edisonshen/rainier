@@ -8,7 +8,6 @@ Tests pass a stub fixture; the production CLI wires `yfinance.download`.
 from __future__ import annotations
 
 import importlib.util
-from datetime import date
 from pathlib import Path
 
 import pandas as pd
