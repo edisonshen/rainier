@@ -70,19 +70,12 @@ def test_missing_symbol_returns_empty(tmp_path):
     _make_cache(cache)
 
     df = loader.read_range("ZZZZ", "2024-10-01", "2024-10-15", path=cache)
-    # Empty DataFrame with the production schema columns intact.
+    # Empty DataFrame with the ledger-registered columns intact.
+    # adjusted_close is INTENTIONALLY absent (look-ahead control; codex iter-7).
     assert df.empty
-    for col in [
-        "symbol",
-        "date",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "adjusted_close",
-    ]:
+    for col in ["symbol", "date", "open", "high", "low", "close", "volume"]:
         assert col in df.columns
+    assert "adjusted_close" not in df.columns
 
 
 def test_date_range_filter(tmp_path):
@@ -120,6 +113,44 @@ def test_read_all_returns_all_symbols(tmp_path):
 
     df = loader.read_all(path=cache)
     assert set(df["symbol"].unique()) == {"VIX", "XLK", "QQQ"}
+
+
+def test_loader_excludes_adjusted_close_by_default(tmp_path):
+    """Default loader output omits look-ahead-leaky columns. Codex iter-7.
+
+    yfinance's ``Adj Close`` is back-adjusted for future splits/dividends
+    and the ledger explicitly does NOT register it as as-of observable. The
+    loader must not return it by default — otherwise an L3 evaluator that
+    serializes/hashes the returned frame wholesale would silently include
+    look-ahead-adjusted values.
+    """
+    cache = tmp_path / "macro.parquet"
+    _make_cache(cache)
+
+    df_range = loader.read_range("VIX", "2024-10-01", "2024-10-15", path=cache)
+    df_all = loader.read_all(path=cache)
+    for frame in (df_range, df_all):
+        assert "adjusted_close" not in frame.columns
+        assert "fetched_at" not in frame.columns
+        assert "yfinance_version" not in frame.columns
+        # As-of fields remain.
+        for col in ["symbol", "date", "open", "high", "low", "close", "volume"]:
+            assert col in frame.columns
+
+
+def test_loader_include_unregistered_opt_in_returns_full_schema(tmp_path):
+    """Explicit opt-in surfaces the full parquet schema for non-L3 analyses."""
+    cache = tmp_path / "macro.parquet"
+    _make_cache(cache)
+
+    df_range = loader.read_range(
+        "VIX", "2024-10-01", "2024-10-15", path=cache, include_unregistered=True
+    )
+    df_all = loader.read_all(path=cache, include_unregistered=True)
+    for frame in (df_range, df_all):
+        assert "adjusted_close" in frame.columns
+        assert "fetched_at" in frame.columns
+        assert "yfinance_version" in frame.columns
 
 
 def test_read_range_accepts_datetime_bounds(tmp_path):
