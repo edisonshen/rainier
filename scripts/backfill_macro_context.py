@@ -314,6 +314,24 @@ silently committed to a cache whose ledger claims observability. Tunable per
 backfill via ``min_coverage`` kwarg or ``--min-coverage`` CLI flag.
 """
 
+DEFAULT_ANCHOR_SYMBOL = "SPY"
+"""Benchmark whose date-set defines the expected NYSE trading calendar.
+
+Phase 0 always includes SPY. Using its actual fetched date-set as the
+ground-truth calendar avoids depending on ``pandas_market_calendars`` /
+``exchange_calendars`` while still detecting "92% partial" scenarios that
+the row-count ratio (tier 2) lets through. Any non-anchor symbol missing
+>``DEFAULT_MAX_ANCHOR_GAP`` of the anchor's dates is flagged.
+"""
+
+DEFAULT_MAX_ANCHOR_GAP_RATIO = 0.02
+"""Max fraction of anchor dates a symbol may be missing before tier-3 fails.
+
+2% of 400 trading days = 8 days. This catches the codex iter-5 scenario
+(92% partial coverage = 8% missing = above the 2% bar) while tolerating
+single-day index publication anomalies. Tune via ``--max-anchor-gap``.
+"""
+
 
 def _validate_coverage(
     fetched: dict[str, pd.DataFrame],
@@ -323,23 +341,28 @@ def _validate_coverage(
     allow_empty: set[str],
     allow_gaps: set[str],
     min_coverage: float,
+    anchor_symbol: str = DEFAULT_ANCHOR_SYMBOL,
+    max_anchor_gap: float = DEFAULT_MAX_ANCHOR_GAP_RATIO,
 ) -> None:
     """Fail-fast on empty or partial per-symbol coverage.
 
-    Two-tier validation:
+    Three-tier validation:
       1. Any requested symbol with **zero** rows → ``ValueError`` (unless in
          ``allow_empty``). Catches outright outages / bad tickers.
       2. Any symbol with row_count / bdays < ``min_coverage`` → ``ValueError``
-         (unless in ``allow_gaps``). Catches transient provider gaps /
-         rate-limit partial responses where yfinance returned a non-empty
-         frame missing trading days. The ledger declares end_of_trading_day
-         observability for the full window; partial coverage would silently
-         mislead the L3 evaluator.
+         (unless in ``allow_gaps``). Catches catastrophic provider partials
+         (rate-limit / outage). ``bdate_range`` is a conservative upper bound
+         on NYSE trading days, so the threshold is biased toward
+         false-negatives.
+      3. **NYSE-calendar exactness** (codex iter-5): when the anchor symbol
+         (default ``SPY``) is present, its fetched date-set defines the
+         ground-truth trading calendar. Any non-anchor symbol missing more
+         than ``max_anchor_gap`` of the anchor's dates → ``ValueError``
+         (unless in ``allow_gaps``). This catches the "92% partial" scenario
+         that tier-2's 90% ratio lets through.
 
-    ``bdate_range`` is a conservative *upper bound* on NYSE trading days (it
-    includes US federal holidays). Using it as the denominator means the
-    threshold is biased toward false-negatives, never false-positives —
-    legitimate full coverage will always clear 0.90.
+    The ledger declares end_of_trading_day observability for the full window;
+    partial coverage would silently mislead the L3 evaluator.
     """
     # Tier 1: empty symbols.
     empty_missing = [
@@ -355,8 +378,7 @@ def _validate_coverage(
             f"pass --allow-empty SYMBOL[,SYMBOL...] to permit known gaps."
         )
 
-    # Tier 2: partial-coverage symbols. Skip empties (already raised above) and
-    # explicitly allow_gaps tickers (operator-acknowledged sparse data).
+    # Tier 2: partial-coverage symbols (row-count ratio).
     bdays = len(pd.bdate_range(start=start, end=end))
     if bdays == 0:
         # Degenerate window — coverage check is meaningless, skip.
@@ -386,6 +408,43 @@ def _validate_coverage(
             f"known-sparse tickers."
         )
 
+    # Tier 3: NYSE-calendar exactness via anchor-symbol date-set comparison.
+    # Only runs when the anchor is among the fetched symbols (it always is
+    # for Phase 0 since SPY is required). If the operator passes a custom
+    # symbol list without SPY, tier 3 is skipped silently.
+    anchor_df = fetched.get(anchor_symbol)
+    if anchor_df is None or anchor_df.empty:
+        return
+    anchor_dates: set = set(anchor_df["date"].tolist())
+    if not anchor_dates:
+        return
+
+    calendar_gaps: list[tuple[str, int, float]] = []
+    for sym in symbols:
+        if sym == anchor_symbol or sym in allow_empty or sym in allow_gaps:
+            continue
+        df = fetched.get(sym)
+        if df is None or df.empty:
+            continue
+        sym_dates: set = set(df["date"].tolist())
+        missing_dates = anchor_dates - sym_dates
+        gap_ratio = len(missing_dates) / len(anchor_dates)
+        if gap_ratio > max_anchor_gap:
+            calendar_gaps.append((sym, len(missing_dates), gap_ratio))
+
+    if calendar_gaps:
+        details = ", ".join(
+            f"{sym} (missing {n_missing}/{len(anchor_dates)} = {ratio:.1%})"
+            for sym, n_missing, ratio in sorted(calendar_gaps)
+        )
+        raise ValueError(
+            f"backfill calendar-gap exceeds {max_anchor_gap:.1%} (vs "
+            f"{anchor_symbol} anchor with {len(anchor_dates)} dates) for "
+            f"{len(calendar_gaps)} symbol(s): {details}. Re-run when the "
+            f"provider is healthy or pass --allow-gaps SYMBOL[,SYMBOL...] "
+            f"to permit known-sparse tickers."
+        )
+
 
 def backfill(
     symbols: Iterable[str],
@@ -399,6 +458,8 @@ def backfill(
     allow_empty: Iterable[str] | None = None,
     allow_gaps: Iterable[str] | None = None,
     min_coverage: float = DEFAULT_MIN_COVERAGE_RATIO,
+    anchor_symbol: str = DEFAULT_ANCHOR_SYMBOL,
+    max_anchor_gap: float = DEFAULT_MAX_ANCHOR_GAP_RATIO,
 ) -> Path | dict[str, object]:
     """Run the backfill.
 
@@ -454,6 +515,8 @@ def backfill(
         allow_empty=allow_empty_set,
         allow_gaps=allow_gaps_set,
         min_coverage=min_coverage,
+        anchor_symbol=anchor_symbol,
+        max_anchor_gap=max_anchor_gap,
     )
 
     df = _to_normalized_frame(fetched, yfinance_version, fetched_at)
@@ -521,6 +584,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Lower this for short windows or noisy providers."
         ),
     )
+    p.add_argument(
+        "--anchor-symbol",
+        default=DEFAULT_ANCHOR_SYMBOL,
+        help=(
+            "Symbol whose fetched date-set defines the NYSE trading calendar "
+            "for tier-3 (calendar-exact) validation. Default %(default)s. Must "
+            "be among --symbols or tier-3 is skipped silently."
+        ),
+    )
+    p.add_argument(
+        "--max-anchor-gap",
+        type=float,
+        default=DEFAULT_MAX_ANCHOR_GAP_RATIO,
+        help=(
+            "Max fraction of anchor dates a non-anchor symbol may be missing "
+            "before tier-3 aborts the backfill. Default %(default).2f "
+            "(~8 days/400). Use --allow-gaps to whitelist known-sparse tickers."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -540,6 +622,8 @@ def main(argv: list[str] | None = None) -> int:
         allow_empty=allow_empty,
         allow_gaps=allow_gaps,
         min_coverage=ns.min_coverage,
+        anchor_symbol=ns.anchor_symbol,
+        max_anchor_gap=ns.max_anchor_gap,
     )
     if ns.dry_run:
         plan = result  # type: ignore[assignment]

@@ -572,3 +572,122 @@ def test_min_coverage_threshold_is_tunable(backfill_mod, tmp_path):
         min_coverage=0.30,  # explicitly tolerate 33%
     )
     assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Codex iter-5 regression — tier-3 anchor-calendar exactness
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_calendar_gap_above_threshold_raises(backfill_mod, tmp_path):
+    """Tier-3: missing >2% of anchor (SPY) dates aborts before write.
+
+    The row-count ratio (tier 2) can pass at 90%+ while a symbol is still
+    missing 8% of trading days mid-window. Tier 3 uses the anchor's actual
+    date-set as ground truth — a "92% partial" yfinance response now fails
+    fast. See codex iter-5.
+    """
+    days = pd.date_range("2024-10-01", periods=10, freq="B").date.tolist()
+
+    def calendar_gappy_fetch(symbols, start, end):
+        out: dict[str, pd.DataFrame] = {}
+        for sym in symbols:
+            if sym == "SPY":
+                # SPY is the anchor — full 10 trading days.
+                sym_days = days
+            else:
+                # Other symbols missing 3/10 = 30% of anchor dates (way above 2%).
+                sym_days = days[:7]
+            rows = [
+                {
+                    "date": d,
+                    "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+                }
+                for d in sym_days
+            ]
+            out[sym] = pd.DataFrame(rows)
+        return out
+
+    out = tmp_path / "macro.parquet"
+    with pytest.raises(ValueError, match="calendar-gap exceeds"):
+        backfill_mod.backfill(
+            symbols=["SPY", "VIX"],
+            start="2024-10-01",
+            end="2024-10-15",  # 11 bdays — VIX 7/11 = 64% trips tier-2 first;
+                               # use looser min_coverage so tier-3 is the gate.
+            out_path=out,
+            force=False,
+            fetch_fn=calendar_gappy_fetch,
+            min_coverage=0.5,  # explicitly disable tier-2 so tier-3 is the gate
+        )
+    assert not out.exists()
+
+
+def test_anchor_calendar_skipped_when_anchor_absent(backfill_mod, tmp_path):
+    """If the operator omits the anchor symbol, tier-3 silently no-ops.
+
+    Operator might run a custom subset (no SPY); tier-3 should not raise
+    spuriously. Tiers 1 + 2 still protect.
+    """
+    days = pd.date_range("2024-10-01", periods=10, freq="B").date.tolist()
+
+    def fetch(symbols, start, end):
+        rows = [
+            {
+                "date": d,
+                "open": 100.0, "high": 101.0, "low": 99.0,
+                "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+            }
+            for d in days
+        ]
+        return {sym: pd.DataFrame(rows) for sym in symbols}
+
+    out = tmp_path / "macro.parquet"
+    # No SPY in symbols — anchor is missing; tier-3 must skip.
+    backfill_mod.backfill(
+        symbols=["VIX", "QQQ"],
+        start="2024-10-01",
+        end="2024-10-15",
+        out_path=out,
+        force=False,
+        fetch_fn=fetch,
+        min_coverage=0.5,
+    )
+    assert out.exists()
+
+
+def test_anchor_calendar_allow_gaps_overrides(backfill_mod, tmp_path):
+    """Operator-acknowledged sparse tickers bypass tier-3 via --allow-gaps."""
+    days = pd.date_range("2024-10-01", periods=10, freq="B").date.tolist()
+
+    def fetch(symbols, start, end):
+        out: dict[str, pd.DataFrame] = {}
+        for sym in symbols:
+            if sym == "SPY":
+                sym_days = days
+            else:
+                sym_days = days[:7]  # 30% calendar gap
+            rows = [
+                {
+                    "date": d,
+                    "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1000, "adjusted_close": 100.5,
+                }
+                for d in sym_days
+            ]
+            out[sym] = pd.DataFrame(rows)
+        return out
+
+    out = tmp_path / "macro.parquet"
+    backfill_mod.backfill(
+        symbols=["SPY", "VIX9D"],
+        start="2024-10-01",
+        end="2024-10-15",
+        out_path=out,
+        force=False,
+        fetch_fn=fetch,
+        min_coverage=0.5,
+        allow_gaps=["VIX9D"],  # known-sparse term-structure index
+    )
+    assert out.exists()
