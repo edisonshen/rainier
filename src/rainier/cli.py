@@ -3436,8 +3436,10 @@ _register_llm_research(cli)
 
 
 def _load_universe_for_compute(yaml_path: Path):
-    """Return ``(sector_map, ticker_registry, sector_registry, yaml_sha,
-    all_symbols)`` from the YAML at ``yaml_path``.
+    """Return ``(spec, sector_map)`` for the YAML at ``yaml_path``.
+
+    ``spec`` is the parsed universe (with ``.sectors`` dict + ``.yaml_sha``);
+    ``sector_map`` is the flattened ``symbol -> sector_name`` dict.
 
     Registries are loaded if their parquets exist, else seeded from the YAML
     so first-run compute always succeeds even before the operator has run
@@ -3451,6 +3453,63 @@ def _load_universe_for_compute(yaml_path: Path):
         for s in syms:
             sector_map[s] = sec
     return spec, sector_map
+
+
+def _check_ohlcv_freshness(
+    panel: pd.DataFrame,
+    asof_dt: date,
+    ohlcv_path: str,
+    spec,  # universe spec with .sectors dict
+) -> None:
+    """Raise click.ClickException if the OHLCV cache is stale or partial for
+    ``asof_dt``. Shared by `thematic compute` and `thematic run-daily` so
+    both paths surface the same diagnostic (codex iter-6/8 [P1]/[P2]).
+
+    Stale: panel.max(date) < asof_dt.
+    Partial: > 25% of YAML symbols missing on asof_dt (fail);
+             > 10% missing (warning to stderr).
+    """
+    if panel.empty or "date" not in panel.columns:
+        return
+
+    panel_max = panel["date"].max()
+    if panel_max < asof_dt:
+        raise click.ClickException(
+            f"OHLCV cache stale: max(date)={panel_max} < asof={asof_dt}. "
+            f"Refresh with:\n"
+            f"  1. uv run python scripts/backfill_thematic_universe.py "
+            f"--start 2024-10-01 --end {asof_dt} --force\n"
+            f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
+            f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
+            f"{ohlcv_path}\n"
+            f"  3. uv run rainier thematic run-daily  # retry"
+        )
+
+    expected_syms = {sym for syms in spec.sectors.values() for sym in syms}
+    asof_rows = panel.loc[panel["date"] == asof_dt]
+    present = (
+        set(asof_rows["symbol"].dropna().unique()) if not asof_rows.empty else set()
+    )
+    missing = expected_syms - present
+    if not expected_syms:
+        return
+    missing_frac = len(missing) / len(expected_syms)
+    if missing_frac > 0.25:
+        example = sorted(missing)[:8]
+        raise click.ClickException(
+            f"OHLCV cache has partial coverage on asof={asof_dt}: "
+            f"{len(missing)}/{len(expected_syms)} YAML symbols missing "
+            f"({missing_frac:.0%}). Examples: {example}. "
+            f"Re-run the backfill --force flow above before computing."
+        )
+    if missing_frac > 0.10:
+        example = sorted(missing)[:8]
+        click.echo(
+            f"warning: {len(missing)}/{len(expected_syms)} YAML symbols "
+            f"missing on asof={asof_dt} ({missing_frac:.0%}). "
+            f"Examples: {example}. Proceeding; consider refreshing OHLCV.",
+            err=True,
+        )
 
 
 @thematic.command("compute")
@@ -3541,6 +3600,12 @@ def thematic_compute(
     panel = pd.read_parquet(ohlcv_path)
     if "date" in panel.columns:
         panel["date"] = pd.to_datetime(panel["date"]).dt.date
+
+    # Same stale/partial-coverage gate as run-daily (codex iter-8 [P2]):
+    # the direct compute path must not silently rank over a shrunken
+    # universe just because the operator invoked `thematic compute` instead
+    # of `thematic run-daily`.
+    _check_ohlcv_freshness(panel, asof_dt, ohlcv_path, spec)
 
     # Pull previous asof's row (if any) so deltas + streak chain correctly.
     prev_features = None
@@ -3774,64 +3839,11 @@ def thematic_run_daily(
     if "date" in panel.columns:
         panel["date"] = pd.to_datetime(panel["date"]).dt.date
 
-    # Stale-OHLCV guard. Per DESIGN §7: "If OHLCV is stale, backfill
-    # incrementally first." We don't auto-fetch (yfinance side effect inside
-    # a cron run is too magical). Instead surface clearly with the exact
-    # next-step command per the operator's surface-don't-silo discipline.
-    #
-    # The Phase A backfill script is revision-immutable: pointing it at an
-    # existing `--out` raises FileExistsError, and `--force` writes a
-    # timestamped sibling cohort (it deliberately never overwrites). The
-    # recovery flow is therefore three steps: backfill --force to a sibling,
-    # then atomically swap the new cohort into the cache path.
-    if not panel.empty and "date" in panel.columns:
-        panel_max = panel["date"].max()
-        if panel_max < asof_dt:
-            raise click.ClickException(
-                f"OHLCV cache stale: max(date)={panel_max} < asof={asof_dt}. "
-                f"Refresh with:\n"
-                f"  1. uv run python scripts/backfill_thematic_universe.py "
-                f"--start 2024-10-01 --end {asof_dt} --force\n"
-                f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
-                f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
-                f"{ohlcv_path}\n"
-                f"  3. uv run rainier thematic run-daily  # retry"
-            )
-
-        # Partial-coverage guard. Ranks are cross-sectional: if a partial
-        # backfill leaves the panel without an asof close for most of the
-        # YAML universe, `compute_thematic_features` silently drops missing
-        # symbols and ranks over a shrunken universe. Surface the gap so the
-        # operator runs a full re-backfill rather than rendering a misleading
-        # dashboard (codex iter-6 [P1] + memory feedback_surface_dont_silo).
-        expected_syms = {
-            sym for syms in spec.sectors.values() for sym in syms
-        }
-        asof_rows = panel.loc[panel["date"] == asof_dt]
-        present = set(asof_rows["symbol"].dropna().unique()) if not asof_rows.empty else set()
-        missing = expected_syms - present
-        # Threshold: warn when >10% missing; fail when >25% missing. 10%
-        # absorbs typical NYSE-holiday + late-listing noise without false
-        # alarms; >25% indicates a botched backfill that should not silently
-        # ship a dashboard.
-        if expected_syms:
-            missing_frac = len(missing) / len(expected_syms)
-            if missing_frac > 0.25:
-                example = sorted(missing)[:8]
-                raise click.ClickException(
-                    f"OHLCV cache has partial coverage on asof={asof_dt}: "
-                    f"{len(missing)}/{len(expected_syms)} YAML symbols missing "
-                    f"({missing_frac:.0%}). Examples: {example}. "
-                    f"Re-run the backfill --force flow above before computing."
-                )
-            if missing_frac > 0.10:
-                example = sorted(missing)[:8]
-                click.echo(
-                    f"warning: {len(missing)}/{len(expected_syms)} YAML "
-                    f"symbols missing on asof={asof_dt} ({missing_frac:.0%}). "
-                    f"Examples: {example}. Proceeding; consider refreshing OHLCV.",
-                    err=True,
-                )
+    # Stale-OHLCV / partial-coverage guard. Per DESIGN §7: "If OHLCV is
+    # stale, backfill incrementally first." We don't auto-fetch (yfinance
+    # side effect inside a cron run is too magical) — instead surface clearly
+    # with the exact next-step command per `feedback_surface_dont_silo`.
+    _check_ohlcv_freshness(panel, asof_dt, ohlcv_path, spec)
 
     # Layer A: idempotent compute.
     features_path = Path(features_out)

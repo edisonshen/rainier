@@ -343,6 +343,49 @@ def test_run_daily_stale_ohlcv_surfaces_diagnostic(fake_cache):
     )
 
 
+def test_thematic_compute_partial_universe_coverage_fails(fake_cache, tmp_path):
+    """Regression — codex iter-8 [P2]: the direct `thematic compute` path
+    must apply the same partial-coverage gate as `run-daily`, otherwise an
+    operator running compute directly with a partial cache would silently
+    produce shrunken ranks.
+    """
+    from rainier.cli import cli
+
+    panel = pd.read_parquet(fake_cache["panel"])
+    asof_dt = date(2024, 11, 8)
+    drop_mask = (panel["date"] == asof_dt) & panel["symbol"].isin(
+        ["AAA", "BBB", "CCC"]
+    )
+    partial = panel.loc[~drop_mask].reset_index(drop=True)
+    partial_path = tmp_path / "partial_universe.parquet"
+    partial.to_parquet(partial_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "thematic",
+            "compute",
+            "--asof",
+            asof_dt.isoformat(),
+            "--ohlcv",
+            str(partial_path),
+            "--yaml",
+            str(fake_cache["yaml"]),
+            "--out",
+            str(fake_cache["features_out"]),
+            "--ticker-registry",
+            str(fake_cache["ticker_registry"]),
+            "--sector-registry",
+            str(fake_cache["sector_registry"]),
+        ],
+    )
+    assert result.exit_code != 0, "direct compute must also fail on partial coverage"
+    assert "partial coverage" in result.output.lower(), (
+        f"diagnostic should mention partial coverage; got: {result.output!r}"
+    )
+
+
 def test_run_daily_partial_universe_coverage_fails(fake_cache, tmp_path):
     """Regression — codex iter-6 [P1]: ranks are cross-sectional, so if a
     partial backfill leaves the panel without close rows for >25% of the
