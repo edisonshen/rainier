@@ -8,7 +8,9 @@ tests double as the integration check that wiring landed.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from rainier.cli import cli as root_cli
@@ -141,6 +143,51 @@ def test_cost_pilot_fixture_rejects_invalid_shape(tmp_path):
     assert result.exit_code != 0
     # The click error message names the supported shapes.
     assert "list" in result.output.lower() or "object" in result.output.lower()
+
+
+def test_resolve_ledger_sha_works_from_subdirectory(tmp_path, monkeypatch):
+    """Regression: codex iter-6 [P2] — _resolve_ledger_sha must use the
+    git toplevel (not Path.cwd()) for the path argument to `git rev-parse
+    HEAD:<path>`. Pre-fix, invocations from any subdirectory stamped
+    `ledger_sha: unknown` because git interpreted the path relative to
+    the repo root while we computed it relative to cwd.
+    """
+    import os
+
+    from rainier.research.cli import _resolve_ledger_sha
+
+    # Simulate a CLI invocation from src/ (a real subdirectory of the
+    # checkout). The function should still resolve to the real SHA, not
+    # the "unknown" fallback. We don't pin the exact SHA — just assert
+    # it looks like a 40-char hex and is not "unknown".
+    repo_root = Path(__file__).resolve().parents[2]
+    src_dir = repo_root / "src"
+    if not src_dir.exists():
+        pytest.skip("src/ not present in this checkout")
+    monkeypatch.chdir(src_dir)
+    sha = _resolve_ledger_sha()
+    # Either we're in a non-git environment (CI build from sdist) and the
+    # fallback is acceptable, OR we got a real SHA. The bug pre-fix was
+    # the FORMER happening inside a real checkout.
+    if sha == "unknown":
+        # Confirm we're actually in a git checkout — otherwise the test is
+        # a no-op (legitimately).
+        import subprocess
+        check = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False, cwd=os.getcwd(),
+        )
+        if check.returncode == 0 and check.stdout.strip():
+            pytest.fail(
+                f"_resolve_ledger_sha returned 'unknown' from {src_dir} "
+                f"despite being inside the git checkout at "
+                f"{check.stdout.strip()}; the toplevel resolution regressed."
+            )
+    else:
+        # Real SHA: 40 hex chars (full) or "unknown" — accept either shape
+        # as success since git's HEAD:<path> returns the full SHA.
+        assert len(sha) == 40, f"unexpected SHA shape: {sha!r}"
+        assert all(c in "0123456789abcdef" for c in sha), f"not hex: {sha!r}"
 
 
 def test_cost_pilot_rejects_undersized_fixture(tmp_path):

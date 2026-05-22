@@ -41,6 +41,11 @@ def _resolve_ledger_sha() -> str:
     Best-effort — falls back to ``"unknown"`` when git isn't available
     (e.g., when running from a wheel install). Live invocations re-stamp
     this when the parquet is persisted.
+
+    ``git rev-parse HEAD:<path>`` resolves <path> relative to the repo
+    root, NOT the cwd. We first ask git for the toplevel and make the
+    ledger path relative to that — otherwise calling the CLI from any
+    subdir silently stamps `ledger_sha: unknown`. codex iter-6 [P2].
     """
     import subprocess
 
@@ -48,8 +53,17 @@ def _resolve_ledger_sha() -> str:
         Path(__file__).parent / "data_availability.yaml"
     ).resolve()
     try:
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        if toplevel.returncode != 0:
+            return "unknown"
+        repo_root = Path(toplevel.stdout.strip()).resolve()
+        rel = ledger_path.relative_to(repo_root)
         out = subprocess.run(
-            ["git", "rev-parse", f"HEAD:{ledger_path.relative_to(Path.cwd())}"],
+            ["git", "rev-parse", f"HEAD:{rel}"],
+            cwd=repo_root,
             capture_output=True, text=True, check=False, timeout=5,
         )
         if out.returncode == 0:
