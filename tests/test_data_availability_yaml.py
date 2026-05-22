@@ -114,6 +114,36 @@ def test_provenance_fields_present(ledger):
         )
 
 
+def test_loader_constant_matches_ledger_registered_fields(ledger):
+    """The loader's _LEDGER_REGISTERED_FIELDS must match the yaml ledger's
+    fields[] list. Otherwise the loader could silently project away (or
+    leak in) columns the ledger declares. Per /review post-codex sweep.
+
+    Identity columns (symbol, date) are always included by the loader for
+    join semantics — assert their presence too.
+    """
+    from rainier.research.macro_context_loader import _LEDGER_REGISTERED_FIELDS
+
+    # Identity must be present.
+    assert "symbol" in _LEDGER_REGISTERED_FIELDS
+    assert "date" in _LEDGER_REGISTERED_FIELDS
+
+    # The market-data columns in the loader constant must equal the union of
+    # `fields:` across all macro_context entries (currently all entries share
+    # the same list).
+    yaml_fields: set[str] = set()
+    for entry in ledger["entries"]:
+        if entry.get("dataset") != "macro_context":
+            continue
+        yaml_fields.update(entry["fields"])
+    loader_fields = set(_LEDGER_REGISTERED_FIELDS) - {"symbol", "date"}
+    assert loader_fields == yaml_fields, (
+        f"loader constant out of sync with ledger yaml: "
+        f"loader_only={loader_fields - yaml_fields} "
+        f"yaml_only={yaml_fields - loader_fields}"
+    )
+
+
 def test_no_look_ahead_leaky_fields_registered(ledger):
     """No entry may register a field that violates the observability rule.
 
