@@ -112,17 +112,6 @@ def _centile_rank(values: pd.Series) -> pd.Series:
     return out
 
 
-def _ordinal_for(d: date, all_trading_days: list[date]) -> int:
-    """Return the 0-indexed ordinal of d within sorted all_trading_days.
-
-    Used for transformer positional encoding. Falls back to -1 if d not found.
-    """
-    try:
-        return all_trading_days.index(d)
-    except ValueError:
-        return -1
-
-
 def _trading_day_ordinal(d: date) -> int:
     """Epoch-anchored integer ordinal (counts every calendar day, not just
     trading days). We use calendar days to keep the function pure — no
@@ -280,12 +269,31 @@ def compute_thematic_features(
             prev_rank_by_sym[row.symbol] = float(row.rank)
             prev_streak_by_sym[row.symbol] = int(row.top15_streak)
 
-    # ---- rank_delta_5d: snap from this same asof's panel + 5d-prior compute ----
-    # We do NOT recompute 5d-prior here (caller may want to chain). For Phase B
-    # API simplicity: rank_delta_5d defaults to 0 unless prev_features carries
-    # a rank-5d-prior column — out of scope. Set to 0 sentinel for the row.
-    # Long-term improvement: cache the most-recent 5 prev_features.
-    rank_delta_5d = 0
+    # ---- rank_delta_5d: compute the composite rank 5 trading days ago and diff ----
+    # This is a single-shot recomputation against the same panel (no prev_features
+    # chain required). Cheap (one extra cross-sectional rankdata pass) and stays
+    # deterministic on the same input.
+    rank_5d_ago: pd.Series
+    prior_5_idx = asof_idx - _RANK_DELTA_5D_LOOKBACK
+    if prior_5_idx >= 0:
+        prior_5_day = all_days[prior_5_idx]
+        prior_5_close = wide_close.loc[prior_5_day]
+        # Recompute REL_N at prior_5 using the same windows; this gives us the
+        # historical rank at that day under the *current* universe membership
+        # (correct for rank_delta_5d under the [D-015] stable-id discipline).
+        prior_r: dict[int, pd.Series] = {}
+        for window in _REL_WINDOWS:
+            pp_idx = prior_5_idx - window
+            if pp_idx < 0:
+                prior_r[window] = pd.Series(np.nan, index=symbols_asof)
+                continue
+            pp_day = all_days[pp_idx]
+            rel_pp = prior_5_close / wide_close.loc[pp_day] - 1.0
+            prior_r[window] = _centile_rank(rel_pp.reindex(symbols_asof))
+        prior_rank_df = pd.DataFrame(prior_r, index=symbols_asof)
+        rank_5d_ago = prior_rank_df.mean(axis=1, skipna=False).round()
+    else:
+        rank_5d_ago = pd.Series(np.nan, index=symbols_asof)
 
     universe_size = len(symbols_asof)
     computed_at = pd.Timestamp(datetime.now(timezone.utc))
@@ -305,6 +313,12 @@ def compute_thematic_features(
             rd1 = int(rank_v) - int(prev_rank)
         else:
             rd1 = 0
+
+        rank_5d = rank_5d_ago.get(sym, np.nan)
+        if pd.notna(rank_v) and pd.notna(rank_5d):
+            rd5 = int(rank_v) - int(rank_5d)
+        else:
+            rd5 = 0
 
         # Persistence streak: increments on rank>=85, resets to 0 otherwise.
         if pd.notna(rank_v) and rank_v >= _PERSISTENCE_THRESHOLD:
@@ -357,7 +371,7 @@ def compute_thematic_features(
                 "r_20": np.int8(_r_int8(r20)),
                 "rank": np.int8(_r_int8(rank_v)),
                 "rank_delta_1d": np.int8(rd1),
-                "rank_delta_5d": np.int8(rank_delta_5d),
+                "rank_delta_5d": np.int8(rd5),
                 "top15_streak": np.int16(streak),
                 "rank_minus_sector_mean": np.float32(rms),
                 "universe_size": np.int16(universe_size),
