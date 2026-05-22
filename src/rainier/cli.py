@@ -3778,14 +3778,24 @@ def thematic_run_daily(
     # incrementally first." We don't auto-fetch (yfinance side effect inside
     # a cron run is too magical). Instead surface clearly with the exact
     # next-step command per the operator's surface-don't-silo discipline.
+    #
+    # The Phase A backfill script is revision-immutable: pointing it at an
+    # existing `--out` raises FileExistsError, and `--force` writes a
+    # timestamped sibling cohort (it deliberately never overwrites). The
+    # recovery flow is therefore three steps: backfill --force to a sibling,
+    # then atomically swap the new cohort into the cache path.
     if not panel.empty and "date" in panel.columns:
         panel_max = panel["date"].max()
         if panel_max < asof_dt:
             raise click.ClickException(
                 f"OHLCV cache stale: max(date)={panel_max} < asof={asof_dt}. "
-                f"Run `uv run python scripts/backfill_thematic_universe.py "
-                f"--start {panel_max} --end {asof_dt} --out {ohlcv_path}` to "
-                f"refresh, then retry `rainier thematic run-daily`."
+                f"Refresh with:\n"
+                f"  1. uv run python scripts/backfill_thematic_universe.py "
+                f"--start 2024-10-01 --end {asof_dt} --force\n"
+                f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
+                f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
+                f"{ohlcv_path}\n"
+                f"  3. uv run rainier thematic run-daily  # retry"
             )
 
     # Layer A: idempotent compute.

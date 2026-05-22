@@ -413,6 +413,44 @@ def test_top15_streak_increments_and_resets(
 # ---------------------------------------------------------------------------
 
 
+def test_rank_delta_1d_treats_sentinel_prev_rank_as_missing(
+    panel_5x30, sector_map, ticker_registry, sector_registry
+):
+    """Regression — codex iter-3 [P2]: when a ticker previously had
+    rank=-1 (insufficient-history sentinel) and now becomes rankable, the
+    rank_delta_1d must be 0 (missing/neutral), not ``current - (-1)``.
+
+    Without the fix, the first day a previously-unrankable ticker enters
+    the rank gives it a spurious +1 momentum feature.
+    """
+    out_t = compute_thematic_features(
+        panel=panel_5x30,
+        asof=date(2024, 11, 8),
+        sector_map=sector_map,
+        ticker_registry=ticker_registry,
+        sector_registry=sector_registry,
+        universe_yaml_sha="abc123",
+    )
+    # Manually craft a prev_features row where AAA's previous rank is the
+    # -1 sentinel (simulating a ticker that just became rankable today).
+    prev = out_t.copy()
+    prev.loc[prev["symbol"] == "AAA", "rank"] = np.int8(-1)
+
+    out_t1 = compute_thematic_features(
+        panel=panel_5x30,
+        asof=date(2024, 11, 8),
+        sector_map=sector_map,
+        ticker_registry=ticker_registry,
+        sector_registry=sector_registry,
+        universe_yaml_sha="abc123",
+        prev_features=prev,
+    )
+    aaa_delta = int(out_t1.loc[out_t1["symbol"] == "AAA", "rank_delta_1d"].iloc[0])
+    assert aaa_delta == 0, (
+        f"rank_delta_1d should be 0 when prev_rank is -1 sentinel; got {aaa_delta}"
+    )
+
+
 def test_universe_size_recorded(
     panel_5x30, sector_map, ticker_registry, sector_registry
 ):

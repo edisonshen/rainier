@@ -255,6 +255,45 @@ def test_load_supervised_keeps_incomplete_when_flag_false(tmp_cache):
     )
 
 
+def test_load_supervised_drop_incomplete_excess_only_label(tmp_cache):
+    """Regression — codex iter-3 [P2]: when caller requests only excess-ret
+    or drawdown/runup labels (no plain ``fwd_Nd_ret``), the completeness
+    gate must still kick in. Previously _most_restrictive_label returned
+    None and trailing NaN rows leaked into the supervised set.
+    """
+    df = load_supervised(
+        feature_cols=["r_5"],
+        label_cols=["fwd_5d_excess_ret"],
+        start=date(2024, 10, 1),
+        end=date(2024, 12, 31),
+        features_path=tmp_cache["features"],
+        labels_path=tmp_cache["labels"],
+        drop_incomplete_labels=True,
+    )
+    assert not df["fwd_5d_excess_ret"].isna().any(), (
+        "excess-only label with drop_incomplete_labels=True must filter NaN rows"
+    )
+
+
+def test_load_supervised_drop_incomplete_drawdown_only_label(tmp_cache):
+    """Regression — codex iter-3 [P2]: drawdown/runup-only labels also gate.
+    These columns use the suffix ``_max_drawdown`` / ``_max_runup`` rather
+    than ``_ret``.
+    """
+    df = load_supervised(
+        feature_cols=["r_5"],
+        label_cols=["fwd_10d_max_drawdown"],
+        start=date(2024, 10, 1),
+        end=date(2024, 12, 31),
+        features_path=tmp_cache["features"],
+        labels_path=tmp_cache["labels"],
+        drop_incomplete_labels=True,
+    )
+    assert not df["fwd_10d_max_drawdown"].isna().any(), (
+        "drawdown-only label with drop_incomplete_labels=True must filter NaN rows"
+    )
+
+
 def test_load_supervised_deterministic(tmp_cache):
     """Identical calls yield identical DataFrames."""
     df_a = load_supervised(

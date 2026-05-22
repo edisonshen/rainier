@@ -309,7 +309,15 @@ def compute_thematic_features(
         prev_rank = prev_rank_by_sym.get(sym)
         prev_streak = prev_streak_by_sym.get(sym, 0)
 
-        if pd.notna(rank_v) and prev_rank is not None:
+        # rank_delta_1d: treat the int8 -1 sentinel from prior_features as
+        # "missing rank, neutral delta" — otherwise the first day a ticker
+        # becomes rankable would record a spurious `rank_v + 1` jump (codex
+        # iter-3 [P2]).
+        if (
+            pd.notna(rank_v)
+            and prev_rank is not None
+            and int(prev_rank) >= 0
+        ):
             rd1 = int(rank_v) - int(prev_rank)
         else:
             rd1 = 0

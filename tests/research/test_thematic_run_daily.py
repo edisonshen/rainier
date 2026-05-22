@@ -331,3 +331,13 @@ def test_run_daily_stale_ohlcv_surfaces_diagnostic(fake_cache):
     assert "backfill_thematic_universe" in result.output, (
         f"diagnostic should name the next-step backfill command; got: {result.output!r}"
     )
+    # codex iter-3 [P1]: the recovery flow must account for backfill's
+    # revision-immutability (--force writes a sibling cohort, not in-place).
+    # Diagnostic must include the cohort-swap step (--force then mv).
+    assert "--force" in result.output, (
+        f"diagnostic must mention --force (sibling cohort flow); "
+        f"got: {result.output!r}"
+    )
+    assert " mv " in result.output, (
+        f"diagnostic must include cohort-swap mv step; got: {result.output!r}"
+    )

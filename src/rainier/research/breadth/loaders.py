@@ -169,18 +169,31 @@ def _most_restrictive_label(label_cols: list[str]) -> str | None:
 
     Heuristic: among requested labels, prefer ``fwd_30d_ret`` (the most-
     restrictive in the §5.2 schema). If not requested, scan for any
-    ``fwd_<N>d_ret`` and return the largest N.
+    ``fwd_<N>d_ret`` / ``fwd_<N>d_excess_ret`` / ``fwd_<N>d_max_drawdown`` /
+    ``fwd_<N>d_max_runup`` column and return the one with the largest N.
+
+    Why every fwd_* family is considered (codex iter-3 [P2]): callers may
+    request only excess-return or drawdown/runup labels (no plain `_d_ret`).
+    Previously this function returned None for those callers, so
+    ``drop_incomplete_labels=True`` silently kept trailing NaN rows. Now
+    every fwd_<N>d_* family is a valid completeness gate.
     """
     if "fwd_30d_ret" in label_cols:
         return "fwd_30d_ret"
     candidates: list[tuple[int, str]] = []
     for c in label_cols:
-        if c.startswith("fwd_") and c.endswith("d_ret"):
-            try:
-                n = int(c.removeprefix("fwd_").removesuffix("d_ret"))
-                candidates.append((n, c))
-            except ValueError:
-                continue
+        if not c.startswith("fwd_"):
+            continue
+        # Strip the fwd_ prefix and parse the leading "<N>d" segment.
+        rest = c.removeprefix("fwd_")
+        if "d" not in rest:
+            continue
+        n_str, _sep, _tail = rest.partition("d")
+        try:
+            n = int(n_str)
+        except ValueError:
+            continue
+        candidates.append((n, c))
     if not candidates:
         return None
     return max(candidates, key=lambda x: x[0])[1]
