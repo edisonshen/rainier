@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rainier.research.breadth.ranks import compute_forward_labels
+from rainier.breadth.ranks import compute_forward_labels
 
 
 def _build_panel_constant_returns(

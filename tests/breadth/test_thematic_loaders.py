@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rainier.research.breadth.loaders import (
+from rainier.breadth.loaders import (
     load_supervised,
     load_thematic_features,
     load_thematic_panel,

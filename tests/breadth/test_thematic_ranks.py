@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rainier.research.breadth.ranks import compute_thematic_features
+from rainier.breadth.ranks import compute_thematic_features
 
 # ---------------------------------------------------------------------------
 # Fixture builder

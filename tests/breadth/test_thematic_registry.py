@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from rainier.research.breadth import registry as reg
+from rainier.breadth import registry as reg
 
 
 def test_first_assignment_returns_int(tmp_path: Path):

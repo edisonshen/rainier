@@ -3303,8 +3303,8 @@ def thematic_backfill(
     import importlib.util
     from datetime import date as _date
 
-    from rainier.research.breadth import registry as _reg
-    from rainier.research.breadth import universe_loader as _ul
+    from rainier.breadth import registry as _reg
+    from rainier.breadth import universe_loader as _ul
 
     # Load the script as a module — it lives in `scripts/`, not under `src/`,
     # because it's a one-off operator tool (same pattern as macro_context).
@@ -3398,7 +3398,7 @@ def thematic_snapshot_universe(
     """Append a row to thematic_universe_log if the YAML SHA changed."""
     from datetime import date as _date
 
-    from rainier.research.breadth import universe_loader as _ul
+    from rainier.breadth import universe_loader as _ul
 
     eff = _date.fromisoformat(effective_from) if effective_from else _date.today()
     appended = _ul.snapshot_universe(
@@ -3445,7 +3445,7 @@ def _load_universe_for_compute(yaml_path: Path):
     so first-run compute always succeeds even before the operator has run
     `thematic backfill` (which usually seeds them).
     """
-    from rainier.research.breadth import universe_loader as _ul
+    from rainier.breadth import universe_loader as _ul
 
     spec = _ul.load_universe(yaml_path)
     sector_map: dict[str, str] = {}
@@ -3569,8 +3569,8 @@ def thematic_compute(
     """
     from datetime import date as _date
 
-    from rainier.research.breadth import registry as _reg
-    from rainier.research.breadth.ranks import compute_thematic_features
+    from rainier.breadth import registry as _reg
+    from rainier.breadth.ranks import compute_thematic_features
 
     asof_dt = _date.fromisoformat(asof)
     spec, sector_map = _load_universe_for_compute(Path(yaml_path))
@@ -3678,7 +3678,7 @@ def thematic_backfill_labels(ohlcv_path: str, out_path: str) -> None:
     """Compute Layer B forward-return labels for every (asof_date, symbol)."""
     import os
 
-    from rainier.research.breadth.ranks import compute_forward_labels
+    from rainier.breadth.ranks import compute_forward_labels
 
     panel = pd.read_parquet(ohlcv_path)
     if "date" in panel.columns:
@@ -3813,8 +3813,8 @@ def thematic_run_daily(
     """
     from datetime import date as _date
 
-    from rainier.research.breadth import registry as _reg
-    from rainier.research.breadth.ranks import (
+    from rainier.breadth import registry as _reg
+    from rainier.breadth.ranks import (
         compute_forward_labels,
         compute_thematic_features,
     )

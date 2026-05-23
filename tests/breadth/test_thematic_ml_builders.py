@@ -14,7 +14,7 @@ from datetime import date, timedelta
 import pandas as pd
 import pytest
 
-from rainier.research.breadth.ml_builders import ThematicTradingEnv
+from rainier.breadth.ml_builders import ThematicTradingEnv
 
 
 def _stub_features_panel() -> pd.DataFrame:
@@ -113,7 +113,7 @@ def test_build_panel_tensor_shape_and_axes():
     """``build_panel_tensor`` returns a (dates, tickers, features) tensor
     with sorted axes for byte-deterministic downstream consumption.
     """
-    from rainier.research.breadth.ml_builders import build_panel_tensor
+    from rainier.breadth.ml_builders import build_panel_tensor
 
     dates = [date(2024, 10, 1) + timedelta(days=i) for i in range(3)]
     syms = ["BBB", "AAA"]  # intentionally unsorted input
@@ -140,7 +140,7 @@ def test_build_panel_tensor_shape_and_axes():
 
 def test_build_panel_tensor_empty_input():
     """Empty panel returns an empty tensor + empty axes (no crash)."""
-    from rainier.research.breadth.ml_builders import build_panel_tensor
+    from rainier.breadth.ml_builders import build_panel_tensor
 
     panel = pd.DataFrame(
         {"asof_date": [], "symbol": [], "rank": []}
