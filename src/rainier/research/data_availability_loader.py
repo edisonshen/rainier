@@ -37,6 +37,13 @@ VALID_OBSERVABILITY_RULES: frozenset[str] = frozenset(
         # Available immediately on the day it's computed (signals derived from
         # T-1 close inputs; output is T-1-close itself).
         "derived_from_t_minus_1_close",
+        # Computed locally from end-of-day inputs (e.g. thematic features).
+        # Output is observable at T-close + compute latency.
+        "derived_from_eod",
+        # Forward-looking label: observable T+n trading days after the as-of
+        # date (e.g. thematic_labels_daily ret_fwd_5d only knows its value at
+        # T+5). The L3 evaluator must NOT serve these for as-of <= T+n-1.
+        "t_plus_n_close",
         # Pending an external dependency (sibling task). Treated as "unobservable
         # by default" — the L3 evaluator rejects look-ups against pending fields.
         "pending_sibling_task",

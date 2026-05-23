@@ -1,1297 +1,5953 @@
-# Data-availability ledger — look-ahead control surface for the LLM-backtest
-# L3 evaluator. Every (symbol, field) pair the evaluator can read must be
-# registered here with an observability timestamp rule + revision-immutability
-# claim per DESIGN-qu100-llm-backtest.md [D-014].
-#
-# Schema:
-#   schema_version: integer; bump on any breaking shape change.
-#   entries: list of per-(dataset, symbol) records:
-#     dataset: string identifier for the cache (e.g., macro_context).
-#     symbol: normalized ticker (no ^-prefix; matches the parquet column).
-#     fields: list of fields the L3 evaluator may read AS-OF the
-#       observability_timestamp_rule. The parquet may contain additional
-#       columns (notably `adjusted_close`) that are NOT in this list — those
-#       are back-adjusted for future splits/dividends and CANNOT be used in
-#       look-ahead-controlled backtests. Code consuming the ledger MUST
-#       restrict reads to fields[]. Per codex iter-6.
-#     observability_timestamp_rule: one of:
-#       - end_of_trading_day  (T close fully observable at market-close T)
-#     revision_immutability: bool. true means the cache writer never
-#       UPDATE/DELETEs a historical row in place; --force cuts a new cohort
-#       file alongside the prior one.
-#     source: data provider (yfinance for macro_context Phase 0).
-#     yfinance_version_at_backfill: minimum yfinance version that the
-#       backfill script was developed/tested against. Per-row provenance is
-#       additionally recorded in the parquet's `yfinance_version` column.
-#     notes: free-form per-entry context (gaps, half-days, listing dates).
-#
-# Adding/removing a symbol from scripts/backfill_macro_context.py SYMBOLS
-# requires a matching update here in the same commit. The
-# tests/test_data_availability_yaml.py schema test enforces lockstep.
-
 schema_version: 1
-
 entries:
-  # ------------------------------------------------------------------
-  # Volatility / risk regime (4)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: VIX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: >
-      CBOE VIX index. yfinance wire ticker `^VIX`; normalized to `VIX` in the
-      stored `symbol` column. Volume is 0 for indices.
+- dataset: macro_context
+  symbol: VIX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: 'CBOE VIX index. yfinance wire ticker `^VIX`; normalized to `VIX` in the
+    stored `symbol` column. Volume is 0 for indices.
 
-  - dataset: macro_context
-    symbol: VIX9D
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: >
-      9-day volatility; short end of VIX term structure. Wire `^VIX9D`.
-      Occasional missing dates (early-close half-days); gaps left absent.
+    '
+- dataset: macro_context
+  symbol: VIX9D
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: '9-day volatility; short end of VIX term structure. Wire `^VIX9D`. Occasional
+    missing dates (early-close half-days); gaps left absent.
 
-  - dataset: macro_context
-    symbol: VIX3M
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: >
-      3-month volatility; long end of VIX term structure. Wire `^VIX3M`.
+    '
+- dataset: macro_context
+  symbol: VIX3M
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: '3-month volatility; long end of VIX term structure. Wire `^VIX3M`.
 
-  - dataset: macro_context
-    symbol: UVXY
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: >
-      Leveraged VIX short-term futures ETF; regime-shift detector.
+    '
+- dataset: macro_context
+  symbol: UVXY
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: 'Leveraged VIX short-term futures ETF; regime-shift detector.
 
-  # ------------------------------------------------------------------
-  # Benchmarks / size buckets (4)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: SPY
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Large-cap broad-market benchmark.
+    '
+- dataset: macro_context
+  symbol: SPY
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Large-cap broad-market benchmark.
+- dataset: macro_context
+  symbol: QQQ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Nasdaq-100 large-cap growth benchmark.
+- dataset: macro_context
+  symbol: DIA
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Dow Jones 30 blue-chip benchmark.
+- dataset: macro_context
+  symbol: IWM
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Russell 2000 small-cap benchmark.
+- dataset: macro_context
+  symbol: XLK
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Technology SPDR.
+- dataset: macro_context
+  symbol: XLF
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Financials SPDR.
+- dataset: macro_context
+  symbol: XLE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Energy SPDR.
+- dataset: macro_context
+  symbol: XLV
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Health Care SPDR.
+- dataset: macro_context
+  symbol: XLI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Industrials SPDR.
+- dataset: macro_context
+  symbol: XLY
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Consumer Discretionary SPDR.
+- dataset: macro_context
+  symbol: XLP
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Consumer Staples SPDR.
+- dataset: macro_context
+  symbol: XLU
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Utilities SPDR.
+- dataset: macro_context
+  symbol: XLB
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Materials SPDR.
+- dataset: macro_context
+  symbol: XLRE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Real Estate SPDR.
+- dataset: macro_context
+  symbol: XLC
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Communication Services SPDR.
+- dataset: macro_context
+  symbol: SMH
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: VanEck Semiconductor; operator-flagged very important for current trend.
+- dataset: macro_context
+  symbol: XBI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: SPDR S&P Biotech; operator-flagged top priority.
+- dataset: macro_context
+  symbol: KRE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: SPDR Regional Banking; stress proxy.
+- dataset: macro_context
+  symbol: EEM
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: iShares MSCI Emerging Markets (broad EM).
+- dataset: macro_context
+  symbol: FXI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: iShares China Large-Cap.
+- dataset: macro_context
+  symbol: KWEB
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: KraneShares CSI China Internet.
+- dataset: macro_context
+  symbol: USO
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: United States Oil Fund (crude oil).
+- dataset: macro_context
+  symbol: GDX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: VanEck Gold Miners.
+- dataset: macro_context
+  symbol: SLV
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: iShares Silver Trust.
+- dataset: macro_context
+  symbol: TLT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: iShares 20+ Year Treasury (long duration).
+- dataset: macro_context
+  symbol: HYG
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: iShares iBoxx HY Corporate Bond (credit spread proxy).
+- dataset: macro_context
+  symbol: IEF
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: iShares 7-10 Year Treasury (mid-curve duration).
+- dataset: macro_context
+  symbol: TIP
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: iShares TIPS (inflation-protected; with IEF gives real-yield regime).
+- dataset: macro_context
+  symbol: UUP
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Invesco US Dollar Index Fund (dollar-strength regime).
+- dataset: macro_context
+  symbol: IBIT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: "iShares Bitcoin Trust (spot BTC). Listed 2024-01-11; data may start mid-window\
+    \ for very early backfill dates \u2014 acceptance criterion allows per-symbol\
+    \ gaps for newer listings.\n"
+- dataset: macro_context
+  symbol: IREN
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: Iris Energy (single-stock; bitcoin-mining proxy).
+- dataset: macro_context
+  symbol: ARKK
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: ARK Innovation (speculative-growth / risk-on).
+- dataset: qu100_history
+  symbol: null
+  fields:
+  - data_date
+  - ranking_type
+  - symbol
+  - rank
+  - sector
+  - industry
+  - long_short
+  observability_timestamp_rule: qu_session_close
+  revision_immutability: true
+  source: quantunicorn
+  notes: 'money_flow_snapshots filtered to ranking_type=''top100''. Daily refresh
+    at QU close session; older rows never UPDATE/DELETE. Survivorship gate (CLI: `llm-research
+    survivorship-check`) validates this property.
 
-  - dataset: macro_context
-    symbol: QQQ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Nasdaq-100 large-cap growth benchmark.
+    '
+- dataset: qu100_ohlcv
+  symbol: null
+  fields:
+  - date
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  notes: 'Per-symbol daily candles for each QU100 member, cached under data/cache/stocks/<SYMBOL>.parquet.
+    yfinance back-adjustment risk for splits/dividends is handled by the loader (adjusted_close
+    excluded from the look-ahead ledger; raw OHLC is point-in-time).
 
-  - dataset: macro_context
-    symbol: DIA
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Dow Jones 30 blue-chip benchmark.
+    '
+- dataset: chart_image
+  symbol: null
+  fields:
+  - ticker
+  - date
+  - sha256
+  - chart_render_version
+  observability_timestamp_rule: derived_from_t_minus_1_close
+  revision_immutability: true
+  source: chart_export
+  notes: "Deterministic chart PNG per (ticker, date). Same inputs \u2192 byte-identical\
+    \ output (D-025 contract). Cache key includes chart_render_version SHA so bumping\
+    \ the renderer invalidates downstream LLM cache hits.\n"
+- dataset: signals_pinbar
+  symbol: null
+  fields:
+  - ticker
+  - date
+  - direction
+  - body_ratio
+  - wick_ratio
+  - confidence
+  observability_timestamp_rule: derived_from_t_minus_1_close
+  revision_immutability: true
+  source: rainier.analysis.pinbar
+  notes: Pinbar detector output for the T-1 daily bar.
+- dataset: signals_sr
+  symbol: null
+  fields:
+  - ticker
+  - date
+  - level
+  - touches
+  - sr_type
+  - source_tf
+  observability_timestamp_rule: derived_from_t_minus_1_close
+  revision_immutability: true
+  source: rainier.analysis.sr_horizontal
+  notes: Support/resistance levels computed from history up to T-1 close.
+- dataset: signals_pivots
+  symbol: null
+  fields:
+  - ticker
+  - date
+  - kind
+  - index
+  - price
+  observability_timestamp_rule: derived_from_t_minus_1_close
+  revision_immutability: true
+  source: rainier.analysis.pivots
+  notes: Swing-pivot output (high/low/HH/LH/HL/LL).
+- dataset: signals_bias
+  symbol: null
+  fields:
+  - ticker
+  - date
+  - bias
+  observability_timestamp_rule: derived_from_t_minus_1_close
+  revision_immutability: true
+  source: rainier.analysis.bias
+  notes: Up/down/neutral bias derived from S/R + pivots.
+- dataset: money_flow_net
+  symbol: null
+  fields:
+  - ticker
+  - date
+  - net_flow_5d
+  observability_timestamp_rule: pending_sibling_task
+  revision_immutability: true
+  source: quantunicorn
+  pending: true
+  notes: 'Per-ticker net institutional inflow/outflow over last 5d. Daily QU rank
+    is already persisted (qu100_history); the per-ticker detail awaits a separate
+    backfill task. Field is registered as pending so the L3 evaluator rejects look-ups
+    until the backfill lands. See D-024.
 
-  - dataset: macro_context
-    symbol: IWM
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Russell 2000 small-cap benchmark.
-
-  # ------------------------------------------------------------------
-  # Sector SPDR ETFs (11)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: XLK
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Technology SPDR.
-
-  - dataset: macro_context
-    symbol: XLF
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Financials SPDR.
-
-  - dataset: macro_context
-    symbol: XLE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Energy SPDR.
-
-  - dataset: macro_context
-    symbol: XLV
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Health Care SPDR.
-
-  - dataset: macro_context
-    symbol: XLI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Industrials SPDR.
-
-  - dataset: macro_context
-    symbol: XLY
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Consumer Discretionary SPDR.
-
-  - dataset: macro_context
-    symbol: XLP
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Consumer Staples SPDR.
-
-  - dataset: macro_context
-    symbol: XLU
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Utilities SPDR.
-
-  - dataset: macro_context
-    symbol: XLB
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Materials SPDR.
-
-  - dataset: macro_context
-    symbol: XLRE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Real Estate SPDR.
-
-  - dataset: macro_context
-    symbol: XLC
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Communication Services SPDR.
-
-  # ------------------------------------------------------------------
-  # Theme / sub-sector (3) — operator-flagged priority for trending
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: SMH
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: VanEck Semiconductor; operator-flagged very important for current trend.
-
-  - dataset: macro_context
-    symbol: XBI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: SPDR S&P Biotech; operator-flagged top priority.
-
-  - dataset: macro_context
-    symbol: KRE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: SPDR Regional Banking; stress proxy.
-
-  # ------------------------------------------------------------------
-  # International (3)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: EEM
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: iShares MSCI Emerging Markets (broad EM).
-
-  - dataset: macro_context
-    symbol: FXI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: iShares China Large-Cap.
-
-  - dataset: macro_context
-    symbol: KWEB
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: KraneShares CSI China Internet.
-
-  # ------------------------------------------------------------------
-  # Commodities / hard assets (3)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: USO
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: United States Oil Fund (crude oil).
-
-  - dataset: macro_context
-    symbol: GDX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: VanEck Gold Miners.
-
-  - dataset: macro_context
-    symbol: SLV
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: iShares Silver Trust.
-
-  # ------------------------------------------------------------------
-  # Fixed income / rates (4)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: TLT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: iShares 20+ Year Treasury (long duration).
-
-  - dataset: macro_context
-    symbol: HYG
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: iShares iBoxx HY Corporate Bond (credit spread proxy).
-
-  - dataset: macro_context
-    symbol: IEF
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: iShares 7-10 Year Treasury (mid-curve duration).
-
-  - dataset: macro_context
-    symbol: TIP
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: iShares TIPS (inflation-protected; with IEF gives real-yield regime).
-
-  # ------------------------------------------------------------------
-  # Currency (1)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: UUP
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Invesco US Dollar Index Fund (dollar-strength regime).
-
-  # ------------------------------------------------------------------
-  # Crypto / digital assets (2)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: IBIT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: >
-      iShares Bitcoin Trust (spot BTC). Listed 2024-01-11; data may start
-      mid-window for very early backfill dates — acceptance criterion allows
-      per-symbol gaps for newer listings.
-
-  - dataset: macro_context
-    symbol: IREN
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: Iris Energy (single-stock; bitcoin-mining proxy).
-
-  # ------------------------------------------------------------------
-  # Innovation / risk appetite (1)
-  # ------------------------------------------------------------------
-  - dataset: macro_context
-    symbol: ARKK
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: ARK Innovation (speculative-growth / risk-on).
-
-  # ------------------------------------------------------------------
-  # Slice 0 — QU100 historical universe (D-001, D-016)
-  # ------------------------------------------------------------------
-  # qu100_history rotates the universe daily; every (data_date, symbol) row
-  # is the QU rank for that ticker on that scrape session. Insert-only
-  # writes preserve delisted tickers per D-009 / D-016. The symbol column
-  # is null at the ledger level because the dataset is per-day, not
-  # per-ticker; survivorship-check / L3 evaluator query by data_date.
-  - dataset: qu100_history
-    symbol: null
-    fields: [data_date, ranking_type, symbol, rank, sector, industry, long_short]
-    observability_timestamp_rule: qu_session_close
-    revision_immutability: true
-    source: quantunicorn
-    notes: >
-      money_flow_snapshots filtered to ranking_type='top100'. Daily refresh
-      at QU close session; older rows never UPDATE/DELETE. Survivorship
-      gate (CLI: `llm-research survivorship-check`) validates this property.
-
-  # ------------------------------------------------------------------
-  # Slice 0 — Per-ticker daily OHLCV (D-004)
-  # ------------------------------------------------------------------
-  - dataset: qu100_ohlcv
-    symbol: null
-    fields: [date, open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    notes: >
-      Per-symbol daily candles for each QU100 member, cached under
-      data/cache/stocks/<SYMBOL>.parquet. yfinance back-adjustment risk for
-      splits/dividends is handled by the loader (adjusted_close excluded
-      from the look-ahead ledger; raw OHLC is point-in-time).
-
-  # ------------------------------------------------------------------
-  # Slice 0 — Chart image fingerprint (D-004, D-025)
-  # ------------------------------------------------------------------
-  - dataset: chart_image
-    symbol: null
-    fields: [ticker, date, sha256, chart_render_version]
-    observability_timestamp_rule: derived_from_t_minus_1_close
-    revision_immutability: true
-    source: chart_export
-    notes: >
-      Deterministic chart PNG per (ticker, date). Same inputs → byte-identical
-      output (D-025 contract). Cache key includes chart_render_version SHA so
-      bumping the renderer invalidates downstream LLM cache hits.
-
-  # ------------------------------------------------------------------
-  # Slice 0 — Per-symbol price-action signals (D-004)
-  # ------------------------------------------------------------------
-  # The signals/* outputs are computed as a pure function of OHLCV up to
-  # and including T-1 close. The ledger registers each signal family so the
-  # L3 evaluator can grep-match EvidencePack fields against the registry.
-  - dataset: signals_pinbar
-    symbol: null
-    fields: [ticker, date, direction, body_ratio, wick_ratio, confidence]
-    observability_timestamp_rule: derived_from_t_minus_1_close
-    revision_immutability: true
-    source: rainier.analysis.pinbar
-    notes: Pinbar detector output for the T-1 daily bar.
-
-  - dataset: signals_sr
-    symbol: null
-    fields: [ticker, date, level, touches, sr_type, source_tf]
-    observability_timestamp_rule: derived_from_t_minus_1_close
-    revision_immutability: true
-    source: rainier.analysis.sr_horizontal
-    notes: Support/resistance levels computed from history up to T-1 close.
-
-  - dataset: signals_pivots
-    symbol: null
-    fields: [ticker, date, kind, index, price]
-    observability_timestamp_rule: derived_from_t_minus_1_close
-    revision_immutability: true
-    source: rainier.analysis.pivots
-    notes: Swing-pivot output (high/low/HH/LH/HL/LL).
-
-  - dataset: signals_bias
-    symbol: null
-    fields: [ticker, date, bias]
-    observability_timestamp_rule: derived_from_t_minus_1_close
-    revision_immutability: true
-    source: rainier.analysis.bias
-    notes: Up/down/neutral bias derived from S/R + pivots.
-
-  # ------------------------------------------------------------------
-  # Slice 0 — QU per-ticker money-flow (D-024 deferred to backfill)
-  # ------------------------------------------------------------------
-  - dataset: money_flow_net
-    symbol: null
-    fields: [ticker, date, net_flow_5d]
-    observability_timestamp_rule: pending_sibling_task
-    revision_immutability: true
-    source: quantunicorn
-    pending: true
-    notes: >
-      Per-ticker net institutional inflow/outflow over last 5d. Daily QU rank
-      is already persisted (qu100_history); the per-ticker detail awaits a
-      separate backfill task. Field is registered as pending so the L3
-      evaluator rejects look-ups until the backfill lands. See D-024.
-
-  # ==================================================================
-  # thematic_universe dataset — operator-owned universe loaded from
-  # config/thematic_universe.yaml. Per DESIGN-thematic-ranks-dashboard.md
-  # §5.5: registers OHLCV observability for the ~94-ticker sector/theme
-  # ETF universe ranked by the dashboard (Phase B will compute Layer A
-  # features and add the thematic_features_daily + thematic_labels_daily
-  # blocks). adjusted_close intentionally NOT in fields[] — yfinance
-  # back-adjusts and the cache does not store it (see §5.0).
-  # ==================================================================
-  # ------------------------------------------------------------------
-  # communication_service (4)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLC
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: communication_service
-  - dataset: thematic_universe
-    symbol: IYZ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: communication_service
-  - dataset: thematic_universe
-    symbol: SOCL
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: communication_service
-  - dataset: thematic_universe
-    symbol: HERO
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: communication_service
-  # ------------------------------------------------------------------
-  # consumer_discretionary (6)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLY
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_discretionary
-  - dataset: thematic_universe
-    symbol: ITB
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_discretionary
-  - dataset: thematic_universe
-    symbol: XHB
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_discretionary
-  - dataset: thematic_universe
-    symbol: IBUY
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_discretionary
-  - dataset: thematic_universe
-    symbol: ONLN
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_discretionary
-  - dataset: thematic_universe
-    symbol: PEJ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_discretionary
-  # ------------------------------------------------------------------
-  # consumer_staples (2)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLP
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_staples
-  - dataset: thematic_universe
-    symbol: XRT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: consumer_staples
-  # ------------------------------------------------------------------
-  # energy (9)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: GUNR
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: FCG
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: XOP
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: ICLN
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: QCLN
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: OIH
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: TAN
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  - dataset: thematic_universe
-    symbol: NLR
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: energy
-  # ------------------------------------------------------------------
-  # finance (7)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLF
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: finance
-  - dataset: thematic_universe
-    symbol: VFH
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: finance
-  - dataset: thematic_universe
-    symbol: KRE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: finance
-  - dataset: thematic_universe
-    symbol: KBE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: finance
-  - dataset: thematic_universe
-    symbol: IAI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: finance
-  - dataset: thematic_universe
-    symbol: KIE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: finance
-  - dataset: thematic_universe
-    symbol: IPAY
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: finance
-  # ------------------------------------------------------------------
-  # healthcare (8)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLV
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  - dataset: thematic_universe
-    symbol: IBB
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  - dataset: thematic_universe
-    symbol: XBI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  - dataset: thematic_universe
-    symbol: IHI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  - dataset: thematic_universe
-    symbol: IHF
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  - dataset: thematic_universe
-    symbol: XHE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  - dataset: thematic_universe
-    symbol: XPH
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  - dataset: thematic_universe
-    symbol: MJ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: healthcare
-  # ------------------------------------------------------------------
-  # industrials (10)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: ITA
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: ROKT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: UFO
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: SHLD
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: BOTZ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: IYT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: JETS
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: SNSR
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  - dataset: thematic_universe
-    symbol: DRIV
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: industrials
-  # ------------------------------------------------------------------
-  # materials (9)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLB
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: GDX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: SIL
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: COPX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: XME
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: LIT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: IYM
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: URA
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  - dataset: thematic_universe
-    symbol: REMX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: materials
-  # ------------------------------------------------------------------
-  # real_estate (5)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLRE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: real_estate
-  - dataset: thematic_universe
-    symbol: VNQ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: real_estate
-  - dataset: thematic_universe
-    symbol: VNQI
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: real_estate
-  - dataset: thematic_universe
-    symbol: REET
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: real_estate
-  - dataset: thematic_universe
-    symbol: REM
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: real_estate
-  # ------------------------------------------------------------------
-  # technology (19)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLK
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: CHAT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: AIQ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: IXN
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: QTEC
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: QTUM
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: VGT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: SOXX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: SMH
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: DRAM
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: IGV
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: FDN
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: KWEB
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: CIBR
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: HACK
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: SKYY
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: METV
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: FINX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  - dataset: thematic_universe
-    symbol: XT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: technology
-  # ------------------------------------------------------------------
-  # utilities (4)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: XLU
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: utilities
-  - dataset: thematic_universe
-    symbol: IGF
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: utilities
-  - dataset: thematic_universe
-    symbol: PAVE
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: utilities
-  - dataset: thematic_universe
-    symbol: GRID
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: utilities
-  # ------------------------------------------------------------------
-  # thematic (11)
-  # ------------------------------------------------------------------
-  - dataset: thematic_universe
-    symbol: MEME
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: DXYZ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: BLOK
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: IPO
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: MOAT
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: MOO
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: ARKK
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: ARKW
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: ARKF
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: ARKX
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
-  - dataset: thematic_universe
-    symbol: ARKQ
-    fields: [open, high, low, close, volume]
-    observability_timestamp_rule: end_of_trading_day
-    revision_immutability: true
-    source: yfinance
-    yfinance_version_at_backfill: "1.2.0"
-    sector: thematic
+    '
+- dataset: thematic_universe
+  symbol: XLC
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: communication_service
+- dataset: thematic_universe
+  symbol: IYZ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: communication_service
+- dataset: thematic_universe
+  symbol: SOCL
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: communication_service
+- dataset: thematic_universe
+  symbol: HERO
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: communication_service
+- dataset: thematic_universe
+  symbol: XLY
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_discretionary
+- dataset: thematic_universe
+  symbol: ITB
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_discretionary
+- dataset: thematic_universe
+  symbol: XHB
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_discretionary
+- dataset: thematic_universe
+  symbol: IBUY
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_discretionary
+- dataset: thematic_universe
+  symbol: ONLN
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_discretionary
+- dataset: thematic_universe
+  symbol: PEJ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_discretionary
+- dataset: thematic_universe
+  symbol: XLP
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_staples
+- dataset: thematic_universe
+  symbol: XRT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: consumer_staples
+- dataset: thematic_universe
+  symbol: XLE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: GUNR
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: FCG
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: XOP
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: ICLN
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: QCLN
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: OIH
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: TAN
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: NLR
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: energy
+- dataset: thematic_universe
+  symbol: XLF
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: finance
+- dataset: thematic_universe
+  symbol: VFH
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: finance
+- dataset: thematic_universe
+  symbol: KRE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: finance
+- dataset: thematic_universe
+  symbol: KBE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: finance
+- dataset: thematic_universe
+  symbol: IAI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: finance
+- dataset: thematic_universe
+  symbol: KIE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: finance
+- dataset: thematic_universe
+  symbol: IPAY
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: finance
+- dataset: thematic_universe
+  symbol: XLV
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: IBB
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: XBI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: IHI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: IHF
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: XHE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: XPH
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: MJ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: healthcare
+- dataset: thematic_universe
+  symbol: XLI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: ITA
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: ROKT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: UFO
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: SHLD
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: BOTZ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: IYT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: JETS
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: SNSR
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: DRIV
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: industrials
+- dataset: thematic_universe
+  symbol: XLB
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: GDX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: SIL
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: COPX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: XME
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: LIT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: IYM
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: URA
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: REMX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: materials
+- dataset: thematic_universe
+  symbol: XLRE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: real_estate
+- dataset: thematic_universe
+  symbol: VNQ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: real_estate
+- dataset: thematic_universe
+  symbol: VNQI
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: real_estate
+- dataset: thematic_universe
+  symbol: REET
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: real_estate
+- dataset: thematic_universe
+  symbol: REM
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: real_estate
+- dataset: thematic_universe
+  symbol: XLK
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: CHAT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: AIQ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: IXN
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: QTEC
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: QTUM
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: VGT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: SOXX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: SMH
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: DRAM
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: IGV
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: FDN
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: KWEB
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: CIBR
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: HACK
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: SKYY
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: METV
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: FINX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: XT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: technology
+- dataset: thematic_universe
+  symbol: XLU
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: utilities
+- dataset: thematic_universe
+  symbol: IGF
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: utilities
+- dataset: thematic_universe
+  symbol: PAVE
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: utilities
+- dataset: thematic_universe
+  symbol: GRID
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: utilities
+- dataset: thematic_universe
+  symbol: MEME
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: DXYZ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: BLOK
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: IPO
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: MOAT
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: MOO
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: ARKK
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: ARKW
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: ARKF
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: ARKX
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_universe
+  symbol: ARKQ
+  fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: true
+  source: yfinance
+  yfinance_version_at_backfill: 1.2.0
+  sector: thematic
+- dataset: thematic_features_daily
+  symbol: XLC
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IYZ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: SOCL
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: HERO
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLY
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ITB
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XHB
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IBUY
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ONLN
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: PEJ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLP
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_staples
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XRT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_staples
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLE
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: GUNR
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: FCG
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XOP
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ICLN
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: QCLN
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: OIH
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: TAN
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: NLR
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLF
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: VFH
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: KRE
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: KBE
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IAI
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: KIE
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IPAY
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLV
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IBB
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XBI
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IHI
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IHF
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XHE
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XPH
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: MJ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLI
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ITA
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ROKT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: UFO
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: SHLD
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: BOTZ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IYT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: JETS
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: SNSR
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: DRIV
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLB
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: GDX
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: SIL
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: COPX
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XME
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: LIT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IYM
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: URA
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: REMX
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLRE
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: VNQ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: VNQI
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: REET
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: REM
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLK
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: CHAT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: AIQ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IXN
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: QTEC
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: QTUM
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: VGT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: SOXX
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: SMH
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: DRAM
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IGV
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: FDN
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: KWEB
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: CIBR
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: HACK
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: SKYY
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: METV
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: FINX
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: XLU
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IGF
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: PAVE
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: GRID
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: MEME
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: DXYZ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: BLOK
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: IPO
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: MOAT
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: MOO
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ARKK
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ARKW
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ARKF
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ARKX
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_features_daily
+  symbol: ARKQ
+  fields:
+  - rel_5
+  - rel_10
+  - rel_20
+  - ret_1d
+  - ret_ytd
+  - relvol_5
+  - relvol_10
+  - relvol_20
+  - r_5
+  - r_10
+  - r_20
+  - rank
+  - rank_delta_1d
+  - rank_delta_5d
+  - top15_streak
+  - rank_minus_sector_mean
+  observability_timestamp_rule: derived_from_eod
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+  compute_input_hash_inputs:
+  - thematic_universe.parquet
+  - thematic_universe_log.yaml_sha
+  - rainier_breadth_ranks_version
+- dataset: thematic_labels_daily
+  symbol: XLC
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+- dataset: thematic_labels_daily
+  symbol: IYZ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+- dataset: thematic_labels_daily
+  symbol: SOCL
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+- dataset: thematic_labels_daily
+  symbol: HERO
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: communication_service
+- dataset: thematic_labels_daily
+  symbol: XLY
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+- dataset: thematic_labels_daily
+  symbol: ITB
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+- dataset: thematic_labels_daily
+  symbol: XHB
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+- dataset: thematic_labels_daily
+  symbol: IBUY
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+- dataset: thematic_labels_daily
+  symbol: ONLN
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+- dataset: thematic_labels_daily
+  symbol: PEJ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_discretionary
+- dataset: thematic_labels_daily
+  symbol: XLP
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_staples
+- dataset: thematic_labels_daily
+  symbol: XRT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: consumer_staples
+- dataset: thematic_labels_daily
+  symbol: XLE
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: GUNR
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: FCG
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: XOP
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: ICLN
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: QCLN
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: OIH
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: TAN
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: NLR
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: energy
+- dataset: thematic_labels_daily
+  symbol: XLF
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+- dataset: thematic_labels_daily
+  symbol: VFH
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+- dataset: thematic_labels_daily
+  symbol: KRE
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+- dataset: thematic_labels_daily
+  symbol: KBE
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+- dataset: thematic_labels_daily
+  symbol: IAI
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+- dataset: thematic_labels_daily
+  symbol: KIE
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+- dataset: thematic_labels_daily
+  symbol: IPAY
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: finance
+- dataset: thematic_labels_daily
+  symbol: XLV
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: IBB
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: XBI
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: IHI
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: IHF
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: XHE
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: XPH
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: MJ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: healthcare
+- dataset: thematic_labels_daily
+  symbol: XLI
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: ITA
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: ROKT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: UFO
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: SHLD
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: BOTZ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: IYT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: JETS
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: SNSR
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: DRIV
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: industrials
+- dataset: thematic_labels_daily
+  symbol: XLB
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: GDX
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: SIL
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: COPX
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: XME
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: LIT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: IYM
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: URA
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: REMX
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: materials
+- dataset: thematic_labels_daily
+  symbol: XLRE
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+- dataset: thematic_labels_daily
+  symbol: VNQ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+- dataset: thematic_labels_daily
+  symbol: VNQI
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+- dataset: thematic_labels_daily
+  symbol: REET
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+- dataset: thematic_labels_daily
+  symbol: REM
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: real_estate
+- dataset: thematic_labels_daily
+  symbol: XLK
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: CHAT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: AIQ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: IXN
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: QTEC
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: QTUM
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: VGT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: SOXX
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: SMH
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: DRAM
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: IGV
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: FDN
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: KWEB
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: CIBR
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: HACK
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: SKYY
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: METV
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: FINX
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: XT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: technology
+- dataset: thematic_labels_daily
+  symbol: XLU
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+- dataset: thematic_labels_daily
+  symbol: IGF
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+- dataset: thematic_labels_daily
+  symbol: PAVE
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+- dataset: thematic_labels_daily
+  symbol: GRID
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: utilities
+- dataset: thematic_labels_daily
+  symbol: MEME
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: DXYZ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: BLOK
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: IPO
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: MOAT
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: MOO
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: ARKK
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: ARKW
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: ARKF
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: ARKX
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic
+- dataset: thematic_labels_daily
+  symbol: ARKQ
+  fields:
+  - fwd_3d_ret
+  - fwd_5d_ret
+  - fwd_10d_ret
+  - fwd_20d_ret
+  - fwd_30d_ret
+  - fwd_5d_excess_ret
+  - fwd_10d_excess_ret
+  - fwd_20d_excess_ret
+  - fwd_10d_max_drawdown
+  - fwd_10d_max_runup
+  observability_timestamp_rule: t_plus_n_close
+  revision_immutability: true
+  source: computed_locally
+  sector: thematic

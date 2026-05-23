@@ -49,3 +49,25 @@ jobs:
     command: "scripts/ensure-chrome.sh && uv run rainier scrape qu --session close --cdp http://127.0.0.1:9222"
     log: "data/qu-scrape.log"
     enabled: true
+
+  # Thematic Ranks dashboard — DESIGN-thematic-ranks-dashboard.md §7 [D-004].
+  # Runs 15min after NYSE close (16:30 ET / 13:30 PT) on weekdays. Idempotent
+  # `run-daily` short-circuits if today's Layer A row is already present, so
+  # cron retries are safe.
+  #
+  # DISABLED until a daily OHLCV refresh job lands (codex iter-7 [P1]).
+  # `run-daily` needs `data/cache/thematic_universe.parquet` to be current
+  # for today's asof. The Phase A `backfill_thematic_universe.py` is a
+  # one-shot bulk fetch (no `--resume`/--update mode) and is revision-
+  # immutable (`--force` writes a sibling cohort, not in-place). Until the
+  # backfill script grows a daily-refresh mode (deferred follow-up), enabling
+  # this cron would hit the stale-OHLCV guard and fail every weekday.
+  # Operator flips `enabled: true` once daily OHLCV refresh is wired up;
+  # `run-daily` itself remains operator-runnable via the CLI for ad-hoc use.
+  - name: thematic-ranks-daily
+    description: "Compute thematic ranks (Layer A+B) + render dashboard"
+    schedule: "30 13 * * 1-5"   # 13:30 PST = 16:30 ET, Mon-Fri
+    command: "uv run rainier thematic run-daily"
+    log: "data/thematic-ranks.log"
+    discord_on_failure: true
+    enabled: false
