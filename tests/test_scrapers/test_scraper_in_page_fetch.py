@@ -164,13 +164,21 @@ class TestQu100FetchReplaysAgainstMock:
                 "morning", captured_at, result, target_date="2026-05-22"
             )
 
-        # No interactions with the date input. _set_date should not be invoked.
+        # No interactions with the date input. _set_date is gone; nothing
+        # in the in-page-fetch path should locator()/fill() the date input.
         assert sel.DATE_INPUT not in str(page.locator.mock_calls)
-        # And no Search button clicks: the DOM scrape sequence is gone.
+        # And no Search-button clicks from _scrape_qu100: the DOM scrape
+        # sequence is gone (the previous toggle/search/old-DOM-extract loop).
         click_targets = [c.args[0] for c in page.click.await_args_list if c.args]
         assert sel.SEARCH_BUTTON not in click_targets
-        assert sel.TOP100_BUTTON not in click_targets
-        assert sel.BOTTOM100_BUTTON not in click_targets
+        # The DOM-only selectors (TOP100_BUTTON, BOTTOM100_BUTTON) were
+        # deleted from selectors.py — their absence is asserted by the
+        # selector-deletion checks at module import time. Here we just
+        # confirm no click() was made against the Chinese-text toggles or
+        # any ant-table row selector either.
+        assert not any(
+            "select-button" in t for t in click_targets if isinstance(t, str)
+        )
 
 
 # ---------------------------------------------------------------------------

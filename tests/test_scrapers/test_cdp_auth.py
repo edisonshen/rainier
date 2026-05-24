@@ -76,7 +76,8 @@ class TestSetupCDP:
 
     @pytest.mark.asyncio
     async def test_cdp_setup_happy_path(self):
-        """CDP mode: existing_page works, _cdp_ensure_auth is called."""
+        """CDP mode (DESIGN D-10): fresh_tab_in_existing_context works,
+        _cdp_ensure_auth is called."""
         page, _ = _make_mock_page()
         # Table already visible → early return from _cdp_ensure_auth
         page.query_selector = AsyncMock(return_value=AsyncMock())
@@ -86,7 +87,7 @@ class TestSetupCDP:
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=page)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_browser.existing_page = MagicMock(return_value=mock_cm)
+        mock_browser.fresh_tab_in_existing_context = MagicMock(return_value=mock_cm)
 
         scraper = _make_scraper(mock_browser)
 
@@ -99,10 +100,12 @@ class TestSetupCDP:
             await scraper.setup()
 
         assert scraper._page is page
+        mock_browser.fresh_tab_in_existing_context.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cdp_setup_chrome_not_open(self):
-        """CDP mode: existing_page() raises when Chrome isn't reachable."""
+        """CDP mode: fresh_tab_in_existing_context() raises when Chrome isn't
+        reachable."""
         mock_browser = MagicMock()
         mock_browser._is_cdp = True
         mock_cm = AsyncMock()
@@ -110,7 +113,7 @@ class TestSetupCDP:
             side_effect=ConnectionError("Cannot connect to Chrome on CDP")
         )
         mock_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_browser.existing_page = MagicMock(return_value=mock_cm)
+        mock_browser.fresh_tab_in_existing_context = MagicMock(return_value=mock_cm)
 
         scraper = _make_scraper(mock_browser)
 
@@ -537,254 +540,18 @@ class TestScrapeQU100PostLogin:
 
         mock_login.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_signin_redirect_between_toggle_iterations_recovers(self):
-        """The Search click inside the top100 iteration can trigger a server-side
-        redirect to /signin (session expired silently). The next iteration's
-        toggle click must NOT fire blind — the scraper must detect the signin
-        URL, re-login, navigate back, and only then click the bottom100 toggle.
-
-        This is the production failure mode that kills 50% of cron runs:
-        - top100 Search → server 401 → page redirects to /signin
-        - `.select-button span:text-is('后100')` no longer exists on the page
-        - default 30s click timeout fires, scraper returns records_created=0
-        """
-        page, page_url = _make_mock_page(
-            url="https://www.quantunicorn.com/products#qu100"
-        )
-
-        # Track every page.click call so we can correlate URL vs. toggle clicks.
-        click_targets: list[str] = []
-
-        async def fake_click(selector, *args, **kwargs):
-            click_targets.append(selector)
-
-        page.click = AsyncMock(side_effect=fake_click)
-
-        # The Search button is obtained via wait_for_selector/query_selector
-        # and `.click()` is called on the handle (NOT page.click). The toggle
-        # iteration's Search click is what triggers the silent signin redirect.
-        search_btn = AsyncMock()
-        search_click_count = {"n": 0}
-
-        async def fake_search_click(*args, **kwargs):
-            search_click_count["n"] += 1
-            # The SECOND search click is the one inside the top100 toggle
-            # iteration (first was the initial table load). Simulate the
-            # server-side redirect to /signin happening then.
-            if search_click_count["n"] == 2:
-                page_url["value"] = (
-                    "https://www.quantunicorn.com/signin?next=%2Fproducts%23qu100"
-                )
-
-        search_btn.click = AsyncMock(side_effect=fake_search_click)
-
-        # wait_for_selector returns the search button for SEARCH_BUTTON and a
-        # generic mock for everything else.
-        async def fake_wait_for_selector(selector, *args, **kwargs):
-            if selector == sel.SEARCH_BUTTON:
-                return search_btn
-            return AsyncMock()
-
-        page.wait_for_selector = AsyncMock(side_effect=fake_wait_for_selector)
-        # query_selector for SEARCH_BUTTON (inside the toggle loop) returns
-        # the same handle.
-        page.query_selector = AsyncMock(return_value=search_btn)
-        page.get_attribute = AsyncMock(return_value="2026-04-09")
-
-        # Make `evaluate` return a different first symbol on each call so the
-        # "table refresh" polling loop exits quickly instead of running its
-        # full 15s timeout (this is purely to keep the unit test fast).
-        eval_counter = {"n": 0}
-
-        async def fake_evaluate(*args, **kwargs):
-            eval_counter["n"] += 1
-            return [
-                {"rank": "1", "symbol": f"SYM{eval_counter['n']}",
-                 "daily_change": "▲5", "sector": "Tech",
-                 "industry": "Semi", "long_short": "多"}
-            ]
-
-        page.evaluate = AsyncMock(side_effect=fake_evaluate)
-
-        scraper = _make_scraper()
-        scraper._page = page
-
-        async def fake_goto(p, url):
-            # After re-login + navigate, URL settles on products again.
-            page_url["value"] = url
-
-        login_calls = {"n": 0}
-
-        async def fake_login(p):
-            # Login also returns us to the products URL.
-            login_calls["n"] += 1
-            page_url["value"] = "https://www.quantunicorn.com/products#qu100"
-
-        from datetime import datetime, timezone
-
-        from rainier.scrapers.base import ScrapeResult
-        result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
-
-        with (
-            patch("rainier.scrapers.qu.scraper.goto_with_retry",
-                  new_callable=AsyncMock, side_effect=fake_goto),
-            patch("rainier.scrapers.qu.scraper.login",
-                  new_callable=AsyncMock, side_effect=fake_login),
-            patch.object(scraper, "_persist_qu100", return_value=1),
-            # Stub the spinner wait so the test runs instantly.
-            patch.object(scraper, "_wait_for_no_spinner",
-                         new_callable=AsyncMock),
-        ):
-            await scraper._scrape_qu100(
-                "afternoon", datetime.now(timezone.utc), result
-            )
-
-        # Recovery happened: login was called at least once mid-scrape.
-        assert login_calls["n"] >= 1, (
-            "Scraper must re-login when session redirects mid-iteration; "
-            f"got login_calls={login_calls['n']}"
-        )
-
-        # Both toggle clicks were dispatched (no silent skip on bottom100).
-        assert sel.TOP100_BUTTON in click_targets
-        assert sel.BOTTOM100_BUTTON in click_targets
-
-        # And critically: the bottom100 toggle came AFTER top100 in dispatch
-        # order — the scraper didn't bail out after the signin redirect.
-        # Recovery returned control to the loop and let it continue.
-        assert click_targets.index(sel.TOP100_BUTTON) < click_targets.index(
-            sel.BOTTOM100_BUTTON
-        ), f"toggle order broken: {click_targets}"
-
-        # And the recorded error list on the result must NOT contain a
-        # bottom100 click failure — the recovery should have prevented it.
-        assert not any("bottom100" in e for e in result.errors), (
-            f"bottom100 should not fail after recovery; errors={result.errors}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_search_button_uses_wait_for_selector(self):
-        """_scrape_qu100 uses wait_for_selector for Search button (PR #47 fix)."""
-        page, page_url = _make_mock_page(
-            url="https://www.quantunicorn.com/products#qu100"
-        )
-
-        search_btn = AsyncMock()
-        wait_selectors = []
-
-        async def fake_wait(selector, timeout=None):
-            wait_selectors.append(selector)
-            if selector == sel.SEARCH_BUTTON:
-                return search_btn
-            return AsyncMock()
-
-        page.wait_for_selector = AsyncMock(side_effect=fake_wait)
-        page.get_attribute = AsyncMock(return_value="2026-04-09")
-        page.evaluate = AsyncMock(return_value=[
-            {"rank": "1", "symbol": "NVDA", "daily_change": "▲5",
-             "sector": "Tech", "industry": "Semi", "long_short": "多"}
-        ])
-
-        scraper = _make_scraper()
-        scraper._page = page
-
-        from datetime import datetime, timezone
-
-        from rainier.scrapers.base import ScrapeResult
-        result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
-
-        with (
-            patch("rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock),
-            patch("rainier.scrapers.qu.scraper.login", new_callable=AsyncMock),
-            patch.object(scraper, "_persist_qu100", return_value=1),
-        ):
-            await scraper._scrape_qu100("afternoon", datetime.now(timezone.utc), result)
-
-        # Search button was found via wait_for_selector, not query_selector
-        assert sel.SEARCH_BUTTON in wait_selectors
-        search_btn.click.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _wait_for_no_spinner() tests
-# ---------------------------------------------------------------------------
-
-
-class TestWaitForNoSpinner:
-    """Tests for the antd loading-spinner wait that guards toggle clicks."""
-
-    @pytest.mark.asyncio
-    async def test_waits_for_spinner_hidden(self):
-        """Calls wait_for_selector with the antd spinner selector and state='hidden'."""
-        page, _ = _make_mock_page()
-        scraper = _make_scraper()
-        scraper._page = page
-
-        await scraper._wait_for_no_spinner(timeout_ms=5000)
-
-        page.wait_for_selector.assert_awaited_once_with(
-            ".ant-spin-spinning", state="hidden", timeout=5000
-        )
-
-    @pytest.mark.asyncio
-    async def test_swallows_timeout(self):
-        """A stuck spinner must not raise — we log and continue."""
-        page, _ = _make_mock_page()
-        page.wait_for_selector = AsyncMock(side_effect=TimeoutError("spinner stuck"))
-        scraper = _make_scraper()
-        scraper._page = page
-
-        # Must not raise — the actual click will surface a clearer error if needed
-        await scraper._wait_for_no_spinner(timeout_ms=100)
-
-    @pytest.mark.asyncio
-    async def test_invoked_before_toggle_click(self):
-        """_scrape_qu100 calls _wait_for_no_spinner before each toggle click."""
-        page, _ = _make_mock_page(url="https://www.quantunicorn.com/products#qu100")
-
-        # Order trace: every page.click and every _wait_for_no_spinner call
-        events: list[str] = []
-
-        async def trace_click(target):
-            events.append(f"click:{target}")
-
-        page.click = AsyncMock(side_effect=trace_click)
-        page.wait_for_selector = AsyncMock(return_value=AsyncMock())
-        page.query_selector = AsyncMock(return_value=None)
-        page.get_attribute = AsyncMock(return_value="2026-04-09")
-        page.evaluate = AsyncMock(return_value=[
-            {"rank": "1", "symbol": "NVDA", "daily_change": "▲5",
-             "sector": "Tech", "industry": "Semi", "long_short": "多"}
-        ])
-
-        scraper = _make_scraper()
-        scraper._page = page
-
-        async def trace_spinner_wait(timeout_ms=10000):
-            events.append("spinner_wait")
-
-        from datetime import datetime, timezone
-
-        from rainier.scrapers.base import ScrapeResult
-
-        result = ScrapeResult(scraper_name="qu", started_at=datetime.now(timezone.utc))
-
-        with (
-            patch("rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock),
-            patch("rainier.scrapers.qu.scraper.login", new_callable=AsyncMock),
-            patch.object(scraper, "_persist_qu100", return_value=1),
-            patch.object(scraper, "_wait_for_no_spinner", side_effect=trace_spinner_wait),
-        ):
-            await scraper._scrape_qu100("afternoon", datetime.now(timezone.utc), result)
-
-        # Both toggle clicks must be preceded by a spinner wait
-        toggle_clicks = [
-            (i, e) for i, e in enumerate(events)
-            if e in (f"click:{sel.TOP100_BUTTON}", f"click:{sel.BOTTOM100_BUTTON}")
-        ]
-        assert len(toggle_clicks) == 2, f"Expected 2 toggle clicks, got {events}"
-        for idx, _ in toggle_clicks:
-            assert events[idx - 1] == "spinner_wait", (
-                f"Expected spinner_wait before toggle click at index {idx}, got {events}"
-            )
+# NOTE: Tests for DOM-path internals have been removed as part of the
+# in-page-fetch migration (DESIGN-qu-scraper-in-page-fetch / TASK-PLAN §3):
+#
+#   - test_signin_redirect_between_toggle_iterations_recovers
+#   - test_search_button_uses_wait_for_selector
+#   - class TestWaitForNoSpinner (3 tests)
+#
+# The behaviors they covered (mid-iteration toggle/Search-click recovery,
+# spinner waits) no longer exist: the scrape is a single
+# page.evaluate(fetch) per ranking and Cloudflare/auth failures surface as
+# fetch errors caught by the per-iteration ``except`` in ``_scrape_qu100``.
+#
+# The pre-scrape signin-redirect path is still covered by
+# ``test_signin_redirect_during_scrape`` above. The in-page-fetch happy
+# path is covered by ``tests/test_scrapers/test_scraper_in_page_fetch.py``.

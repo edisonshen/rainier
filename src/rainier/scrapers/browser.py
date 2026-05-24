@@ -200,6 +200,70 @@ class BrowserManager:
         yield page
         # Do NOT close — it's the user's tab
 
+    @asynccontextmanager
+    async def fresh_tab_in_existing_context(
+        self,
+    ) -> AsyncGenerator[Page, None]:
+        """Open a new page inside the CDP browser's existing context, close it on exit.
+
+        Used by the QU scraper (DESIGN D-10) to satisfy the USCIS-style "always
+        close the scrape window" guarantee in CDP mode without disturbing the
+        operator's other tabs.
+
+        We attach to ``contexts[0]`` — the operator's logged-in Chrome context
+        carrying the live ``session`` + ``cf_clearance`` cookies — and call
+        ``new_page()`` on it. **We do NOT call ``browser.new_context()``**:
+        that would drop the operator's auth state. The new tab inherits the
+        existing context's cookies, so the QU SPA + Cloudflare see us as
+        logged in.
+
+        On exit the helper closes only that one page. The context, the
+        Chrome process, and every other tab the operator had open survive.
+
+        Falls back to :meth:`new_page` if the manager is in launch mode (not
+        CDP) so callers can stay mode-agnostic.
+        """
+        if not self._is_cdp:
+            async with self.new_page() as page:
+                yield page
+            return
+
+        if self._browser is None:
+            raise RuntimeError("Browser not started. Call start() or use 'async with'.")
+
+        contexts = self._browser.contexts
+        if not contexts:
+            # No context yet (unusual for CDP but possible if Chrome started
+            # fresh) — create one. This is the only path that legitimately
+            # creates a new context in CDP mode; it carries no operator auth
+            # by definition because none existed yet.
+            log.warning("cdp_no_contexts_creating_new", msg="No contexts in CDP browser")
+            context = await self._browser.new_context()
+            context.set_default_timeout(self._timeout_ms)
+            page = await context.new_page()
+            try:
+                yield page
+            finally:
+                await page.close()
+            return
+
+        context = contexts[0]
+        page = await context.new_page()
+        page.set_default_timeout(self._timeout_ms)
+        log.info("cdp_fresh_tab_opened", url=page.url)
+        try:
+            yield page
+        finally:
+            try:
+                await page.close()
+                log.info("cdp_fresh_tab_closed")
+            except Exception as exc:
+                # Closing a tab should never break the calling code. Log and
+                # move on — the worst case is one leftover tab the operator
+                # can close manually, which we treat as a non-fatal hygiene
+                # bug rather than a scrape failure.
+                log.warning("cdp_fresh_tab_close_failed", error=str(exc))
+
     @staticmethod
     async def save_storage_state(page: Page, path: str | Path) -> None:
         """Save cookies + localStorage from the current page's context."""
