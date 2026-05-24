@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from rainier.research.breadth import universe_loader as ul
+from rainier.breadth import universe_loader as ul
 
 SAMPLE_YAML_V1 = """\
 version: 1

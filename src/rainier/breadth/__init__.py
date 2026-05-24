@@ -13,7 +13,7 @@ Design ref: docs/DESIGN-thematic-ranks-dashboard.md
 
 from __future__ import annotations
 
-from rainier.research.breadth import (
+from rainier.breadth import (
     loaders,
     ml_builders,
     ranks,
