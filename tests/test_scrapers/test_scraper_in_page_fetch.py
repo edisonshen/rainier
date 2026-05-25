@@ -480,3 +480,54 @@ class TestTeardownCdpModeOpensAndClosesFreshTab:
         assert not page.context.close.await_args_list  # type: ignore[attr-defined]
         assert scraper._page is None
         assert scraper._page_cm is None
+
+
+# ---------------------------------------------------------------------------
+# Chrome-ownership cleanup: when BrowserManager force-restarted Chrome, the
+# whole Chrome process is killed on bm.stop(), not just the scraper tab.
+# ---------------------------------------------------------------------------
+
+
+class TestScraperClosesChromeWhenForceRestarted:
+    """End-to-end mocked flow: BrowserManager's CDP connect fails on first
+    try, force-restart fires, scraper runs against the fresh Chrome, and on
+    ``async with`` exit the Chrome process we spawned is killed (not left
+    listening on :9222).
+    """
+
+    async def test_scraper_closes_chrome_when_force_restarted(self):
+        from rainier.scrapers.browser import BrowserManager
+
+        # --- Playwright mock: first connect fails, second succeeds ---
+        mock_browser = MagicMock()
+        mock_browser.contexts = [MagicMock()]
+        mock_chromium = MagicMock()
+        mock_chromium.connect_over_cdp = AsyncMock(
+            side_effect=[
+                RuntimeError("Browser context management is not supported"),
+                mock_browser,
+            ]
+        )
+        mock_pw = MagicMock()
+        mock_pw.chromium = mock_chromium
+        mock_pw.stop = AsyncMock()
+        mock_pw_factory = MagicMock()
+        mock_pw_factory.start = AsyncMock(return_value=mock_pw)
+
+        with (
+            patch("rainier.scrapers.browser.async_playwright", return_value=mock_pw_factory),
+            patch.object(
+                BrowserManager, "_force_restart_chrome", new=AsyncMock()
+            ) as restart,
+            patch.object(
+                BrowserManager, "_kill_chrome_we_spawned", new=AsyncMock()
+            ) as kill,
+        ):
+            async with BrowserManager(cdp_url="http://localhost:9222") as bm:
+                # The recovery path fired during start() — we now own Chrome.
+                assert bm._we_spawned_chrome is True
+                assert bm._is_cdp is True
+            # __aexit__ ran bm.stop() — and because we own Chrome it must
+            # have killed the process, not just disconnected.
+            restart.assert_awaited_once()
+            kill.assert_awaited_once()
