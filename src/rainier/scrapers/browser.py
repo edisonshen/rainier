@@ -119,18 +119,22 @@ class BrowserManager:
     async def stop(self) -> None:
         """Close/disconnect the browser and Playwright.
 
-        CDP-mode teardown branches on ownership:
+        Teardown decision tree::
 
-        - Attached to operator's pre-existing Chrome → just disconnect.
-          The D-10 contract owns this case: the operator's window stays
-          alive and the fresh scrape tab was already closed by the
-          ``fresh_tab_in_existing_context`` exit path.
-        - We force-restarted Chrome ourselves during ``start()`` → kill
-          the whole Chrome process. Otherwise an empty Chrome window
-          accumulates on :9222 after every cron run.
+            stop()
+              ├─ launch mode (_is_cdp=False)
+              │    └─ browser.close()                      # our Chromium
+              └─ CDP mode (_is_cdp=True)
+                   ├─ _we_spawned_chrome=False
+                   │    └─ disconnect only                 # D-10: operator's Chrome
+                   └─ _we_spawned_chrome=True
+                        └─ _kill_chrome_we_spawned()       # our Chrome — kill it
 
-        Launch mode is unchanged: ``browser.close()`` tears down the
-        Chromium we launched.
+        The CDP-spawned branch exists because the recovery path in
+        ``start()`` (``connect_over_cdp`` raises → ``_force_restart_chrome``
+        → retry) leaves us holding a Chrome process the operator did not
+        ask for. Closing only the scrape tab would leave an empty Chrome
+        window on :9222 — one leak per cron run.
         """
         if self._browser:
             if self._is_cdp:
