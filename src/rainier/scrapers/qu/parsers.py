@@ -118,6 +118,41 @@ def parse_qu100_rows(raw_rows: list[dict]) -> list[QU100Row]:
     return results
 
 
+def api_rows_to_qu100_rows(api_rows: list[dict]) -> list[QU100Row]:
+    """Adapt /api/v3/mf100 response rows to QU100Row (DESIGN D-4).
+
+    The API payload (per the spike capture) ships rows shaped like::
+
+        {"rank": 1, "ticker": "MU", "change": "0",
+         "industry": "Semiconductors", "long_short": "No dominance",
+         "sector": "Technology"}
+
+    QU100Row uses `symbol` instead of `ticker` and `daily_change: int`
+    instead of `change: str`. The only transformations are the rename
+    and feeding `change` through `parse_daily_change` (which already
+    handles "0", signed integers, "new", and arrow-prefixed inputs).
+
+    Empty / missing tickers are skipped defensively.
+    """
+    results: list[QU100Row] = []
+    for row in api_rows:
+        symbol = str(row.get("ticker", "")).strip().upper()
+        if not symbol:
+            continue
+        results.append(
+            QU100Row(
+                rank=int(row.get("rank", 0) or 0),
+                symbol=symbol,
+                daily_change=parse_daily_change(str(row.get("change", "0"))),
+                sector=str(row.get("sector", "")).strip(),
+                industry=str(row.get("industry", "")).strip(),
+                long_short=str(row.get("long_short", "")).strip(),
+                raw=row,
+            )
+        )
+    return results
+
+
 def parse_capital_flow_rows(
     raw_rows: list[dict], period_type: str
 ) -> list[CapitalFlowRow]:

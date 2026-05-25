@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from rainier.scrapers.qu.parsers import (
+    api_rows_to_qu100_rows,
     parse_capital_flow_rows,
     parse_daily_change,
     parse_qu100_rows,
@@ -158,6 +159,87 @@ class TestParseQU100Rows:
         assert result[2].daily_change == 0
         assert result[3].daily_change == 0  # "New" -> 0
         assert result[3].symbol == "CTRN"
+
+
+# ---------------------------------------------------------------------------
+# api_rows_to_qu100_rows (D-4 adapter for the in-page-fetch /api/v3/mf100 path)
+# ---------------------------------------------------------------------------
+
+
+class TestApiRowsToQU100Rows:
+    """Adapter that maps the /api/v3/mf100 response shape onto QU100Row.
+
+    API shape (per spike capture):
+        {"rank": 1, "ticker": "MU", "change": "0",
+         "industry": "Semiconductors", "long_short": "No dominance",
+         "sector": "Technology"}
+
+    The adapter renames `ticker -> symbol` and runs `change` through
+    `parse_daily_change` to land on `daily_change`. No other transformations.
+    """
+
+    def test_happy_path(self):
+        api = [
+            {
+                "rank": 1,
+                "ticker": "MU",
+                "change": "0",
+                "industry": "Semiconductors",
+                "long_short": "No dominance",
+                "sector": "Technology",
+            }
+        ]
+        rows = api_rows_to_qu100_rows(api)
+        assert len(rows) == 1
+        assert rows[0].rank == 1
+        assert rows[0].symbol == "MU"
+        assert rows[0].daily_change == 0
+        assert rows[0].sector == "Technology"
+        assert rows[0].industry == "Semiconductors"
+        assert rows[0].long_short == "No dominance"
+        # raw preserves the original API dict so downstream JSONB storage
+        # keeps the source-of-truth payload.
+        assert rows[0].raw is api[0]
+
+    def test_change_variants(self):
+        api = [
+            {"rank": 1, "ticker": "AAA", "change": "0",
+             "industry": "", "long_short": "", "sector": ""},
+            {"rank": 2, "ticker": "BBB", "change": "-3",
+             "industry": "", "long_short": "", "sector": ""},
+            {"rank": 3, "ticker": "CCC", "change": "1604",
+             "industry": "", "long_short": "", "sector": ""},
+            {"rank": 4, "ticker": "DDD", "change": "new",
+             "industry": "", "long_short": "", "sector": ""},
+            # change missing entirely — should not raise, falls through to 0
+            {"rank": 5, "ticker": "EEE",
+             "industry": "", "long_short": "", "sector": ""},
+        ]
+        rows = api_rows_to_qu100_rows(api)
+        assert [r.daily_change for r in rows] == [0, -3, 1604, 0, 0]
+
+    def test_field_rename_ticker_to_symbol(self):
+        # The API field is named `ticker`. The QU100Row field is `symbol`.
+        # The adapter must never leak `ticker` onto QU100Row.
+        api = [{"rank": 1, "ticker": "msft", "change": "0",
+                "industry": "", "long_short": "", "sector": ""}]
+        rows = api_rows_to_qu100_rows(api)
+        assert rows[0].symbol == "MSFT"  # uppercased per existing convention
+
+    def test_empty_data(self):
+        assert api_rows_to_qu100_rows([]) == []
+
+    def test_skips_empty_ticker(self):
+        # Defensive: an empty ticker shouldn't produce a junk row.
+        api = [
+            {"rank": 1, "ticker": "", "change": "0",
+             "industry": "", "long_short": "", "sector": ""},
+            {"rank": 2, "ticker": "AAPL", "change": "5",
+             "industry": "", "long_short": "", "sector": ""},
+        ]
+        rows = api_rows_to_qu100_rows(api)
+        assert len(rows) == 1
+        assert rows[0].symbol == "AAPL"
 
 
 # ---------------------------------------------------------------------------

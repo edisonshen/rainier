@@ -22,65 +22,36 @@ LOGGED_IN_INDICATOR = None
 # Main container
 QU100_CONTAINER = ".qu100"
 
-# Ant Design table
+# Ant Design table — still referenced by the CDP auth probe (the table
+# appearing proves we are logged in and the SPA is alive).
 QU100_TABLE = ".ant-table"
 QU100_TABLE_ROW = ".ant-table-tbody tr.ant-table-row"
-
-# Top100/Bottom100 toggle — use text selectors (stable across DOM changes)
-TOP100_BUTTON = ".select-button span:text-is('前100')"
-BOTTOM100_BUTTON = ".select-button span:text-is('后100')"
 
 # Daily/Weekly toggle
 DAILY_BUTTON = ".select-button span:text-is('日线')"
 WEEKLY_BUTTON = ".select-button span:text-is('周线')"
 
-# Date picker (Ant Design)
+# Date picker (Ant Design) — kept for CDP auth probe; the in-page-fetch
+# path (DESIGN D-9) does NOT click this; it passes the date as a query
+# param.
 DATE_INPUT = ".ant-picker-input input"
 DATE_DISPLAY = ".ant-picker-input input"  # value attribute has the date
 
-# Search/Query button (查 询) — MUST click after any toggle or date change
+# Search/Query button (查 询) — kept for CDP auth flow + detail page.
+# The QU100 fetch path no longer needs it (DESIGN D-3).
 SEARCH_BUTTON = "button.ant-btn-default.button"
-
-# Global search input within the table
-TABLE_SEARCH_INPUT = ".table-input input.ant-input"
 
 # Last updated text
 UPDATE_TIME = ".update-time"
 
-# JavaScript to extract rows from the QU100 Ant Design table.
-# The table has 6 columns: Rank, Ticker, Daily Change, Sector, Industry, Long/Short
-# - Ticker is inside <div class="purple">SYMBOL</div>
-# - Daily change: <span class="green">▲</span><span>92</span> or "0" or "New"
-QU100_EXTRACT_JS = """
-() => {
-    const rows = document.querySelectorAll('.ant-table-tbody tr.ant-table-row');
-    return Array.from(rows).map(row => {
-        const cells = row.querySelectorAll('td.ant-table-cell');
-        // Daily change: get the raw text (includes ▲/▼ and number)
-        const changeCell = cells[2];
-        let dailyChange = '0';
-        if (changeCell) {
-            const spans = changeCell.querySelectorAll('span');
-            if (spans.length >= 2) {
-                // Has arrow span + number span
-                const arrow = spans[0]?.textContent?.trim() || '';
-                const num = spans[1]?.textContent?.trim() || '0';
-                dailyChange = arrow + num;
-            } else {
-                dailyChange = changeCell.textContent?.trim() || '0';
-            }
-        }
-        return {
-            rank: cells[0]?.textContent?.trim() || '',
-            symbol: cells[1]?.textContent?.trim() || '',
-            daily_change: dailyChange,
-            sector: cells[3]?.textContent?.trim() || '',
-            industry: cells[4]?.textContent?.trim() || '',
-            long_short: cells[5]?.textContent?.trim() || '',
-        };
-    });
-}
-"""
+# ---------------------------------------------------------------------------
+# QU100 in-page-fetch endpoint (DESIGN D-7)
+# ---------------------------------------------------------------------------
+# The SPA fetches /api/v3/mf100 with three query params: date (YYYY-MM-DD),
+# top (true|false), frequency (daily). Cloudflare cf_clearance is bound to
+# the page's TLS handshake, so the request MUST originate from inside the
+# rendered page (page.evaluate(fetch(...))). See SPIKE-qu-json-api.md.
+QU100_API_URL = "/api/v3/mf100"
 
 # ---------------------------------------------------------------------------
 # Detail page (QU Stock Capital Flow) — TODO: needs separate HTML inspection

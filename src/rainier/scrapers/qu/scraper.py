@@ -19,9 +19,30 @@ from rainier.scrapers.qu import selectors as sel
 from rainier.scrapers.qu.auth import ensure_authenticated, get_session_path, is_session_valid, login
 from rainier.scrapers.qu.parsers import (
     QU100Row,
+    api_rows_to_qu100_rows,
     parse_capital_flow_rows,
-    parse_qu100_rows,
 )
+
+# In-page fetch JS (DESIGN D-3/D-7). Defined at module scope so it's easy
+# to find, easy to unit-test by reference, and not allocated per call.
+#
+# Cloudflare cf_clearance is bound to the page's TLS handshake — the only
+# request shape that gets past the challenge is one that originates from
+# the rendered page itself. We use ``credentials: 'include'`` so the
+# session + cf_clearance cookies on the page are sent automatically.
+QU100_FETCH_JS = """
+async ({url}) => {
+    const resp = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {'accept': 'application/json, text/plain, */*'},
+    });
+    if (!resp.ok) {
+        throw new Error('qu100 api ' + resp.status + ' for ' + url);
+    }
+    return await resp.json();
+}
+"""
 
 log = structlog.get_logger()
 
@@ -42,16 +63,26 @@ class QUScraper(BaseScraper):
     async def setup(self) -> None:
         """Open a page and ensure logged in.
 
-        In CDP mode: uses the existing browser tab (user already logged in).
+        In CDP mode (DESIGN D-10): opens a FRESH TAB inside the operator's
+        existing logged-in Chrome context via
+        ``BrowserManager.fresh_tab_in_existing_context``. The context's
+        cookies (``session`` + ``cf_clearance``) carry through, so the
+        QU SPA + Cloudflare see us as logged in. **We do NOT use
+        ``existing_page`` (which reuses the operator's tab and refuses to
+        close it) or ``browser.new_context`` (which drops auth).**
+
         In launch mode: opens a new page with saved session + auto-login.
         """
         if self.browser._is_cdp:
-            # CDP mode: user's real Chrome — check if auth is needed
-            self._page_cm = self.browser.existing_page()
+            # CDP mode: fresh tab in the operator's context. Always-close on
+            # teardown — leaves the operator's other tabs and Chrome process
+            # untouched.
+            self._page_cm = self.browser.fresh_tab_in_existing_context()
             self._page = await self._page_cm.__aenter__()
-            self.log.info("cdp_mode", url=self._page.url)
+            self.log.info("cdp_mode_fresh_tab", url=self._page.url)
 
-            # Auto-login if not authenticated
+            # Auto-login if not authenticated (rare — the operator's context
+            # typically already has live cookies).
             await self._cdp_ensure_auth()
         else:
             # Launch mode: fresh Playwright browser, need auth
@@ -64,11 +95,23 @@ class QUScraper(BaseScraper):
             await self._verify_session()
 
     async def teardown(self) -> None:
-        """Close the page/context."""
-        if self._page_cm:
-            await self._page_cm.__aexit__(None, None, None)
-            self._page = None
+        """Close the scrape page/tab (USCIS-style, DESIGN D-10).
+
+        Runs unconditionally from ``BaseScraper.execute``'s ``finally``, so
+        it fires on success AND on every failure path (including a raise
+        from ``run()``). Idempotent w.r.t. the outer ``async with
+        BrowserManager`` — exiting the page context here means the outer
+        block's exit is a no-op for the page (it still tears down the
+        browser/playwright in launch mode).
+        """
+        if self._page_cm is not None:
+            page_cm = self._page_cm
+            # Clear bookkeeping BEFORE awaiting __aexit__ so a re-entrant
+            # call (or a __aexit__ that itself raises) doesn't double-close
+            # or leave dangling state.
             self._page_cm = None
+            self._page = None
+            await page_cm.__aexit__(None, None, None)
 
     async def run(self, **kwargs) -> ScrapeResult:
         """
@@ -265,166 +308,72 @@ class QUScraper(BaseScraper):
         result: ScrapeResult,
         target_date: str | None = None,
     ) -> None:
-        """Scrape Top100 and Bottom100 from the QU100 page."""
+        """Scrape Top100 + Bottom100 via in-page fetch (DESIGN D-3/D-7/D-9).
+
+        Two ``page.evaluate(fetch(...))`` calls per date — one for
+        ``top=true`` and one for ``top=false`` — against ``/api/v3/mf100``.
+        The fetch originates from the rendered page, so Cloudflare's
+        cf_clearance (TLS-bound) accepts the request. No DOM clicks. No
+        date-picker interaction. No spinner waits.
+        """
         page = self._page
 
-        # Navigate to QU100 page if needed
+        # Make sure the page is on the QU SPA so cf_clearance + session
+        # cookies are scoped correctly. The in-page fetch path needs the
+        # page to be on the same origin as the API.
         current_url = page.url or ""
         if "quantunicorn.com/products" not in current_url:
             if self.browser._is_cdp:
-                self.log.warning("cdp_wrong_page", url=current_url,
-                                 hint="Navigate to QU100 page in Chrome first")
+                self.log.info("cdp_navigating_for_fetch", url=current_url)
             await goto_with_retry(page, self._qu_config.url)
 
-        # Safety net: if redirected to signin after navigation, force login
+        # Safety net: if redirected to signin (stale session), force login
+        # and try again. Same logic as before; just preserved here for the
+        # one place it still matters.
         if "signin" in (page.url or ""):
             self.log.info("scrape_forced_login", url=page.url)
             await login(page)
             await goto_with_retry(page, self._qu_config.url)
 
-        # Change date if requested, then click Search to load data
+        # The API takes ``date`` as a query param (DESIGN D-9). We use the
+        # caller-supplied target_date if any, otherwise the run's captured_at.
         if target_date:
-            await self._set_date(target_date)
-        search_btn = await page.wait_for_selector(sel.SEARCH_BUTTON, timeout=15000)
-        if search_btn:
-            await search_btn.click()
-
-        # Wait for the table to appear
-        await page.wait_for_selector(sel.QU100_TABLE, timeout=15000)
-
-        # Read the data date from the date picker (e.g., "2026-03-13")
-        data_date_str = await page.get_attribute(sel.DATE_INPUT, "value")
-        try:
-            data_date = date_type.fromisoformat(data_date_str) if data_date_str else captured_at.date()
-        except ValueError:
+            try:
+                data_date = date_type.fromisoformat(target_date)
+            except ValueError:
+                self.log.warning("invalid_target_date_fallback",
+                                 target_date=target_date)
+                data_date = captured_at.date()
+        else:
             data_date = captured_at.date()
         self.log.info("qu100_data_date", date=str(data_date))
 
-        for ranking_type, button_sel in [
-            ("top100", sel.TOP100_BUTTON),
-            ("bottom100", sel.BOTTOM100_BUTTON),
-        ]:
+        # One fetch per ranking. ``top=true|false`` per the SPA contract.
+        for ranking_type, top_flag in [("top100", "true"), ("bottom100", "false")]:
             try:
-                # Capture current first-row symbol to detect table refresh
-                old_first = None
-                try:
-                    old_rows = await page.evaluate(sel.QU100_EXTRACT_JS)
-                    if old_rows:
-                        old_first = old_rows[0].get("symbol")
-                except Exception:
-                    pass
-
-                # The previous Search click leaves an antd loading spinner
-                # overlaying the toggle buttons. Clicking through it makes
-                # Playwright stall on actionability checks until 30s timeout.
-                await self._wait_for_no_spinner()
-
-                # Mid-iteration auth check: the previous iteration's Search
-                # click can trigger a server-side redirect to /signin when the
-                # session cookie has expired silently. In that state, the
-                # `.select-button` toggle no longer exists on the page and
-                # clicking it stalls for the full default click timeout (30s),
-                # which is what was killing the midday + close cron runs.
-                # Recover by re-logging in and re-navigating before the click.
-                await self._recover_if_signin()
-
-                # Click toggle, then Search button (required per QU100 UI)
-                await page.click(button_sel)
-                search_btn = await page.query_selector(sel.SEARCH_BUTTON)
-                if search_btn:
-                    await search_btn.click()
-
-                # Wait for table to refresh with new data
-                if old_first:
-                    for _ in range(30):
-                        await asyncio.sleep(0.5)
-                        try:
-                            new_rows = await page.evaluate(
-                                sel.QU100_EXTRACT_JS
-                            )
-                            if (
-                                new_rows
-                                and new_rows[0].get("symbol") != old_first
-                            ):
-                                break
-                        except Exception:
-                            pass
-                    else:
-                        self.log.warning(
-                            "table_refresh_timeout",
-                            ranking_type=ranking_type,
-                        )
-                else:
-                    await page.wait_for_selector(
-                        sel.QU100_TABLE_ROW, timeout=15000
-                    )
-
-                raw_rows = await page.evaluate(sel.QU100_EXTRACT_JS)
-                parsed = parse_qu100_rows(raw_rows)
-                count = self._persist_qu100(parsed, ranking_type, session_name, captured_at, data_date)
+                url = (
+                    f"{sel.QU100_API_URL}?date={data_date.isoformat()}"
+                    f"&top={top_flag}&frequency=daily"
+                )
+                payload = await page.evaluate(QU100_FETCH_JS, {"url": url})
+                api_data = payload.get("data", []) if isinstance(payload, dict) else []
+                parsed = api_rows_to_qu100_rows(api_data)
+                count = self._persist_qu100(
+                    parsed, ranking_type, session_name, captured_at, data_date
+                )
                 result.records_created += count
-
-                self.log.info("qu100_scraped", ranking_type=ranking_type, rows=count, date=str(data_date))
-
+                self.log.info(
+                    "qu100_scraped",
+                    ranking_type=ranking_type,
+                    rows=count,
+                    date=str(data_date),
+                )
             except Exception as exc:
                 error_msg = f"Failed to scrape {ranking_type}: {exc}"
-                self.log.warning("qu100_failed", ranking_type=ranking_type, error=str(exc))
+                self.log.warning(
+                    "qu100_failed", ranking_type=ranking_type, error=str(exc)
+                )
                 result.errors.append(error_msg)
-
-    async def _wait_for_no_spinner(self, timeout_ms: int = 10000) -> None:
-        """Wait for any antd loading spinner to disappear.
-
-        Best-effort: a stuck spinner shouldn't kill the scrape — log and continue,
-        and let the actual click surface a clearer error if the page is truly broken.
-        """
-        try:
-            await self._page.wait_for_selector(
-                ".ant-spin-spinning", state="hidden", timeout=timeout_ms
-            )
-        except Exception as exc:
-            self.log.warning("spinner_wait_timeout", error=str(exc))
-
-    async def _recover_if_signin(self) -> bool:
-        """If the page is on /signin, re-login and navigate back to QU100.
-
-        Returns True if recovery ran, False otherwise.
-
-        Background: between toggle iterations inside `_scrape_qu100`, the
-        previous Search click can produce a 401 from the API and cause the
-        SPA to redirect to /signin. The select-button toggle is then gone
-        from the DOM and the next iteration's `page.click(...)` hangs until
-        the default 30s timeout. This helper makes that path recoverable.
-        """
-        page = self._page
-        url = page.url or ""
-        if "signin" not in url:
-            return False
-
-        self.log.warning("mid_iter_signin_redirect", url=url)
-        await login(page)
-        await goto_with_retry(page, self._qu_config.url)
-        # After re-login, the Search button needs to be clicked again to
-        # repopulate the table. Wait for the button + table to be present.
-        try:
-            search_btn = await page.wait_for_selector(
-                sel.SEARCH_BUTTON, timeout=15000
-            )
-            if search_btn:
-                await search_btn.click()
-            await page.wait_for_selector(sel.QU100_TABLE, timeout=15000)
-        except Exception as exc:
-            self.log.warning("mid_iter_recover_failed", error=str(exc))
-        self.log.info("mid_iter_recovered")
-        return True
-
-    async def _set_date(self, date_str: str) -> None:
-        """Change the date picker to the given date and trigger search."""
-        page = self._page
-        date_input = page.locator(sel.DATE_INPUT)
-        await date_input.click(click_count=3)
-        await date_input.fill(date_str)
-        await page.keyboard.press("Enter")
-        self.log.info("date_changed", date=date_str)
 
     def _persist_qu100(
         self,

@@ -1,0 +1,804 @@
+{
+  "data": [
+    {
+      "change": "0",
+      "industry": "Semiconductors",
+      "long_short": "No dominance",
+      "rank": 1,
+      "sector": "Technology",
+      "ticker": "MU"
+    },
+    {
+      "change": "-3",
+      "industry": "Autos",
+      "long_short": "No dominance",
+      "rank": 2,
+      "sector": "Consumer Cyclical",
+      "ticker": "TSLA"
+    },
+    {
+      "change": "-14",
+      "industry": "Computer Hardware",
+      "long_short": "No dominance",
+      "rank": 3,
+      "sector": "Technology",
+      "ticker": "AAPL"
+    },
+    {
+      "change": "-17",
+      "industry": "Communication Equipment",
+      "long_short": "Long in",
+      "rank": 4,
+      "sector": "Technology",
+      "ticker": "ASTS"
+    },
+    {
+      "change": "-2",
+      "industry": "Information Technology Services",
+      "long_short": "Long in",
+      "rank": 5,
+      "sector": "Technology",
+      "ticker": "IBM"
+    },
+    {
+      "change": "-24",
+      "industry": "Computer SYstems",
+      "long_short": "No dominance",
+      "rank": 6,
+      "sector": "Technology",
+      "ticker": "DELL"
+    },
+    {
+      "change": "-21",
+      "industry": "Aerospace & Defense",
+      "long_short": "Long in",
+      "rank": 7,
+      "sector": "Industrials",
+      "ticker": "RKLB"
+    },
+    {
+      "change": "-36",
+      "industry": "Application Software",
+      "long_short": "Long in",
+      "rank": 8,
+      "sector": "Technology",
+      "ticker": "MSFT"
+    },
+    {
+      "change": "-1497",
+      "industry": "Application Software",
+      "long_short": "Short out",
+      "rank": 9,
+      "sector": "Technology",
+      "ticker": "ADBE"
+    },
+    {
+      "change": "8",
+      "industry": "",
+      "long_short": "No dominance",
+      "rank": 10,
+      "sector": "",
+      "ticker": "SNDK"
+    },
+    {
+      "change": "-23",
+      "industry": "Semiconductors",
+      "long_short": "No dominance",
+      "rank": 11,
+      "sector": "Technology",
+      "ticker": "QCOM"
+    },
+    {
+      "change": "9",
+      "industry": "Semiconductors",
+      "long_short": "No dominance",
+      "rank": 12,
+      "sector": "Technology",
+      "ticker": "ARM"
+    },
+    {
+      "change": "-1599",
+      "industry": "Semiconductors",
+      "long_short": "No dominance",
+      "rank": 13,
+      "sector": "Technology",
+      "ticker": "NVDA"
+    },
+    {
+      "change": "5",
+      "industry": "Semiconductors",
+      "long_short": "No dominance",
+      "rank": 14,
+      "sector": "Technology",
+      "ticker": "INTC"
+    },
+    {
+      "change": "-1",
+      "industry": "Electronic Components",
+      "long_short": "No dominance",
+      "rank": 15,
+      "sector": "Technology",
+      "ticker": "BE"
+    },
+    {
+      "change": "-13",
+      "industry": "ETF",
+      "long_short": "No dominance",
+      "rank": 16,
+      "sector": "Financial Services",
+      "ticker": "SOXL"
+    },
+    {
+      "change": "13",
+      "industry": "ETF",
+      "long_short": "No dominance",
+      "rank": 17,
+      "sector": "Financial Services",
+      "ticker": "QQQ"
+    },
+    {
+      "change": "-2",
+      "industry": "Computer Systems",
+      "long_short": "Long in",
+      "rank": 18,
+      "sector": "Technology",
+      "ticker": "IONQ"
+    },
+    {
+      "change": "-45",
+      "industry": "",
+      "long_short": "Long in",
+      "rank": 19,
+      "sector": "",
+      "ticker": "NOK"
+    },
+    {
+      "change": "9",
+      "industry": "Retail - Apparel & Specialty",
+      "long_short": "No dominance",
+      "rank": 20,
+      "sector": "Consumer Cyclical",
+      "ticker": "AMZN"
+    },
+    {
+      "change": "6",
+      "industry": "Retail - Apparel & Specialty",
+      "long_short": "No dominance",
+      "rank": 21,
+      "sector": "Consumer Cyclical",
+      "ticker": "CRWD"
+    },
+    {
+      "change": "-9",
+      "industry": "Semiconductors",
+      "long_short": "Long in",
+      "rank": 22,
+      "sector": "Technology",
+      "ticker": "ALAB"
+    },
+    {
+      "change": "-16",
+      "industry": "Semiconductors",
+      "long_short": "No dominance",
+      "rank": 23,
+      "sector": "Technology",
+      "ticker": "MRVL"
+    },
+    {
+      "change": "-48",
+      "industry": "",
+      "long_short": "Long in",
+      "rank": 24,
+      "sector": "",
+      "ticker": "CRDO"
+    },
+    {
+      "change": "-72",
+      "industry": "Application Software",
+      "long_short": "Long in",
+      "rank": 25,
+      "sector": "Technology",
+      "ticker": "TTWO"
+    },
+    {
+      "change": "-83",
+      "industry": "Communication Equipment",
+      "long_short": "Long in",
+      "rank": 26,
+      "sector": "Technology",
+      "ticker": "CSCO"
+    },
+    {
+      "change": "-1571",
+      "industry": "ETF",
+      "long_short": "Long in",
+      "rank": 27,
+      "sector": "Financials",
+      "ticker": "IBIT"
+    },
+    {
+      "change": "-68",
+      "industry": "ETF",
+      "long_short": "Short out",
+      "rank": 28,
+      "sector": "Technology",
+      "ticker": "IGV"
+    },
+    {
+      "change": "-9",
+      "industry": "Semiconductors",
+      "long_short": "No dominance",
+      "rank": 29,
+      "sector": "Technology",
+      "ticker": "AVGO"
+    },
+    {
+      "change": "-164",
+      "industry": "Semiconductors",
+      "long_short": "Long in",
+      "rank": 30,
+      "sector": "Technology",
+      "ticker": "SIMO"
+    },
+    {
+      "change": "-36",
+      "industry": "Application Software",
+      "long_short": "Long in",
+      "rank": 31,
+      "sector": "Technology",
+      "ticker": "NOW"
+    },
+    {
+      "change": "-11",
+      "industry": "Capital Markets",
+      "long_short": "No dominance",
+      "rank": 32,
+      "sector": "Financial Services",
+      "ticker": "GS"
+    },
+    {
+      "change": "19",
+      "industry": "Drug Manufacturers",
+      "long_short": "No dominance",
+      "rank": 33,
+      "sector": "Healthcare",
+      "ticker": "LLY"
+    },
+    {
+      "rank": 34,
+      "ticker": "ST034",
+      "change": "0",
+      "industry": "Electric Utilities",
+      "sector": "Basic Materials",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 35,
+      "ticker": "ST035",
+      "change": "-1497",
+      "industry": "REIT",
+      "sector": "Technology",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 36,
+      "ticker": "ST036",
+      "change": "-10",
+      "industry": "Mining",
+      "sector": "Healthcare",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 37,
+      "ticker": "ST037",
+      "change": "1604",
+      "industry": "Semiconductors",
+      "sector": "Financial Services",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 38,
+      "ticker": "ST038",
+      "change": "100",
+      "industry": "Software",
+      "sector": "Energy",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 39,
+      "ticker": "ST039",
+      "change": "5",
+      "industry": "Banks",
+      "sector": "Consumer Cyclical",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 40,
+      "ticker": "ST040",
+      "change": "new",
+      "industry": "Oil & Gas",
+      "sector": "Communication Services",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 41,
+      "ticker": "ST041",
+      "change": "-3",
+      "industry": "Autos",
+      "sector": "Industrials",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 42,
+      "ticker": "ST042",
+      "change": "12",
+      "industry": "Media",
+      "sector": "Utilities",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 43,
+      "ticker": "ST043",
+      "change": "0",
+      "industry": "Aerospace",
+      "sector": "Real Estate",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 44,
+      "ticker": "ST044",
+      "change": "-1497",
+      "industry": "Electric Utilities",
+      "sector": "Basic Materials",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 45,
+      "ticker": "ST045",
+      "change": "-10",
+      "industry": "REIT",
+      "sector": "Technology",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 46,
+      "ticker": "ST046",
+      "change": "1604",
+      "industry": "Mining",
+      "sector": "Healthcare",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 47,
+      "ticker": "ST047",
+      "change": "100",
+      "industry": "Semiconductors",
+      "sector": "Financial Services",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 48,
+      "ticker": "ST048",
+      "change": "5",
+      "industry": "Software",
+      "sector": "Energy",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 49,
+      "ticker": "ST049",
+      "change": "new",
+      "industry": "Banks",
+      "sector": "Consumer Cyclical",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 50,
+      "ticker": "ST050",
+      "change": "-3",
+      "industry": "Oil & Gas",
+      "sector": "Communication Services",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 51,
+      "ticker": "ST051",
+      "change": "12",
+      "industry": "Autos",
+      "sector": "Industrials",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 52,
+      "ticker": "ST052",
+      "change": "0",
+      "industry": "Media",
+      "sector": "Utilities",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 53,
+      "ticker": "ST053",
+      "change": "-1497",
+      "industry": "Aerospace",
+      "sector": "Real Estate",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 54,
+      "ticker": "ST054",
+      "change": "-10",
+      "industry": "Electric Utilities",
+      "sector": "Basic Materials",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 55,
+      "ticker": "ST055",
+      "change": "1604",
+      "industry": "REIT",
+      "sector": "Technology",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 56,
+      "ticker": "ST056",
+      "change": "100",
+      "industry": "Mining",
+      "sector": "Healthcare",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 57,
+      "ticker": "ST057",
+      "change": "5",
+      "industry": "Semiconductors",
+      "sector": "Financial Services",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 58,
+      "ticker": "ST058",
+      "change": "new",
+      "industry": "Software",
+      "sector": "Energy",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 59,
+      "ticker": "ST059",
+      "change": "-3",
+      "industry": "Banks",
+      "sector": "Consumer Cyclical",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 60,
+      "ticker": "ST060",
+      "change": "12",
+      "industry": "Oil & Gas",
+      "sector": "Communication Services",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 61,
+      "ticker": "ST061",
+      "change": "0",
+      "industry": "Autos",
+      "sector": "Industrials",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 62,
+      "ticker": "ST062",
+      "change": "-1497",
+      "industry": "Media",
+      "sector": "Utilities",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 63,
+      "ticker": "ST063",
+      "change": "-10",
+      "industry": "Aerospace",
+      "sector": "Real Estate",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 64,
+      "ticker": "ST064",
+      "change": "1604",
+      "industry": "Electric Utilities",
+      "sector": "Basic Materials",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 65,
+      "ticker": "ST065",
+      "change": "100",
+      "industry": "REIT",
+      "sector": "Technology",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 66,
+      "ticker": "ST066",
+      "change": "5",
+      "industry": "Mining",
+      "sector": "Healthcare",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 67,
+      "ticker": "ST067",
+      "change": "new",
+      "industry": "Semiconductors",
+      "sector": "Financial Services",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 68,
+      "ticker": "ST068",
+      "change": "-3",
+      "industry": "Software",
+      "sector": "Energy",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 69,
+      "ticker": "ST069",
+      "change": "12",
+      "industry": "Banks",
+      "sector": "Consumer Cyclical",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 70,
+      "ticker": "ST070",
+      "change": "0",
+      "industry": "Oil & Gas",
+      "sector": "Communication Services",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 71,
+      "ticker": "ST071",
+      "change": "-1497",
+      "industry": "Autos",
+      "sector": "Industrials",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 72,
+      "ticker": "ST072",
+      "change": "-10",
+      "industry": "Media",
+      "sector": "Utilities",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 73,
+      "ticker": "ST073",
+      "change": "1604",
+      "industry": "Aerospace",
+      "sector": "Real Estate",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 74,
+      "ticker": "ST074",
+      "change": "100",
+      "industry": "Electric Utilities",
+      "sector": "Basic Materials",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 75,
+      "ticker": "ST075",
+      "change": "5",
+      "industry": "REIT",
+      "sector": "Technology",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 76,
+      "ticker": "ST076",
+      "change": "new",
+      "industry": "Mining",
+      "sector": "Healthcare",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 77,
+      "ticker": "ST077",
+      "change": "-3",
+      "industry": "Semiconductors",
+      "sector": "Financial Services",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 78,
+      "ticker": "ST078",
+      "change": "12",
+      "industry": "Software",
+      "sector": "Energy",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 79,
+      "ticker": "ST079",
+      "change": "0",
+      "industry": "Banks",
+      "sector": "Consumer Cyclical",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 80,
+      "ticker": "ST080",
+      "change": "-1497",
+      "industry": "Oil & Gas",
+      "sector": "Communication Services",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 81,
+      "ticker": "ST081",
+      "change": "-10",
+      "industry": "Autos",
+      "sector": "Industrials",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 82,
+      "ticker": "ST082",
+      "change": "1604",
+      "industry": "Media",
+      "sector": "Utilities",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 83,
+      "ticker": "ST083",
+      "change": "100",
+      "industry": "Aerospace",
+      "sector": "Real Estate",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 84,
+      "ticker": "ST084",
+      "change": "5",
+      "industry": "Electric Utilities",
+      "sector": "Basic Materials",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 85,
+      "ticker": "ST085",
+      "change": "new",
+      "industry": "REIT",
+      "sector": "Technology",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 86,
+      "ticker": "ST086",
+      "change": "-3",
+      "industry": "Mining",
+      "sector": "Healthcare",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 87,
+      "ticker": "ST087",
+      "change": "12",
+      "industry": "Semiconductors",
+      "sector": "Financial Services",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 88,
+      "ticker": "ST088",
+      "change": "0",
+      "industry": "Software",
+      "sector": "Energy",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 89,
+      "ticker": "ST089",
+      "change": "-1497",
+      "industry": "Banks",
+      "sector": "Consumer Cyclical",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 90,
+      "ticker": "ST090",
+      "change": "-10",
+      "industry": "Oil & Gas",
+      "sector": "Communication Services",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 91,
+      "ticker": "ST091",
+      "change": "1604",
+      "industry": "Autos",
+      "sector": "Industrials",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 92,
+      "ticker": "ST092",
+      "change": "100",
+      "industry": "Media",
+      "sector": "Utilities",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 93,
+      "ticker": "ST093",
+      "change": "5",
+      "industry": "Aerospace",
+      "sector": "Real Estate",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 94,
+      "ticker": "ST094",
+      "change": "new",
+      "industry": "Electric Utilities",
+      "sector": "Basic Materials",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 95,
+      "ticker": "ST095",
+      "change": "-3",
+      "industry": "REIT",
+      "sector": "Technology",
+      "long_short": "Long in"
+    },
+    {
+      "rank": 96,
+      "ticker": "ST096",
+      "change": "12",
+      "industry": "Mining",
+      "sector": "Healthcare",
+      "long_short": "Short in"
+    },
+    {
+      "rank": 97,
+      "ticker": "ST097",
+      "change": "0",
+      "industry": "Semiconductors",
+      "sector": "Financial Services",
+      "long_short": "Short out"
+    },
+    {
+      "rank": 98,
+      "ticker": "ST098",
+      "change": "-1497",
+      "industry": "Software",
+      "sector": "Energy",
+      "long_short": "Long out"
+    },
+    {
+      "rank": 99,
+      "ticker": "ST099",
+      "change": "-10",
+      "industry": "Banks",
+      "sector": "Consumer Cyclical",
+      "long_short": "No dominance"
+    },
+    {
+      "rank": 100,
+      "ticker": "ST100",
+      "change": "1604",
+      "industry": "Oil & Gas",
+      "sector": "Communication Services",
+      "long_short": "Long in"
+    }
+  ]
+}
