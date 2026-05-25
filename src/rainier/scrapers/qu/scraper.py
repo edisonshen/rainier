@@ -378,17 +378,23 @@ class QUScraper(BaseScraper):
         return result["body"]
 
     async def _reauth(self) -> None:
-        """Re-authenticate the current page. Mode-aware.
+        """Force a fresh login to recover from server-side session rejection.
 
-        CDP mode reuses ``_cdp_ensure_auth`` (handles cookie reload + the
-        operator-visible login prompt path). Launch mode reuses
-        ``ensure_authenticated`` on ``self._page``. No duplication of the
-        auth flow lives here.
+        Called from ``_fetch_qu_api`` after a 401/403 — by construction the
+        server just rejected the current cookies. Local heuristics
+        (``is_session_valid`` TTL check in ``ensure_authenticated``, or the
+        "table is already on the page" early-return in ``_cdp_ensure_auth``)
+        would no-op and the retry would replay the same rejected session.
+        So we bypass both and call ``login`` directly, which navigates to
+        the login form, submits credentials, and overwrites the storage
+        state with fresh cookies. After login we navigate back to the
+        QU100 SPA so the in-page fetch on retry has the right origin.
+
+        Works for both launch and CDP modes — ``login`` operates on
+        whatever ``Page`` it's given.
         """
-        if self.browser._is_cdp:
-            await self._cdp_ensure_auth()
-        else:
-            await ensure_authenticated(self._page)
+        await login(self._page)
+        await goto_with_retry(self._page, self._qu_config.url)
 
     # ------------------------------------------------------------------
     # Phase A: QU100 table

@@ -155,3 +155,82 @@ class TestFetchQuApi:
         assert "non-JSON" in msg or "non-json" in msg.lower()
         assert page.evaluate.await_count == 1
         scraper._reauth.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests on QUScraper._reauth — regression for codex P1
+# ---------------------------------------------------------------------------
+#
+# The first cut of _reauth delegated to ensure_authenticated (launch mode)
+# or _cdp_ensure_auth (CDP mode). Both have local-state early-returns:
+# ensure_authenticated bails out if the session file is "fresh" (TTL), and
+# _cdp_ensure_auth bails out if the QU100 table is still on the page. By
+# construction _reauth is only called AFTER the server rejected the current
+# cookies with 401/403 — so both early-returns produce a no-op reauth and
+# the retry replays the same rejected session. The fix: bypass both TTL and
+# DOM heuristics, call `login` directly to force fresh cookies, then
+# navigate back to the QU SPA so the in-page fetch retry has the right
+# origin.
+
+
+class TestReauthBypassesLocalHeuristics:
+    """_reauth must FORCE a real login, ignoring TTL/DOM early-returns.
+
+    Regression for codex iter-1 [P1]: when the server invalidates the
+    session mid-scrape but the local session file is still within TTL
+    (or the QU100 table is still rendered from cache in CDP mode), the
+    old _reauth no-op'd and the retry failed against the same cookies.
+    """
+
+    async def test_reauth_calls_login_and_navigates_back(self):
+        """_reauth calls login() then goto_with_retry() in that order.
+        Does NOT consult ensure_authenticated / _cdp_ensure_auth — both
+        have local early-returns that would skip the actual cookie
+        refresh."""
+        scraper = _make_scraper(is_cdp=False)
+        scraper._page = MagicMock()
+
+        with (
+            patch("rainier.scrapers.qu.scraper.login", new_callable=AsyncMock) as mock_login,
+            patch(
+                "rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock
+            ) as mock_goto,
+            patch(
+                "rainier.scrapers.qu.scraper.ensure_authenticated",
+                new_callable=AsyncMock,
+            ) as mock_ensure,
+        ):
+            scraper._cdp_ensure_auth = AsyncMock()  # type: ignore[assignment]
+            await scraper._reauth()
+
+            # login() is the load-bearing call — it bypasses TTL.
+            mock_login.assert_awaited_once_with(scraper._page)
+            # goto_with_retry takes us back to the QU SPA after login.
+            mock_goto.assert_awaited_once()
+            assert mock_goto.await_args.args[0] is scraper._page
+            assert "quantunicorn" in mock_goto.await_args.args[1]
+            # Critical: TTL-gated helpers are NOT called.
+            mock_ensure.assert_not_awaited()
+            scraper._cdp_ensure_auth.assert_not_awaited()
+
+    async def test_reauth_in_cdp_mode_still_forces_login(self):
+        """CDP mode also force-logs-in. The old code routed CDP to
+        _cdp_ensure_auth, which bails out if the QU100 table is still on
+        the page (e.g., cached DOM after server-side session revocation).
+        Now the same login path runs for both modes."""
+        scraper = _make_scraper(is_cdp=True)
+        scraper._page = MagicMock()
+
+        with (
+            patch("rainier.scrapers.qu.scraper.login", new_callable=AsyncMock) as mock_login,
+            patch(
+                "rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock
+            ) as mock_goto,
+        ):
+            scraper._cdp_ensure_auth = AsyncMock()  # type: ignore[assignment]
+            await scraper._reauth()
+
+            mock_login.assert_awaited_once_with(scraper._page)
+            mock_goto.assert_awaited_once()
+            # The DOM-heuristic CDP helper is NOT called from _reauth.
+            scraper._cdp_ensure_auth.assert_not_awaited()
