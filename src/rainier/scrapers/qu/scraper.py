@@ -6,6 +6,7 @@ import asyncio
 import random
 from datetime import date as date_type
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy import func, select
@@ -45,6 +46,23 @@ async ({url}) => {
 """
 
 log = structlog.get_logger()
+
+# QU is a US-equity product; the API's ``date=`` query param keys off the
+# NYSE/NASDAQ calendar day. Manual operator runs at 19:00 PT (= 02:00 UTC
+# next day) would otherwise request "tomorrow's" non-existent data. We
+# hard-code America/New_York because QU is single-market — promote to a
+# config knob only if a non-US market ever materializes.
+MARKET_TZ = ZoneInfo("America/New_York")
+
+
+def market_date(timestamp: datetime) -> date_type:
+    """Return the US-market calendar date for a (UTC-or-other-tz) timestamp.
+
+    ``timestamp`` must be timezone-aware; ``astimezone`` raises on naive
+    inputs in Python 3.12+. The scraper always passes
+    ``datetime.now(timezone.utc)``, so naive inputs are not expected.
+    """
+    return timestamp.astimezone(MARKET_TZ).date()
 
 
 class QUScraper(BaseScraper):
@@ -336,16 +354,21 @@ class QUScraper(BaseScraper):
             await goto_with_retry(page, self._qu_config.url)
 
         # The API takes ``date`` as a query param (DESIGN D-9). We use the
-        # caller-supplied target_date if any, otherwise the run's captured_at.
+        # caller-supplied target_date if any, otherwise derive the US-market
+        # calendar day from captured_at. ``captured_at`` itself is UTC and
+        # stays UTC (it's the DB snapshot timestamp); only the *date*
+        # going into the API query is shifted to America/New_York so
+        # manual late-PT runs hit the correct trading day. See
+        # docs/TASK-PLAN-qu-captured-at-tz-drift-44e3.md.
         if target_date:
             try:
                 data_date = date_type.fromisoformat(target_date)
             except ValueError:
                 self.log.warning("invalid_target_date_fallback",
                                  target_date=target_date)
-                data_date = captured_at.date()
+                data_date = market_date(captured_at)
         else:
-            data_date = captured_at.date()
+            data_date = market_date(captured_at)
         self.log.info("qu100_data_date", date=str(data_date))
 
         # One fetch per ranking. ``top=true|false`` per the SPA contract.
