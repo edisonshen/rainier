@@ -107,3 +107,32 @@ class TestCDPConnectRetry:
         assert bm._browser is mock_browser
         assert chromium.connect_over_cdp.await_count == 1
         restart.assert_not_awaited()
+
+
+class TestFreshTabInExistingContext:
+    """fresh_tab_in_existing_context (DESIGN D-10) in CDP mode."""
+
+    async def test_fresh_tab_no_contexts_raises_clearly(self):
+        """When the CDP browser exposes an empty ``contexts`` list, the helper
+        must raise ``RuntimeError`` with a clear message rather than silently
+        creating a new (auth-less) context or letting ``IndexError`` bubble.
+
+        Rationale: contexts[] is empty only when Chrome has no operator window
+        open — in that state every downstream cookie-bound fetch will fail
+        anyway. Raising immediately with a self-explanatory message is much
+        less confusing than the IndexError that previously surfaced from
+        ``contexts[0]``.
+        """
+        bm = BrowserManager(cdp_url="http://localhost:9222")
+        # Simulate a started CDP browser with no contexts.
+        mock_browser = MagicMock()
+        mock_browser.contexts = []
+        bm._browser = mock_browser
+        bm._is_cdp = True
+
+        with pytest.raises(RuntimeError, match="CDP browser has no contexts"):
+            async with bm.fresh_tab_in_existing_context():
+                pass  # pragma: no cover — we expect to raise before this
+
+        # And we did NOT silently materialize a new context as a workaround.
+        mock_browser.new_context.assert_not_called()

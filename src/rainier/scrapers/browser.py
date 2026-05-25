@@ -233,19 +233,17 @@ class BrowserManager:
 
         contexts = self._browser.contexts
         if not contexts:
-            # No context yet (unusual for CDP but possible if Chrome started
-            # fresh) — create one. This is the only path that legitimately
-            # creates a new context in CDP mode; it carries no operator auth
-            # by definition because none existed yet.
-            log.warning("cdp_no_contexts_creating_new", msg="No contexts in CDP browser")
-            context = await self._browser.new_context()
-            context.set_default_timeout(self._timeout_ms)
-            page = await context.new_page()
-            try:
-                yield page
-            finally:
-                await page.close()
-            return
+            # No context attached to the CDP browser. The fallback that used
+            # to live here (``self._browser.new_context()``) materialized a
+            # blank context with no operator cookies — every QU fetch from
+            # that tab would hit Cloudflare's challenge wall and 401 within
+            # one round-trip, so the workaround masked a misconfiguration
+            # without recovering from it. Surface the state to the operator
+            # instead so they know to open Chrome / restart the CDP debug
+            # session before re-running.
+            raise RuntimeError(
+                "CDP browser has no contexts; cannot open fresh tab"
+            )
 
         context = contexts[0]
         page = await context.new_page()

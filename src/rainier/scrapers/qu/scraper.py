@@ -20,7 +20,7 @@ from rainier.scrapers.qu import selectors as sel
 from rainier.scrapers.qu.auth import ensure_authenticated, get_session_path, is_session_valid, login
 from rainier.scrapers.qu.parsers import (
     QU100Row,
-    api_rows_to_qu100_rows,
+    _api_rows_to_qu100_rows,
     parse_capital_flow_rows,
 )
 
@@ -460,8 +460,16 @@ class QUScraper(BaseScraper):
                     f"&top={top_flag}&frequency=daily"
                 )
                 payload = await self._fetch_qu_api(page, url)
-                api_data = payload.get("data", []) if isinstance(payload, dict) else []
-                parsed = api_rows_to_qu100_rows(api_data)
+                # ``payload.get("data") or []`` (not ``.get("data", [])``):
+                # the API has been observed to return ``{"data": null}`` on
+                # some dates (key present, value null). ``.get("data", [])``
+                # only kicks in the default when the key is *missing*, so a
+                # null value passes through and ``_api_rows_to_qu100_rows``
+                # then raises ``TypeError: 'NoneType' is not iterable``.
+                # Coalescing collapses both shapes ({}, {"data": null}) into
+                # an empty list.
+                api_data = (payload.get("data") or []) if isinstance(payload, dict) else []
+                parsed = _api_rows_to_qu100_rows(api_data)
                 count = self._persist_qu100(
                     parsed, ranking_type, session_name, captured_at, data_date
                 )

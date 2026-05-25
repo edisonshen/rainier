@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from rainier.scrapers.qu.parsers import (
-    api_rows_to_qu100_rows,
+    _api_rows_to_qu100_rows,
     parse_capital_flow_rows,
     parse_daily_change,
-    parse_qu100_rows,
     parse_rank_fraction,
 )
 
@@ -88,81 +87,7 @@ class TestParseRankFraction:
 
 
 # ---------------------------------------------------------------------------
-# parse_qu100_rows
-# ---------------------------------------------------------------------------
-
-
-class TestParseQU100Rows:
-    def test_single_row(self):
-        raw = [
-            {
-                "rank": "1",
-                "symbol": "TSLA",
-                "daily_change": "▲ 9",
-                "sector": "Consumer Cyclical",
-                "industry": "Autos",
-                "long_short": "No dominance",
-            }
-        ]
-        result = parse_qu100_rows(raw)
-        assert len(result) == 1
-        assert result[0].symbol == "TSLA"
-        assert result[0].rank == 1
-        assert result[0].daily_change == 9
-        assert result[0].sector == "Consumer Cyclical"
-        assert result[0].long_short == "No dominance"
-        assert result[0].raw is raw[0]
-
-    def test_multiple_rows(self):
-        raw = [
-            {"rank": "1", "symbol": "TSLA", "daily_change": "▲ 9", "sector": "", "industry": "", "long_short": ""},
-            {"rank": "2", "symbol": "NVDA", "daily_change": "0", "sector": "Technology", "industry": "Semiconductors", "long_short": "Long in"},
-            {"rank": "3", "symbol": "XOM", "daily_change": "▼ 5", "sector": "Energy", "industry": "Oil", "long_short": ""},
-        ]
-        result = parse_qu100_rows(raw)
-        assert len(result) == 3
-        assert result[1].symbol == "NVDA"
-        assert result[1].daily_change == 0
-        assert result[2].daily_change == -5
-
-    def test_skips_empty_symbol(self):
-        raw = [
-            {"rank": "1", "symbol": "", "daily_change": "0", "sector": "", "industry": "", "long_short": ""},
-            {"rank": "2", "symbol": "AAPL", "daily_change": "0", "sector": "", "industry": "", "long_short": ""},
-        ]
-        result = parse_qu100_rows(raw)
-        assert len(result) == 1
-        assert result[0].symbol == "AAPL"
-
-    def test_lowercased_symbol_uppercased(self):
-        raw = [{"rank": "1", "symbol": "aapl", "daily_change": "0", "sector": "", "industry": "", "long_short": ""}]
-        result = parse_qu100_rows(raw)
-        assert result[0].symbol == "AAPL"
-
-    def test_empty_input(self):
-        assert parse_qu100_rows([]) == []
-
-    def test_real_site_data(self):
-        """Test with actual data format from QuantUnicorn site."""
-        raw = [
-            {"rank": "1", "symbol": "MRK", "daily_change": "▲92", "sector": "Healthcare", "industry": "Drug Manufacturers", "long_short": "Long in"},
-            {"rank": "8", "symbol": "USO", "daily_change": "▼2", "sector": "Financial Services", "industry": "ETF", "long_short": "No dominance"},
-            {"rank": "51", "symbol": "FSLY", "daily_change": "0", "sector": "Technology", "industry": "Application Software", "long_short": "Long in"},
-            {"rank": "99", "symbol": "CTRN", "daily_change": "New", "sector": "", "industry": "", "long_short": "Long in"},
-        ]
-        result = parse_qu100_rows(raw)
-        assert len(result) == 4
-        assert result[0].symbol == "MRK"
-        assert result[0].daily_change == 92
-        assert result[0].long_short == "Long in"
-        assert result[1].daily_change == -2
-        assert result[2].daily_change == 0
-        assert result[3].daily_change == 0  # "New" -> 0
-        assert result[3].symbol == "CTRN"
-
-
-# ---------------------------------------------------------------------------
-# api_rows_to_qu100_rows (D-4 adapter for the in-page-fetch /api/v3/mf100 path)
+# _api_rows_to_qu100_rows (D-4 adapter for the in-page-fetch /api/v3/mf100 path)
 # ---------------------------------------------------------------------------
 
 
@@ -189,7 +114,7 @@ class TestApiRowsToQU100Rows:
                 "sector": "Technology",
             }
         ]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert len(rows) == 1
         assert rows[0].rank == 1
         assert rows[0].symbol == "MU"
@@ -215,7 +140,7 @@ class TestApiRowsToQU100Rows:
             {"rank": 5, "ticker": "EEE",
              "industry": "", "long_short": "", "sector": ""},
         ]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert [r.daily_change for r in rows] == [0, -3, 1604, 0, 0]
 
     def test_field_rename_ticker_to_symbol(self):
@@ -223,11 +148,11 @@ class TestApiRowsToQU100Rows:
         # The adapter must never leak `ticker` onto QU100Row.
         api = [{"rank": 1, "ticker": "msft", "change": "0",
                 "industry": "", "long_short": "", "sector": ""}]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert rows[0].symbol == "MSFT"  # uppercased per existing convention
 
     def test_empty_data(self):
-        assert api_rows_to_qu100_rows([]) == []
+        assert _api_rows_to_qu100_rows([]) == []
 
     def test_skips_empty_ticker(self):
         # Defensive: an empty ticker shouldn't produce a junk row.
@@ -237,7 +162,7 @@ class TestApiRowsToQU100Rows:
             {"rank": 2, "ticker": "AAPL", "change": "5",
              "industry": "", "long_short": "", "sector": ""},
         ]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert len(rows) == 1
         assert rows[0].symbol == "AAPL"
 

@@ -142,7 +142,7 @@ class TestQu100FetchReplaysAgainstMock:
         assert persist_calls[1]["ranking_type"] == "bottom100"
         assert len(persist_calls[0]["rows"]) == 100
         assert len(persist_calls[1]["rows"]) == 100
-        # Field rename landed (ticker -> symbol via api_rows_to_qu100_rows).
+        # Field rename landed (ticker -> symbol via _api_rows_to_qu100_rows).
         assert persist_calls[0]["rows"][0].symbol == top_payload["data"][0]["ticker"]
         # records_created accumulates both calls.
         assert result.records_created == 200
@@ -294,6 +294,58 @@ class TestQu100FetchReplaysAgainstMock:
         assert result.records_created == 200
         # Per-date try/except did NOT swallow a hard error: no error string.
         assert result.errors == []
+
+    async def test_scrape_qu100_handles_null_data_field(self):
+        """Regression: ``{"data": null}`` from the API must be treated like
+        a missing ``data`` key — no exception, zero rows persisted for that
+        ranking type, and the other ranking type still completes normally.
+
+        ``payload.get("data", [])`` returns ``None`` when the key is present
+        but the value is ``null``; the iter that follows used to raise
+        ``TypeError: 'NoneType' is not iterable``. The fix is
+        ``payload.get("data") or []`` so both branches collapse to ``[]``.
+        """
+        bottom_payload = _load_fixture("qu_api_mf100_bottom.json")
+
+        scraper = _make_scraper()
+        scraper._page = _make_mock_page()
+
+        # Patch _fetch_qu_api directly so we don't need to drive the evaluate
+        # envelope contract; the {data: null} hardening lives strictly in
+        # _scrape_qu100, between fetch and adapter.
+        async def fake_fetch(page, url):
+            return {"data": None} if "top=true" in url else bottom_payload
+
+        scraper._fetch_qu_api = fake_fetch  # type: ignore[assignment]
+
+        persist_calls: list[dict] = []
+
+        def fake_persist(rows, ranking_type, session_name, captured_at, data_date=None):
+            persist_calls.append({"rows": rows, "ranking_type": ranking_type})
+            return len(rows)
+
+        scraper._persist_qu100 = fake_persist  # type: ignore[assignment]
+
+        from rainier.scrapers.base import ScrapeResult
+        captured_at = datetime(2026, 5, 22, 13, 0, tzinfo=timezone.utc)
+        result = ScrapeResult(scraper_name="qu", started_at=captured_at)
+
+        with patch("rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock):
+            await scraper._scrape_qu100(
+                "morning", captured_at, result, target_date="2026-05-22"
+            )
+
+        # No exception bubbled — no error entry on the result.
+        assert result.errors == []
+        # Both ranking types reached persist (top100 with zero rows, bottom100
+        # with the normal 100). The top100 row-list must be empty, not None.
+        assert len(persist_calls) == 2
+        top_call = next(c for c in persist_calls if c["ranking_type"] == "top100")
+        bot_call = next(c for c in persist_calls if c["ranking_type"] == "bottom100")
+        assert top_call["rows"] == []
+        assert len(bot_call["rows"]) == 100
+        # records_created accounts only for the rows that actually persisted.
+        assert result.records_created == 100
 
 
 # ---------------------------------------------------------------------------
