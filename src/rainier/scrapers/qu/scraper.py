@@ -31,6 +31,12 @@ from rainier.scrapers.qu.parsers import (
 # request shape that gets past the challenge is one that originates from
 # the rendered page itself. We use ``credentials: 'include'`` so the
 # session + cf_clearance cookies on the page are sent automatically.
+#
+# Return shape: ``{status, body, text_excerpt}`` so the Python caller can
+# distinguish 401/403 (recoverable via reauth) from other errors instead of
+# throwing inside the page context. ``body`` is the parsed JSON or ``None``
+# when the response isn't valid JSON; ``text_excerpt`` is the first 500
+# chars of the raw text for diagnostics.
 QU100_FETCH_JS = """
 async ({url}) => {
     const resp = await fetch(url, {
@@ -38,10 +44,14 @@ async ({url}) => {
         credentials: 'include',
         headers: {'accept': 'application/json, text/plain, */*'},
     });
-    if (!resp.ok) {
-        throw new Error('qu100 api ' + resp.status + ' for ' + url);
-    }
-    return await resp.json();
+    const text = await resp.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch (_) { /* non-JSON 4xx/5xx */ }
+    return {
+        status: resp.status,
+        body: body,
+        text_excerpt: text.slice(0, 500),
+    };
 }
 """
 
@@ -316,6 +326,77 @@ class QUScraper(BaseScraper):
             self.log.info("cdp_auth_ok_after_login")
 
     # ------------------------------------------------------------------
+    # In-page fetch + auth recovery
+    # ------------------------------------------------------------------
+    #
+    # PR #84 dropped the DOM-path `_recover_if_signin` helper when the
+    # scrape moved to in-page fetch. _fetch_qu_api restores the equivalent:
+    # on 401/403 (cookie expiry, server-side session invalidation), reauth
+    # ONCE and retry the same URL. Bail on second auth failure or any
+    # other 4xx/5xx. No exponential backoff, no jitter — cookie expiry is
+    # a single-shot recoverable condition.
+    #
+    #   ┌──────────────┐  401/403  ┌─────────┐  ok   ┌────────┐
+    #   │ page.evaluate│──────────▶│ _reauth │──────▶│ retry  │──▶ body
+    #   └──────────────┘           └─────────┘       └────────┘
+    #          │                                          │
+    #          │ ok                                       │ 401/403
+    #          ▼                                          ▼
+    #         body                                     RuntimeError
+
+    async def _fetch_qu_api(self, page, url: str) -> dict:
+        """In-page fetch with one-shot re-auth retry on 401/403.
+
+        Returns the parsed JSON body. Raises ``RuntimeError`` on:
+          - persistent 401/403 (after one re-auth attempt)
+          - any other HTTP error (4xx/5xx not in {401, 403})
+          - status 200 with a non-JSON body
+        """
+        result = await page.evaluate(QU100_FETCH_JS, {"url": url})
+        if result["status"] in (401, 403):
+            self.log.warning(
+                "qu_api_auth_failure",
+                status=result["status"],
+                url=url,
+                attempting="reauth_and_retry",
+            )
+            await self._reauth()
+            result = await page.evaluate(QU100_FETCH_JS, {"url": url})
+            if result["status"] in (401, 403):
+                raise RuntimeError(
+                    f"qu api {result['status']} after re-auth: "
+                    f"{result['text_excerpt']}"
+                )
+        if result["status"] >= 400:
+            raise RuntimeError(
+                f"qu api {result['status']}: {result['text_excerpt']}"
+            )
+        if result["body"] is None:
+            raise RuntimeError(
+                f"qu api {result['status']} non-JSON: {result['text_excerpt']}"
+            )
+        return result["body"]
+
+    async def _reauth(self) -> None:
+        """Force a fresh login to recover from server-side session rejection.
+
+        Called from ``_fetch_qu_api`` after a 401/403 — by construction the
+        server just rejected the current cookies. Local heuristics
+        (``is_session_valid`` TTL check in ``ensure_authenticated``, or the
+        "table is already on the page" early-return in ``_cdp_ensure_auth``)
+        would no-op and the retry would replay the same rejected session.
+        So we bypass both and call ``login`` directly, which navigates to
+        the login form, submits credentials, and overwrites the storage
+        state with fresh cookies. After login we navigate back to the
+        QU100 SPA so the in-page fetch on retry has the right origin.
+
+        Works for both launch and CDP modes — ``login`` operates on
+        whatever ``Page`` it's given.
+        """
+        await login(self._page)
+        await goto_with_retry(self._page, self._qu_config.url)
+
+    # ------------------------------------------------------------------
     # Phase A: QU100 table
     # ------------------------------------------------------------------
 
@@ -378,7 +459,7 @@ class QUScraper(BaseScraper):
                     f"{sel.QU100_API_URL}?date={data_date.isoformat()}"
                     f"&top={top_flag}&frequency=daily"
                 )
-                payload = await page.evaluate(QU100_FETCH_JS, {"url": url})
+                payload = await self._fetch_qu_api(page, url)
                 api_data = payload.get("data", []) if isinstance(payload, dict) else []
                 parsed = api_rows_to_qu100_rows(api_data)
                 count = self._persist_qu100(

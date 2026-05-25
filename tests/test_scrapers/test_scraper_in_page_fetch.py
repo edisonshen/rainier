@@ -82,9 +82,16 @@ class TestQu100FetchReplaysAgainstMock:
         bottom_payload = _load_fixture("qu_api_mf100_bottom.json")
 
         page = _make_mock_page()
-        # page.evaluate returns the API payload from the fixture. The scraper
-        # calls evaluate twice — once for top, once for bottom — in this order.
-        page.evaluate = AsyncMock(side_effect=[top_payload, bottom_payload])
+        # page.evaluate returns the API payload wrapped in the
+        # {status, body, text_excerpt} envelope returned by the new fetch JS.
+        # The scraper calls evaluate twice — once for top, once for bottom —
+        # in this order.
+        page.evaluate = AsyncMock(
+            side_effect=[
+                {"status": 200, "body": top_payload, "text_excerpt": ""},
+                {"status": 200, "body": bottom_payload, "text_excerpt": ""},
+            ]
+        )
 
         scraper = _make_scraper()
         scraper._page = page
@@ -194,7 +201,12 @@ class TestQu100FetchReplaysAgainstMock:
         bottom_payload = _load_fixture("qu_api_mf100_bottom.json")
 
         page = _make_mock_page()
-        page.evaluate = AsyncMock(side_effect=[top_payload, bottom_payload])
+        page.evaluate = AsyncMock(
+            side_effect=[
+                {"status": 200, "body": top_payload, "text_excerpt": ""},
+                {"status": 200, "body": bottom_payload, "text_excerpt": ""},
+            ]
+        )
 
         scraper = _make_scraper()
         scraper._page = page
@@ -224,6 +236,64 @@ class TestQu100FetchReplaysAgainstMock:
         assert not any(
             "select-button" in t for t in click_targets if isinstance(t, str)
         )
+
+    async def test_scrape_qu100_survives_mid_session_401(self):
+        """Regression for PR #84 follow-up: mid-session 401 (e.g., cookie
+        expiry) triggers a single reauth + retry on the same fetch. Both top
+        and bottom calls land successfully (200 rows total), no exception
+        bubbles out of `_scrape_qu100`."""
+        top_payload = _load_fixture("qu_api_mf100_top.json")
+        bottom_payload = _load_fixture("qu_api_mf100_bottom.json")
+
+        page = _make_mock_page()
+        # Sequence: top=true 401 (auth expired), reauth happens, top=true 200,
+        # then top=false 200. Three evaluate() calls total.
+        page.evaluate = AsyncMock(
+            side_effect=[
+                {"status": 401, "body": None, "text_excerpt": "unauthorized"},
+                {"status": 200, "body": top_payload, "text_excerpt": ""},
+                {"status": 200, "body": bottom_payload, "text_excerpt": ""},
+            ]
+        )
+
+        scraper = _make_scraper()
+        scraper._page = page
+
+        # Spy on _reauth so the test doesn't try to drive a real login flow.
+        reauth_mock = AsyncMock()
+        scraper._reauth = reauth_mock  # type: ignore[assignment]
+
+        persist_calls: list[dict] = []
+
+        def fake_persist(rows, ranking_type, session_name, captured_at, data_date=None):
+            persist_calls.append({
+                "rows": rows,
+                "ranking_type": ranking_type,
+            })
+            return len(rows)
+
+        scraper._persist_qu100 = fake_persist  # type: ignore[assignment]
+
+        from rainier.scrapers.base import ScrapeResult
+        captured_at = datetime(2026, 5, 22, 13, 0, tzinfo=timezone.utc)
+        result = ScrapeResult(scraper_name="qu", started_at=captured_at)
+
+        with patch("rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock):
+            await scraper._scrape_qu100(
+                "morning", captured_at, result, target_date="2026-05-22"
+            )
+
+        # One reauth (between the first 401 and its retry).
+        reauth_mock.assert_awaited_once()
+        # Three evaluate() calls: 401, retry-200 (top), 200 (bottom).
+        assert page.evaluate.await_count == 3
+        # 200 rows persisted overall.
+        assert len(persist_calls) == 2
+        assert len(persist_calls[0]["rows"]) == 100
+        assert len(persist_calls[1]["rows"]) == 100
+        assert result.records_created == 200
+        # Per-date try/except did NOT swallow a hard error: no error string.
+        assert result.errors == []
 
 
 # ---------------------------------------------------------------------------
