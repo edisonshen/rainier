@@ -93,31 +93,6 @@ def parse_rank_fraction(text: str) -> tuple[int, int]:
         return 0, 0
 
 
-def parse_qu100_rows(raw_rows: list[dict]) -> list[QU100Row]:
-    """
-    Parse raw dicts extracted via page.evaluate() into QU100Row objects.
-
-    Expected raw_row keys: rank, symbol, daily_change, sector, industry, long_short
-    """
-    results = []
-    for row in raw_rows:
-        symbol = row.get("symbol", "").strip().upper()
-        if not symbol:
-            continue
-        results.append(
-            QU100Row(
-                rank=int(row.get("rank", 0) or 0),
-                symbol=symbol,
-                daily_change=parse_daily_change(str(row.get("daily_change", "0"))),
-                sector=row.get("sector", "").strip(),
-                industry=row.get("industry", "").strip(),
-                long_short=row.get("long_short", "").strip(),
-                raw=row,
-            )
-        )
-    return results
-
-
 def api_rows_to_qu100_rows(api_rows: list[dict]) -> list[QU100Row]:
     """Adapt /api/v3/mf100 response rows to QU100Row (DESIGN D-4).
 
