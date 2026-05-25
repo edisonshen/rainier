@@ -193,3 +193,62 @@ class TestKillChromeImplementation:
         ):
             # Should not raise.
             await BrowserManager._kill_chrome_we_spawned()
+
+    async def test_kill_chrome_lsof_restricts_to_listen_socket(self):
+        """Regression for codex iter-1 P2: lsof MUST filter to LISTEN state.
+
+        Without ``-sTCP:LISTEN``, lsof on :9222 returns every client of
+        the port (including Playwright's CDP websocket, which lives in
+        this same Python process). The kill loop would then ``kill`` our
+        own PID mid-teardown. Assert the LISTEN filter is present in the
+        argv we hand to lsof.
+        """
+        captured_args: list[tuple] = []
+
+        async def fake_exec(*args, **kwargs):
+            captured_args.append(args)
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.returncode = 0
+            return proc
+
+        with patch(
+            "rainier.scrapers.browser.asyncio.create_subprocess_exec",
+            side_effect=fake_exec,
+        ):
+            await BrowserManager._kill_chrome_we_spawned()
+
+        lsof_invocations = [a for a in captured_args if a and a[0] == "lsof"]
+        assert len(lsof_invocations) == 1, captured_args
+        lsof_argv = lsof_invocations[0]
+        assert "-sTCP:LISTEN" in lsof_argv, (
+            f"lsof must restrict to LISTEN state to avoid killing CDP "
+            f"clients (including our own process); got argv={lsof_argv}"
+        )
+
+
+class TestWeSpawnedFlagResetOnReuse:
+    """Regression for codex iter-1 P2: reusing a BrowserManager across
+    multiple start()/stop() cycles must reset ``_we_spawned_chrome`` so
+    a recovery-set True from cycle N never leaks into cycle N+1 and
+    causes stop() to kill the operator's Chrome.
+    """
+
+    async def test_start_resets_we_spawned_flag(self):
+        """Pre-condition: flag is True (simulating stale state from a
+        previous cycle). After a clean start() against a healthy CDP
+        endpoint, the flag must be False again."""
+        mock_browser = MagicMock()
+        factory, _ = _mock_playwright([mock_browser])
+        with (
+            patch("rainier.scrapers.browser.async_playwright", return_value=factory),
+            patch.object(BrowserManager, "_force_restart_chrome", new=AsyncMock()),
+        ):
+            bm = BrowserManager(cdp_url="http://localhost:9222")
+            bm._we_spawned_chrome = True  # stale from a prior recovery cycle
+            await bm.start()
+
+        assert bm._we_spawned_chrome is False, (
+            "start() must clear stale ownership so reused managers do not "
+            "kill the operator's Chrome on the next stop()"
+        )

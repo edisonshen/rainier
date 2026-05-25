@@ -72,6 +72,12 @@ class BrowserManager:
         """Launch or connect to the browser."""
         if self._browser is not None:
             return
+        # Reset ownership before every fresh start. If a previous start()
+        # set the flag (recovery path) and a later caller reuses the same
+        # manager against an already-healthy Chrome, we must not carry
+        # the stale ownership forward — that would have stop() kill the
+        # operator's Chrome on the second cycle.
+        self._we_spawned_chrome = False
         self._playwright = await async_playwright().start()
 
         if self._cdp_url:
@@ -164,8 +170,14 @@ class BrowserManager:
         process the next ``ensure-chrome.sh`` invocation will recycle.
 
         Flow:
-            lsof -ti :9222          → list pids holding the port
+            lsof -ti :9222 -sTCP:LISTEN   → list ONLY the listener (Chrome)
             for each pid: kill <pid>
+
+        ``-sTCP:LISTEN`` is load-bearing: without it ``lsof`` also returns
+        every ESTABLISHED client of :9222 — including the Python process
+        running this code, which holds a CDP websocket to Chrome — and
+        ``kill <our-own-pid>`` would terminate the scraper mid-teardown.
+        Restricting to LISTEN ensures we only target the Chrome server.
 
         Returns silently when:
             - lsof finds no pids (Chrome already gone),
@@ -176,6 +188,7 @@ class BrowserManager:
                 "lsof",
                 "-ti",
                 f":{CDP_DEBUG_PORT}",
+                "-sTCP:LISTEN",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
