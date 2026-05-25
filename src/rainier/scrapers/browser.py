@@ -91,7 +91,19 @@ class BrowserManager:
                 # Record that WE own the Chrome process now. ``stop()`` will
                 # kill it on teardown so we don't leak an empty window.
                 self._we_spawned_chrome = True
-                self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+                try:
+                    self._browser = await self._playwright.chromium.connect_over_cdp(
+                        self._cdp_url
+                    )
+                except Exception:
+                    # We force-restarted Chrome but the retry connect still
+                    # failed — ``__aenter__`` will propagate this exception
+                    # and Python will NOT call ``__aexit__`` (so ``stop()``
+                    # never runs). Reap the Chrome we just spawned right
+                    # here, otherwise the empty window we own leaks until
+                    # the next ensure-chrome.sh --force.
+                    await self._kill_chrome_we_spawned()
+                    raise
             self._is_cdp = True
             log.info(
                 "browser_connected_cdp",

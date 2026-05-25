@@ -227,6 +227,46 @@ class TestKillChromeImplementation:
         )
 
 
+class TestSecondConnectFailureReapsChrome:
+    """Regression for /review iter-1 P1: when the retry ``connect_over_cdp``
+    raises after ``_force_restart_chrome`` succeeded, ``start()`` propagates
+    the exception. Python's async-with semantics mean ``__aexit__`` (and
+    thus ``stop()``) will NEVER run in this path — so if we don't kill the
+    Chrome we just spawned right here in ``start()``, it leaks indefinitely.
+
+    The WIP doc claims "stop() will reap it on the way out", but that is
+    only true when ``__aenter__`` returned normally. This test pins down
+    the failing-retry path explicitly.
+    """
+
+    async def test_kill_chrome_called_when_second_connect_fails(self):
+        first_error = RuntimeError("Browser context management is not supported")
+        second_error = RuntimeError("connection refused after restart")
+        factory, _ = _mock_playwright([first_error, second_error])
+        with (
+            patch("rainier.scrapers.browser.async_playwright", return_value=factory),
+            patch.object(BrowserManager, "_force_restart_chrome", new=AsyncMock()),
+            patch.object(
+                BrowserManager, "_kill_chrome_we_spawned", new=AsyncMock()
+            ) as kill,
+        ):
+            bm = BrowserManager(cdp_url="http://localhost:9222")
+            raised = None
+            try:
+                await bm.start()
+            except RuntimeError as exc:
+                raised = exc
+
+        # The retry exception must propagate so callers know start() failed.
+        assert raised is second_error, raised
+        # And we must have reaped the Chrome we spawned before re-raising,
+        # because async-with will never call our __aexit__.
+        kill.assert_awaited_once()
+        # Flag stays True so any defensive caller-side teardown also sees
+        # the ownership state.
+        assert bm._we_spawned_chrome is True
+
+
 class TestWeSpawnedFlagResetOnReuse:
     """Regression for codex iter-1 P2: reusing a BrowserManager across
     multiple start()/stop() cycles must reset ``_we_spawned_chrome`` so
