@@ -199,30 +199,46 @@ class QUScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def _verify_session(self) -> None:
-        """Navigate to QU100 and verify the session is live.
+        """Verify the saved session works against the QU API.
 
-        If the saved session is stale (server-side), force a fresh login.
+        Uses the same in-page-fetch transport the scrape itself uses
+        (DESIGN D-3/D-7). A 200 with valid JSON means the session +
+        cf_clearance are alive; a 401/403 triggers ``_fetch_qu_api``'s
+        one-shot reauth + retry; anything else propagates as a real
+        error.
+
+        The previous implementation waited for ``.ant-table`` to render
+        on ``/products#qu100``. Post-PR-#84 the scrape no longer clicks
+        Search, so the table never renders on bare nav — verification
+        timed out every cron run. Probing the API directly is the only
+        check that agrees with what the scrape actually does.
         """
         page = self._page
         await goto_with_retry(page, self._qu_config.url)
 
-        # Check if we got redirected to signin
+        # Pre-auth state — saved storage was empty or cookies wiped at
+        # the file level; force a login then return. The next caller
+        # (the scrape itself) will exercise the API path; no need to
+        # double-probe here.
         if "signin" in (page.url or ""):
             self.log.warning("session_stale_redirected", url=page.url)
             await login(page)
             await goto_with_retry(page, self._qu_config.url)
             return
 
-        # Check if QU100 table is visible (proves auth works)
+        # API probe. ``_fetch_qu_api`` handles 401/403 → reauth + retry
+        # (PR #86); we just propagate any RuntimeError it raises.
+        probe_date = market_date(datetime.now(timezone.utc)).isoformat()
+        probe_url = (
+            f"{sel.QU100_API_URL}?date={probe_date}"
+            "&top=true&frequency=daily"
+        )
         try:
-            await page.wait_for_selector(sel.QU100_TABLE, timeout=10000)
-            self.log.info("session_verified")
-        except Exception:
-            self.log.warning("session_stale_no_table", url=page.url)
-            await login(page)
-            await goto_with_retry(page, self._qu_config.url)
-            await page.wait_for_selector(sel.QU100_TABLE, timeout=15000)
-            self.log.info("session_verified_after_relogin")
+            await self._fetch_qu_api(page, probe_url)
+            self.log.info("session_verified_via_api")
+        except RuntimeError as exc:
+            self.log.error("session_verify_failed", error=str(exc))
+            raise
 
     # ------------------------------------------------------------------
     # CDP auto-auth
@@ -269,14 +285,37 @@ class QUScraper(BaseScraper):
             await login(page)
             await goto_with_retry(page, self._qu_config.url)
 
-        # Detect Cloudflare challenge page
+        # Detect Cloudflare JS challenge. Playwright (Chromium) executes
+        # the challenge JS automatically; we just need to wait for it to
+        # resolve and issue a fresh cf_clearance cookie. Most challenges
+        # clear in 5-10s. The old code bailed immediately and asked the
+        # operator for a --headed run, which broke every unattended cron.
         title = await page.title()
         if "just a moment" in title.lower():
-            raise RuntimeError(
-                "Cloudflare challenge detected — cf_clearance cookie expired. "
-                "Run `rainier scrape qu --session morning --headed` in a "
-                "terminal to pass the challenge manually, then retry."
-            )
+            self.log.info("cf_challenge_waiting", initial_title=title)
+            try:
+                # Wait for document.title to flip away from "Just a
+                # moment..." (case-insensitive). On success the SPA loads
+                # with title = "QuantUnicorn" (or similar). 25s is
+                # generous; Cloudflare's own SLA for the challenge is
+                # ~10s end-to-end.
+                await page.wait_for_function(
+                    """() => !document.title.toLowerCase().includes("just a moment")""",
+                    timeout=25000,
+                )
+                new_title = await page.title()
+                self.log.info("cf_challenge_cleared", new_title=new_title)
+            except Exception as exc:
+                # Challenge stuck > 25s — operator intervention needed.
+                # The operator already has Chrome on :9222 (CDP mode), so
+                # the simplest recovery is just to open QU there manually.
+                raise RuntimeError(
+                    "Cloudflare challenge stuck for >25s — cf_clearance "
+                    "cookie expired and JS challenge didn't auto-resolve. "
+                    f"Open {self._qu_config.url} in the CDP browser "
+                    "(currently on :9222) and manually clear any "
+                    "challenge, then retry."
+                ) from exc
 
         # Check if redirected to signin — cookies didn't work
         if "signin" in (page.url or ""):
