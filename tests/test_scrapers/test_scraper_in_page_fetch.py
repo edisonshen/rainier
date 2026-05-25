@@ -142,6 +142,51 @@ class TestQu100FetchReplaysAgainstMock:
         # No errors recorded on the happy path.
         assert result.errors == []
 
+    async def test_api_date_uses_market_tz_for_late_utc_captured_at(self):
+        """Regression for the UTC drift surfaced by codex iter 2 on PR #84.
+
+        When ``captured_at`` is in the next UTC day but the operator's
+        intent is "today's US market data" (e.g., a 19:00 PT manual run),
+        the API ``date=`` query param must derive from the America/New_York
+        calendar date, not from ``captured_at.date()``.
+
+        captured_at = 2026-05-22T02:30:00Z (= 22:30 ET on 2026-05-21).
+        Expected: ``date=2026-05-21`` in both fetched URLs.
+        """
+        top_payload = _load_fixture("qu_api_mf100_top.json")
+        bottom_payload = _load_fixture("qu_api_mf100_bottom.json")
+
+        page = _make_mock_page()
+        page.evaluate = AsyncMock(side_effect=[top_payload, bottom_payload])
+
+        scraper = _make_scraper()
+        scraper._page = page
+        scraper._persist_qu100 = MagicMock(return_value=100)  # type: ignore[assignment]
+
+        from rainier.scrapers.base import ScrapeResult
+        # Late-PT timestamp — 22:30 ET on 2026-05-21, but UTC date is
+        # 2026-05-22. Pre-fix this would request date=2026-05-22 and break.
+        captured_at = datetime(2026, 5, 22, 2, 30, tzinfo=timezone.utc)
+        result = ScrapeResult(scraper_name="qu", started_at=captured_at)
+
+        with patch("rainier.scrapers.qu.scraper.goto_with_retry", new_callable=AsyncMock):
+            # No target_date — exercises the captured_at-derived branch.
+            await scraper._scrape_qu100("morning", captured_at, result)
+
+        assert page.evaluate.await_count == 2
+        urls = []
+        for call in page.evaluate.await_args_list:
+            # The fetch URL is passed in the evaluate args dict: {"url": "..."}
+            blob = json.dumps(list(call.args) + list(call.kwargs.values()))
+            urls.append(blob)
+        for blob in urls:
+            assert "date=2026-05-21" in blob, (
+                f"market-tz date expected in fetch URL but got: {blob}"
+            )
+            assert "date=2026-05-22" not in blob, (
+                f"UTC date leaked into fetch URL: {blob}"
+            )
+
     async def test_no_date_picker_click(self):
         """D-9: the API takes `date` as a query param. The scraper must NOT
         click the date picker."""
