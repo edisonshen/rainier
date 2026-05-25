@@ -37,6 +37,9 @@ def _make_mock_page(url="https://www.quantunicorn.com/products#qu100", title="QU
     # wait_for_selector returns a mock element by default
     page.wait_for_selector = AsyncMock(return_value=AsyncMock())
     page.wait_for_load_state = AsyncMock()
+    # wait_for_function (CF challenge wait) — defaults to clean return so
+    # title==challenge tests don't accidentally hit the timeout branch.
+    page.wait_for_function = AsyncMock()
 
     def set_url(new_url, **kwargs):
         page_url["value"] = new_url
@@ -303,11 +306,22 @@ class TestCDPEnsureAuth:
         mock_login.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_cloudflare_challenge_raises(self):
-        """Cloudflare challenge page detected → raises RuntimeError."""
+    async def test_cloudflare_challenge_stuck_raises(self):
+        """Cloudflare 'Just a moment...' challenge that doesn't clear within
+        25s → RuntimeError pointing operator at the CDP browser.
+
+        Post-fix (TASK-PLAN-qu-verify-and-cf-recover-9f39 §3) the
+        immediate bail is replaced with a wait_for_function(25s). The
+        stuck path still raises, but with new wording ("stuck for >25s")
+        and a CDP-browser recovery hint, not the old "--headed" message.
+        """
         page, _ = _make_mock_page(
             url="https://www.quantunicorn.com/products#qu100",
             title="Just a moment..."
+        )
+        # Force the wait to fail so we exercise the raise path.
+        page.wait_for_function = AsyncMock(
+            side_effect=Exception("Timeout 25000ms exceeded")
         )
 
         scraper = _make_scraper()
@@ -319,7 +333,7 @@ class TestCDPEnsureAuth:
             patch("rainier.scrapers.qu.scraper.login", new_callable=AsyncMock),
             patch("pathlib.Path.exists", return_value=False),
         ):
-            with pytest.raises(RuntimeError, match="Cloudflare challenge"):
+            with pytest.raises(RuntimeError, match="stuck for >25s"):
                 await scraper._cdp_ensure_auth()
 
     @pytest.mark.asyncio
