@@ -18,6 +18,10 @@ log = structlog.get_logger()
 
 ENSURE_CHROME_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ensure-chrome.sh"
 
+# CDP debug port. Must match scripts/ensure-chrome.sh's PORT — the kill
+# path uses this to locate the Chrome process we spawned.
+CDP_DEBUG_PORT = 9222
+
 
 class BrowserManager:
     """
@@ -57,11 +61,23 @@ class BrowserManager:
         self._playwright = None
         self._browser: Browser | None = None
         self._is_cdp = False
+        # True only when this manager triggered ``_force_restart_chrome``
+        # during ``start()`` — i.e., the Chrome listening on :9222 was
+        # spawned by US, not by the operator. ``stop()`` checks this to
+        # decide whether to kill the whole Chrome process (we own it) or
+        # leave it running (D-10: it's the operator's browser).
+        self._we_spawned_chrome = False
 
     async def start(self) -> None:
         """Launch or connect to the browser."""
         if self._browser is not None:
             return
+        # Reset ownership before every fresh start. If a previous start()
+        # set the flag (recovery path) and a later caller reuses the same
+        # manager against an already-healthy Chrome, we must not carry
+        # the stale ownership forward — that would have stop() kill the
+        # operator's Chrome on the second cycle.
+        self._we_spawned_chrome = False
         self._playwright = await async_playwright().start()
 
         if self._cdp_url:
@@ -72,9 +88,28 @@ class BrowserManager:
                 # or sitting idle for days. Force-restart it once and retry.
                 log.warning("cdp_connect_failed_restarting_chrome", error=str(e))
                 await self._force_restart_chrome()
-                self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+                # Record that WE own the Chrome process now. ``stop()`` will
+                # kill it on teardown so we don't leak an empty window.
+                self._we_spawned_chrome = True
+                try:
+                    self._browser = await self._playwright.chromium.connect_over_cdp(
+                        self._cdp_url
+                    )
+                except Exception:
+                    # We force-restarted Chrome but the retry connect still
+                    # failed — ``__aenter__`` will propagate this exception
+                    # and Python will NOT call ``__aexit__`` (so ``stop()``
+                    # never runs). Reap the Chrome we just spawned right
+                    # here, otherwise the empty window we own leaks until
+                    # the next ensure-chrome.sh --force.
+                    await self._kill_chrome_we_spawned()
+                    raise
             self._is_cdp = True
-            log.info("browser_connected_cdp", url=self._cdp_url)
+            log.info(
+                "browser_connected_cdp",
+                url=self._cdp_url,
+                we_spawned_chrome=self._we_spawned_chrome,
+            )
         else:
             self._browser = await self._playwright.chromium.launch(
                 headless=self._headless,
@@ -100,18 +135,91 @@ class BrowserManager:
         log.info("chrome_force_restarted", output=output)
 
     async def stop(self) -> None:
-        """Close/disconnect the browser and Playwright."""
+        """Close/disconnect the browser and Playwright.
+
+        Teardown decision tree::
+
+            stop()
+              ├─ launch mode (_is_cdp=False)
+              │    └─ browser.close()                      # our Chromium
+              └─ CDP mode (_is_cdp=True)
+                   ├─ _we_spawned_chrome=False
+                   │    └─ disconnect only                 # D-10: operator's Chrome
+                   └─ _we_spawned_chrome=True
+                        └─ _kill_chrome_we_spawned()       # our Chrome — kill it
+
+        The CDP-spawned branch exists because the recovery path in
+        ``start()`` (``connect_over_cdp`` raises → ``_force_restart_chrome``
+        → retry) leaves us holding a Chrome process the operator did not
+        ask for. Closing only the scrape tab would leave an empty Chrome
+        window on :9222 — one leak per cron run.
+        """
         if self._browser:
             if self._is_cdp:
-                # Don't close the user's Chrome — just disconnect
-                pass
+                if self._we_spawned_chrome:
+                    # WE spawned this Chrome instance; nothing else owns it.
+                    # Kill the process so the next ensure-chrome.sh call gets
+                    # a clean start.
+                    await self._kill_chrome_we_spawned()
+                # else: D-10 — don't touch the operator's Chrome.
             else:
                 await self._browser.close()
             self._browser = None
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
-        log.info("browser_stopped")
+        log.info("browser_stopped", we_spawned_chrome=self._we_spawned_chrome)
+
+    @staticmethod
+    async def _kill_chrome_we_spawned() -> None:
+        """Terminate the Chrome process bound to :9222.
+
+        Mirrors the pattern in ``scripts/ensure-chrome.sh kill_chrome``
+        (``pkill -f remote-debugging-port=$PORT``) but in pure asyncio so
+        we don't need a separate shell-script entrypoint. Best-effort:
+        every failure is logged and swallowed because teardown must not
+        break the calling code — the worst case is one leftover Chrome
+        process the next ``ensure-chrome.sh`` invocation will recycle.
+
+        Flow:
+            lsof -ti :9222 -sTCP:LISTEN   → list ONLY the listener (Chrome)
+            for each pid: kill <pid>
+
+        ``-sTCP:LISTEN`` is load-bearing: without it ``lsof`` also returns
+        every ESTABLISHED client of :9222 — including the Python process
+        running this code, which holds a CDP websocket to Chrome — and
+        ``kill <our-own-pid>`` would terminate the scraper mid-teardown.
+        Restricting to LISTEN ensures we only target the Chrome server.
+
+        Returns silently when:
+            - lsof finds no pids (Chrome already gone),
+            - any subprocess call fails (logged as ``chrome_kill_failed``).
+        """
+        try:
+            lsof = await asyncio.create_subprocess_exec(
+                "lsof",
+                "-ti",
+                f":{CDP_DEBUG_PORT}",
+                "-sTCP:LISTEN",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await lsof.communicate()
+            pids = [p for p in stdout.decode(errors="replace").split() if p.strip()]
+            if not pids:
+                log.info("chrome_kill_skipped_no_pids", port=CDP_DEBUG_PORT)
+                return
+            for pid in pids:
+                kill = await asyncio.create_subprocess_exec(
+                    "kill",
+                    pid,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await kill.communicate()
+            log.info("chrome_we_spawned_killed", pids=pids, port=CDP_DEBUG_PORT)
+        except Exception as exc:
+            log.warning("chrome_kill_failed", error=str(exc))
 
     async def __aenter__(self) -> BrowserManager:
         await self.start()

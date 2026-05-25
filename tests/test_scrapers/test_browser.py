@@ -83,9 +83,15 @@ class TestCDPConnectRetry:
 
     async def test_second_failure_propagates(self):
         factory, chromium = _mock_playwright(RuntimeError("still broken"))
+        # Mock the kill helper so this test cannot SIGTERM a real debug
+        # Chrome that happens to be listening on :9222 on the dev's box.
+        # The retry path now reaps the Chrome it spawned when the second
+        # connect fails (so __aexit__ never runs); without this mock we
+        # would call real lsof/kill from a unit test.
         with (
             patch("rainier.scrapers.browser.async_playwright", return_value=factory),
             patch.object(BrowserManager, "_force_restart_chrome", new=AsyncMock()) as restart,
+            patch.object(BrowserManager, "_kill_chrome_we_spawned", new=AsyncMock()) as kill,
         ):
             bm = BrowserManager(cdp_url="http://localhost:9222")
             with pytest.raises(RuntimeError, match="still broken"):
@@ -93,6 +99,8 @@ class TestCDPConnectRetry:
 
         assert chromium.connect_over_cdp.await_count == 2
         restart.assert_awaited_once()
+        # And the cleanup ran exactly once for the spawned Chrome.
+        kill.assert_awaited_once()
 
     async def test_happy_path_no_restart(self):
         mock_browser = MagicMock()
