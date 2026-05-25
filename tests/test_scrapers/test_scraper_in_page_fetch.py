@@ -142,7 +142,7 @@ class TestQu100FetchReplaysAgainstMock:
         assert persist_calls[1]["ranking_type"] == "bottom100"
         assert len(persist_calls[0]["rows"]) == 100
         assert len(persist_calls[1]["rows"]) == 100
-        # Field rename landed (ticker -> symbol via api_rows_to_qu100_rows).
+        # Field rename landed (ticker -> symbol via _api_rows_to_qu100_rows).
         assert persist_calls[0]["rows"][0].symbol == top_payload["data"][0]["ticker"]
         # records_created accumulates both calls.
         assert result.records_created == 200

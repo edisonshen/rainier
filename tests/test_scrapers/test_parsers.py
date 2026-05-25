@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from rainier.scrapers.qu.parsers import (
-    api_rows_to_qu100_rows,
+    _api_rows_to_qu100_rows,
     parse_capital_flow_rows,
     parse_daily_change,
     parse_rank_fraction,
@@ -87,7 +87,7 @@ class TestParseRankFraction:
 
 
 # ---------------------------------------------------------------------------
-# api_rows_to_qu100_rows (D-4 adapter for the in-page-fetch /api/v3/mf100 path)
+# _api_rows_to_qu100_rows (D-4 adapter for the in-page-fetch /api/v3/mf100 path)
 # ---------------------------------------------------------------------------
 
 
@@ -114,7 +114,7 @@ class TestApiRowsToQU100Rows:
                 "sector": "Technology",
             }
         ]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert len(rows) == 1
         assert rows[0].rank == 1
         assert rows[0].symbol == "MU"
@@ -140,7 +140,7 @@ class TestApiRowsToQU100Rows:
             {"rank": 5, "ticker": "EEE",
              "industry": "", "long_short": "", "sector": ""},
         ]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert [r.daily_change for r in rows] == [0, -3, 1604, 0, 0]
 
     def test_field_rename_ticker_to_symbol(self):
@@ -148,11 +148,11 @@ class TestApiRowsToQU100Rows:
         # The adapter must never leak `ticker` onto QU100Row.
         api = [{"rank": 1, "ticker": "msft", "change": "0",
                 "industry": "", "long_short": "", "sector": ""}]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert rows[0].symbol == "MSFT"  # uppercased per existing convention
 
     def test_empty_data(self):
-        assert api_rows_to_qu100_rows([]) == []
+        assert _api_rows_to_qu100_rows([]) == []
 
     def test_skips_empty_ticker(self):
         # Defensive: an empty ticker shouldn't produce a junk row.
@@ -162,7 +162,7 @@ class TestApiRowsToQU100Rows:
             {"rank": 2, "ticker": "AAPL", "change": "5",
              "industry": "", "long_short": "", "sector": ""},
         ]
-        rows = api_rows_to_qu100_rows(api)
+        rows = _api_rows_to_qu100_rows(api)
         assert len(rows) == 1
         assert rows[0].symbol == "AAPL"
 

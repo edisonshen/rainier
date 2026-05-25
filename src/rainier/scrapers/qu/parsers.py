@@ -93,7 +93,7 @@ def parse_rank_fraction(text: str) -> tuple[int, int]:
         return 0, 0
 
 
-def api_rows_to_qu100_rows(api_rows: list[dict]) -> list[QU100Row]:
+def _api_rows_to_qu100_rows(api_rows: list[dict]) -> list[QU100Row]:
     """Adapt /api/v3/mf100 response rows to QU100Row (DESIGN D-4).
 
     The API payload (per the spike capture) ships rows shaped like::
