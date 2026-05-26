@@ -159,6 +159,120 @@ def test_window_toggle_present(rendered_html):
     ), "McClellan 'all' radio should not be default-checked"
 
 
+def test_window_toggle_css_targets_section_descendants(rendered_html):
+    """CSS toggle selectors must traverse INTO the section, not stop at siblings.
+
+    Codex review iter-2 found the original selectors used
+    `:checked ~ svg.chart-...` — but the radios were body-level siblings of
+    `<section>`, while the SVGs were descendants of the section. The general
+    sibling combinator (`~`) only matches same-level siblings, so the CSS
+    never matched in practice. Both 2y AND `-all` variants would render by
+    default, AND clicking labels couldn't switch views.
+
+    The fix targets the section first, then descends to the SVG. This test
+    pins that selector shape so a future style edit can't silently regress.
+    """
+    html = rendered_html
+    # Each :checked rule must include the `section` descendant step.
+    must_have_patterns = [
+        r"#window-ad-2y:checked\s*~\s*section\s+svg\.chart-ad-cumulative",
+        r"#window-ad-all:checked\s*~\s*section\s+svg\.chart-alt-ad-cumulative-all",
+        r"#window-mc-2y:checked\s*~\s*section\s+svg\.chart-mcclellan",
+        r"#window-mc-all:checked\s*~\s*section\s+svg\.chart-alt-mcclellan-all",
+    ]
+    for pattern in must_have_patterns:
+        assert re.search(pattern, html), (
+            f"toggle CSS missing section-descendant selector: {pattern}"
+        )
+    # The non-section-traversing form must NOT remain. Catches a partial revert.
+    forbidden_patterns = [
+        # The classic bug: `~ svg.chart-...` without the `section` step.
+        r"#window-ad-2y:checked\s*~\s*svg\.chart-ad-cumulative\b",
+        r"#window-ad-all:checked\s*~\s*svg\.chart-alt-ad-cumulative-all\b",
+        r"#window-mc-2y:checked\s*~\s*svg\.chart-mcclellan\b",
+        r"#window-mc-all:checked\s*~\s*svg\.chart-alt-mcclellan-all\b",
+    ]
+    for pattern in forbidden_patterns:
+        assert not re.search(pattern, html), (
+            f"toggle CSS still uses broken sibling-only selector: {pattern}"
+        )
+
+
+def test_alt_variants_hidden_by_default(rendered_html):
+    """Alt-variant SVGs (`-all` toggle target) must be `display: none` by default.
+
+    Belt-and-suspenders for the toggle CSS: if no `:checked` rule wins
+    (e.g. a future stylesheet edit removes the `checked` attribute, or a
+    UA strips it), the alt-variant SVGs MUST still be hidden by default.
+    Without this, the page would render with BOTH the 2y chart and the
+    all-history chart visible — confusing the operator and doubling the
+    rendered chart count.
+    """
+    html = rendered_html
+    # Match the explicit default-hide rule for each alt variant.
+    assert re.search(
+        r"svg\.chart-alt-ad-cumulative-all\s*{\s*display:\s*none",
+        html,
+    ), "alt A/D chart not default-hidden"
+    assert re.search(
+        r"svg\.chart-alt-mcclellan-all\s*{\s*display:\s*none",
+        html,
+    ), "alt McClellan chart not default-hidden"
+
+
+def test_historical_asof_filters_chart_data(breadth_df):
+    """`--asof 2025-01-15` must not let 2026 chart data leak into the render.
+
+    Codex review iter-2 (P2): the chart-slice path used
+    `wide.tail(window_days)` over the UNFILTERED wide frame, so historical
+    `--asof` renders carried the requested header date but the most recent
+    chart rows (2026 data on a 2025 page). Filter `wide <= asof` BEFORE
+    slicing so historical replays are byte-deterministic per-day.
+    """
+    from rainier.market_breadth.render import render_breadth_html
+
+    historical_asof = date(2025, 1, 15)
+    html = render_breadth_html(
+        breadth=breadth_df,
+        asof=historical_asof,
+        rendered_at_pt="12:40",
+    )
+    # Header must reflect the historical asof.
+    assert "Last updated: 2025-01-15 12:40 PT" in html, (
+        "historical asof not honored in header"
+    )
+    # Pull the pct-above-ma chart block and count points in the first <path>.
+    block = re.search(
+        r'(<svg\b[^>]*\bclass="chart-pct-above-ma"[^>]*>.*?</svg>)',
+        html,
+        re.DOTALL,
+    )
+    assert block, "chart-pct-above-ma block not found in historical render"
+    path_d = re.search(r'<path\b[^>]*\bd="([^"]+)"', block.group(1))
+    assert path_d, "no <path d=> in historical chart"
+    point_count = len(re.findall(r"[ML]\s*[-\d.]+,[-\d.]+", path_d.group(1)))
+
+    # The fixture ends 2026-05-25 with 750 trading days back, so
+    # 2025-01-15 sits in the middle. After filtering to <= 2025-01-15
+    # the post-filter dataframe has ~370 rows (from ~mid-2023 to 2025-01-15).
+    # The 504d window then keeps all of them (since 370 < 504). The point
+    # count MUST be MUCH less than the full 750-day count and the no-filter
+    # 504-day count we already test elsewhere.
+    asof_iso = historical_asof.isoformat()
+    expected_max = breadth_df[
+        breadth_df["asof_date"].astype(str) <= asof_iso
+    ]["asof_date"].nunique()
+    assert point_count <= expected_max, (
+        f"chart leaked future data: {point_count} points > {expected_max} "
+        f"available days up to {asof_iso}"
+    )
+    # Sanity: a healthy fixture has hundreds of days up to 2025-01-15.
+    assert point_count > 100, (
+        f"historical chart suspiciously sparse: {point_count} points "
+        f"(fixture has {expected_max} days up to {asof_iso})"
+    )
+
+
 def test_rendered_html_under_size_budget(rendered_html):
     """Render output stays under the 150KB byte budget.
 

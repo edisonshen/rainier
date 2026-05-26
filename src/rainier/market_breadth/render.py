@@ -115,6 +115,25 @@ def render_breadth_html(
             has_data=False,
         )
 
+    # Filter to asof FIRST so historical renders never publish future data.
+    # Without this, a backfill render at `--asof 2024-01-01` would carry the
+    # 2024 header timestamp but draw the most recent (2026) chart rows
+    # because `tail(window_days)` would slice from the unfiltered tail.
+    # The "all" toggle variants render against this same `wide` view so
+    # they too respect the asof cutoff (callers can replay any historical
+    # day deterministically).
+    wide = wide.loc[wide.index <= asof_str]
+    if wide.empty:
+        # asof predates every row in the parquet → same degenerate state
+        # the empty-parquet branch already handles. Fall through cleanly.
+        return _render_template(
+            asof_str=asof_str,
+            rendered_at_pt=rendered_at_pt,
+            header=_empty_header(),
+            charts={},
+            has_data=False,
+        )
+
     # Slice trailing N for default-view charts.
     short = wide.tail(window_days)
 
@@ -536,20 +555,32 @@ input[type=radio].window-toggle {
 }
 /* A/D toggle — default-visible chart hides when "all" is selected; the
    alt-prefixed SVG only appears under :checked, so the default state holds
-   exactly 4 chart-* SVGs in DOM order (matches design §5 + acceptance §2). */
-#window-ad-2y:checked  ~ .toggle-row label[for=window-ad-2y]  { color: var(--bull); border-color: var(--bull); }
-#window-ad-all:checked ~ .toggle-row label[for=window-ad-all] { color: var(--bull); border-color: var(--bull); }
-#window-ad-2y:checked  ~ svg.chart-ad-cumulative          { display: block; }
-#window-ad-2y:checked  ~ svg.chart-alt-ad-cumulative-all  { display: none; }
-#window-ad-all:checked ~ svg.chart-ad-cumulative          { display: none; }
-#window-ad-all:checked ~ svg.chart-alt-ad-cumulative-all  { display: block; }
+   exactly 4 chart-* SVGs in DOM order (matches design §5 + acceptance §2).
+   The radios live at body level BEFORE their owning `<section>`, so the
+   general-sibling combinator (`~`) reaches the section; the SVGs / labels
+   are descendants of that section, hence the trailing descendant selector
+   (`section .toggle-row`, `section svg.chart-...`). Without the descendant
+   step the `~` combinator would never match — `~` only crosses same-level
+   siblings. Verified by `test_window_toggle_default_chart_visibility`. */
+#window-ad-2y:checked  ~ section .toggle-row label[for=window-ad-2y]  { color: var(--bull); border-color: var(--bull); }
+#window-ad-all:checked ~ section .toggle-row label[for=window-ad-all] { color: var(--bull); border-color: var(--bull); }
+#window-ad-2y:checked  ~ section svg.chart-ad-cumulative          { display: block; }
+#window-ad-2y:checked  ~ section svg.chart-alt-ad-cumulative-all  { display: none; }
+#window-ad-all:checked ~ section svg.chart-ad-cumulative          { display: none; }
+#window-ad-all:checked ~ section svg.chart-alt-ad-cumulative-all  { display: block; }
+/* Default state: when no `:checked` selector wins (i.e. JS-disabled view
+   that somehow loses the `checked` attribute), force the alt-* variant to
+   stay hidden. Without this, the alt SVGs would render alongside the 2y
+   SVGs by default — same bug codex flagged on iter-2. */
+svg.chart-alt-ad-cumulative-all { display: none; }
+svg.chart-alt-mcclellan-all     { display: none; }
 /* McClellan toggle */
-#window-mc-2y:checked  ~ .toggle-row label[for=window-mc-2y]  { color: var(--bull); border-color: var(--bull); }
-#window-mc-all:checked ~ .toggle-row label[for=window-mc-all] { color: var(--bull); border-color: var(--bull); }
-#window-mc-2y:checked  ~ svg.chart-mcclellan          { display: block; }
-#window-mc-2y:checked  ~ svg.chart-alt-mcclellan-all  { display: none; }
-#window-mc-all:checked ~ svg.chart-mcclellan          { display: none; }
-#window-mc-all:checked ~ svg.chart-alt-mcclellan-all  { display: block; }
+#window-mc-2y:checked  ~ section .toggle-row label[for=window-mc-2y]  { color: var(--bull); border-color: var(--bull); }
+#window-mc-all:checked ~ section .toggle-row label[for=window-mc-all] { color: var(--bull); border-color: var(--bull); }
+#window-mc-2y:checked  ~ section svg.chart-mcclellan          { display: block; }
+#window-mc-2y:checked  ~ section svg.chart-alt-mcclellan-all  { display: none; }
+#window-mc-all:checked ~ section svg.chart-mcclellan          { display: none; }
+#window-mc-all:checked ~ section svg.chart-alt-mcclellan-all  { display: block; }
 .disclaimer {
   margin-top: 32px; padding-top: 12px; border-top: 1px solid var(--line);
   color: var(--mute); font-size: 0.8rem; line-height: 1.5;

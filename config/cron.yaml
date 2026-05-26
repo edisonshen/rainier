@@ -139,7 +139,15 @@ jobs:
   # `enabled: true` once the one-shot is complete.
   - name: market-breadth-daily
     description: "Refresh sp500 OHLCV + compute breadth indicators + render & publish market-breadth dashboard"
-    schedule: "40 12 * * 1-5"   # 12:40 PST Mon-Fri (20 min pre-close)
+    schedule: "45 12 * * 1-5"   # 12:45 PST Mon-Fri (15 min pre-close)
+    # Schedule rationale: `etf-dashboard-publish` runs at 12:40 PT and also
+    # invokes `scripts/publish-dashboard.sh` against the SAME fengshen-site
+    # checkout. If the two publishers raced, the second would see a dirty
+    # tree (publish-dashboard.sh:75 bails with "target working tree dirty
+    # — refusing to publish") and fire a spurious Discord alert. Staggering
+    # by 5 minutes gives the ETF publish chain time to commit + push before
+    # this job's `cd "$TARGET_DIR"` step runs.
+    #
     # Full chain (DESIGN-market-breadth-webpage.md §6):
     #   1. yfinance incremental refresh -> data/cache/sp500_universe.parquet
     #   2. indicator recompute          -> data/cache/sp500_breadth_daily.parquet
