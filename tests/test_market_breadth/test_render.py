@@ -273,6 +273,86 @@ def test_historical_asof_filters_chart_data(breadth_df):
     )
 
 
+def test_line_path_preserves_date_alignment_with_warmup_nans():
+    """Codex iter-2 [P2]: `dropna()` reindexed warm-up gaps to the left edge.
+
+    With different warm-up periods per indicator (`pct_above_ma_20` starts
+    producing values at day 20, `pct_above_ma_200` at day 200), naively
+    dropping NaN before scaling x positions would push both first-valid
+    points to `x = PAD_X`. The same calendar day would then render at
+    different x-positions across chart layers — silently misleading.
+
+    Fix: x-position is the original index in the full series; NaNs become
+    SVG subpath breaks. This test pins that.
+    """
+    from rainier.market_breadth.render import (
+        CHART_PAD_X,
+        CHART_W,
+        _line_path,
+    )
+
+    # Two series with the SAME length and the SAME last valid value but
+    # different warm-up periods. After fix: the last L-point in both paths
+    # must land at the same x-coordinate (the right edge).
+    n = 100
+    series_short_warmup = pd.Series(
+        [float("nan")] * 5 + [10.0 + i * 0.1 for i in range(n - 5)]
+    )
+    series_long_warmup = pd.Series(
+        [float("nan")] * 50 + [10.0 + i * 0.1 for i in range(n - 50)]
+    )
+    path_short = _line_path(series_short_warmup, 0.0, 100.0)
+    path_long = _line_path(series_long_warmup, 0.0, 100.0)
+
+    # Extract the last x-coordinate from each path.
+    last_x_short = float(
+        re.findall(r"[ML]([-\d.]+),", path_short)[-1]
+    )
+    last_x_long = float(
+        re.findall(r"[ML]([-\d.]+),", path_long)[-1]
+    )
+    # Both must hit the right edge (i.e., be very close to each other).
+    assert abs(last_x_short - last_x_long) < 0.01, (
+        f"warm-up indicators misalign on right edge: "
+        f"short_warmup_last_x={last_x_short}, long_warmup_last_x={last_x_long}"
+    )
+    # And the first valid x-coordinate of the long-warmup series must NOT
+    # be at the left edge (PAD_X) — proves we're not reindexing.
+    first_x_long = float(
+        re.findall(r"[ML]([-\d.]+),", path_long)[0]
+    )
+    assert first_x_long > CHART_PAD_X + 1.0, (
+        f"long-warmup series starts at pad x={first_x_long:.2f}; "
+        f"NaN warm-up was incorrectly reindexed to the left edge"
+    )
+    # Sanity: short warm-up's first valid x is near (but past) the left pad.
+    first_x_short = float(
+        re.findall(r"[ML]([-\d.]+),", path_short)[0]
+    )
+    assert first_x_short < first_x_long, (
+        f"short_warmup first valid x ({first_x_short:.2f}) must be left of "
+        f"long_warmup first valid x ({first_x_long:.2f})"
+    )
+    # And the right edge for both is approximately CHART_W - CHART_PAD_X.
+    assert abs(last_x_short - (CHART_W - CHART_PAD_X)) < 0.5
+
+
+def test_line_path_breaks_subpath_on_interior_nan():
+    """Interior NaN gaps must break the line — not connect across the gap."""
+    from rainier.market_breadth.render import _line_path
+
+    # 10 days with a NaN gap in the middle: values exist at indices 0-3 and 6-9.
+    series = pd.Series([1.0, 2.0, 3.0, 4.0, float("nan"), float("nan"),
+                        7.0, 8.0, 9.0, 10.0])
+    path = _line_path(series, 0.0, 10.0)
+    # Must contain at least 2 `M` markers (one per subpath).
+    m_count = len(re.findall(r"\bM", path))
+    assert m_count >= 2, (
+        f"interior NaN should split into ≥2 subpaths, got {m_count} 'M' "
+        f"in path: {path!r}"
+    )
+
+
 def test_rendered_html_under_size_budget(rendered_html):
     """Render output stays under the 150KB byte budget.
 

@@ -306,24 +306,50 @@ def _scale_y(v: float, vmin: float, vmax: float) -> float:
 
 
 def _line_path(series: pd.Series, vmin: float, vmax: float) -> str:
-    """Build a single `M x,y L x,y …` path string from ``series``.
+    """Build an SVG path string from ``series``, preserving date alignment.
 
-    Skips NaN points: the path stays continuous through the next valid
-    point (SVG's path "M…L…" naturally handles this by simply not emitting
-    a coordinate for the missing day).
+    Each point's x-coordinate uses the position WITHIN THE FULL SERIES
+    (including NaN warm-up rows), not the position after dropping NaNs.
+    Without this, indicators with different warm-up periods would visually
+    misalign: e.g. `pct_above_ma_200` starts producing values at day ~200
+    while `pct_above_ma_20` starts at day ~20. Naive `dropna().tolist()`
+    would push both first-valid-points to x = PAD_X, so the same calendar
+    day would render at different x-positions across chart layers.
+
+    NaN values create path breaks. SVG supports this naturally: when we
+    hit a NaN after a valid run, emit `M` on the next valid point to
+    start a new subpath rather than `L`-connecting across the gap.
+
+    Returns a `M x,y [L x,y]…` (or multi-subpath) string. Always emits
+    at least one `M` so the test that counts `<path d=…>` still passes.
     """
-    values = series.dropna().tolist()
-    n = len(values)
-    if n < 2:
-        # Flat midline so the test counter still finds a `<path d=…>`.
+    n = len(series)
+    if n == 0:
         mid_y = CHART_H / 2.0
         return f"M{CHART_PAD_X:.2f},{mid_y:.2f} L{CHART_W - CHART_PAD_X:.2f},{mid_y:.2f}"
-    pts: list[str] = []
+
+    values = series.to_list()
+    # Count valid points to decide whether we have enough to draw at all.
+    valid_count = sum(1 for v in values if not _is_nan(v))
+    if valid_count < 2:
+        # Single point or all-NaN — fall back to a flat midline so the
+        # rendered SVG still satisfies the `<path d=…>` counter assertion.
+        mid_y = CHART_H / 2.0
+        return f"M{CHART_PAD_X:.2f},{mid_y:.2f} L{CHART_W - CHART_PAD_X:.2f},{mid_y:.2f}"
+
+    parts: list[str] = []
+    pending_move = True  # next valid point starts a subpath
     for i, v in enumerate(values):
+        if _is_nan(v):
+            # Break the line. Next valid point will start a new subpath.
+            pending_move = True
+            continue
         x = _scale_x(i, n)
         y = _scale_y(float(v), vmin, vmax)
-        pts.append(f"{x:.2f},{y:.2f}")
-    return "M" + " L".join(pts)
+        prefix = "M" if pending_move else "L"
+        parts.append(f"{prefix}{x:.2f},{y:.2f}")
+        pending_move = False
+    return " ".join(parts)
 
 
 def _axes_g() -> str:
