@@ -224,6 +224,17 @@ def parse_constituents(html: str, table_id: str = DEFAULT_TABLE_ID) -> list[dict
 # ---------------------------------------------------------------------------
 
 
+# YAML 1.1 bare-coerces a set of reserved words to bool/null:
+#   y/Y/yes/Yes/YES/n/N/no/No/NO/true/True/TRUE/false/False/FALSE/
+#   on/On/ON/off/Off/OFF/null/Null/NULL/~
+# Rainier loads YAML via pyyaml.safe_load in several places
+# (core/config.py, scheduler/jobs.py, llm_thesis/research.py, etc.) which is
+# strict YAML 1.1, so an unquoted ``ON`` (ON Semiconductor) ticker would
+# deserialize to boolean True and silently corrupt downstream membership.
+# We force-quote every symbol on render — cheap insurance against any future
+# S&P add like Y, NO, OFF that would hit the same trap.
+
+
 def _build_yaml_doc(
     entries: list[dict[str, str]],
     asof: str,
@@ -234,6 +245,12 @@ def _build_yaml_doc(
     Entries are sorted by symbol for deterministic output across runs (the
     Wikipedia table is roughly alphabetical but contains occasional
     out-of-order rows after edits; sorting locks down idempotency).
+
+    Symbol cells are emitted as single-quoted scalars unconditionally. This
+    forces every YAML 1.1 reader (including ``pyyaml.safe_load`` used in
+    several rainier loaders) to treat the value as a string, preventing
+    ``ON`` -> ``True`` and similar boolean coercions for any future ticker
+    matching YAML 1.1's reserved bool/null vocabulary.
     """
     yaml = YAML()
     yaml.indent(mapping=2, sequence=4, offset=2)
@@ -245,11 +262,13 @@ def _build_yaml_doc(
     sorted_entries = sorted(entries, key=lambda e: e["symbol"])
 
     from ruamel.yaml.comments import CommentedMap, CommentedSeq
+    from ruamel.yaml.scalarstring import SingleQuotedScalarString
 
     universe = CommentedSeq()
     for entry in sorted_entries:
         m = CommentedMap()
-        m["symbol"] = entry["symbol"]
+        # Force-quote symbol so YAML 1.1 readers never see ON -> True etc.
+        m["symbol"] = SingleQuotedScalarString(entry["symbol"])
         m["sector"] = entry["sector"]
         m.fa.set_flow_style()
         universe.append(m)

@@ -301,3 +301,59 @@ def test_seed_fails_loudly_when_required_header_missing(seed_mod, tmp_path):
         )
     # No file should be written on the failure path.
     assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — reviewer hardening: YAML 1.1 boolean-coercion regression.
+# ---------------------------------------------------------------------------
+
+
+BOOL_COERCE_HTML = """
+<!DOCTYPE html>
+<html><body>
+<table id="constituents">
+<tr>
+  <th>Symbol</th><th>Security</th><th>GICS Sector</th>
+  <th>GICS Sub-Industry</th><th>HQ</th><th>Date</th><th>CIK</th><th>Founded</th>
+</tr>
+<tr><td>ON</td><td>ON Semiconductor</td><td>Information Technology</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+<tr><td>NO</td><td>Bogus YAML 1.1 reserved</td><td>Industrials</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+<tr><td>YES</td><td>Bogus YAML 1.1 reserved</td><td>Financials</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+<tr><td>AAPL</td><td>Apple</td><td>Information Technology</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+</table>
+</body></html>
+"""
+
+
+def test_seed_force_quotes_symbols_so_pyyaml_safe_load_keeps_them_as_strings(
+    seed_mod, tmp_path
+):
+    """Rainier loads YAML via pyyaml.safe_load in several places. YAML 1.1
+    reserved words like ON/NO/YES bare-coerce to bool unless quoted, which
+    would silently swap ON Semiconductor's ticker to ``True`` in the
+    universe. The seed script must force-quote so safe_load keeps strings.
+    """
+    import yaml as pyyaml  # pyyaml — strict YAML 1.1
+
+    out = tmp_path / "sp500_universe.yaml"
+    seed_mod.seed_universe(
+        html=BOOL_COERCE_HTML,
+        out_path=out,
+        asof="2026-05-25",
+        source_url="http://example.test",
+        accept_min=1,
+        accept_max=10,
+    )
+    raw = out.read_text()
+    # File-level: each symbol value is single-quoted on disk.
+    assert "symbol: 'ON'" in raw
+    assert "symbol: 'NO'" in raw
+    assert "symbol: 'YES'" in raw
+    assert "symbol: 'AAPL'" in raw
+
+    # Round-trip through pyyaml.safe_load: every symbol stays a string.
+    data = pyyaml.safe_load(raw)
+    symbols = [e["symbol"] for e in data["universe"]]
+    for s in symbols:
+        assert isinstance(s, str), f"symbol coerced to {type(s).__name__}: {s!r}"
+    assert {"ON", "NO", "YES", "AAPL"} <= set(symbols)
