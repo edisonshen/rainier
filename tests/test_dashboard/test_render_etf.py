@@ -216,6 +216,78 @@ def test_render_does_not_touch_db(features_df, registry_df):
     assert "<html" in out.lower()
 
 
+def test_missing_cells_get_data_missing_marker():
+    """Regression: cells with missing data must carry `data-missing="1"`.
+
+    The client-side `sortEtfTable` reads `data-missing` to push missing
+    rows to the bottom regardless of sort direction. Without the marker
+    the very-negative `ytd_sort_key` would cluster missing-YTD rows at the
+    top of ascending order — wrong: missing-data is not the same as
+    "lowest value", it's "no value". The marker fixes this contract.
+    """
+    from rainier.dashboard.render_etf import render_etf_html
+
+    nan = float("nan")
+    features = pd.DataFrame(
+        [
+            {
+                "asof_date": "2026-05-25",
+                "symbol": "MISS",
+                "sector_id": 1,
+                "rank": -1,
+                "rank_delta_1d": 0,
+                "rank_delta_5d": 0,
+                "r_5": -1,
+                "r_10": -1,
+                "r_20": -1,
+                "ret_ytd": nan,
+                "top15_streak": 0,
+            },
+            {
+                "asof_date": "2026-05-25",
+                "symbol": "FULL",
+                "sector_id": 1,
+                "rank": 50,
+                "rank_delta_1d": 0,
+                "rank_delta_5d": 0,
+                "r_5": 50,
+                "r_10": 50,
+                "r_20": 50,
+                "ret_ytd": 0.1,
+                "top15_streak": 0,
+            },
+        ]
+    )
+    features["asof_date"] = features["asof_date"].astype("string")
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
+    html = render_etf_html(
+        features=features, registry=registry,
+        asof=date(2026, 5, 25), rendered_at_pt="12:40",
+    )
+
+    miss_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>MISS</td>(.*?)</tr>", html, re.DOTALL)
+    full_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>FULL</td>(.*?)</tr>", html, re.DOTALL)
+    assert miss_block and full_block, "rows not found"
+
+    # MISS row: every numeric cell with a missing value must carry data-missing="1"
+    miss_cells = miss_block.group(1)
+    assert miss_cells.count('data-missing="1"') == 5, (
+        f"expected 5 data-missing markers (rank,r5,r10,r20,ytd) on MISS row, "
+        f"got {miss_cells.count('data-missing=')!r}: {miss_cells!r}"
+    )
+
+    # FULL row: no data-missing markers — all values are real.
+    full_cells = full_block.group(1)
+    assert 'data-missing=' not in full_cells, (
+        f"FULL row should not have data-missing markers: {full_cells!r}"
+    )
+
+    # Sort JS knows to push them last.
+    assert 'data-missing' in html and "ma && !mb" in html, (
+        "sortEtfTable JS must consult data-missing"
+    )
+
+
 def test_negative_rank_sentinels_render_as_em_dash():
     """Regression: `rank == -1` and `r_5/r_10/r_20 == -1` must display as '—'.
 

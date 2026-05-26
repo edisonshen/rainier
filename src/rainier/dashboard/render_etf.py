@@ -242,11 +242,16 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
     r5_raw = _safe_int(row.get("r_5"), default=-1)
     r10_raw = _safe_int(row.get("r_10"), default=-1)
     r20_raw = _safe_int(row.get("r_20"), default=-1)
+    rank_missing = rank < 0
+    r5_missing = r5_raw < 0
+    r10_missing = r10_raw < 0
+    r20_missing = r20_raw < 0
     return {
         "sector_name": str(row["sector_name"]),
         "symbol": sym,
         "rank_int": rank,
-        "rank_text": "—" if rank < 0 else str(rank),
+        "rank_text": "—" if rank_missing else str(rank),
+        "rank_missing": rank_missing,
         # rank_color comes from _rank_color() — a hex literal we just built,
         # never touched by an external string. Safe to mark explicitly.
         "rank_color": Markup(_rank_color(rank)),
@@ -257,13 +262,19 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
         "r5": r5_raw,
         "r10": r10_raw,
         "r20": r20_raw,
-        "r5_text": "—" if r5_raw < 0 else str(r5_raw),
-        "r10_text": "—" if r10_raw < 0 else str(r10_raw),
-        "r20_text": "—" if r20_raw < 0 else str(r20_raw),
-        # Missing YTD → display "—" but sort to the bottom of either direction
-        # (use a stable very-negative key so NaN rows cluster predictably).
+        "r5_text": "—" if r5_missing else str(r5_raw),
+        "r10_text": "—" if r10_missing else str(r10_raw),
+        "r20_text": "—" if r20_missing else str(r20_raw),
+        "r5_missing": r5_missing,
+        "r10_missing": r10_missing,
+        "r20_missing": r20_missing,
+        # Missing YTD → display "—". Sort key stays a stable very-negative
+        # number so cells without `data-missing="1"` still parse cleanly;
+        # the sortEtfTable JS uses `data-missing` to push missing rows to
+        # the bottom regardless of direction.
         "ytd_pct": "—" if ret_ytd_missing else f"{ret_ytd * 100:+.1f}%",
         "ytd_sort_key": "-9.999999" if ret_ytd_missing else f"{ret_ytd:.6f}",
+        "ytd_missing": ret_ytd_missing,
         "top15_streak": _safe_int(row.get("top15_streak"), default=0),
         # Pre-rendered SVG built from numeric data ONLY (_sparkline_svg()
         # accepts a list[int] and emits a fixed-shape <svg><path/></svg>).
@@ -526,13 +537,13 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
       <tr>
         <td>{{ r.sector_name }}</td>
         <td>{{ r.symbol }}</td>
-        <td class="rank-cell" data-sort="{{ r.rank_int }}" style="background: {{ r.rank_color }}">{{ r.rank_text }}</td>
+        <td class="rank-cell" data-sort="{{ r.rank_int }}"{% if r.rank_missing %} data-missing="1"{% endif %} style="background: {{ r.rank_color }}">{{ r.rank_text }}</td>
         <td data-sort="{{ r.rank_delta_1d }}" class="{% if r.rank_delta_1d > 0 %}pos{% elif r.rank_delta_1d < 0 %}neg{% endif %}">{{ r.rank_delta_1d_text }}</td>
         <td data-sort="{{ r.rank_delta_5d }}" class="{% if r.rank_delta_5d > 0 %}pos{% elif r.rank_delta_5d < 0 %}neg{% endif %}">{{ r.rank_delta_5d_text }}</td>
-        <td data-sort="{{ r.r5 }}">{{ r.r5_text }}</td>
-        <td data-sort="{{ r.r10 }}">{{ r.r10_text }}</td>
-        <td data-sort="{{ r.r20 }}">{{ r.r20_text }}</td>
-        <td data-sort="{{ r.ytd_sort_key }}">{{ r.ytd_pct }}</td>
+        <td data-sort="{{ r.r5 }}"{% if r.r5_missing %} data-missing="1"{% endif %}>{{ r.r5_text }}</td>
+        <td data-sort="{{ r.r10 }}"{% if r.r10_missing %} data-missing="1"{% endif %}>{{ r.r10_text }}</td>
+        <td data-sort="{{ r.r20 }}"{% if r.r20_missing %} data-missing="1"{% endif %}>{{ r.r20_text }}</td>
+        <td data-sort="{{ r.ytd_sort_key }}"{% if r.ytd_missing %} data-missing="1"{% endif %}>{{ r.ytd_pct }}</td>
         <td>{{ r.sparkline_svg }}</td>
       </tr>
     {% endfor %}
@@ -542,6 +553,10 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
 {% endfor %}
 
 <script>
+// Tab table sort. Cells with data-missing="1" always sort to the BOTTOM
+// regardless of direction (so the "no data" rows don't show up at the top
+// of ascending order — they're missing, not low). The data-sort attribute
+// drives the comparison for ranked rows.
 function sortEtfTable(tableId, idx, kind) {
   const table = document.getElementById(tableId);
   if (!table) return;
@@ -552,6 +567,12 @@ function sortEtfTable(tableId, idx, kind) {
   const rows = Array.from(tbody.rows);
   rows.sort((a, b) => {
     const ca = a.cells[idx], cb = b.cells[idx];
+    const ma = ca.dataset.missing === '1';
+    const mb = cb.dataset.missing === '1';
+    // Missing rows always sink, regardless of direction.
+    if (ma && !mb) return 1;
+    if (!ma && mb) return -1;
+    if (ma && mb) return 0;
     const va = ca.dataset.sort !== undefined ? ca.dataset.sort : ca.textContent;
     const vb = cb.dataset.sort !== undefined ? cb.dataset.sort : cb.textContent;
     if (kind === 'num') {
