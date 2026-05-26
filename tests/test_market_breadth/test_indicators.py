@@ -224,6 +224,13 @@ def test_long_format_one_row_per_indicator_per_date(tmp_path) -> None:
     assert set(result.columns) == {"asof_date", "indicator", "value"}
     # One row per pair, no duplicates.
     assert result.drop_duplicates(subset=["asof_date", "indicator"]).shape == result.shape
+    # The set of indicator names in the parquet must match the canonical
+    # enumerator — guards against orchestrator drift if a new indicator gets
+    # wired into indicators.py but not into compute.py's series_map (or vice
+    # versa).
+    from rainier.market_breadth.indicators import indicator_names
+
+    assert set(result["indicator"].unique()) == set(indicator_names())
 
 
 # ---------------------------------------------------------------------------

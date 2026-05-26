@@ -129,6 +129,20 @@ def new_52w_high(df: pd.DataFrame) -> pd.Series:
     The "==" comparison is a strict tie at the per-row level: when today's
     high equals the prior 252-row max, we count it. NaN highs (warm-up
     period) are excluded.
+
+    Warm-up caveat
+    --------------
+    ``min_periods=1`` means the rolling max is computed over whatever
+    history is available, not strictly 252 rows. Until each symbol has
+    252 trading days behind it, the "max-so-far" registers a "new high"
+    on most rows (any within-history-so-far high counts). For an S&P 500
+    universe loaded from a single snapshot, all symbols share the same
+    data-start, so the unreliable window is the first ~252 trading days
+    of the input. Downstream renderers should gate to dates ≥
+    ``data_start + 252 trading days`` if presenting these series on their
+    own. The default ``epoch=2020-01-01`` for ad_cumulative /
+    mcclellan_summation already sits well past this warm-up boundary, so
+    the chart anchors are safe.
     """
     col = "high" if "high" in df.columns else "close"
     highs = _pivot(df, col)
@@ -145,6 +159,7 @@ def new_52w_high(df: pd.DataFrame) -> pd.Series:
 
 
 def new_52w_low(df: pd.DataFrame) -> pd.Series:
+    """Symmetric to :func:`new_52w_high` — same warm-up caveat applies."""
     col = "low" if "low" in df.columns else "close"
     lows = _pivot(df, col)
     rolling_min = lows.rolling(TRADING_DAYS_PER_YEAR, min_periods=1).min()
