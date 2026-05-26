@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from rainier.market_breadth import universe_loader as ul
 
 SAMPLE_YAML = """\
@@ -57,3 +59,34 @@ def test_universe_loader_reads_yaml(tmp_path):
         ("JPM", "financials"),
         ("XOM", "energy"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Malformed YAML — docstring promises ValueError, not AttributeError
+# ---------------------------------------------------------------------------
+
+
+def test_universe_loader_rejects_list_at_root(tmp_path):
+    """Root-level list (missing the `universe:` wrapper) raises ValueError.
+
+    Regression for /review iter-2: `(parsed or {}).get(...)` blew up with
+    AttributeError when the YAML root was a list, violating the docstring
+    contract that promises ValueError for malformed input.
+    """
+    p = _write_yaml(tmp_path / "bad.yaml", "- {symbol: AAPL, sector: tech}\n")
+    with pytest.raises(ValueError, match="expected top-level `universe:`"):
+        ul.load_sp500_universe(p)
+
+
+def test_universe_loader_rejects_scalar_root(tmp_path):
+    """Scalar root (e.g. a bare string) raises ValueError, not AttributeError."""
+    p = _write_yaml(tmp_path / "scalar.yaml", "just a string\n")
+    with pytest.raises(ValueError, match="expected top-level `universe:`"):
+        ul.load_sp500_universe(p)
+
+
+def test_universe_loader_rejects_empty_yaml(tmp_path):
+    """Empty YAML file raises ValueError (parsed is None → ``universe`` missing)."""
+    p = _write_yaml(tmp_path / "empty.yaml", "")
+    with pytest.raises(ValueError, match="expected top-level `universe:`"):
+        ul.load_sp500_universe(p)

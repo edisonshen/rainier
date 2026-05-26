@@ -43,7 +43,13 @@ def load_sp500_universe(yaml_path: str | Path) -> list[tuple[str, str]]:
     path = Path(yaml_path)
     parsed = yaml.safe_load(path.read_bytes())
 
-    universe = (parsed or {}).get("universe")
+    # Defensive: yaml.safe_load can return any type (None, str, list, dict).
+    # Coerce non-dict roots to {} so the `.get("universe")` lookup stays
+    # ValueError-clean (the docstring promises ValueError on malformed YAML;
+    # an AttributeError from `list.get` would violate that contract).
+    if not isinstance(parsed, dict):
+        parsed = {}
+    universe = parsed.get("universe")
     if not isinstance(universe, list):
         raise ValueError(
             f"{path}: expected top-level `universe:` to be a list of "
