@@ -79,3 +79,39 @@ jobs:
     log: "data/thematic-ranks.log"
     discord_on_failure: true
     enabled: false
+
+  # ETF ranks dashboard — DESIGN-etf-dashboard-publish.md §4/§5.
+  # 20 min before US market close: render today's snapshot, publish to
+  # fengshen.dev/trading/etf-ranks/ via git push to fengshen-site (Cloudflare
+  # Pages auto-deploys on push). The publish step is a no-op when the
+  # rendered HTML didn't change (market holiday, identical day), so cron
+  # retries are safe.
+  #
+  # The chain lives in scripts/publish-etf-dashboard.sh so the crontab line
+  # never contains `%` — cron's command field treats unescaped `%` as a
+  # line terminator + stdin marker, which would silently truncate the job.
+  # The script also guards against publishing an empty render (no data for
+  # `asof`), which the renderer produces as a valid-but-empty HTML page.
+  #
+  # DATA DEPENDENCY: this job reads `data/cache/thematic_features_daily.parquet`
+  # for today's asof_date. That file is updated by `thematic-ranks-daily`
+  # above, which (a) is currently `enabled: false` pending daily OHLCV refresh
+  # wiring, AND (b) is scheduled at 13:30 PT (post-close) while this publish
+  # job runs at 12:40 PT (pre-close, per the design's "20 min pre-close
+  # snapshot" intent). Even after OHLCV is wired, the producer would need a
+  # pre-close compute pass — or this job would need to render the latest
+  # available asof — for today's data to be ready at 12:40 PT.
+  #
+  # Until that's reconciled, this job will hit the empty-render guard on
+  # weekdays and fire a Discord alert (loud-fail, not silent corruption).
+  # Operator decision: keep `enabled: true` so the empty-render alert
+  # surfaces the data-readiness gap; flip to `false` to suppress alerts
+  # during the transition. Fixing the timing belongs to a follow-up PR that
+  # owns the pre-close compute path; this PR only ships the publish chain.
+  - name: etf-dashboard-publish
+    description: "Render ETF ranks HTML + publish to fengshen.dev/trading/etf-ranks/"
+    schedule: "40 12 * * 1-5"   # 12:40 PST, Mon-Fri (20 min pre-close)
+    command: "scripts/publish-etf-dashboard.sh"
+    log: "data/etf-dashboard.log"
+    discord_on_failure: true
+    enabled: true
