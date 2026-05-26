@@ -39,6 +39,7 @@ from pathlib import Path
 
 import pandas as pd
 from jinja2 import Environment, StrictUndefined, select_autoescape
+from markupsafe import Markup
 
 __all__ = [
     "render_etf_html",
@@ -219,7 +220,9 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
         "sector_name": str(row["sector_name"]),
         "symbol": sym,
         "rank_int": rank,
-        "rank_color": _rank_color(rank),
+        # rank_color comes from _rank_color() — a hex literal we just built,
+        # never touched by an external string. Safe to mark explicitly.
+        "rank_color": Markup(_rank_color(rank)),
         "rank_delta_1d": int(row.get("rank_delta_1d", 0) or 0),
         "rank_delta_5d": int(row.get("rank_delta_5d", 0) or 0),
         "rank_delta_1d_text": _signed_int(row.get("rank_delta_1d", 0)),
@@ -230,7 +233,10 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
         "ytd_pct": f"{ret_ytd * 100:+.1f}%",
         "ytd_sort_key": f"{ret_ytd:.6f}",
         "top15_streak": int(row.get("top15_streak", 0) or 0),
-        "sparkline_svg": sparkline_svg,
+        # Pre-rendered SVG built from numeric data ONLY (_sparkline_svg()
+        # accepts a list[int] and emits a fixed-shape <svg><path/></svg>).
+        # Marked Markup so the autoescaping template emits it as raw HTML.
+        "sparkline_svg": Markup(sparkline_svg),
     }
 
 
@@ -500,17 +506,17 @@ function sortEtfTable(tableId, idx, kind) {
 """
 
 
-# Module-level jinja environment — autoescape on, StrictUndefined for safety.
-# Sparkline SVG is pre-rendered and marked safe via the `|safe` filter when
-# we explicitly want raw HTML; here the row dict's `sparkline_svg` is HTML
-# the template emits inside a <td>, so we need autoescape OFF for that field
-# specifically. Easiest path: turn autoescape ON for default but mark
-# `sparkline_svg` with Markup-style |safe at the template site. We chose
-# the simpler route: turn off HTML autoescape (the inputs are numeric-only
-# or ticker-symbols that are bounded by exchange rules — no untrusted user
-# strings in the data path).
+# Module-level jinja environment — autoescape ON, StrictUndefined for safety.
+#
+# Why autoescape ON: the rendered HTML is published to a public path (per
+# DESIGN-etf-dashboard-publish.md), so every string-valued field that flows
+# through the template must be entity-encoded by default. `sector_name`
+# comes from `sector_registry.parquet` (human-edited config), and even the
+# ticker `symbol` is not load-bearing enough to trust unescaped. Pre-built
+# HTML fragments we DO want raw (sparkline SVG, rank-color hex) are wrapped
+# in `Markup(...)` at the `_row_to_dict` site so they pass through verbatim.
 _ENV = Environment(
-    autoescape=select_autoescape(disabled_extensions=("html",), default_for_string=False),
+    autoescape=select_autoescape(default=True, default_for_string=True),
     undefined=StrictUndefined,
     trim_blocks=False,
     lstrip_blocks=False,

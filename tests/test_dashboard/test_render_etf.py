@@ -216,6 +216,50 @@ def test_render_does_not_touch_db(features_df, registry_df):
     assert "<html" in out.lower()
 
 
+def test_html_escapes_untrusted_registry_strings():
+    """Regression: sector_name from sector_registry.parquet must be HTML-escaped.
+
+    The rendered dashboard is published to a public path. Even though the
+    registry is operator-edited, treating it as trusted means a typo with
+    a stray `<` breaks the page and a copy/paste with `<script>` becomes
+    an XSS in any browser that opens the file. Autoescape MUST be on.
+    """
+    from rainier.dashboard.render_etf import render_etf_html
+
+    features = pd.DataFrame(
+        [
+            {
+                "asof_date": "2026-05-25",
+                "symbol": "XLE",
+                "sector_id": 1,
+                "rank": 50,
+                "rank_delta_1d": 0,
+                "rank_delta_5d": 0,
+                "r_5": 50,
+                "r_10": 50,
+                "r_20": 50,
+                "ret_ytd": 0.1,
+                "top15_streak": 0,
+            }
+        ]
+    )
+    features["asof_date"] = features["asof_date"].astype("string")
+    payload = "<script>document.title='PWNED'</script>"
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": payload}])
+
+    html = render_etf_html(
+        features=features,
+        registry=registry,
+        asof=date(2026, 5, 25),
+        rendered_at_pt="12:40",
+    )
+    assert payload not in html, "untrusted sector_name leaked into HTML unescaped"
+    assert "&lt;script&gt;" in html, "sector_name was not HTML-escaped"
+    # Sparkline SVG (pre-rendered, marked Markup) must still pass through
+    # raw — verify the autoescape didn't double-escape pre-built HTML.
+    assert "<svg" in html and "<path" in html, "sparkline SVG was double-escaped"
+
+
 def test_render_works_with_missing_history(features_df, registry_df):
     """Ticker with <30 days of history renders without crashing (flat sparkline ok)."""
     from rainier.dashboard.render_etf import render_etf_html
