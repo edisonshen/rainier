@@ -33,41 +33,35 @@ from rainier.market_breadth import ohlcv_backfill as ob
 
 
 def _stub_fetch_factory(days: int = 5, anchor: str = "2024-01-02"):
-    """Return a callable matching the `fetch_fn` contract.
+    """Return a `fetch_fn` callable that records the (symbols, start, end)
+    of its most recent invocation on ``.last_args`` for window assertions.
 
     Yields `days` business days starting at `anchor` for every symbol.
     """
+    state: dict[str, object] = {"last_args": None}
 
     def _fetch(symbols, start, end):
+        state["last_args"] = (list(symbols), start, end)
         ds = pd.bdate_range(anchor, periods=days).date.tolist()
         out: dict[str, pd.DataFrame] = {}
         for i, sym in enumerate(symbols):
             base = 100.0 + i * 10.0
-            rows = []
-            for j, d in enumerate(ds):
-                rows.append(
-                    {
-                        "date": d,
-                        "open": base + j,
-                        "high": base + j + 0.5,
-                        "low": base + j - 0.5,
-                        "close": base + j + 0.25,
-                        "volume": 1000 * (j + 1),
-                    }
-                )
+            rows = [
+                {
+                    "date": d,
+                    "open": base + j,
+                    "high": base + j + 0.5,
+                    "low": base + j - 0.5,
+                    "close": base + j + 0.25,
+                    "volume": 1000 * (j + 1),
+                }
+                for j, d in enumerate(ds)
+            ]
             out[sym] = pd.DataFrame(rows)
-        return _fetch._last_args, out  # type: ignore[attr-defined]
+        return out
 
-    # patched below: tests inspect the args the script handed to fetch_fn.
-    _fetch._last_args = None  # type: ignore[attr-defined]
-
-    def _wrapped(symbols, start, end):
-        # Record the call shape so tests can assert window semantics.
-        _fetch._last_args = (list(symbols), start, end)  # type: ignore[attr-defined]
-        return _fetch(symbols, start, end)[1]
-
-    _wrapped.last_args = lambda: _fetch._last_args  # type: ignore[attr-defined]
-    return _wrapped
+    _fetch.last_args = lambda: state["last_args"]  # type: ignore[attr-defined]
+    return _fetch
 
 
 # ---------------------------------------------------------------------------
