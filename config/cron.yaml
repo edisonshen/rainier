@@ -78,10 +78,16 @@ jobs:
   # Pages auto-deploys on push). The publish step is a no-op when the
   # rendered HTML didn't change (market holiday, identical day), so cron
   # retries are safe.
+  #
+  # The chain lives in scripts/publish-etf-dashboard.sh so the crontab line
+  # never contains `%` — cron's command field treats unescaped `%` as a
+  # line terminator + stdin marker, which would silently truncate the job.
+  # The script also guards against publishing an empty render (no data for
+  # `asof`), which the renderer produces as a valid-but-empty HTML page.
   - name: etf-dashboard-publish
     description: "Render ETF ranks HTML + publish to fengshen.dev/trading/etf-ranks/"
     schedule: "40 12 * * 1-5"   # 12:40 PST, Mon-Fri (20 min pre-close)
-    command: "uv run rainier dashboard render-etf-html --asof $(date +%Y-%m-%d) --rendered-at-pt $(date +%H:%M) --output $HOME/projects/rainier/out/dashboards/etf-ranks.html && scripts/publish-dashboard.sh etf-ranks"
+    command: "scripts/publish-etf-dashboard.sh"
     log: "data/etf-dashboard.log"
     discord_on_failure: true
     enabled: true
