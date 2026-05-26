@@ -192,7 +192,8 @@ def parse_constituents(html: str, table_id: str = DEFAULT_TABLE_ID) -> list[dict
     # from being parsed as constituent rows.
     body = table.find("tbody") or table
     rows = body.find_all("tr", recursive=False)
-    skipped = 0
+    skipped_no_symbol = 0
+    skipped_no_sector = 0
     min_cells = max(sym_idx, sec_idx) + 1
     for tr in rows:
         cells = tr.find_all("td", recursive=False)
@@ -205,16 +206,28 @@ def parse_constituents(html: str, table_id: str = DEFAULT_TABLE_ID) -> list[dict
             log.warning(
                 "skip: row has empty Symbol cell (sector=%r)", sector or "<empty>"
             )
-            skipped += 1
+            skipped_no_symbol += 1
+            continue
+        normalized_sector = normalize_sector(sector)
+        if not normalized_sector:
+            # Wikipedia row had a Symbol but no GICS Sector — downstream breadth
+            # grouping requires a real sector, so skip rather than write
+            # ``sector: ''`` into the YAML.
+            log.warning(
+                "skip: row has empty/unparseable sector (symbol=%r)", symbol
+            )
+            skipped_no_sector += 1
             continue
         # Wikipedia uses "." for BRK.B, BF.B etc. yfinance prefers "-".
         # Leave as-is here; downstream consumers normalize per provider.
-        out.append({"symbol": symbol, "sector": normalize_sector(sector)})
+        out.append({"symbol": symbol, "sector": normalized_sector})
 
+    skipped = skipped_no_symbol + skipped_no_sector
     if skipped:
         log.info(
-            "parsed %d S&P 500 rows (%d skipped for missing Symbol)",
-            len(out), skipped,
+            "parsed %d S&P 500 rows (%d skipped: %d missing Symbol, "
+            "%d missing Sector)",
+            len(out), skipped, skipped_no_symbol, skipped_no_sector,
         )
     return out
 

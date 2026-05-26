@@ -325,6 +325,56 @@ BOOL_COERCE_HTML = """
 """
 
 
+EMPTY_SECTOR_HTML = """
+<!DOCTYPE html>
+<html><body>
+<table id="constituents">
+<tr>
+  <th>Symbol</th><th>Security</th><th>GICS Sector</th>
+  <th>GICS Sub-Industry</th><th>HQ</th><th>Date</th><th>CIK</th><th>Founded</th>
+</tr>
+<tr><td>AAPL</td><td>Apple</td><td>Information Technology</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+<tr><td>BOGUS</td><td>Broken row</td><td>   </td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+<tr><td>JPM</td><td>JPMorgan</td><td>Financials</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+</table>
+</body></html>
+"""
+
+
+def test_seed_skips_rows_with_empty_sector(seed_mod, tmp_path, caplog):
+    """A Wikipedia row with a present Symbol but blank GICS Sector must NOT
+    land in the YAML as ``sector: ''`` — downstream breadth grouping breaks
+    on empty sectors. The row is skipped and the skip is logged for audit.
+    """
+    import logging
+    out = tmp_path / "sp500_universe.yaml"
+    caplog.set_level(logging.WARNING)
+    n = seed_mod.seed_universe(
+        html=EMPTY_SECTOR_HTML,
+        out_path=out,
+        asof="2026-05-25",
+        source_url="http://example.test",
+        accept_min=1,
+        accept_max=10,
+    )
+    assert n == 2, "BOGUS row (empty sector) should be skipped"
+
+    from ruamel.yaml import YAML
+    yaml = YAML()
+    parsed = yaml.load(out.read_text())
+    symbols = {e["symbol"] for e in parsed["universe"]}
+    assert symbols == {"AAPL", "JPM"}
+    # No entry should have an empty sector value.
+    for e in parsed["universe"]:
+        assert e["sector"], f"empty sector slipped through for {e['symbol']!r}"
+
+    # Skip is logged so the operator can audit.
+    skip_logged = any(
+        "empty/unparseable sector" in r.message for r in caplog.records
+    )
+    assert skip_logged, "empty-sector skip should be logged"
+
+
 def test_seed_force_quotes_symbols_so_pyyaml_safe_load_keeps_them_as_strings(
     seed_mod, tmp_path
 ):
