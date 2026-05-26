@@ -64,6 +64,14 @@ DEFAULT_CHUNK_SIZE = 25
 DEFAULT_RETRIES = 1
 INCREMENTAL_WINDOW_DAYS = 5
 
+# Fail-loud threshold for the cron path: if fewer than this fraction of
+# requested symbols returned ANY rows, abort the write so the operator
+# gets a non-zero exit + Discord alert instead of a silently incomplete
+# parquet. 0.95 means "tolerate up to ~25 of 503 S&P-500 tickers being
+# missing in a single run" — well above the steady-state delisting churn
+# but below the "yfinance is having a bad day" mass-failure case.
+DEFAULT_MIN_COVERAGE = 0.95
+
 # Canonical column order. Kept identical to thematic_universe.parquet so
 # downstream breadth-indicator code can read both with the same loader.
 _COLUMN_ORDER: tuple[str, ...] = (
@@ -102,6 +110,26 @@ class RateLimitError(RuntimeError):
     exercise the retry path. Operators can also raise it from a custom
     fetcher.
     """
+
+
+class CoverageError(RuntimeError):
+    """Raised when too few requested symbols returned data — the run is
+    aborted so the operator gets a Discord alert via the cron-wrapper's
+    non-zero-exit path instead of a silently incomplete parquet.
+
+    Hold the missing-symbol list on the exception so the alert body
+    surfaces exactly which tickers failed.
+    """
+
+    def __init__(self, missing: list[str], requested: int, threshold: float) -> None:
+        self.missing = missing
+        self.requested = requested
+        self.threshold = threshold
+        super().__init__(
+            f"yfinance coverage below threshold: {len(missing)}/{requested} "
+            f"symbols returned no rows (need ≥{threshold:.0%} coverage). "
+            f"First 10 missing: {missing[:10]}"
+        )
 
 
 FetchFn = Callable[
@@ -321,6 +349,7 @@ def backfill(
     retries: int = DEFAULT_RETRIES,
     retry_sleep: Callable[[int], None] | None = None,
     today: date | None = None,
+    min_coverage: float = DEFAULT_MIN_COVERAGE,
 ) -> Path:
     """Run the backfill.
 
@@ -350,11 +379,23 @@ def backfill(
         pass ``lambda _: None`` for determinism.
     today:
         Override "today" (tests inject a fixed date). Defaults to UTC today.
+    min_coverage:
+        Minimum fraction of requested symbols that must return rows.
+        Default 0.95 (per the cron fail-loud design). Below threshold →
+        ``CoverageError`` is raised BEFORE the parquet write, so the
+        prior good parquet (if any) is preserved. Pass ``0.0`` to disable
+        the check (useful for ad-hoc operator runs against narrow
+        symbol lists).
 
     Returns
     -------
     Path
         The path actually written (equal to ``out_path``).
+
+    Raises
+    ------
+    CoverageError
+        Too few symbols returned rows. Prior parquet preserved.
     """
     symbols = list(symbols)
     if not symbols:
@@ -398,6 +439,25 @@ def backfill(
 
     new_df = _to_long_frame(all_fetched, yfinance_version, fetched_at)
 
+    # Coverage gate — fail loud BEFORE writing if too many symbols silently
+    # returned zero rows (yfinance transient outages, mass-ticker delisting,
+    # bad chunk). Cron-wrapper's discord_on_failure=true picks up the
+    # non-zero exit; the previous good parquet stays intact since we abort
+    # before _write_parquet_atomic.
+    if min_coverage > 0.0:
+        missing = [
+            sym
+            for sym in symbols
+            if all_fetched.get(sym) is None or all_fetched[sym].empty
+        ]
+        present = len(symbols) - len(missing)
+        if present < min_coverage * len(symbols):
+            raise CoverageError(
+                missing=missing,
+                requested=len(symbols),
+                threshold=min_coverage,
+            )
+
     # Upsert into the existing parquet on (symbol, date).
     merged = _upsert(new_df, out_path)
     _write_parquet_atomic(merged, out_path)
@@ -410,6 +470,16 @@ def _upsert(new_df: pd.DataFrame, out_path: Path) -> pd.DataFrame:
     Latest write wins for any overlap — rows in ``new_df`` replace prior
     rows with the same key. The full backfill case ends up rewriting every
     row; the incremental case rewrites only rows in the last 5-day window.
+
+    Stale-row caveat (codex iter-1 [P2], deferred):
+        If a symbol is dropped from ``config/sp500_universe.yaml`` between
+        runs, its existing rows linger in the parquet. Same for rows
+        outside a later ``--since`` window. The breadth pipeline joins
+        OHLCV to the YAML at compute time so stale parquet rows are
+        invisible to downstream indicators, but operators who want a
+        clean replace can ``rm data/cache/sp500_universe.parquet`` before
+        re-running the one-shot. A ``--prune-to-universe`` flag belongs
+        to the cohort-management follow-up (out of scope for this PR).
     """
     if not out_path.exists():
         return new_df

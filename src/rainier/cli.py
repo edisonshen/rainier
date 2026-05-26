@@ -3528,12 +3528,23 @@ def market_breadth() -> None:
     default=None,
     help="Symbols per yfinance call. Default: package constant (25).",
 )
+@click.option(
+    "--min-coverage",
+    type=float,
+    default=None,
+    help=(
+        "Fraction of requested symbols that must return rows; below threshold → "
+        "exit non-zero (Discord alert via cron-wrapper) and preserve prior parquet. "
+        "Default: package constant (0.95). Pass 0.0 to disable the gate."
+    ),
+)
 def market_breadth_backfill_ohlcv(
     yaml_path: str,
     since: str,
     output_path: str,
     incremental: bool,
     chunk_size: int | None,
+    min_coverage: float | None,
 ) -> None:
     """Backfill the S&P 500 OHLCV parquet via yfinance.
 
@@ -3554,6 +3565,8 @@ def market_breadth_backfill_ohlcv(
     }
     if chunk_size is not None:
         kwargs["chunk_size"] = chunk_size
+    if min_coverage is not None:
+        kwargs["min_coverage"] = min_coverage
 
     written = ohlcv_backfill.backfill(**kwargs)  # type: ignore[arg-type]
     mode = "incremental" if incremental else "one-shot"

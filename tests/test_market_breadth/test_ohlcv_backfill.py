@@ -295,3 +295,117 @@ def test_yfinance_fetch_bumps_end_by_one_day(monkeypatch):
         f"expected end bumped to 2024-03-16 (yfinance end is exclusive); "
         f"got {captured['end']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. Coverage gate — fail loud BEFORE writing when too many symbols return
+#    empty rows. Regression test for /codex review iter-1 [P1].
+#
+#    yfinance can silently drop tickers during transient outages; the
+#    earlier behaviour wrote a partial parquet and exited 0. Cron then
+#    succeeded with the operator getting no Discord alert, so the missing
+#    data sat undetected until downstream breadth indicators noticed
+#    sector counts shifting. The fix: when fewer than `min_coverage` of
+#    the requested symbols return rows, raise CoverageError and leave the
+#    prior parquet untouched (cron-wrapper picks up the non-zero exit and
+#    fires Discord).
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_raises_when_coverage_below_threshold(tmp_path):
+    """All-empty fetch must raise CoverageError, not silently write empty parquet."""
+    out = tmp_path / "sp500.parquet"
+
+    def _all_empty(symbols, start, end):  # noqa: ARG001
+        return {sym: pd.DataFrame() for sym in symbols}
+
+    with pytest.raises(ob.CoverageError) as exc_info:
+        ob.backfill(
+            symbols=["AAPL", "MSFT", "NVDA"],
+            since="2024-01-01",
+            out_path=out,
+            fetch_fn=_all_empty,
+        )
+
+    # Exception body carries the missing-symbol list so the cron Discord
+    # alert can surface which tickers failed.
+    assert exc_info.value.requested == 3
+    assert set(exc_info.value.missing) == {"AAPL", "MSFT", "NVDA"}
+    # Prior parquet preserved (in this case: never existed).
+    assert not out.exists()
+
+
+def test_backfill_preserves_prior_parquet_on_coverage_failure(tmp_path):
+    """Coverage failure must leave the on-disk parquet byte-identical.
+
+    Atomic-write contract still holds — a bad coverage day doesn't
+    corrupt yesterday's good cache.
+    """
+    out = tmp_path / "sp500.parquet"
+
+    # Seed a good parquet.
+    fetch_good = _stub_fetch_factory(days=2)
+    ob.backfill(
+        symbols=["AAPL", "MSFT"],
+        since="2024-01-01",
+        out_path=out,
+        fetch_fn=fetch_good,
+    )
+    pre_bytes = out.read_bytes()
+
+    # Re-run with a fetcher that returns nothing for either symbol.
+    def _all_empty(symbols, start, end):  # noqa: ARG001
+        return {sym: pd.DataFrame() for sym in symbols}
+
+    with pytest.raises(ob.CoverageError):
+        ob.backfill(
+            symbols=["AAPL", "MSFT"],
+            since="2024-01-01",
+            out_path=out,
+            fetch_fn=_all_empty,
+        )
+
+    # Prior parquet bytes preserved.
+    assert out.read_bytes() == pre_bytes
+
+
+def test_backfill_coverage_check_can_be_disabled(tmp_path):
+    """``min_coverage=0.0`` skips the gate — useful for ad-hoc single-ticker runs.
+
+    When the operator deliberately asks for a small universe (e.g.
+    rainier market-breadth backfill-ohlcv ... --since 2020-01-01 with
+    a 5-symbol custom YAML), a single missing ticker would otherwise
+    blow the default 95% threshold (5 → 4 = 80%).
+    """
+    out = tmp_path / "sp500.parquet"
+
+    def _half_empty(symbols, start, end):  # noqa: ARG001
+        # Only AAPL returns rows; MSFT is empty.
+        return {
+            "AAPL": pd.DataFrame(
+                [
+                    {
+                        "date": pd.Timestamp("2024-01-02").date(),
+                        "open": 100.0,
+                        "high": 100.5,
+                        "low": 99.5,
+                        "close": 100.25,
+                        "volume": 1000,
+                    }
+                ]
+            ),
+            "MSFT": pd.DataFrame(),
+        }
+
+    # Default threshold (0.95) would raise — disable it.
+    ob.backfill(
+        symbols=["AAPL", "MSFT"],
+        since="2024-01-01",
+        out_path=out,
+        fetch_fn=_half_empty,
+        min_coverage=0.0,
+    )
+
+    df = pd.read_parquet(out)
+    assert len(df) == 1
+    assert df["symbol"].tolist() == ["AAPL"]
