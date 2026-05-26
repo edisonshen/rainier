@@ -220,10 +220,19 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
     The template is dumb on purpose — strings only, no conditionals beyond
     the trivial truthy checks. Pre-formatting here keeps the renderer
     deterministic and the template tiny.
+
+    NaN handling: the prod parquet emits `NaN` for fields that aren't
+    populated yet (e.g. `ret_ytd` for a newly-added ETF before its first
+    YTD base date). Naive ``int(x or 0)`` and ``float(x or 0)`` both fail:
+    NaN is truthy AND ``int(NaN)`` raises. Every numeric pull goes through
+    the _safe_* helpers below so a missing/NaN value renders as a stable
+    "—" display token + a deterministic sort key.
     """
-    rank = int(row["rank"])
+    rank = _safe_int(row.get("rank"), default=-1)
     sym = str(row["symbol"])
-    ret_ytd = float(row.get("ret_ytd", 0.0) or 0.0)
+    ret_ytd_raw = row.get("ret_ytd")
+    ret_ytd_missing = _is_missing(ret_ytd_raw)
+    ret_ytd = 0.0 if ret_ytd_missing else float(ret_ytd_raw)
     history = history_lookup.get(sym, [])
     sparkline_svg = _sparkline_svg(history)
     return {
@@ -233,16 +242,18 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
         # rank_color comes from _rank_color() — a hex literal we just built,
         # never touched by an external string. Safe to mark explicitly.
         "rank_color": Markup(_rank_color(rank)),
-        "rank_delta_1d": int(row.get("rank_delta_1d", 0) or 0),
-        "rank_delta_5d": int(row.get("rank_delta_5d", 0) or 0),
-        "rank_delta_1d_text": _signed_int(row.get("rank_delta_1d", 0)),
-        "rank_delta_5d_text": _signed_int(row.get("rank_delta_5d", 0)),
-        "r5": int(row.get("r_5", -1) or -1),
-        "r10": int(row.get("r_10", -1) or -1),
-        "r20": int(row.get("r_20", -1) or -1),
-        "ytd_pct": f"{ret_ytd * 100:+.1f}%",
-        "ytd_sort_key": f"{ret_ytd:.6f}",
-        "top15_streak": int(row.get("top15_streak", 0) or 0),
+        "rank_delta_1d": _safe_int(row.get("rank_delta_1d"), default=0),
+        "rank_delta_5d": _safe_int(row.get("rank_delta_5d"), default=0),
+        "rank_delta_1d_text": _signed_int(row.get("rank_delta_1d")),
+        "rank_delta_5d_text": _signed_int(row.get("rank_delta_5d")),
+        "r5": _safe_int(row.get("r_5"), default=-1),
+        "r10": _safe_int(row.get("r_10"), default=-1),
+        "r20": _safe_int(row.get("r_20"), default=-1),
+        # Missing YTD → display "—" but sort to the bottom of either direction
+        # (use a stable very-negative key so NaN rows cluster predictably).
+        "ytd_pct": "—" if ret_ytd_missing else f"{ret_ytd * 100:+.1f}%",
+        "ytd_sort_key": "-9.999999" if ret_ytd_missing else f"{ret_ytd:.6f}",
+        "top15_streak": _safe_int(row.get("top15_streak"), default=0),
         # Pre-rendered SVG built from numeric data ONLY (_sparkline_svg()
         # accepts a list[int] and emits a fixed-shape <svg><path/></svg>).
         # Marked Markup so the autoescaping template emits it as raw HTML.
@@ -250,8 +261,35 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
     }
 
 
+def _is_missing(value) -> bool:
+    """True iff value is None, pd.NA, or NaN.
+
+    Centralizes the "missing-data sentinel" check. ``bool(NaN)`` is True,
+    so naive ``x or default`` does NOT substitute the default — we need
+    an explicit isna() probe.
+    """
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _safe_int(value, *, default: int) -> int:
+    """Coerce to int, falling back to ``default`` on NaN/None/pd.NA.
+
+    ``int(NaN)`` raises ValueError, and ``NaN or 0`` returns NaN because
+    NaN is truthy. Neither idiom is safe for fields that arrive as NaN
+    in the prod parquet.
+    """
+    if _is_missing(value):
+        return default
+    return int(value)
+
+
 def _signed_int(value) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if _is_missing(value):
         return "0"
     v = int(value)
     if v == 0:

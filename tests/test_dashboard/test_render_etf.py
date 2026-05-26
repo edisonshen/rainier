@@ -216,6 +216,72 @@ def test_render_does_not_touch_db(features_df, registry_df):
     assert "<html" in out.lower()
 
 
+def test_render_handles_nan_numeric_fields():
+    """Regression: NaN in any numeric field must not crash or render '+nan%'.
+
+    The prod parquet emits NaN for fields that aren't populated yet (a
+    newly added ETF before its first YTD base date, missing intermediate
+    momentum returns, etc.). Naive `x or default` does NOT substitute the
+    default because NaN is truthy; `int(NaN)` raises ValueError. Every
+    numeric pull goes through _safe_int / _is_missing so a missing value
+    renders as '—' (for percentages) or a sensible sentinel (for ints).
+    """
+    from rainier.dashboard.render_etf import render_etf_html
+
+    nan = float("nan")
+    features = pd.DataFrame(
+        [
+            {
+                "asof_date": "2026-05-25",
+                "symbol": "NEW",
+                "sector_id": 1,
+                "rank": 50,
+                "rank_delta_1d": nan,
+                "rank_delta_5d": nan,
+                "r_5": nan,
+                "r_10": nan,
+                "r_20": nan,
+                "ret_ytd": nan,
+                "top15_streak": nan,
+            },
+            {
+                "asof_date": "2026-05-25",
+                "symbol": "OLD",
+                "sector_id": 1,
+                "rank": 90,
+                "rank_delta_1d": 0,
+                "rank_delta_5d": 0,
+                "r_5": 50,
+                "r_10": 50,
+                "r_20": 50,
+                "ret_ytd": 0.15,
+                "top15_streak": 5,
+            },
+        ]
+    )
+    features["asof_date"] = features["asof_date"].astype("string")
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
+
+    # This must not raise (was crashing with int(NaN) before the fix).
+    html = render_etf_html(
+        features=features, registry=registry,
+        asof=date(2026, 5, 25), rendered_at_pt="12:40",
+    )
+    # No '+nan%' or 'nan%' or 'NaN' anywhere in rendered output.
+    assert "nan" not in html.lower() or "atkinson" in html.lower(), (
+        "NaN leaked into rendered HTML"
+    )
+    # Spot-check: the case-insensitive 'nan' substring lives inside
+    # 'Atkinson Hyperlegible' (the font name has 'nan' inside 'Atkinson').
+    # Strip the font reference before checking.
+    no_font = html.replace("Atkinson Hyperlegible", "")
+    assert "nan" not in no_font.lower(), f"NaN leak: {[m for m in no_font.lower().split() if 'nan' in m][:5]}"
+    # OLD's YTD still renders normally.
+    assert "+15.0%" in html, "OLD ticker's YTD missing or malformed"
+    # NEW's YTD missing token present.
+    assert "—" in html, "missing-YTD token '—' not rendered"
+
+
 def test_sparkline_skips_missing_rank_sentinel():
     """Regression: `rank == -1` (missing-data sentinel) must not paint as 0.
 
