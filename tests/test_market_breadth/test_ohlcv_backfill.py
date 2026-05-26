@@ -280,11 +280,24 @@ def test_yfinance_fetch_bumps_end_by_one_day(monkeypatch):
 
     captured: dict[str, object] = {}
 
+    # Return a minimal non-empty frame so the rate-limit translation
+    # (codex iter-2) doesn't trip on the empty path; we only care about
+    # the `end` argument here.
     def _fake_download(symbols, start, end, **kwargs):  # noqa: ARG001
         captured["start"] = start
         captured["end"] = end
-        # Return an empty frame; we only care about the end= we received.
-        return pd.DataFrame()
+        return pd.DataFrame(
+            [
+                {
+                    "Date": pd.Timestamp("2024-03-15"),
+                    "Open": 1.0,
+                    "High": 1.0,
+                    "Low": 1.0,
+                    "Close": 1.0,
+                    "Volume": 1,
+                }
+            ]
+        )
 
     monkeypatch.setattr(yf, "download", _fake_download)
 
@@ -367,6 +380,54 @@ def test_backfill_preserves_prior_parquet_on_coverage_failure(tmp_path):
 
     # Prior parquet bytes preserved.
     assert out.read_bytes() == pre_bytes
+
+
+def test_yfinance_fetch_translates_empty_chunk_to_rate_limit(monkeypatch):
+    """Empty yf.download return for a multi-day weekday window → RateLimitError.
+
+    Regression for /codex review iter-2 [P2]: yfinance silently records
+    per-ticker rate-limit errors and returns an empty bulk frame; without
+    this translation the caller's documented single retry never fires
+    against the real yfinance path. We use the window-shape heuristic
+    (≥2 days, includes ≥1 weekday) to keep weekend-only / single-day
+    legitimately-empty windows out of the retry path.
+    """
+    import yfinance as yf
+
+    def _fake_empty_download(symbols, start, end, **kwargs):  # noqa: ARG001
+        return pd.DataFrame()  # bulk yfinance "rate-limited" shape
+
+    monkeypatch.setattr(yf, "download", _fake_empty_download)
+
+    # Wed → Fri 2024-03-13/14/15: 2-day inclusive span = 3 days
+    # (end_wire = 2024-03-16), all weekdays → should translate.
+    with pytest.raises(ob.RateLimitError, match="transient"):
+        ob._yfinance_fetch(
+            ["AAPL", "MSFT", "NVDA"],
+            start="2024-03-13",
+            end="2024-03-15",
+        )
+
+
+def test_yfinance_fetch_empty_weekend_returns_empty_not_rate_limit(monkeypatch):
+    """Empty result over a weekend-only window is legitimate, not a rate-limit.
+
+    Sat 2024-03-16 → Sun 2024-03-17 (end_wire = Mon 2024-03-18). Days in
+    [start, end_wire) span Sat+Sun only — yfinance correctly returns
+    empty. Do NOT raise RateLimitError in this case.
+    """
+    import yfinance as yf
+
+    def _fake_empty_download(symbols, start, end, **kwargs):  # noqa: ARG001
+        return pd.DataFrame()
+
+    monkeypatch.setattr(yf, "download", _fake_empty_download)
+
+    result = ob._yfinance_fetch(
+        ["AAPL", "MSFT"], start="2024-03-16", end="2024-03-17"
+    )
+    assert set(result.keys()) == {"AAPL", "MSFT"}
+    assert all(v.empty for v in result.values())
 
 
 def test_backfill_coverage_check_can_be_disabled(tmp_path):

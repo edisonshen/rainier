@@ -202,6 +202,32 @@ def _yfinance_fetch(
 
     out: dict[str, pd.DataFrame] = {}
     if df is None or df.empty:
+        # Heuristic: yfinance returns an empty/None frame for the whole
+        # chunk on rate-limits, 429s, transient network blips, and weekend
+        # runs against an empty window. The first three are RETRYABLE; the
+        # fourth isn't (no data to return is correct). Distinguish by the
+        # requested window: a weekday window of 2+ days that returns zero
+        # rows for an entire S&P 500 chunk is almost certainly rate-
+        # limited (yfinance records per-ticker YFRateLimitError but bulk
+        # `download` swallows them into empty rows). Surface as
+        # RateLimitError so the caller's single retry actually fires.
+        # Single-day or pure-weekend windows are kept as legitimate empty.
+        try:
+            start_d = pd.to_datetime(start).date()
+            end_d = pd.to_datetime(end_wire).date()
+            window_days = (end_d - start_d).days
+            window_has_weekday = any(
+                (start_d + timedelta(days=i)).weekday() < 5
+                for i in range(max(window_days, 0))
+            )
+        except Exception:  # noqa: BLE001 — fall through to empty-frame return
+            window_has_weekday = False
+        if window_has_weekday and window_days >= 2:
+            raise RateLimitError(
+                f"yfinance returned no rows for {len(symbols)} symbols across "
+                f"{start}→{end} — treating as transient (likely rate-limit). "
+                f"First 5 symbols: {symbols[:5]}"
+            )
         return {sym: pd.DataFrame() for sym in symbols}
 
     # Multi-symbol mode returns columns = MultiIndex[(ticker, field)].
