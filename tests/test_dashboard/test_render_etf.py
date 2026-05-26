@@ -216,6 +216,56 @@ def test_render_does_not_touch_db(features_df, registry_df):
     assert "<html" in out.lower()
 
 
+def test_sparkline_skips_missing_rank_sentinel():
+    """Regression: `rank == -1` (missing-data sentinel) must not paint as 0.
+
+    The upstream pipeline writes `rank = -1` for a ticker's first ~20
+    trading days. Naive `_sparkline_svg` clamps negative ranks to 0, which
+    renders as a real bottom-of-range point and creates a fake collapse
+    curve. The history lookup must filter -1 BEFORE the SVG is built.
+    """
+    from rainier.dashboard.render_etf import render_etf_html
+
+    # Ticker NEW has 5 sentinel days then 5 valid days. Sparkline should
+    # only reflect the valid 5.
+    rows = []
+    for i, d in enumerate(["2026-05-16","2026-05-17","2026-05-18","2026-05-19","2026-05-20"]):
+        rows.append({"asof_date": d, "symbol": "NEW", "sector_id": 1, "rank": -1,
+                     "rank_delta_1d": 0, "rank_delta_5d": 0,
+                     "r_5": 50, "r_10": 50, "r_20": 50, "ret_ytd": 0.1, "top15_streak": 0})
+    for i, d in enumerate(["2026-05-21","2026-05-22","2026-05-23","2026-05-24","2026-05-25"]):
+        rows.append({"asof_date": d, "symbol": "NEW", "sector_id": 1, "rank": 90 - i,
+                     "rank_delta_1d": 0, "rank_delta_5d": 0,
+                     "r_5": 50, "r_10": 50, "r_20": 50, "ret_ytd": 0.1, "top15_streak": 0})
+    features = pd.DataFrame(rows)
+    features["asof_date"] = features["asof_date"].astype("string")
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
+    html = render_etf_html(
+        features=features, registry=registry,
+        asof=date(2026, 5, 25), rendered_at_pt="12:40",
+    )
+
+    # Pull the NEW row's sparkline path d-attribute. Each path looks like:
+    # `<path d="M0.00,3.30 L20.00,3.50 L40.00,3.70 ...">`. We extract the
+    # numeric y-values and assert NONE are clamped to the bottom-of-range
+    # (which would be _SPARK_H - _SPARK_PAD ≈ 18.5 — what y looks like
+    # when rank=0 after the invert). A flat midline rendered for missing
+    # data sits at y=10 (the _SPARK_H/2 fallback).
+    new_row = re.search(r"<td>NEW</td>(.*?)</tr>", html, re.DOTALL)
+    assert new_row, "NEW row not in rendered HTML"
+    spark_path = re.search(r'<path d="([^"]+)"', new_row.group(1))
+    assert spark_path, "NEW row missing sparkline path"
+    d_attr = spark_path.group(1)
+    # Pull y values from `Mx,y` and `Lx,y` tokens.
+    ys = [float(m.group(1)) for m in re.finditer(r"[ML][^,]+,([0-9.]+)", d_attr)]
+    # Allow a 0.5 tolerance below 18.5 — the bottom-clamp boundary.
+    bottom_clamped = [y for y in ys if y >= 18.0]
+    assert not bottom_clamped, (
+        f"sparkline has bottom-clamped points {bottom_clamped} from -1 sentinels; "
+        f"path={d_attr}"
+    )
+
+
 def test_tab_radios_are_hidden_by_a_matching_selector(rendered_html):
     """Regression: the radio inputs powering the CSS tabs must be hidden.
 

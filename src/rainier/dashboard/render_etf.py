@@ -190,15 +190,25 @@ def _normalise_asof_column(features: pd.DataFrame) -> pd.DataFrame:
 def _build_history_lookup(
     features: pd.DataFrame, asof_str: str, history_days: int
 ) -> dict[str, list[int]]:
-    """For each symbol, return up to `history_days` of `rank` values, oldest first.
+    """For each symbol, return up to `history_days` of valid `rank` values, oldest first.
 
     Only includes rows on or before `asof_str`. Truncates to the most recent
     `history_days` after sorting.
+
+    Filters out the `rank == -1` missing-data sentinel that the upstream
+    pipeline writes during a ticker's first ~20 trading days. Letting -1
+    leak into the sparkline gets clamped to 0 by `_sparkline_svg` and
+    paints a misleading "collapse → rebound" curve instead of "no data".
+    A ticker with no valid history degrades to the flat-midline branch
+    in `_sparkline_svg` (same as `<2 points`).
     """
-    cutoff = features.loc[features["asof_date"] <= asof_str, ["symbol", "asof_date", "rank"]]
-    cutoff = cutoff.sort_values(by=["symbol", "asof_date"], kind="mergesort")
+    valid = features.loc[
+        (features["asof_date"] <= asof_str) & (features["rank"] >= 0),
+        ["symbol", "asof_date", "rank"],
+    ]
+    valid = valid.sort_values(by=["symbol", "asof_date"], kind="mergesort")
     out: dict[str, list[int]] = {}
-    for sym, grp in cutoff.groupby("symbol", sort=False):
+    for sym, grp in valid.groupby("symbol", sort=False):
         ranks = grp["rank"].tolist()[-history_days:]
         out[str(sym)] = [int(v) for v in ranks]
     return out
