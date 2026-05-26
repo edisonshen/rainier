@@ -87,12 +87,19 @@ jobs:
   #
   # DATA DEPENDENCY: this job reads `data/cache/thematic_features_daily.parquet`
   # for today's asof_date. That file is updated by `thematic-ranks-daily`
-  # above, which is currently `enabled: false` pending daily OHLCV refresh
-  # wiring (see that job's comment). Until both upstream steps are running,
-  # this job will hit the empty-render guard on weekdays and fire a Discord
-  # alert (loud-fail, not silent corruption). Operator decision: keep
-  # `enabled: true` so the empty-render alert surfaces the data-readiness
-  # gap; flip to `false` to suppress alerts during the transition.
+  # above, which (a) is currently `enabled: false` pending daily OHLCV refresh
+  # wiring, AND (b) is scheduled at 13:30 PT (post-close) while this publish
+  # job runs at 12:40 PT (pre-close, per the design's "20 min pre-close
+  # snapshot" intent). Even after OHLCV is wired, the producer would need a
+  # pre-close compute pass — or this job would need to render the latest
+  # available asof — for today's data to be ready at 12:40 PT.
+  #
+  # Until that's reconciled, this job will hit the empty-render guard on
+  # weekdays and fire a Discord alert (loud-fail, not silent corruption).
+  # Operator decision: keep `enabled: true` so the empty-render alert
+  # surfaces the data-readiness gap; flip to `false` to suppress alerts
+  # during the transition. Fixing the timing belongs to a follow-up PR that
+  # owns the pre-close compute path; this PR only ships the publish chain.
   - name: etf-dashboard-publish
     description: "Render ETF ranks HTML + publish to fengshen.dev/trading/etf-ranks/"
     schedule: "40 12 * * 1-5"   # 12:40 PST, Mon-Fri (20 min pre-close)
