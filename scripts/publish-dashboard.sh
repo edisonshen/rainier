@@ -91,6 +91,17 @@ git add -- "$DST_REL"
 if git diff --cached --quiet -- "$DST_REL"; then
     # Reset the noop stage to keep the working tree pristine.
     git reset --quiet HEAD -- "$DST_REL" >/dev/null 2>&1 || true
+    # Recovery: if a prior run's commit never made it upstream (e.g., a
+    # non-fast-forward `git push` failure from an unrelated remote advance),
+    # the local branch is ahead of @{u}. Without this check, today's no-op
+    # would silently abandon that unpushed commit. Detect + push it now.
+    AHEAD="$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+    if [ "$AHEAD" -gt 0 ]; then
+        log "no-op render, but $AHEAD local commit(s) ahead of upstream — pushing"
+        git push --quiet
+        log "done (recovered unpushed commits)"
+        exit 0
+    fi
     log "no-op: rendered HTML matches the published copy (no commit)"
     exit 0
 fi

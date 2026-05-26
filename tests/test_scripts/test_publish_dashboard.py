@@ -260,7 +260,134 @@ def test_publish_bails_on_dirty_target(source_dir: Path, target_repo: Path):
 
 
 # ---------------------------------------------------------------------------
-# Test 5 — cron-wrapper integration: invokes render then publish in order.
+# Test 5 — missing source HTML produces a clean non-zero exit (no copy, no
+# commit). `set -euo pipefail` + the early `[ ! -f "$SRC" ]` guard must turn
+# this into a meaningful error, NOT a silent success.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_errors_when_source_missing(source_dir: Path, target_repo: Path):
+    """No rendered HTML at the source path → exit non-zero, no commit."""
+    name = "etf-ranks"
+    # Intentionally do NOT write `etf-ranks.html` into source_dir.
+    assert not (source_dir / f"{name}.html").exists()
+
+    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+
+    assert result.returncode != 0, (
+        f"missing source must produce non-zero exit, got rc={result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert head_before == head_after, "must not commit when source is missing"
+
+    combined = (result.stdout + result.stderr).lower()
+    assert "missing" in combined or "no such" in combined, (
+        f"expected actionable error mentioning missing source, got:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+
+    # And no file should have been published.
+    dst = target_repo / "public" / "trading" / name / "index.html"
+    assert not dst.exists(), "must not create destination when source is missing"
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — target is not a git checkout → clean non-zero exit, no file copy.
+# Protects against misconfiguration (DASHBOARD_PUBLISH_TARGET_DIR pointing at
+# a plain directory instead of the fengshen-site clone).
+# ---------------------------------------------------------------------------
+
+
+def test_publish_errors_when_target_not_git(tmp_path: Path, source_dir: Path):
+    """Non-git target → exit non-zero, no file written."""
+    name = "etf-ranks"
+    (source_dir / f"{name}.html").write_text("<html>v1</html>")
+
+    # Plain directory, no .git/ inside.
+    not_a_git_repo = tmp_path / "fengshen-site-but-not-really"
+    not_a_git_repo.mkdir()
+    assert not (not_a_git_repo / ".git").exists()
+
+    result = _run_publisher(
+        name, source_dir=source_dir, target_repo=not_a_git_repo
+    )
+    assert result.returncode != 0, (
+        f"non-git target must produce non-zero exit, got rc={result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    combined = (result.stdout + result.stderr).lower()
+    assert "not a git" in combined or "git checkout" in combined, (
+        f"expected error mentioning git checkout, got:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+
+    # And no destination directory created.
+    dst = not_a_git_repo / "public" / "trading" / name
+    assert not dst.exists(), "must not create destination on non-git target"
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — pending unpushed commits are recovered on the no-op path.
+# Regression for the "yesterday push failed + today identical render"
+# corner case where the local repo silently drifts ahead of origin.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_pushes_pending_commits_on_noop(
+    source_dir: Path, target_repo: Path
+):
+    """After a prior commit is left local-only (simulating a failed push),
+    a subsequent no-op render must detect the ahead-of-upstream state and
+    push the pending commit instead of exiting silently."""
+    name = "etf-ranks"
+    html = "<html>v1</html>"
+    (source_dir / f"{name}.html").write_text(html)
+
+    # First run: lands a commit and pushes.
+    r1 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    assert r1.returncode == 0, r1.stderr
+
+    # Simulate "yesterday's push failed" by rewinding the remote one commit.
+    # Resolve the parent SHA in the working clone (where the reflog lives),
+    # then point the bare remote's main ref at it directly. We avoid
+    # `HEAD~1` against the bare repo because its HEAD is symbolic-only.
+    remote_url = _git("config", "remote.origin.url", cwd=target_repo).strip()
+    parent_sha = _git("rev-parse", "HEAD~1", cwd=target_repo).strip()
+    _git(
+        "update-ref",
+        "refs/heads/main",
+        parent_sha,
+        cwd=Path(remote_url),
+    )
+    # Confirm we are now ahead of origin/main.
+    _git("fetch", "origin", cwd=target_repo)
+    ahead = _git(
+        "rev-list", "--count", "origin/main..HEAD", cwd=target_repo
+    ).strip()
+    assert ahead == "1", f"setup error: expected 1 ahead, got {ahead}"
+
+    # Re-run with identical source HTML → the no-op path triggers, but the
+    # pending commit must still be pushed.
+    r2 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    assert r2.returncode == 0, (
+        f"rc={r2.returncode}\nstdout: {r2.stdout}\nstderr: {r2.stderr}"
+    )
+
+    # Local and origin should be back in sync.
+    _git("fetch", "origin", cwd=target_repo)
+    local_head = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    origin_head = _git("rev-parse", "origin/main", cwd=target_repo).strip()
+    assert local_head == origin_head, (
+        f"pending commit was not recovered: local={local_head[:8]} "
+        f"origin={origin_head[:8]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — cron-wrapper integration: invokes render then publish in order.
 # ---------------------------------------------------------------------------
 
 
