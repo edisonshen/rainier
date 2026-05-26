@@ -1386,6 +1386,73 @@ async def _run_qu_detail(symbols, headed, cdp):
 
 
 # ---------------------------------------------------------------------------
+# QU DB-hygiene commands (qu-money-flow-backfill-ea9d / DESIGN v2 §3.1)
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="qu")
+def qu_group() -> None:
+    """QuantUnicorn DB-hygiene + coverage audits (read-only)."""
+
+
+@qu_group.command(name="money-flow-coverage")
+@click.option(
+    "--asof",
+    "asof_str",
+    default=None,
+    help="Audit anchor date (YYYY-MM-DD). Defaults to today.",
+)
+@click.option(
+    "--lookback-days",
+    default=30,
+    show_default=True,
+    type=int,
+    help="Calendar days of history to audit.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Emit JSON instead of the textual report (for cron + structured logs).",
+)
+def qu_money_flow_coverage(asof_str: str | None, lookback_days: int, as_json: bool) -> None:
+    """Audit money_flow_snapshots coverage; exit non-zero on alarm.
+
+    Reads the production DB (via core.database.get_session) unless tests
+    monkey-patch coverage._open_session — keeps the CLI a thin wrapper
+    over the pure-function audit so the same code path runs in unit tests
+    against an in-memory sqlite session.
+    """
+    import json as _json
+    import sys
+    from datetime import date
+
+    from rainier.scrapers.qu import coverage
+
+    if asof_str:
+        try:
+            asof = date.fromisoformat(asof_str)
+        except ValueError:
+            click.echo(f"invalid --asof: {asof_str!r}", err=True)
+            sys.exit(2)
+    else:
+        asof = date.today()
+
+    with coverage._open_session() as session:
+        report = coverage.compute_report(
+            session=session, asof=asof, lookback_days=lookback_days,
+        )
+
+    if as_json:
+        click.echo(_json.dumps(coverage.report_to_dict(report), indent=2))
+    else:
+        click.echo(coverage.render_text_report(report), nl=False)
+
+    sys.exit(report.exit_code())
+
+
+# ---------------------------------------------------------------------------
 # Scheduler service command
 # ---------------------------------------------------------------------------
 
