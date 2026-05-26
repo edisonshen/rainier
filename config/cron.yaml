@@ -84,6 +84,15 @@ jobs:
   # line terminator + stdin marker, which would silently truncate the job.
   # The script also guards against publishing an empty render (no data for
   # `asof`), which the renderer produces as a valid-but-empty HTML page.
+  #
+  # DATA DEPENDENCY: this job reads `data/cache/thematic_features_daily.parquet`
+  # for today's asof_date. That file is updated by `thematic-ranks-daily`
+  # above, which is currently `enabled: false` pending daily OHLCV refresh
+  # wiring (see that job's comment). Until both upstream steps are running,
+  # this job will hit the empty-render guard on weekdays and fire a Discord
+  # alert (loud-fail, not silent corruption). Operator decision: keep
+  # `enabled: true` so the empty-render alert surfaces the data-readiness
+  # gap; flip to `false` to suppress alerts during the transition.
   - name: etf-dashboard-publish
     description: "Render ETF ranks HTML + publish to fengshen.dev/trading/etf-ranks/"
     schedule: "40 12 * * 1-5"   # 12:40 PST, Mon-Fri (20 min pre-close)
