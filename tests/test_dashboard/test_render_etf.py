@@ -216,6 +216,31 @@ def test_render_does_not_touch_db(features_df, registry_df):
     assert "<html" in out.lower()
 
 
+def test_tab_radios_are_hidden_by_a_matching_selector(rendered_html):
+    """Regression: the radio inputs powering the CSS tabs must be hidden.
+
+    The radios live as siblings BEFORE `<div class="tabs">` (so the `~`
+    general-sibling selector that toggles `:checked ~ section` works).
+    A selector like `.tabs input[type=radio]` will NOT match them and the
+    raw OS radio buttons leak above the tab labels in the published page.
+    """
+    html = rendered_html
+    # Find a CSS rule that targets the radios specifically and hides them.
+    # We accept either `display: none` or the visually-hidden absolute pattern,
+    # as long as the rule actually mentions one of the three radio ids.
+    style_block = re.search(r"<style>(.*?)</style>", html, re.DOTALL)
+    assert style_block, "no <style> block found"
+    css = style_block.group(1)
+    targets_radio = re.search(
+        r"(input\[type=radio\]#tab-(?:all|top15|movers)|#tab-(?:all|top15|movers)\b[^,{]*\{[^}]*\b(?:display\s*:\s*none|opacity\s*:\s*0)[^}]*\})",
+        css,
+    )
+    assert targets_radio, (
+        "no CSS rule hides the tab radio inputs by id — they will render "
+        "as visible OS radio buttons above the tab labels"
+    )
+
+
 def test_html_escapes_untrusted_registry_strings():
     """Regression: sector_name from sector_registry.parquet must be HTML-escaped.
 

@@ -374,7 +374,12 @@ h1 { font-size: 1.4rem; margin: 0 0 4px; color: var(--gray-fg); }
   font-size: 0.85rem;
 }
 .tabs { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid var(--gray-line); }
-.tabs input[type=radio] { display: none; }
+/* The tab radios live as siblings BEFORE `.tabs` (the `~` general-sibling
+   selector needs them to precede the section/label nodes), so hide them by
+   id rather than by descendant-of-.tabs which doesn't match. */
+input[type=radio]#tab-all,
+input[type=radio]#tab-top15,
+input[type=radio]#tab-movers { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
 .tabs label {
   padding: 6px 16px;
   cursor: pointer;
