@@ -139,10 +139,12 @@ def _yfinance_fetch(
 ) -> dict[str, pd.DataFrame]:
     """Hit yfinance.download in chunked, multi-symbol mode.
 
-    End-bound semantics: yfinance's ``end=`` is EXCLUSIVE. To match a
-    single-sided operator contract (``--since 2020-01-01`` → include
-    today's bar if it's a trading day), the caller bumps ``end`` by +1
-    calendar day before calling here. Same convention vix + thematic land.
+    End-bound semantics: yfinance's ``end=`` is EXCLUSIVE. The caller
+    passes an INCLUSIVE end-date string (``2024-03-15`` means "include
+    the 2024-03-15 bar"); this fetcher bumps it by +1 calendar day on
+    the wire so today's bar is captured when the operator runs
+    ``--since 2020-01-01`` on a trading day. Matches the convention in
+    ``scripts/backfill_thematic_universe.py`` (line 110).
 
     Returns a per-symbol map keyed by the original (dotted) ticker so the
     caller doesn't have to undo the dash translation.
@@ -155,10 +157,14 @@ def _yfinance_fetch(
     yf_symbols = [_to_yfinance_symbol(s) for s in symbols]
     yf_to_orig = dict(zip(yf_symbols, symbols))
 
+    # Inclusive→exclusive: bump end by +1 calendar day so the user-facing
+    # ``end=2024-03-15`` includes the 2024-03-15 bar on the wire.
+    end_wire = (pd.to_datetime(end).date() + timedelta(days=1)).isoformat()
+
     df = yf.download(
         yf_symbols,
         start=start,
-        end=end,
+        end=end_wire,
         progress=False,
         auto_adjust=False,
         actions=False,

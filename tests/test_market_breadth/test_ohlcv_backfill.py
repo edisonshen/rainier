@@ -256,3 +256,42 @@ def test_partial_failure_does_not_corrupt_parquet(tmp_path):
 
     # And no `.tmp` sibling lingers next to it.
     assert not (tmp_path / "sp500.parquet.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
+# 6. End-bound bump — yfinance.end is EXCLUSIVE, so the prod fetcher must
+#    bump end by +1 calendar day before calling yf.download. Without the
+#    bump, today's bar is silently dropped on every run (the 12:40 PT
+#    cron's whole purpose is capturing today's bar pre-close, so this
+#    would be a silent data-loss bug).
+#
+#    Regression test for /review iter-1 finding.
+# ---------------------------------------------------------------------------
+
+
+def test_yfinance_fetch_bumps_end_by_one_day(monkeypatch):
+    """`_yfinance_fetch(end='2024-03-15')` must call `yf.download(end='2024-03-16')`.
+
+    yfinance's `end=` is EXCLUSIVE; the caller contract passes inclusive
+    end-date strings (matches scripts/backfill_thematic_universe.py:110).
+    Without the +1 day bump the caller's "today" bar is dropped.
+    """
+    import yfinance as yf
+
+    captured: dict[str, object] = {}
+
+    def _fake_download(symbols, start, end, **kwargs):  # noqa: ARG001
+        captured["start"] = start
+        captured["end"] = end
+        # Return an empty frame; we only care about the end= we received.
+        return pd.DataFrame()
+
+    monkeypatch.setattr(yf, "download", _fake_download)
+
+    ob._yfinance_fetch(["AAPL"], start="2024-03-01", end="2024-03-15")
+
+    assert captured["start"] == "2024-03-01"
+    assert captured["end"] == "2024-03-16", (
+        f"expected end bumped to 2024-03-16 (yfinance end is exclusive); "
+        f"got {captured['end']!r}"
+    )
