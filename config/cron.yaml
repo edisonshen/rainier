@@ -44,9 +44,17 @@ jobs:
     enabled: true
 
   - name: qu-close
-    description: "Scrape QU100 close session (ET 17:30 update → PT 15:00)"
+    description: "Scrape QU100 close session (ET 17:30 update → PT 15:00) + DB coverage audit"
     schedule: "0 15 * * 1-5"    # 15:00 PST Mon-Fri
-    command: "scripts/ensure-chrome.sh && uv run rainier scrape qu --session close --cdp http://127.0.0.1:9222"
+    # Chains the coverage audit after the scrape so cron-wrapper.sh's
+    # existing non-zero-exit → Discord alert path catches both scrape
+    # failures AND coverage gaps. Coverage exit codes per
+    # docs/TASK-PLAN-qu-money-flow-backfill-ea9d.md §Acceptance:
+    #   0  = no missing days in tail-7 (or 1 missing = warning)
+    #   1  = >1 missing in tail-7 OR table empty → fires Discord alert
+    # The coverage report's tail-1500-chars lands in the Discord embed so
+    # the operator can see which dates are missing without opening the log.
+    command: "scripts/ensure-chrome.sh && uv run rainier scrape qu --session close --cdp http://127.0.0.1:9222 && uv run rainier qu money-flow-coverage"
     log: "data/qu-scrape.log"
     enabled: true
 
