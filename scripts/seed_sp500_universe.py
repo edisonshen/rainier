@@ -104,6 +104,57 @@ def normalize_sector(raw: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _header_key(text: str) -> str:
+    """Normalize a header cell to a comparison key.
+
+    Wikipedia headers contain wiki links, footnote anchors, and stray
+    whitespace; ``get_text(strip=True)`` already trims edges but can
+    concatenate adjacent inline elements without a space
+    (e.g. ``<a>GICS</a> Sector`` -> ``GICSSector``). Lowercase + strip all
+    whitespace so ``GICS Sector``, ``GICSSector``, and ``gics  sector`` all
+    compare equal.
+    """
+    return re.sub(r"\s+", "", text).lower()
+
+
+_SYMBOL_HEADER_KEYS = {"symbol"}
+_SECTOR_HEADER_KEYS = {"gicssector"}
+
+
+def _resolve_column_indices(table) -> tuple[int, int]:
+    """Find which columns hold ``Symbol`` and ``GICS Sector`` by header name.
+
+    Looking up by header instead of fixed position protects against Wikipedia
+    reordering or inserting columns. Raises ``ValueError`` if either header
+    is missing — fail loud, so the operator catches schema drift before
+    committing a degenerate YAML.
+    """
+    header_row = table.find("tr")
+    if header_row is None:
+        raise ValueError("constituents table has no rows; Wikipedia layout changed?")
+    headers = header_row.find_all(["th", "td"], recursive=False)
+    if not headers:
+        # Some Wikipedia renders wrap headers in a <thead> — fall back to
+        # recursive search of the first row.
+        headers = header_row.find_all(["th", "td"])
+
+    sym_idx = sec_idx = -1
+    for i, h in enumerate(headers):
+        key = _header_key(h.get_text(strip=True))
+        if sym_idx == -1 and key in _SYMBOL_HEADER_KEYS:
+            sym_idx = i
+        elif sec_idx == -1 and key in _SECTOR_HEADER_KEYS:
+            sec_idx = i
+
+    if sym_idx == -1 or sec_idx == -1:
+        header_text = [h.get_text(strip=True) for h in headers]
+        raise ValueError(
+            f"could not resolve Symbol / GICS Sector columns. "
+            f"Headers found: {header_text}. Wikipedia layout changed?"
+        )
+    return sym_idx, sec_idx
+
+
 def parse_constituents(html: str, table_id: str = DEFAULT_TABLE_ID) -> list[dict[str, str]]:
     """Parse the constituents table out of the Wikipedia HTML.
 
@@ -121,6 +172,10 @@ def parse_constituents(html: str, table_id: str = DEFAULT_TABLE_ID) -> list[dict
         col 5  Date added
         col 6  CIK
         col 7  Founded
+
+    Column positions are resolved by header name (``Symbol`` / ``GICS Sector``)
+    so a future Wikipedia column reorder produces a loud error instead of a
+    silently-shifted sector mapping.
     """
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", id=table_id)
@@ -130,16 +185,22 @@ def parse_constituents(html: str, table_id: str = DEFAULT_TABLE_ID) -> list[dict
             f"Did the Wikipedia layout change?"
         )
 
+    sym_idx, sec_idx = _resolve_column_indices(table)
+
     out: list[dict[str, str]] = []
-    rows = table.find_all("tr")
+    # ``recursive=False`` keeps nested tables (sub-rows on Wikipedia edits)
+    # from being parsed as constituent rows.
+    body = table.find("tbody") or table
+    rows = body.find_all("tr", recursive=False)
     skipped = 0
+    min_cells = max(sym_idx, sec_idx) + 1
     for tr in rows:
-        cells = tr.find_all("td")
-        if len(cells) < 3:
+        cells = tr.find_all("td", recursive=False)
+        if len(cells) < min_cells:
             # Header row (uses <th>) or a non-data row — silent skip.
             continue
-        symbol = cells[0].get_text(strip=True)
-        sector = cells[2].get_text(strip=True)
+        symbol = cells[sym_idx].get_text(strip=True)
+        sector = cells[sec_idx].get_text(strip=True)
         if not symbol:
             log.warning(
                 "skip: row has empty Symbol cell (sector=%r)", sector or "<empty>"
@@ -230,12 +291,21 @@ def _atomic_write(path: Path, text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Acceptance count band — S&P 500 has 503-505 members in practice (dual-class
+# share split). Refuse to write outside this band so a broken scrape can't
+# silently commit a degenerate YAML.
+ACCEPT_MIN = 495
+ACCEPT_MAX = 510
+
+
 def seed_universe(
     html: str,
     out_path: Path,
     asof: str,
     source_url: str = DEFAULT_SOURCE,
     table_id: str = DEFAULT_TABLE_ID,
+    accept_min: int = ACCEPT_MIN,
+    accept_max: int = ACCEPT_MAX,
 ) -> int:
     """Render YAML for the constituents table in ``html``; return entry count.
 
@@ -254,16 +324,35 @@ def seed_universe(
         Recorded in the YAML for provenance.
     table_id : str
         HTML id of the constituents table. Wikipedia uses ``constituents``.
+    accept_min, accept_max : int
+        Allowed entry-count band. Counts outside this band raise
+        ``ValueError`` BEFORE the file is written, so a broken scrape (table
+        renamed, columns reordered, partial response) can never overwrite a
+        good YAML with a degenerate one. Override only when you genuinely
+        intend to seed a non-S&P-500 universe.
 
     Returns
     -------
     int
         Number of universe entries written.
+
+    Raises
+    ------
+    ValueError
+        Parsed entry count is outside ``[accept_min, accept_max]``.
     """
     entries = parse_constituents(html, table_id=table_id)
+    n = len(entries)
+    if not (accept_min <= n <= accept_max):
+        raise ValueError(
+            f"parsed {n} S&P 500 entries — outside acceptance band "
+            f"[{accept_min}, {accept_max}]. Refusing to write {out_path}. "
+            f"Likely cause: Wikipedia table schema drift; inspect the HTML "
+            f"and re-run with --from-file once verified."
+        )
     text = _build_yaml_doc(entries, asof=asof, source_url=source_url)
     _atomic_write(Path(out_path), text)
-    return len(entries)
+    return n
 
 
 # ---------------------------------------------------------------------------

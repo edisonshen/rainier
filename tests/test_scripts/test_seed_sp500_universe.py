@@ -117,11 +117,15 @@ def test_seed_skips_malformed_rows(seed_mod, tmp_path, caplog):
     out = tmp_path / "sp500_universe.yaml"
     import logging
     caplog.set_level(logging.WARNING)
+    # Synthetic fixture is tiny — relax the acceptance band so the band check
+    # doesn't shadow this skip-logging test.
     n = seed_mod.seed_universe(
         html=MALFORMED_HTML,
         out_path=out,
         asof="2026-05-25",
         source_url="http://example.test",
+        accept_min=1,
+        accept_max=10,
     )
     assert n == 2  # AAPL + MSFT; empty-symbol row dropped.
     yaml = YAML()
@@ -163,6 +167,8 @@ def test_seed_normalizes_sector_names(seed_mod, tmp_path):
         out_path=out,
         asof="2026-05-25",
         source_url="http://example.test",
+        accept_min=1,
+        accept_max=10,
     )
     yaml = YAML()
     parsed = yaml.load(out.read_text())
@@ -199,3 +205,99 @@ def test_yaml_is_idempotent(seed_mod, fixture_html, tmp_path):
     assert out1.read_bytes() == out2.read_bytes(), (
         "seed script must produce byte-identical YAML on repeat runs"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — reviewer hardening: count outside acceptance band refuses to write.
+# ---------------------------------------------------------------------------
+
+
+def test_seed_refuses_to_write_when_count_below_band(seed_mod, tmp_path):
+    """A broken scrape must never overwrite a good YAML with a degenerate one."""
+    out = tmp_path / "sp500_universe.yaml"
+    out.write_text("PRE-EXISTING\n")
+    pre_bytes = out.read_bytes()
+
+    with pytest.raises(ValueError, match="outside acceptance band"):
+        seed_mod.seed_universe(
+            html=MALFORMED_HTML,  # only ~2 rows; far below the 495 floor.
+            out_path=out,
+            asof="2026-05-25",
+            source_url="http://example.test",
+            # use default accept_min=495 to trip the guard
+        )
+
+    # Existing file must be untouched on the failure path.
+    assert out.read_bytes() == pre_bytes
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — reviewer hardening: column lookup is by header name, not fixed index.
+# ---------------------------------------------------------------------------
+
+
+REORDERED_HTML = """
+<!DOCTYPE html>
+<html><body>
+<table id="constituents">
+<tr>
+  <th>GICS Sector</th><th>Symbol</th><th>Security</th>
+  <th>GICS Sub-Industry</th><th>HQ</th><th>Date</th><th>CIK</th><th>Founded</th>
+</tr>
+<tr><td>Information Technology</td><td>AAPL</td><td>Apple</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+<tr><td>Health Care</td><td>JNJ</td><td>JNJ</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+</table>
+</body></html>
+"""
+
+
+def test_seed_resolves_columns_by_header_name(seed_mod, tmp_path):
+    """If Wikipedia ever reorders columns, header-name lookup keeps the
+    symbol/sector mapping correct instead of silently shifting."""
+    out = tmp_path / "sp500_universe.yaml"
+    seed_mod.seed_universe(
+        html=REORDERED_HTML,
+        out_path=out,
+        asof="2026-05-25",
+        source_url="http://example.test",
+        accept_min=1,
+        accept_max=10,
+    )
+    yaml = YAML()
+    parsed = yaml.load(out.read_text())
+    by_sym = {e["symbol"]: e["sector"] for e in parsed["universe"]}
+    # Mapped correctly even though Sector now comes before Symbol.
+    assert by_sym == {
+        "AAPL": "information_technology",
+        "JNJ": "health_care",
+    }
+
+
+MISSING_HEADER_HTML = """
+<!DOCTYPE html>
+<html><body>
+<table id="constituents">
+<tr>
+  <th>Ticker</th><th>Security</th><th>Industry Group</th>
+  <th>Sub-Industry</th><th>HQ</th><th>Date</th><th>CIK</th><th>Founded</th>
+</tr>
+<tr><td>AAPL</td><td>Apple</td><td>Information Technology</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+</table>
+</body></html>
+"""
+
+
+def test_seed_fails_loudly_when_required_header_missing(seed_mod, tmp_path):
+    """Wikipedia renaming the Symbol or GICS Sector header must error out."""
+    out = tmp_path / "sp500_universe.yaml"
+    with pytest.raises(ValueError, match="resolve Symbol / GICS Sector"):
+        seed_mod.seed_universe(
+            html=MISSING_HEADER_HTML,
+            out_path=out,
+            asof="2026-05-25",
+            source_url="http://example.test",
+            accept_min=1,
+            accept_max=10,
+        )
+    # No file should be written on the failure path.
+    assert not out.exists()
