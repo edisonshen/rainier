@@ -71,3 +71,17 @@ jobs:
     log: "data/thematic-ranks.log"
     discord_on_failure: true
     enabled: false
+
+  # ETF ranks dashboard — DESIGN-etf-dashboard-publish.md §4/§5.
+  # 20 min before US market close: render today's snapshot, publish to
+  # fengshen.dev/trading/etf-ranks/ via git push to fengshen-site (Cloudflare
+  # Pages auto-deploys on push). The publish step is a no-op when the
+  # rendered HTML didn't change (market holiday, identical day), so cron
+  # retries are safe.
+  - name: etf-dashboard-publish
+    description: "Render ETF ranks HTML + publish to fengshen.dev/trading/etf-ranks/"
+    schedule: "40 12 * * 1-5"   # 12:40 PST, Mon-Fri (20 min pre-close)
+    command: "uv run rainier dashboard render-etf-html --asof $(date +%Y-%m-%d) --rendered-at-pt $(date +%H:%M) --output $HOME/projects/rainier/out/dashboards/etf-ranks.html && scripts/publish-dashboard.sh etf-ranks"
+    log: "data/etf-dashboard.log"
+    discord_on_failure: true
+    enabled: true
