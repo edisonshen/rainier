@@ -127,12 +127,52 @@ def test_default_window_is_2y(rendered_html, breadth_df):
 
 
 def test_window_toggle_present(rendered_html):
-    """Output contains an <input type="radio"> AND a :checked CSS selector."""
+    """Output contains an <input type="radio"> AND a :checked CSS selector.
+
+    Also asserts the **default-on** radios are the 2y variants for both
+    A/D-cumulative and McClellan toggles. Without this, a future CSS edit
+    could swap the `checked` attribute onto the `-all` variants and the
+    default view would render the full-history chart — silently breaking
+    the "last 2y default" acceptance gate.
+    """
     html = rendered_html
     assert re.search(r"<input\b[^>]*\btype=[\"']radio[\"']", html), (
         "no <input type=radio> for the window toggle"
     )
     assert ":checked" in html, "no :checked CSS selector for the toggle"
+    # The two 2y radios MUST carry the `checked` attribute so the CSS-only
+    # default state renders the trailing-2y SVGs (not the hidden "all"
+    # variants). Match against the input element rather than the CSS
+    # selector so a stylesheet rename can't fool the assertion.
+    assert re.search(
+        r'<input\b[^>]*\bid=["\']window-ad-2y["\'][^>]*\bchecked\b', html
+    ), "default A/D radio is not the 2y variant"
+    assert re.search(
+        r'<input\b[^>]*\bid=["\']window-mc-2y["\'][^>]*\bchecked\b', html
+    ), "default McClellan radio is not the 2y variant"
+    # And the `-all` radios must NOT be checked by default.
+    assert not re.search(
+        r'<input\b[^>]*\bid=["\']window-ad-all["\'][^>]*\bchecked\b', html
+    ), "A/D 'all' radio should not be default-checked"
+    assert not re.search(
+        r'<input\b[^>]*\bid=["\']window-mc-all["\'][^>]*\bchecked\b', html
+    ), "McClellan 'all' radio should not be default-checked"
+
+
+def test_rendered_html_under_size_budget(rendered_html):
+    """Render output stays under the 150KB byte budget.
+
+    Operator's acceptance gate is "sub-100KB" (observed at 97KB during the
+    worker turn). 150KB is the **regression bar**: above that, the page
+    becomes too heavy to ship through fengshen-site's edge cache cleanly,
+    AND the gap usually means a chart blew up its point count or someone
+    embedded a binary blob. Catch it here rather than at deploy time.
+    """
+    byte_len = len(rendered_html.encode("utf-8"))
+    assert byte_len < 150_000, (
+        f"rendered HTML exceeds 150KB regression budget: {byte_len:,} bytes "
+        f"(operator target: <100KB, ratchet at >150KB)"
+    )
 
 
 def test_palette_is_green_red(rendered_html):
@@ -209,3 +249,134 @@ def test_today_snapshot_values_match_input(rendered_html, breadth_df):
     assert f">{nl}<" in html or f" {nl} " in html, f"header missing new_52w_low={nl}"
     # A/D rendered with explicit sign.
     assert f"+{ad}" in html or f"{ad:+d}" in html, f"header missing ad_diff={ad}"
+
+
+# ---------------------------------------------------------------------------
+# CLI fail-loud regression — `rainier market-breadth render-html` must NOT
+# silently publish a degenerate page when the input parquet is empty or has
+# only NaT asof_dates. Without this, `breadth["asof_date"].max()` returns
+# `pd.NaT`, `NaT.date()` returns NaT (not a real date), and the renderer's
+# `asof.isoformat()` writes the literal string "NaT" into the published HTML.
+# ---------------------------------------------------------------------------
+
+
+def test_cli_render_html_fails_loud_on_empty_parquet(tmp_path):
+    """Empty input parquet → non-zero exit + stderr error, never a stale render."""
+    from click.testing import CliRunner
+
+    from rainier.cli import cli
+
+    empty_path = tmp_path / "empty.parquet"
+    # Zero-row parquet — schema matches what compute.py emits but no rows.
+    pd.DataFrame(
+        {
+            "asof_date": pd.Series(dtype="datetime64[ns]"),
+            "indicator": pd.Series(dtype=str),
+            "value": pd.Series(dtype=float),
+        }
+    ).to_parquet(empty_path, index=False)
+    out_path = tmp_path / "market-breadth.html"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "market-breadth",
+            "render-html",
+            "--input",
+            str(empty_path),
+            "--rendered-at-pt",
+            "12:40",
+            "--output",
+            str(out_path),
+        ],
+    )
+    assert result.exit_code != 0, (
+        f"expected non-zero exit on empty parquet, got {result.exit_code}; "
+        f"output={result.output!r}"
+    )
+    assert "no rows" in result.output.lower(), (
+        f"expected fail-loud output mentioning 'no rows', got {result.output!r}"
+    )
+    # And critically: no HTML must have been written to the public path.
+    assert not out_path.exists(), (
+        f"output HTML must NOT be written on empty-parquet failure: {out_path}"
+    )
+
+
+def test_cli_render_html_fails_loud_on_all_nat_asof(tmp_path):
+    """Non-empty parquet whose every asof_date is NaT → fail-loud, no stale render."""
+    from click.testing import CliRunner
+
+    from rainier.cli import cli
+
+    nat_path = tmp_path / "nat.parquet"
+    pd.DataFrame(
+        {
+            "asof_date": [pd.NaT, pd.NaT, pd.NaT],
+            "indicator": ["pct_above_ma_20", "pct_above_ma_50", "pct_above_ma_200"],
+            "value": [50.0, 55.0, 60.0],
+        }
+    ).to_parquet(nat_path, index=False)
+    out_path = tmp_path / "market-breadth.html"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "market-breadth",
+            "render-html",
+            "--input",
+            str(nat_path),
+            "--rendered-at-pt",
+            "12:40",
+            "--output",
+            str(out_path),
+        ],
+    )
+    assert result.exit_code != 0, (
+        f"expected non-zero exit on all-NaT asof_date, got {result.exit_code}; "
+        f"output={result.output!r}"
+    )
+    assert "asof_date" in result.output.lower(), (
+        f"expected fail-loud output mentioning 'asof_date', got {result.output!r}"
+    )
+    assert not out_path.exists(), (
+        f"output HTML must NOT be written on all-NaT failure: {out_path}"
+    )
+
+
+def test_cli_render_html_auto_asof_uses_latest_row(tmp_path, breadth_df):
+    """Healthy parquet + no `--asof` → CLI resolves the latest row and renders."""
+    from click.testing import CliRunner
+
+    from rainier.cli import cli
+
+    in_path = tmp_path / "breadth.parquet"
+    breadth_df.to_parquet(in_path, index=False)
+    out_path = tmp_path / "market-breadth.html"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "market-breadth",
+            "render-html",
+            "--input",
+            str(in_path),
+            "--rendered-at-pt",
+            "12:40",
+            "--output",
+            str(out_path),
+        ],
+    )
+    assert result.exit_code == 0, (
+        f"expected success on healthy parquet, got {result.exit_code}; "
+        f"output={result.output!r}"
+    )
+    assert out_path.exists(), "output HTML must be written on success"
+    # The latest row in the fixture is 2026-05-25 — verify the auto-asof picked it.
+    html = out_path.read_text(encoding="utf-8")
+    assert "Last updated: 2026-05-25 12:40 PT" in html, (
+        "auto-asof did not resolve to the fixture's latest row"
+    )

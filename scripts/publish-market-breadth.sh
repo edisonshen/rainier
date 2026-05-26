@@ -57,6 +57,24 @@ log "render rendered_at_pt=$RENDERED_AT_PT output=$OUTPUT"
     --rendered-at-pt "$RENDERED_AT_PT" \
     --output "$OUTPUT"
 
+# Empty-render guard — mirrors scripts/publish-etf-dashboard.sh:70.
+#
+# The renderer produces a valid-but-empty HTML page when its input parquet
+# has zero rows that survive the pivot (no breadth indicators available for
+# any asof_date — e.g. an upstream compute job left an empty cache file).
+# That page contains the literal "No breadth data available" string from
+# render.py's `has_data=False` template branch. Match against it here so
+# this script never overwrites the last good dashboard with an empty one.
+#
+# The CLI's auto-`--asof` resolution ALSO fails loud on a zero-row parquet
+# (raises non-zero exit before this script reaches the guard); this guard
+# is a belt-and-suspenders defense for the case where the parquet has rows
+# but no usable indicator data — still degenerate, still must not publish.
+if grep -q 'No breadth data available' "$OUTPUT"; then
+    log "ERROR rendered market-breadth dashboard is empty (no usable breadth data) — refusing to publish"
+    exit 1
+fi
+
 log "publish slug=market-breadth"
 "$SCRIPT_DIR/publish-dashboard.sh" market-breadth
 log "done"
