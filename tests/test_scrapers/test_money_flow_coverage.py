@@ -22,7 +22,6 @@ from sqlalchemy.orm import Session
 
 from rainier.scrapers.qu import coverage
 
-
 # --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
@@ -85,19 +84,19 @@ def test_coverage_reports_clean_when_all_days_present(in_memory_session):
 
 
 def test_coverage_detects_missing_recent_day(in_memory_session):
-    # 9-day window, day 8 (Wed 2026-05-20) missing.
+    """Plan §Tests #2 + §Acceptance gate: missing days in tail-7 trip alarm.
+
+    The plan's §Acceptance line specifies "exit 1 when >1 trading day
+    missing in the last 7". To trip the alarm, we delete 2 recent days
+    and confirm both land in ``missing_dates``. (The 1-missing-only case
+    is covered by ``test_coverage_alarm_threshold_one_missing_is_warning``
+    below.)
+    """
     start = date(2026, 5, 11)
     end = date(2026, 5, 21)
-    _seed_clean_window(in_memory_session, start=start, end=end - 1, rows_per_day=100)
-    # Skip 2026-05-20, then seed only the final day so the gap is in the tail-7.
-    coverage.seed_snapshots(
-        in_memory_session,
-        start=end,
-        end=end,
-        rows_per_day=100,
-        ranking_type="top100",
-    )
-    # Now manually delete 2026-05-20 rows that the bulk seeder added.
+    _seed_clean_window(in_memory_session, start=start, end=end, rows_per_day=100)
+    # Delete 2 recent days so the alarm threshold (>1 missing) trips.
+    coverage.delete_day_for_test(in_memory_session, on_date=date(2026, 5, 19))
     coverage.delete_day_for_test(in_memory_session, on_date=date(2026, 5, 20))
 
     report = coverage.compute_report(
@@ -107,6 +106,7 @@ def test_coverage_detects_missing_recent_day(in_memory_session):
     )
 
     assert not report.is_clean()
+    assert date(2026, 5, 19) in report.missing_dates
     assert date(2026, 5, 20) in report.missing_dates
     assert report.exit_code() == 1
 
