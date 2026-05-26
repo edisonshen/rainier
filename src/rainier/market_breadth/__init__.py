@@ -19,6 +19,11 @@ Task plan:
     docs/TASK-PLAN-sp500-ohlcv-backfill-47b8.md
 """
 
-from rainier.market_breadth import ohlcv_backfill, universe_loader
+from rainier.market_breadth import (
+    compute,
+    indicators,
+    ohlcv_backfill,
+    universe_loader,
+)
 
-__all__ = ["ohlcv_backfill", "universe_loader"]
+__all__ = ["compute", "indicators", "ohlcv_backfill", "universe_loader"]

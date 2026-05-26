@@ -138,9 +138,19 @@ jobs:
   # (which seeds data/cache/sp500_universe.parquet). Operator flips
   # `enabled: true` once the one-shot is complete.
   - name: sp500-ohlcv-incremental
-    description: "Refresh sp500_universe.parquet (last 5 days, yfinance incremental)"
+    description: "Refresh sp500_universe.parquet (last 5 days, yfinance incremental) + recompute breadth indicators"
     schedule: "40 12 * * 1-5"   # 12:40 PST Mon-Fri
-    command: "uv run rainier market-breadth backfill-ohlcv --incremental"
+    # Chain: OHLCV refresh first, THEN indicator recompute. The recompute
+    # reads `data/cache/sp500_universe.parquet` so the incremental upsert
+    # must finish before it starts — `&&` enforces serial execution and
+    # propagates the OHLCV exit code (cron-wrapper's discord_on_failure
+    # path catches either step's non-zero exit).
+    #
+    # The indicator recompute is a few seconds on the full ~700k-row
+    # parquet (pivot + rolling math is pure pandas); no separate slot
+    # needed. Render step (future PR) will chain after this one as a
+    # third stage.
+    command: "uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators"
     log: "data/sp500-ohlcv.log"
     discord_on_failure: true
     enabled: false

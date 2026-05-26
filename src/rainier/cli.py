@@ -3573,6 +3573,55 @@ def market_breadth_backfill_ohlcv(
     click.echo(f"wrote sp500 OHLCV ({mode}, {len(symbols)} symbols) -> {written}")
 
 
+@market_breadth.command("compute-indicators")
+@click.option(
+    "--input",
+    "input_path",
+    type=click.Path(exists=True),
+    default="data/cache/sp500_universe.parquet",
+    show_default=True,
+    help="Path to the S&P 500 OHLCV parquet (long format).",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(),
+    default="data/cache/sp500_breadth_daily.parquet",
+    show_default=True,
+    help="Destination long-format breadth parquet.",
+)
+@click.option(
+    "--epoch",
+    default="2020-01-01",
+    show_default=True,
+    help=(
+        "Cumulative-indicator anchor (YYYY-MM-DD). ad_cumulative and "
+        "mcclellan_summation start the day strictly AFTER this date."
+    ),
+)
+def market_breadth_compute_indicators(
+    input_path: str, output_path: str, epoch: str
+) -> None:
+    """Compute the 12 S&P 500 breadth indicators and write long parquet.
+
+    Re-computes from scratch every run — cheap because the universe is
+    ~500 symbols × ~1400 trading days (~700k rows). Idempotent: same
+    input parquet → byte-identical output parquet. Cron runs this after
+    `backfill-ohlcv --incremental` so today's bar is already in place.
+    """
+    from datetime import date
+
+    from rainier.market_breadth import compute
+
+    epoch_d = date.fromisoformat(epoch)
+    written = compute.compute_indicators(
+        input_path=Path(input_path),
+        output_path=Path(output_path),
+        epoch=epoch_d,
+    )
+    click.echo(f"wrote sp500 breadth indicators -> {written}")
+
+
 # Composition root — wire the research engine's `llm-research` subgroup
 # onto the root `rainier` command. Per project CLAUDE.md the research
 # package never reaches into production CLI plumbing; we register it here

@@ -17,7 +17,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
-import pyarrow.parquet as pq
 import pytest
 
 FIXTURE_PATH = (
@@ -57,7 +56,7 @@ def test_pct_above_ma_5_known_fixture(fixture_df: pd.DataFrame) -> None:
 
 
 @pytest.mark.parametrize("window", [5, 10, 20, 50, 100, 200])
-def test_pct_above_ma_N_for_each_window(
+def test_pct_above_ma_n_for_each_window(
     fixture_df: pd.DataFrame, window: int
 ) -> None:
     """Series is finite + bounded [0, 100] at the fixture tail for every N."""
