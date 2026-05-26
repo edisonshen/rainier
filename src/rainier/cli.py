@@ -3480,6 +3480,99 @@ def thematic_snapshot_universe(
         click.echo(f"no-op: yaml SHA unchanged; {log_path} untouched")
 
 
+# ---------------------------------------------------------------------------
+# market-breadth — S&P 500 OHLCV substrate for the breadth-webpage
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="market-breadth")
+def market_breadth() -> None:
+    """S&P 500 breadth-webpage data substrate.
+
+    Twin of the `thematic` group — same shape, different universe + parquet.
+    Owns `config/sp500_universe.yaml` → `data/cache/sp500_universe.parquet`.
+    """
+
+
+@market_breadth.command("backfill-ohlcv")
+@click.option(
+    "--yaml",
+    "yaml_path",
+    type=click.Path(exists=True),
+    default="config/sp500_universe.yaml",
+    show_default=True,
+    help="Path to the S&P 500 universe YAML.",
+)
+@click.option(
+    "--since",
+    default="2020-01-01",
+    show_default=True,
+    help="One-shot backfill anchor (YYYY-MM-DD). Ignored with --incremental.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(),
+    default="data/cache/sp500_universe.parquet",
+    show_default=True,
+)
+@click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help="Fetch last 5 calendar days only, upsert into the existing parquet.",
+)
+@click.option(
+    "--chunk-size",
+    type=int,
+    default=None,
+    help="Symbols per yfinance call. Default: package constant (25).",
+)
+@click.option(
+    "--min-coverage",
+    type=float,
+    default=None,
+    help=(
+        "Fraction of requested symbols that must return rows; below threshold → "
+        "exit non-zero (Discord alert via cron-wrapper) and preserve prior parquet. "
+        "Default: package constant (0.95). Pass 0.0 to disable the gate."
+    ),
+)
+def market_breadth_backfill_ohlcv(
+    yaml_path: str,
+    since: str,
+    output_path: str,
+    incremental: bool,
+    chunk_size: int | None,
+    min_coverage: float | None,
+) -> None:
+    """Backfill the S&P 500 OHLCV parquet via yfinance.
+
+    Operator-run for the one-shot mode; cron-driven for `--incremental`.
+    The yfinance network call is real — tests mock it via a fetch_fn
+    injection point that lives in the python package, not the CLI.
+    """
+    from rainier.market_breadth import ohlcv_backfill, universe_loader
+
+    entries = universe_loader.load_sp500_universe(Path(yaml_path))
+    symbols = [sym for sym, _sec in entries]
+
+    kwargs: dict[str, object] = {
+        "symbols": symbols,
+        "since": since,
+        "out_path": Path(output_path),
+        "incremental": incremental,
+    }
+    if chunk_size is not None:
+        kwargs["chunk_size"] = chunk_size
+    if min_coverage is not None:
+        kwargs["min_coverage"] = min_coverage
+
+    written = ohlcv_backfill.backfill(**kwargs)  # type: ignore[arg-type]
+    mode = "incremental" if incremental else "one-shot"
+    click.echo(f"wrote sp500 OHLCV ({mode}, {len(symbols)} symbols) -> {written}")
+
+
 # Composition root — wire the research engine's `llm-research` subgroup
 # onto the root `rainier` command. Per project CLAUDE.md the research
 # package never reaches into production CLI plumbing; we register it here

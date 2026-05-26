@@ -115,3 +115,32 @@ jobs:
     log: "data/etf-dashboard.log"
     discord_on_failure: true
     enabled: true
+
+  # S&P 500 breadth-webpage child series — daily OHLCV refresh.
+  # docs/DESIGN-market-breadth-webpage.md §3.2.
+  #
+  # 12:40 PT is the breadth-webpage publish chain anchor: this incremental
+  # refresh runs BEFORE the (future) render step so today's bar is already
+  # in the parquet when the renderer reads it. Self-healing 5-day window
+  # forgives a missed cron yesterday.
+  #
+  # SLOT CONFLICT (40 12 * * 1-5): `etf-dashboard-publish` above shares this
+  # slot. cron spawns both jobs concurrently when both are enabled; YAML
+  # ordering here does NOT enforce serial execution (jobs.py installs each
+  # as an independent crontab line). The two jobs touch different parquet
+  # caches (`sp500_universe.parquet` vs. `thematic_features_daily.parquet`)
+  # so concurrent execution is safe today, but if a future render step on
+  # the breadth side reads `sp500_universe.parquet`, schedule it on a later
+  # minute (e.g., `45 12`) so this refresh has finished writing.
+  #
+  # Disabled at file-commit time so a fresh checkout doesn't immediately
+  # hit yfinance from a host that hasn't yet run the one-shot backfill
+  # (which seeds data/cache/sp500_universe.parquet). Operator flips
+  # `enabled: true` once the one-shot is complete.
+  - name: sp500-ohlcv-incremental
+    description: "Refresh sp500_universe.parquet (last 5 days, yfinance incremental)"
+    schedule: "40 12 * * 1-5"   # 12:40 PST Mon-Fri
+    command: "uv run rainier market-breadth backfill-ohlcv --incremental"
+    log: "data/sp500-ohlcv.log"
+    discord_on_failure: true
+    enabled: false
