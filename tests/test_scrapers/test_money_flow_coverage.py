@@ -326,6 +326,15 @@ def test_coverage_detects_stale_table_no_recent_data(in_memory_session):
     # run yet at audit time. The alarm is for days strictly before asof.
     assert date(2026, 5, 21) not in report.missing_dates_in_alarm_window
 
+    # codex iter-1 [P3]: the rendered Discord-bound report MUST surface the
+    # alarm-window dates so operators see which days are missing. Without
+    # this, `missing dates: []` shows up in the alert (because the main
+    # audit window is clamped to `latest`) even as the alarm fires.
+    rendered = coverage.render_text_report(report)
+    assert "alarm-window missing:" in rendered, rendered
+    assert "2026-05-12" in rendered
+    assert "2026-05-20" in rendered
+
 
 # --------------------------------------------------------------------------- #
 # 10. Empty table → exit 1 with distinct "table is empty" alarm

@@ -543,6 +543,19 @@ def render_text_report(report: CoverageReport) -> str:
         "missing dates:       "
         + (", ".join(d.isoformat() for d in report.missing_dates) or "[]")
     )
+    # Stale-table outages have missing_dates=[] (audit window is clamped to
+    # latest), but the alarm-window list carries the actual dates that
+    # triggered. Surface them so Discord shows operators which days the
+    # scraper missed without forcing a manual re-run.
+    if report.missing_dates_in_alarm_window and (
+        set(report.missing_dates_in_alarm_window) - set(report.missing_dates)
+    ):
+        lines.append(
+            "alarm-window missing: "
+            + ", ".join(
+                d.isoformat() for d in report.missing_dates_in_alarm_window
+            )
+        )
     if report.per_day_count:
         lines.append(
             "per-day row count:   "
