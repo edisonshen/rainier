@@ -50,6 +50,11 @@ dependencies = [
     # Round-trip YAML for the auto-research accept handler — preserves
     # comments + key order when ACTION_EXECUTORS mutate config/settings.yaml.
     "ruamel.yaml>=0.18",
+    # HTML templating — used by the publish-friendly ETF dashboard renderer
+    # at src/rainier/dashboard/render_etf.py. Already transitively present
+    # via streamlit; declaring it directly so the renderer doesn't silently
+    # depend on the streamlit-extras transitive graph.
+    "jinja2>=3.1",
 ]
 
 [project.scripts]

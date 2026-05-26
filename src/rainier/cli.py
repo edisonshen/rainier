@@ -3914,3 +3914,92 @@ def thematic_run_daily(
     target = Path(html_out) if html_out else Path(f"docs/thematic-ranks-{asof_dt}.html")
     written = render_dashboard(sub, out_path=target, asof=asof_dt)
     click.echo(f"render: wrote dashboard -> {written}")
+
+
+# ---------------------------------------------------------------------------
+# dashboard — publish-friendly self-contained HTML renderers
+# ---------------------------------------------------------------------------
+#
+# Distinct from `thematic render` (the legacy in-tree dashboard). The
+# `dashboard` group exists for the public/static-publish path:
+#   - Light + dark mode via fengshen-site CSS vars
+#   - Three CSS-toggle tab views (All / Top 15 / Movers)
+#   - Inline SVG sparklines
+#   - Deterministic: caller supplies --rendered-at-pt (no wall-clock reads)
+#
+# Design ref: docs/DESIGN-etf-dashboard-publish.md.
+
+
+@cli.group()
+def dashboard() -> None:
+    """Publish-friendly self-contained HTML dashboard renderers."""
+
+
+@dashboard.command("render-etf-html")
+@click.option(
+    "--features",
+    "features_path",
+    type=click.Path(exists=True),
+    default="data/cache/thematic_features_daily.parquet",
+    show_default=True,
+)
+@click.option(
+    "--registry",
+    "registry_path",
+    type=click.Path(exists=True),
+    default="data/cache/sector_registry.parquet",
+    show_default=True,
+)
+@click.option(
+    "--asof",
+    required=True,
+    help="Date to render (YYYY-MM-DD). The renderer slices features to this asof_date.",
+)
+@click.option(
+    "--rendered-at-pt",
+    required=True,
+    help="Wall-clock HH:MM (Pacific) for the header. Caller-supplied to keep "
+    "the renderer deterministic (no datetime.now inside the renderer).",
+)
+@click.option(
+    "--history-days",
+    type=int,
+    default=30,
+    show_default=True,
+    help="Sparkline history window per ticker.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(),
+    default="out/dashboards/etf-ranks.html",
+    show_default=True,
+)
+def dashboard_render_etf_html(
+    features_path: str,
+    registry_path: str,
+    asof: str,
+    rendered_at_pt: str,
+    history_days: int,
+    output_path: str,
+) -> None:
+    """Render the ETF-ranks self-contained HTML dashboard.
+
+    Reads `thematic_features_daily.parquet` + `sector_registry.parquet` and
+    writes a single deterministic HTML file. Sub-second runtime on the
+    operator's machine for ~94 rows × 30-day history.
+    """
+    from datetime import date as _date
+
+    from rainier.dashboard.render_etf import write_etf_html
+
+    asof_dt = _date.fromisoformat(asof)
+    written = write_etf_html(
+        features_path=features_path,
+        registry_path=registry_path,
+        output_path=output_path,
+        asof=asof_dt,
+        rendered_at_pt=rendered_at_pt,
+        history_days=history_days,
+    )
+    click.echo(f"wrote ETF dashboard -> {written}")
