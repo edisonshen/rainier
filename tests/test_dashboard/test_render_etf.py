@@ -216,6 +216,76 @@ def test_render_does_not_touch_db(features_df, registry_df):
     assert "<html" in out.lower()
 
 
+def test_negative_rank_sentinels_render_as_em_dash():
+    """Regression: `rank == -1` and `r_5/r_10/r_20 == -1` must display as '—'.
+
+    The upstream features parquet uses -1 as the "no data yet" sentinel
+    for rank-like columns during a ticker's first ~20 trading days.
+    Without explicit handling these surface as a literal `-1` in the
+    Rank / R5 / R10 / R20 cells of the published dashboard. Replace
+    them with an em-dash; sort keys keep the raw int so column sorting
+    is deterministic (missing rows cluster at the bottom of ascending).
+    """
+    from rainier.dashboard.render_etf import render_etf_html
+
+    features = pd.DataFrame(
+        [
+            {
+                "asof_date": "2026-05-25",
+                "symbol": "NEW",
+                "sector_id": 1,
+                "rank": -1,
+                "rank_delta_1d": 0,
+                "rank_delta_5d": 0,
+                "r_5": -1,
+                "r_10": -1,
+                "r_20": -1,
+                "ret_ytd": 0.0,
+                "top15_streak": 0,
+            },
+            {
+                "asof_date": "2026-05-25",
+                "symbol": "OLD",
+                "sector_id": 1,
+                "rank": 90,
+                "rank_delta_1d": 0,
+                "rank_delta_5d": 0,
+                "r_5": 50,
+                "r_10": 60,
+                "r_20": 70,
+                "ret_ytd": 0.10,
+                "top15_streak": 5,
+            },
+        ]
+    )
+    features["asof_date"] = features["asof_date"].astype("string")
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
+    html = render_etf_html(
+        features=features, registry=registry,
+        asof=date(2026, 5, 25), rendered_at_pt="12:40",
+    )
+
+    # NEW row's <td> cells should NOT contain a literal `>-1<` for any
+    # rank-like column.
+    new_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>NEW</td>(.*?)</tr>", html, re.DOTALL)
+    assert new_block, "NEW row not found in rendered HTML"
+    new_cells = new_block.group(1)
+    assert ">-1<" not in new_cells, (
+        f"raw -1 sentinel leaked into displayed cell: {new_cells!r}"
+    )
+    # The em-dash is present in those cells.
+    assert "—" in new_cells, "missing-data em-dash absent from NEW row"
+    # Sort keys must still be the raw -1 so column-click sorting works.
+    assert 'data-sort="-1"' in new_cells, "rank sort key not preserved"
+
+    # OLD row still displays its real values.
+    old_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>OLD</td>(.*?)</tr>", html, re.DOTALL)
+    assert old_block, "OLD row not found"
+    old_cells = old_block.group(1)
+    assert ">90<" in old_cells, "OLD rank display value missing"
+    assert ">50<" in old_cells, "OLD r5 display value missing"
+
+
 def test_render_handles_nan_numeric_fields():
     """Regression: NaN in any numeric field must not crash or render '+nan%'.
 

@@ -235,10 +235,18 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
     ret_ytd = 0.0 if ret_ytd_missing else float(ret_ytd_raw)
     history = history_lookup.get(sym, [])
     sparkline_svg = _sparkline_svg(history)
+    # Negative rank-like values are the upstream "missing data" sentinel
+    # — bake them into the displayed cell as an em-dash so the published
+    # dashboard never surfaces a literal `-1`. Sort keys keep the raw int
+    # so column-click sorting clusters missing rows at the bottom of asc.
+    r5_raw = _safe_int(row.get("r_5"), default=-1)
+    r10_raw = _safe_int(row.get("r_10"), default=-1)
+    r20_raw = _safe_int(row.get("r_20"), default=-1)
     return {
         "sector_name": str(row["sector_name"]),
         "symbol": sym,
         "rank_int": rank,
+        "rank_text": "—" if rank < 0 else str(rank),
         # rank_color comes from _rank_color() — a hex literal we just built,
         # never touched by an external string. Safe to mark explicitly.
         "rank_color": Markup(_rank_color(rank)),
@@ -246,9 +254,12 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
         "rank_delta_5d": _safe_int(row.get("rank_delta_5d"), default=0),
         "rank_delta_1d_text": _signed_int(row.get("rank_delta_1d")),
         "rank_delta_5d_text": _signed_int(row.get("rank_delta_5d")),
-        "r5": _safe_int(row.get("r_5"), default=-1),
-        "r10": _safe_int(row.get("r_10"), default=-1),
-        "r20": _safe_int(row.get("r_20"), default=-1),
+        "r5": r5_raw,
+        "r10": r10_raw,
+        "r20": r20_raw,
+        "r5_text": "—" if r5_raw < 0 else str(r5_raw),
+        "r10_text": "—" if r10_raw < 0 else str(r10_raw),
+        "r20_text": "—" if r20_raw < 0 else str(r20_raw),
         # Missing YTD → display "—" but sort to the bottom of either direction
         # (use a stable very-negative key so NaN rows cluster predictably).
         "ytd_pct": "—" if ret_ytd_missing else f"{ret_ytd * 100:+.1f}%",
@@ -515,12 +526,12 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
       <tr>
         <td>{{ r.sector_name }}</td>
         <td>{{ r.symbol }}</td>
-        <td class="rank-cell" data-sort="{{ r.rank_int }}" style="background: {{ r.rank_color }}">{{ r.rank_int }}</td>
+        <td class="rank-cell" data-sort="{{ r.rank_int }}" style="background: {{ r.rank_color }}">{{ r.rank_text }}</td>
         <td data-sort="{{ r.rank_delta_1d }}" class="{% if r.rank_delta_1d > 0 %}pos{% elif r.rank_delta_1d < 0 %}neg{% endif %}">{{ r.rank_delta_1d_text }}</td>
         <td data-sort="{{ r.rank_delta_5d }}" class="{% if r.rank_delta_5d > 0 %}pos{% elif r.rank_delta_5d < 0 %}neg{% endif %}">{{ r.rank_delta_5d_text }}</td>
-        <td data-sort="{{ r.r5 }}">{{ r.r5 }}</td>
-        <td data-sort="{{ r.r10 }}">{{ r.r10 }}</td>
-        <td data-sort="{{ r.r20 }}">{{ r.r20 }}</td>
+        <td data-sort="{{ r.r5 }}">{{ r.r5_text }}</td>
+        <td data-sort="{{ r.r10 }}">{{ r.r10_text }}</td>
+        <td data-sort="{{ r.r20 }}">{{ r.r20_text }}</td>
         <td data-sort="{{ r.ytd_sort_key }}">{{ r.ytd_pct }}</td>
         <td>{{ r.sparkline_svg }}</td>
       </tr>
