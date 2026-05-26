@@ -137,20 +137,24 @@ jobs:
   # hit yfinance from a host that hasn't yet run the one-shot backfill
   # (which seeds data/cache/sp500_universe.parquet). Operator flips
   # `enabled: true` once the one-shot is complete.
-  - name: sp500-ohlcv-incremental
-    description: "Refresh sp500_universe.parquet (last 5 days, yfinance incremental) + recompute breadth indicators"
-    schedule: "40 12 * * 1-5"   # 12:40 PST Mon-Fri
-    # Chain: OHLCV refresh first, THEN indicator recompute. The recompute
-    # reads `data/cache/sp500_universe.parquet` so the incremental upsert
-    # must finish before it starts — `&&` enforces serial execution and
-    # propagates the OHLCV exit code (cron-wrapper's discord_on_failure
-    # path catches either step's non-zero exit).
+  - name: market-breadth-daily
+    description: "Refresh sp500 OHLCV + compute breadth indicators + render & publish market-breadth dashboard"
+    schedule: "40 12 * * 1-5"   # 12:40 PST Mon-Fri (20 min pre-close)
+    # Full chain (DESIGN-market-breadth-webpage.md §6):
+    #   1. yfinance incremental refresh -> data/cache/sp500_universe.parquet
+    #   2. indicator recompute          -> data/cache/sp500_breadth_daily.parquet
+    #   3. render + publish             -> fengshen.dev/trading/market-breadth/
     #
-    # The indicator recompute is a few seconds on the full ~700k-row
-    # parquet (pivot + rolling math is pure pandas); no separate slot
-    # needed. Render step (future PR) will chain after this one as a
-    # third stage.
-    command: "uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators"
-    log: "data/sp500-ohlcv.log"
+    # `&&` enforces serial execution and propagates the first non-zero exit
+    # to cron-wrapper.sh, which fires the Discord alert (discord_on_failure
+    # below). Render is gated behind compute so today's bar is always
+    # reflected in the published HTML; publish step is byte-stable (no-op
+    # commit when the rendered HTML matches what's already deployed).
+    #
+    # The publish-market-breadth.sh chain-wrapper exists to keep `%` chars
+    # off the crontab (cron treats `%` as a stdin marker); compute the
+    # rendered-at HH:MM inside the script.
+    command: "uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators && scripts/publish-market-breadth.sh"
+    log: "data/market-breadth.log"
     discord_on_failure: true
     enabled: false

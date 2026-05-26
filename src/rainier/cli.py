@@ -3622,6 +3622,88 @@ def market_breadth_compute_indicators(
     click.echo(f"wrote sp500 breadth indicators -> {written}")
 
 
+@market_breadth.command("render-html")
+@click.option(
+    "--input",
+    "input_path",
+    type=click.Path(exists=True),
+    default="data/cache/sp500_breadth_daily.parquet",
+    show_default=True,
+    help="Long-format breadth parquet (asof_date, indicator, value).",
+)
+@click.option(
+    "--asof",
+    default=None,
+    help=(
+        "Display + filter date (YYYY-MM-DD). Defaults to the most recent "
+        "asof_date present in the input parquet (the cron's 'today')."
+    ),
+)
+@click.option(
+    "--rendered-at-pt",
+    required=True,
+    help="Wall-clock HH:MM (Pacific) for the header timestamp. Caller-supplied "
+    "to keep the renderer deterministic (no datetime.now inside the renderer).",
+)
+@click.option(
+    "--window-days",
+    type=int,
+    default=504,
+    show_default=True,
+    help="Trailing-window cap for the chart series (~2y default).",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(),
+    default="out/dashboards/market-breadth.html",
+    show_default=True,
+)
+def market_breadth_render_html(
+    input_path: str,
+    asof: str | None,
+    rendered_at_pt: str,
+    window_days: int,
+    output_path: str,
+) -> None:
+    """Render the S&P 500 market-breadth self-contained HTML dashboard.
+
+    Reads `data/cache/sp500_breadth_daily.parquet` and writes a single
+    deterministic HTML file. Sub-second runtime on the operator's machine
+    for ~9k rows (12 indicators × ~750 days).
+    """
+    from datetime import date as _date
+
+    import pandas as _pd
+
+    from rainier.market_breadth.render import write_breadth_html
+
+    if asof is None:
+        # Resolve asof from the parquet's last row so cron callers don't
+        # need to thread `$(date +%Y-%m-%d)` through (which would carry
+        # the same `%`-in-crontab footgun the publish-etf-dashboard.sh
+        # script was built to avoid).
+        breadth = _pd.read_parquet(input_path)
+        asof_max = breadth["asof_date"].max()
+        if hasattr(asof_max, "date"):
+            asof_dt = asof_max.date()
+        elif isinstance(asof_max, _date):
+            asof_dt = asof_max
+        else:
+            asof_dt = _date.fromisoformat(str(asof_max))
+    else:
+        asof_dt = _date.fromisoformat(asof)
+
+    written = write_breadth_html(
+        breadth_path=input_path,
+        output_path=output_path,
+        asof=asof_dt,
+        rendered_at_pt=rendered_at_pt,
+        window_days=window_days,
+    )
+    click.echo(f"wrote market-breadth dashboard -> {written}")
+
+
 # Composition root — wire the research engine's `llm-research` subgroup
 # onto the root `rainier` command. Per project CLAUDE.md the research
 # package never reaches into production CLI plumbing; we register it here
