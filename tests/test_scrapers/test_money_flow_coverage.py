@@ -286,7 +286,49 @@ def test_coverage_is_pure_db_read(in_memory_session):
 
 
 # --------------------------------------------------------------------------- #
-# 9. Empty table → exit 1 with distinct "table is empty" alarm
+# 9. Stale table — scraper stopped days ago → alarm fires.
+#
+# Regression for review iter-1: previously the `audit_end = min(asof, latest)`
+# clamp silently restricted `missing_dates` to the populated window, so an
+# 8-trading-day scraper outage produced exit 0 ("no missing days in tail-7").
+# The whole point of the alarm is to catch that.
+# --------------------------------------------------------------------------- #
+
+
+def test_coverage_detects_stale_table_no_recent_data(in_memory_session):
+    """Scraper outage: latest row in DB is 8 trading days before asof.
+
+    The alarm must fire because most of the last 7 trading days BEFORE
+    asof have no rows. Otherwise the cron-hook's whole reason for being
+    (catching scrape outages) is defeated.
+    """
+    # Seed through Mon 2026-05-11; pretend the scraper stopped that day.
+    start = date(2026, 4, 27)
+    end_seeded = date(2026, 5, 11)
+    _seed_clean_window(
+        in_memory_session, start=start, end=end_seeded, rows_per_day=100,
+    )
+    # asof = Thu 2026-05-21 → 8 trading days have passed since latest=5/11.
+    asof = date(2026, 5, 21)
+
+    report = coverage.compute_report(
+        session=in_memory_session, asof=asof, lookback_days=30,
+    )
+
+    assert report.exit_code() == 1, (
+        f"stale-table outage must trigger alarm; latest={report.latest_date} "
+        f"asof={asof} missing_in_tail={report.missing_dates_in_alarm_window}"
+    )
+    # Concrete missing days that should be flagged.
+    assert date(2026, 5, 12) in report.missing_dates_in_alarm_window
+    assert date(2026, 5, 20) in report.missing_dates_in_alarm_window
+    # asof itself (5/21) should NOT be flagged — today's scrape may not have
+    # run yet at audit time. The alarm is for days strictly before asof.
+    assert date(2026, 5, 21) not in report.missing_dates_in_alarm_window
+
+
+# --------------------------------------------------------------------------- #
+# 10. Empty table → exit 1 with distinct "table is empty" alarm
 # --------------------------------------------------------------------------- #
 
 

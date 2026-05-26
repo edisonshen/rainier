@@ -451,11 +451,32 @@ def compute_report(
     # Missing days = expected NYSE sessions in the audit window not in per_day.
     report.missing_dates = sorted(d for d in expected_days if d not in per_day)
 
-    # Alarm window: last 7 trading days up to ``asof``. Step back through
-    # trading days to find the tail-7 window start.
-    tail_days = _trading_days(asof - timedelta(days=21), asof)[-7:]
+    # Alarm window: the last 7 trading days strictly BEFORE ``asof`` that
+    # the table has been operational for. Computed independently of the
+    # ``audit_end = min(asof, latest)`` clamp so a scraper outage (latest
+    # << asof) still trips the alarm — otherwise `missing_dates` collapses
+    # to [] because the audit window itself shrinks to match the data,
+    # and an 8-trading-day outage produces exit 0 (regression iter-1).
+    #
+    # ``asof`` is excluded from the must-exist set when it is itself a
+    # trading day, because the same-day scrape may not have run yet at
+    # audit time. The alarm targets days that should already be present.
+    tail_window_all = _trading_days(asof - timedelta(days=21), asof)
+    if tail_window_all and tail_window_all[-1] == asof:
+        candidate_tail = tail_window_all[:-1]
+    else:
+        candidate_tail = tail_window_all
+    # Trim to >= earliest so pre-table dates aren't synthesized as missing.
+    candidate_tail = [d for d in candidate_tail if d >= earliest]
+    must_exist = candidate_tail[-7:]
+    if must_exist:
+        tail_present = _row_counts_by_day(
+            session, must_exist[0], must_exist[-1],
+        )
+    else:
+        tail_present = {}
     report.missing_dates_in_alarm_window = sorted(
-        d for d in tail_days if d in report.missing_dates
+        d for d in must_exist if d not in tail_present
     )
 
     # Null-rate audit on the production NOT-NULL columns.
@@ -470,7 +491,7 @@ def compute_report(
     if missing_in_tail > report.alarm_threshold:
         report.alarm_text = (
             f"{missing_in_tail} trading days missing in the last "
-            f"{len(tail_days)} — alarm threshold is "
+            f"{len(must_exist)} — alarm threshold is "
             f"{report.alarm_threshold}"
         )
     elif missing_in_tail >= 1:
