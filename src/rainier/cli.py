@@ -4522,6 +4522,20 @@ def dashboard_render_etf_html(
     default="out/dashboards/trading.html",
     show_default=True,
 )
+@click.option(
+    "--names-path",
+    "names_path",
+    type=click.Path(),
+    default="data/cache/etf_names.parquet",
+    show_default=True,
+    help=(
+        "Optional ETF names parquet (from `thematic backfill-names`). "
+        "When present, the ETF tab's Name column renders yfinance "
+        "longName; missing or unreadable → falls back to the symbol "
+        "itself (same fallback semantics as the standalone "
+        "`/trading/etf-ranks/` page)."
+    ),
+)
 def dashboard_render_combined(
     breadth_path: str,
     features_path: str,
@@ -4532,6 +4546,7 @@ def dashboard_render_combined(
     history_days: int,
     window_days: int,
     output_path: str,
+    names_path: str,
 ) -> None:
     """Render the combined trading dashboard (breadth + ETF ranks) to HTML.
 
@@ -4576,6 +4591,12 @@ def dashboard_render_combined(
     else:
         asof_dt = _date.fromisoformat(asof)
 
+    # Mirror the standalone `render-etf-html` CLI: the default points at
+    # the cache path, but pass None to the renderer when the file doesn't
+    # exist so the renderer's symbol-fallback kicks in cleanly (no
+    # spurious "file not found" surprise).
+    names_arg: str | None = names_path if Path(names_path).exists() else None
+
     written = write_combined_html(
         breadth_path=breadth_path,
         features_path=features_path,
@@ -4586,5 +4607,6 @@ def dashboard_render_combined(
         rendered_at_pt=rendered_at_pt,
         history_days=history_days,
         window_days=window_days,
+        names_path=names_arg,
     )
     click.echo(f"wrote trading dashboard -> {written}")

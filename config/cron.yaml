@@ -196,6 +196,18 @@ jobs:
   # commits to the same fengshen-site checkout; only one can hold it at a
   # time).
   #
+  # WALL-CLOCK DEPENDENCIES (jobs.py installs each job as an independent
+  # crontab line — no `depends_on:` graph). The schedule below assumes:
+  #   - `etf-names-refresh`       (12:35 PT) — keeps data/cache/etf_names.parquet
+  #                                fresh so the ETF tab's Name column shows
+  #                                yfinance longName instead of the symbol
+  #                                fallback (PR #100 / this PR).
+  #   - `etf-dashboard-publish`   (12:40 PT) — refreshes the ETF features
+  #                                parquet read by the combined render.
+  #   - `market-breadth-daily`    (12:45 PT) — refreshes the breadth parquet.
+  # 15-minute lead time on names-refresh leaves comfortable headroom; if
+  # any of those slots shift, re-verify this job still runs LAST.
+  #
   # D4 from the design: standalone URLs `/trading/etf-ranks/` and
   # `/trading/market-breadth/` keep publishing in addition to this one —
   # no 301 redirects. All three URLs go live on the same publish push
