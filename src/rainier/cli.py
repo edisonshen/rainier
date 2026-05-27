@@ -4460,8 +4460,8 @@ def dashboard_render_combined(
 ) -> None:
     """Render the combined trading dashboard (breadth + ETF ranks) to HTML.
 
-    DESIGN-trading-dashboard-combined-v1.md §2 — one URL
-    (`/trading/dashboard/`) with shared header + top-level tabs over both
+    DESIGN-trading-dashboard-combined-v1.md §2 + §4 D1 — one URL
+    (`/trading/`) with shared header + top-level tabs over both
     the S&P 500 breadth view and the ETF ranks table. Standalone breadth +
     ETF render-html commands still ship the per-page URLs (D4 — keep all
     three URLs, no 301).

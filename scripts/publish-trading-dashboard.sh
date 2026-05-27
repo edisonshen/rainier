@@ -1,6 +1,6 @@
 #!/bin/bash
 # publish-trading-dashboard.sh — render the combined trading dashboard
-# (breadth + ETF ranks) and publish to fengshen.dev/trading/dashboard/.
+# (breadth + ETF ranks) and publish to fengshen.dev/trading/.
 #
 # Mirrors scripts/publish-market-breadth.sh + scripts/publish-etf-dashboard.sh
 # in shape:
@@ -8,7 +8,11 @@
 #   1. Compute the rendered-at HH:MM HERE (not in crontab) so `%` chars never
 #      reach cron's command field.
 #   2. Render the HTML via `rainier dashboard render-combined`.
-#   3. Hand off to the generic publisher (`publish-dashboard.sh dashboard`).
+#   3. Hand off to the generic publisher (`publish-dashboard.sh dashboard --root`).
+#      The `--root` flag promotes the file to `public/trading/index.html`
+#      (i.e. `/trading/`) instead of the default `public/trading/dashboard/index.html`
+#      — DESIGN-trading-dashboard-combined-v1.md §4 D1 (operator override
+#      2026-05-27 "the url will be /trading").
 #
 # Cron sequencing (config/cron.yaml):
 #   - market-breadth-daily   refreshes data/cache/sp500_breadth_daily.parquet
@@ -17,7 +21,7 @@
 #   - etf-dashboard-publish  reads data/cache/thematic_features_daily.parquet
 #                            and renders the standalone /trading/etf-ranks/.
 #   - trading-dashboard      runs LAST and composes both feeds into one HTML
-#                            at /trading/dashboard/.
+#                            at /trading/.
 #
 # DESIGN-trading-dashboard-combined-v1.md §5: standalone URLs continue to
 # publish — D4 keeps all three URLs without 301.
@@ -80,6 +84,6 @@ if grep -q 'No breadth data available' "$OUTPUT" \
     exit 1
 fi
 
-log "publish slug=dashboard"
-"$SCRIPT_DIR/publish-dashboard.sh" dashboard
+log "publish slug=dashboard root=1"
+"$SCRIPT_DIR/publish-dashboard.sh" dashboard --root
 log "done"

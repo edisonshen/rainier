@@ -3,17 +3,25 @@
 # Astro `public/` tree, commit + push so Cloudflare Pages auto-deploys.
 #
 # Usage:
-#   scripts/publish-dashboard.sh <name>
+#   scripts/publish-dashboard.sh <name>           # publishes to /trading/<name>/
+#   scripts/publish-dashboard.sh <name> --root    # publishes to /trading/ (root)
 #
-# <name> is the dashboard slug (e.g. `etf-ranks`, `market-breadth`).
+# <name> is the dashboard slug (e.g. `etf-ranks`, `market-breadth`, `dashboard`).
 # The same script is reused across dashboards — keep it generic.
+#
+# The `--root` flag promotes the dashboard to the `/trading/` landing page
+# rather than nesting it under `/trading/<name>/`. Used by the combined
+# trading dashboard (DESIGN-trading-dashboard-combined-v1.md §4 D1 —
+# "the url will be /trading"). The source HTML is still read from
+# `$DASHBOARD_SOURCE_DIR/<name>.html`; only the destination path changes.
 #
 # ASCII flow:
 #
 #   rainier render CLI ─▶ $DASHBOARD_SOURCE_DIR/<name>.html
 #                                │
 #                                ▼   cp (creates dirs)
-#                    $DASHBOARD_PUBLISH_TARGET_DIR/public/trading/<name>/index.html
+#                    default:    $DASHBOARD_PUBLISH_TARGET_DIR/public/trading/<name>/index.html
+#                    with --root: $DASHBOARD_PUBLISH_TARGET_DIR/public/trading/index.html
 #                                │
 #                                ▼   git diff --quiet ?
 #                          ┌──────┴───────┐
@@ -32,7 +40,8 @@
 # Bootstrap note: the first publish for a brand-new <name> creates
 # `public/trading/<name>/` inside fengshen-site automatically — no manual
 # `.gitkeep` pre-step required. Astro serves `public/` verbatim, so the
-# rendered HTML lives at `https://fengshen.dev/trading/<name>/`.
+# rendered HTML lives at `https://fengshen.dev/trading/<name>/` (or
+# `https://fengshen.dev/trading/` when `--root` is set).
 
 set -euo pipefail
 
@@ -40,11 +49,26 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '%s [publish-dashboard] %s\n' "$(ts)" "$*"; }
 
 if [ $# -lt 1 ]; then
-    echo "usage: $(basename "$0") <name>" >&2
+    echo "usage: $(basename "$0") <name> [--root]" >&2
     exit 2
 fi
 
 NAME="$1"
+ROOT_PUBLISH=0
+shift
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --root)
+            ROOT_PUBLISH=1
+            shift
+            ;;
+        *)
+            echo "error: unknown flag: $1" >&2
+            echo "usage: $(basename "$0") <name> [--root]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 # Sanity: slug must be filesystem-safe (no path traversal).
 case "$NAME" in
@@ -57,7 +81,11 @@ esac
 SOURCE_DIR="${DASHBOARD_SOURCE_DIR:-$HOME/projects/rainier/out/dashboards}"
 TARGET_DIR="${DASHBOARD_PUBLISH_TARGET_DIR:-$HOME/projects/fengshen-site}"
 SRC="$SOURCE_DIR/$NAME.html"
-DST_REL="public/trading/$NAME/index.html"
+if [ "$ROOT_PUBLISH" -eq 1 ]; then
+    DST_REL="public/trading/index.html"
+else
+    DST_REL="public/trading/$NAME/index.html"
+fi
 DST="$TARGET_DIR/$DST_REL"
 
 log "name=$NAME source=$SRC target=$TARGET_DIR"

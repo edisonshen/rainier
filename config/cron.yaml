@@ -168,8 +168,9 @@ jobs:
     enabled: false
 
   # Combined trading dashboard — DESIGN-trading-dashboard-combined-v1.md.
-  # Publishes /trading/dashboard/ (one URL, shared header + Breadth / ETF
-  # Ranks top-level tabs). Runs AFTER `etf-dashboard-publish` (12:40) and
+  # Publishes /trading/ (one URL, shared header + Breadth / ETF
+  # Ranks top-level tabs — D1: operator override 2026-05-27 "the url will
+  # be /trading"). Runs AFTER `etf-dashboard-publish` (12:40) and
   # `market-breadth-daily` (12:45) so both source parquets are fresh.
   #
   # Slot 12:50: serialized after the two upstream publishers to avoid the
@@ -182,7 +183,7 @@ jobs:
   # no 301 redirects. All three URLs go live on the same publish push
   # cadence; bookmarks survive the v1 combined launch.
   - name: trading-dashboard
-    description: "Render combined trading dashboard (breadth + ETF) + publish to fengshen.dev/trading/dashboard/"
+    description: "Render combined trading dashboard (breadth + ETF) + publish to fengshen.dev/trading/"
     schedule: "50 12 * * 1-5"   # 12:50 PST Mon-Fri (5 min after market-breadth-daily)
     command: "scripts/publish-trading-dashboard.sh"
     log: "data/trading-dashboard.log"

@@ -1,8 +1,14 @@
-"""Combined trading dashboard renderer — `/trading/dashboard/`.
+"""Combined trading dashboard renderer — `/trading/`.
 
 One HTML page that hosts both the S&P 500 breadth view AND the ETF ranks
 table, with a shared site header (brand + asof + regime chip + rendered-at-pt)
 and pure-CSS top-level tabs (Breadth / ETF Ranks).
+
+URL: DESIGN-trading-dashboard-combined-v1.md §4 D1 (operator override
+2026-05-27 "the url will be /trading"). The publish script
+`scripts/publish-trading-dashboard.sh` invokes the generic publisher with
+`--root` so this HTML lands at `public/trading/index.html` rather than the
+default `public/trading/<name>/index.html`.
 
 Composition model (DESIGN-trading-dashboard-combined-v1.md §3):
 
