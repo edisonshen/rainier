@@ -236,14 +236,16 @@ def _latest_pct_above_200d(breadth: pd.DataFrame, asof_str: str) -> float | None
         return None
     rows["asof_date"] = asof_col[mask]
     rows = rows.sort_values("asof_date")
-    value = float(rows.iloc[-1]["value"])
-    # NaN guard — partial breadth data can leave the latest row with a NaN
-    # value column. Returning NaN here would feed `regime_chip_html`, which
-    # calls `int(round(pct))` → ValueError → crash the combined render.
-    # Map NaN to None so the caller falls back to the "No data" chip.
-    if value != value:  # NaN check (NaN != NaN by IEEE 754)
+    raw = rows.iloc[-1]["value"]
+    # Missing-value guard — partial breadth data can leave the latest row's
+    # value as NaN, pd.NA, or None (nullable/object dtypes appear when a
+    # row is partially populated). `float(pd.NA)` and `float(None)` both
+    # raise TypeError; `float(nan)` succeeds but yields nan which then
+    # crashes `regime_chip_html` at `int(round(nan))`. `pd.isna` covers
+    # all three so the caller falls back to the "No data" chip uniformly.
+    if pd.isna(raw):
         return None
-    return value
+    return float(raw)
 
 
 # NOTE: The combined-page shell is hand-assembled in `render_combined_html`

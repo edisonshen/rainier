@@ -367,23 +367,37 @@ def test_combined_responsive_breakpoint_present(rendered_combined):
     )
 
 
-def test_combined_handles_nan_pct_above_200d(spy_df, features_df, registry_df):
-    """When the latest `pct_above_ma_200` row has a NaN value (partial breadth
-    data — happens when compute-indicators races publish), the combined
-    renderer must fall back to the "No data" chip rather than crashing.
+@pytest.mark.parametrize(
+    "missing_value, label",
+    [
+        (float("nan"), "nan"),
+        (pd.NA, "pd.NA"),
+        (None, "None"),
+    ],
+)
+def test_combined_handles_missing_pct_above_200d(
+    spy_df, features_df, registry_df, missing_value, label
+):
+    """When the latest `pct_above_ma_200` row's value is missing (NaN, pd.NA,
+    or None — partial breadth data, common when compute-indicators races
+    publish), the combined renderer must fall back to the "No data" chip
+    rather than crashing.
 
-    Codex iter-3 surfaced this gap: `_latest_pct_above_200d` previously
-    returned `nan`, which fed `regime_chip_html` → `int(round(nan))` →
-    ValueError → render aborts → /trading/ misses today's publish.
+    Codex iter-3 surfaced the NaN case (int(round(nan)) → ValueError),
+    iter-4 added the pd.NA / None cases (float(pd.NA) / float(None) →
+    TypeError BEFORE the NaN guard runs). `pd.isna` covers all three.
     """
-    import numpy as np
+    from rainier.dashboard.render_combined import (
+        _latest_pct_above_200d,
+        render_combined_html,
+    )
 
-    from rainier.dashboard.render_combined import render_combined_html
-
-    # Build a breadth frame whose pct_above_ma_200 latest value is NaN.
     asof = date(2026, 5, 25)
+    # Build a breadth frame whose latest pct_above_ma_200 is the missing flavor.
+    # `object` dtype is required for pd.NA + None to survive the DataFrame
+    # constructor without coercion to NaN.
     rows = [
-        {"asof_date": asof, "indicator": "pct_above_ma_200", "value": float("nan")},
+        {"asof_date": asof, "indicator": "pct_above_ma_200", "value": missing_value},
         # Sister indicators so the breadth section still renders something.
         {"asof_date": asof, "indicator": "pct_above_ma_20", "value": 55.0},
         {"asof_date": asof, "indicator": "pct_above_ma_50", "value": 50.0},
@@ -395,35 +409,39 @@ def test_combined_handles_nan_pct_above_200d(spy_df, features_df, registry_df):
         {"asof_date": asof, "indicator": "advancers", "value": 300.0},
         {"asof_date": asof, "indicator": "decliners", "value": 200.0},
     ]
-    breadth_nan = pd.DataFrame(rows)
+    breadth_missing = pd.DataFrame(rows)
+    # Force object dtype on the value column when the missing flavor isn't a
+    # float — pandas would otherwise coerce pd.NA/None to NaN at the column
+    # level and we'd lose coverage of the float(pd.NA)/float(None) paths.
+    if not isinstance(missing_value, float):
+        breadth_missing["value"] = breadth_missing["value"].astype(object)
 
-    # Must not raise.
+    # Helper itself returns None across all three missing flavors.
+    assert _latest_pct_above_200d(breadth_missing, asof.isoformat()) is None, (
+        f"_latest_pct_above_200d failed to map {label} to None"
+    )
+
+    # Renderer must not raise.
     html = render_combined_html(
-        breadth=breadth_nan,
+        breadth=breadth_missing,
         spy_ohlcv=spy_df,
         features=features_df,
         registry=registry_df,
         asof=asof,
         rendered_at_pt="14:32",
     )
-    # And the fallback chip must be present (the "No data" regime chip).
-    assert "No data" in html, (
-        "expected 'No data' regime chip in HTML when pct_above_ma_200 is NaN"
-    )
-    # Sanity: the helper itself must return None for the NaN row.
-    from rainier.dashboard.render_combined import _latest_pct_above_200d
 
-    assert _latest_pct_above_200d(breadth_nan, asof.isoformat()) is None
-    # The threshold-derived chip text must NOT be present in any rendered
-    # element (CSS *rule* declarations like `.regime-bullish { ... }` are
-    # OK; only an actual chip emitting one of these labels would indicate
-    # the NaN leaked through into regime_chip_html).
+    # Fallback chip text present.
+    assert "No data" in html, (
+        f"expected 'No data' regime chip in HTML when pct_above_ma_200={label}"
+    )
+
+    # No threshold-derived band label leaked through.
     for threshold_label in ("Strong bull", "Bullish breadth", "Bearish breadth"):
         assert threshold_label not in html, (
-            f"unexpected threshold-derived label {threshold_label!r} in HTML — "
-            "NaN must fall back to the 'No data' chip, not a real band"
+            f"unexpected threshold-derived label {threshold_label!r} in HTML "
+            f"when pct_above_ma_200={label} — must fall back to 'No data'"
         )
-    _ = np  # numpy imported in case future test additions need it
 
 
 def test_combined_escapes_rendered_at_pt(breadth_df, spy_df, features_df, registry_df):
