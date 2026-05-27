@@ -367,6 +367,65 @@ def test_combined_responsive_breakpoint_present(rendered_combined):
     )
 
 
+def test_combined_handles_nan_pct_above_200d(spy_df, features_df, registry_df):
+    """When the latest `pct_above_ma_200` row has a NaN value (partial breadth
+    data — happens when compute-indicators races publish), the combined
+    renderer must fall back to the "No data" chip rather than crashing.
+
+    Codex iter-3 surfaced this gap: `_latest_pct_above_200d` previously
+    returned `nan`, which fed `regime_chip_html` → `int(round(nan))` →
+    ValueError → render aborts → /trading/ misses today's publish.
+    """
+    import numpy as np
+
+    from rainier.dashboard.render_combined import render_combined_html
+
+    # Build a breadth frame whose pct_above_ma_200 latest value is NaN.
+    asof = date(2026, 5, 25)
+    rows = [
+        {"asof_date": asof, "indicator": "pct_above_ma_200", "value": float("nan")},
+        # Sister indicators so the breadth section still renders something.
+        {"asof_date": asof, "indicator": "pct_above_ma_20", "value": 55.0},
+        {"asof_date": asof, "indicator": "pct_above_ma_50", "value": 50.0},
+        {"asof_date": asof, "indicator": "ad_line", "value": 100.0},
+        {"asof_date": asof, "indicator": "mcclellan_oscillator", "value": 25.0},
+        {"asof_date": asof, "indicator": "mcclellan_summation", "value": 500.0},
+        {"asof_date": asof, "indicator": "new_highs", "value": 30.0},
+        {"asof_date": asof, "indicator": "new_lows", "value": 5.0},
+        {"asof_date": asof, "indicator": "advancers", "value": 300.0},
+        {"asof_date": asof, "indicator": "decliners", "value": 200.0},
+    ]
+    breadth_nan = pd.DataFrame(rows)
+
+    # Must not raise.
+    html = render_combined_html(
+        breadth=breadth_nan,
+        spy_ohlcv=spy_df,
+        features=features_df,
+        registry=registry_df,
+        asof=asof,
+        rendered_at_pt="14:32",
+    )
+    # And the fallback chip must be present (the "No data" regime chip).
+    assert "No data" in html, (
+        "expected 'No data' regime chip in HTML when pct_above_ma_200 is NaN"
+    )
+    # Sanity: the helper itself must return None for the NaN row.
+    from rainier.dashboard.render_combined import _latest_pct_above_200d
+
+    assert _latest_pct_above_200d(breadth_nan, asof.isoformat()) is None
+    # The threshold-derived chip text must NOT be present in any rendered
+    # element (CSS *rule* declarations like `.regime-bullish { ... }` are
+    # OK; only an actual chip emitting one of these labels would indicate
+    # the NaN leaked through into regime_chip_html).
+    for threshold_label in ("Strong bull", "Bullish breadth", "Bearish breadth"):
+        assert threshold_label not in html, (
+            f"unexpected threshold-derived label {threshold_label!r} in HTML — "
+            "NaN must fall back to the 'No data' chip, not a real band"
+        )
+    _ = np  # numpy imported in case future test additions need it
+
+
 def test_combined_escapes_rendered_at_pt(breadth_df, spy_df, features_df, registry_df):
     """`rendered_at_pt` is caller-supplied free-form text that lands in the
     public `/trading/` HTML. The standalone breadth/ETF jinja templates

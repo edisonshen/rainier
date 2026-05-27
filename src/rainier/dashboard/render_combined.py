@@ -218,8 +218,10 @@ def write_combined_html(
 def _latest_pct_above_200d(breadth: pd.DataFrame, asof_str: str) -> float | None:
     """Pick the latest `pct_above_ma_200` value on or before `asof_str`.
 
-    Returns None when the indicator column is missing entirely (degraded
-    render path) so the caller can substitute a "no data" chip.
+    Returns None when the indicator column is missing entirely OR the
+    latest matching row's value is NaN (partial-population case — the
+    standalone breadth renderer treats this as missing too). The caller
+    substitutes a "no data" chip.
     """
     if breadth.empty:
         return None
@@ -234,7 +236,14 @@ def _latest_pct_above_200d(breadth: pd.DataFrame, asof_str: str) -> float | None
         return None
     rows["asof_date"] = asof_col[mask]
     rows = rows.sort_values("asof_date")
-    return float(rows.iloc[-1]["value"])
+    value = float(rows.iloc[-1]["value"])
+    # NaN guard — partial breadth data can leave the latest row with a NaN
+    # value column. Returning NaN here would feed `regime_chip_html`, which
+    # calls `int(round(pct))` → ValueError → crash the combined render.
+    # Map NaN to None so the caller falls back to the "No data" chip.
+    if value != value:  # NaN check (NaN != NaN by IEEE 754)
+        return None
+    return value
 
 
 # NOTE: The combined-page shell is hand-assembled in `render_combined_html`
