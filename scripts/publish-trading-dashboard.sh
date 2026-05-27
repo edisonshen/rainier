@@ -69,9 +69,18 @@ cd "$PROJECT_DIR"
 # Don't pass --asof — the renderer pulls the latest row from the breadth
 # parquet itself (same auto-resolution as `market-breadth render-html`).
 # Keeps this script agnostic to weekend / holiday timing.
+#
+# --names-path threads PR #100's Name-column behavior through the combined
+# render so the ETF tab inside /trading/ shows yfinance longName, not the
+# symbol-only fallback. The CLI default already points at
+# `data/cache/etf_names.parquet`, but pass it explicitly so the publish
+# chain is self-documenting + future-proof against any default drift.
+# Cron sequencing keeps the parquet fresh: `etf-names-refresh` (12:35 PT)
+# runs before this script (12:50 PT), so the file is in place by render.
 log "render rendered_at_pt=$RENDERED_AT_PT output=$OUTPUT"
 "$UV" run rainier dashboard render-combined \
     --rendered-at-pt "$RENDERED_AT_PT" \
+    --names-path "data/cache/etf_names.parquet" \
     --output "$OUTPUT"
 
 # Empty-render guard — combined page is degenerate when BOTH sub-renders are

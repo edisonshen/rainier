@@ -86,6 +86,7 @@ def render_combined_html(
     spy_ohlcv: pd.DataFrame | None = None,
     history_days: int = 30,
     window_days: int = 504,
+    names_path: str | Path | None = None,
 ) -> str:
     """Render the combined trading dashboard to a single HTML string.
 
@@ -93,7 +94,18 @@ def render_combined_html(
     composition step picks the regime-chip pct from the latest
     ``pct_above_ma_200`` row in ``breadth``.
 
-    Pure function — no I/O, no DB, no wall-clock reads inside.
+    Pure function — no I/O, no DB, no wall-clock reads inside (the
+    optional ``names_path`` read is delegated to ``render_etf_html``,
+    which handles a missing / unreadable path by falling back to the
+    symbol-only display — same semantics as the standalone path in
+    PR #100).
+
+    ``names_path`` threads PR #100's ETF Name-column behavior through
+    the combined-dashboard composition. When provided + readable, the
+    ETF tab inside ``/trading/`` renders yfinance ``longName`` in the
+    Name column; otherwise it falls back to the symbol itself, matching
+    the standalone ``/trading/etf-ranks/`` page byte-for-byte on
+    identical inputs.
     """
     asof_str = asof.isoformat()
     # Defense-in-depth — `asof.isoformat()` always returns safe YYYY-MM-DD,
@@ -125,6 +137,7 @@ def render_combined_html(
         rendered_at_pt=rendered_at_pt,
         history_days=history_days,
         include_shared_styles=False,
+        names_path=names_path,
     )
 
     # Plain concatenation — `str.format()` is unsafe here because the
@@ -182,8 +195,13 @@ def write_combined_html(
     spy_path: str | Path | None = None,
     history_days: int = 30,
     window_days: int = 504,
+    names_path: str | Path | None = None,
 ) -> Path:
-    """Convenience wrapper: load parquets, render, atomic-write the HTML."""
+    """Convenience wrapper: load parquets, render, atomic-write the HTML.
+
+    ``names_path`` is forwarded to ``render_combined_html`` → the ETF
+    sub-renderer; see that docstring for fallback semantics.
+    """
     breadth = pd.read_parquet(breadth_path)
     features = pd.read_parquet(features_path)
     registry = pd.read_parquet(registry_path)
@@ -201,6 +219,7 @@ def write_combined_html(
         rendered_at_pt=rendered_at_pt,
         history_days=history_days,
         window_days=window_days,
+        names_path=names_path,
     )
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
