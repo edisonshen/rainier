@@ -103,6 +103,7 @@ def _run_publisher(
     source_dir: Path,
     target_repo: Path,
     extra_env: dict | None = None,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(
@@ -118,8 +119,11 @@ def _run_publisher(
     )
     if extra_env:
         env.update(extra_env)
+    argv = ["bash", str(SCRIPT), name]
+    if extra_args:
+        argv.extend(extra_args)
     return subprocess.run(
-        ["bash", str(SCRIPT), name],
+        argv,
         capture_output=True,
         text=True,
         env=env,
@@ -383,6 +387,64 @@ def test_publish_pushes_pending_commits_on_noop(
     assert local_head == origin_head, (
         f"pending commit was not recovered: local={local_head[:8]} "
         f"origin={origin_head[:8]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 7b — `--root` flag publishes to `public/trading/index.html` (the
+# combined trading dashboard's URL = `/trading/`, DESIGN §4 D1 operator
+# override 2026-05-27). Default path remains `public/trading/<name>/`.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_root_flag_lands_at_trading_root(
+    source_dir: Path, target_repo: Path
+):
+    """With `--root`, the rendered HTML lands at `public/trading/index.html`,
+    not the default `public/trading/<name>/index.html`."""
+    name = "dashboard"
+    html = "<html><body>combined v1</body></html>"
+    (source_dir / f"{name}.html").write_text(html)
+
+    result = _run_publisher(
+        name, source_dir=source_dir, target_repo=target_repo, extra_args=["--root"]
+    )
+    assert result.returncode == 0, (
+        f"rc={result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    root_dst = target_repo / "public" / "trading" / "index.html"
+    nested_dst = target_repo / "public" / "trading" / name / "index.html"
+
+    assert root_dst.exists(), (
+        f"--root must publish to public/trading/index.html (got nothing at {root_dst})"
+    )
+    assert root_dst.read_text() == html
+    assert not nested_dst.exists(), (
+        "--root must NOT also create the nested `public/trading/<name>/` path "
+        f"(found stale file at {nested_dst})"
+    )
+
+
+def test_publish_root_flag_rejects_unknown_args(
+    source_dir: Path, target_repo: Path
+):
+    """Unknown flags after `<name>` exit non-zero with a usage hint —
+    silent ignore would let typos like `--roto` silently fall back to the
+    default nested path and silently misroute the combined dashboard."""
+    name = "dashboard"
+    (source_dir / f"{name}.html").write_text("<html>v1</html>")
+
+    result = _run_publisher(
+        name, source_dir=source_dir, target_repo=target_repo, extra_args=["--bogus"]
+    )
+    assert result.returncode != 0, (
+        f"unknown flag must produce non-zero exit, got rc={result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "unknown" in combined or "usage" in combined, (
+        f"expected unknown-flag error, got:\n{result.stdout}\n{result.stderr}"
     )
 
 
