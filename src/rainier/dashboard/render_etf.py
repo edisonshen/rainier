@@ -96,6 +96,7 @@ def render_etf_html(
     rendered_at_pt: str,
     history_days: int = 30,
     include_shared_styles: bool = True,
+    names_path: str | Path | None = None,
 ) -> str:
     """Render the ETF-ranks dashboard to an HTML string.
 
@@ -109,7 +110,9 @@ def render_etf_html(
         ``rank_delta_1d``, ``rank_delta_5d``, ``r_5``, ``r_10``, ``r_20``,
         ``ret_ytd``, ``top15_streak``.
     registry:
-        Sector registry parquet — ``sector_id``, ``sector_name``.
+        Sector registry parquet — ``sector_id``, ``sector_name``. Still
+        joined onto the features (the underlying parquet keeps it for
+        downstream consumers) but no longer rendered as a column.
     asof:
         Display + filter date. The renderer slices the features DataFrame
         to rows where ``asof_date == asof``.
@@ -127,10 +130,23 @@ def render_etf_html(
         no ``<html>``, no ``<head>``, no full ``<style>`` block — the
         combined trading dashboard's shared ``<head>`` provides the
         common CSS via ``shared_styles.shared_styles()``).
+    names_path:
+        Optional path to ``etf_names.parquet`` (schema:
+        ``symbol, long_name, short_name, fetched_at``). When the file
+        exists and contains the row's symbol, the Name column renders
+        ``long_name``. Otherwise it falls back to the symbol itself —
+        keeps the table shape intact and visually flags missing data.
     """
     asof_str = asof.isoformat()
     features = _normalise_asof_column(features)
     latest = features.loc[features["asof_date"] == asof_str].copy()
+
+    # Load the optional names cache once; renderer-side fallback fills in
+    # missing tickers with their symbol. None / non-existent path / unreadable
+    # parquet all degrade silently to an empty lookup — the per-row fallback
+    # keeps the page rendering.
+    name_lookup = _build_name_lookup(names_path)
+
     if latest.empty:
         # Best-effort: render empty page so the cron output is still a valid
         # file (the publish step can detect emptiness via byte size).
@@ -143,7 +159,9 @@ def render_etf_html(
             include_shared_styles=include_shared_styles,
         )
 
-    # Join sector_name onto the latest slice.
+    # Join sector_name onto the latest slice. Still kept on the row dict
+    # (other tests + future consumers may use it) but the rendered HTML no
+    # longer surfaces it as a column — that slot belongs to Name now.
     sector_map = dict(zip(registry["sector_id"].astype(int), registry["sector_name"].astype(str)))
     latest["sector_name"] = latest["sector_id"].astype(int).map(sector_map).fillna("unknown")
 
@@ -165,7 +183,7 @@ def render_etf_html(
     ).reset_index(drop=True)
     latest = latest.drop(columns=["_tier"])
 
-    rows_all = [_row_to_dict(r, history_lookup) for r in latest.to_dict(orient="records")]
+    rows_all = [_row_to_dict(r, history_lookup, name_lookup) for r in latest.to_dict(orient="records")]
 
     # Tab filters — operate on the already-rendered rows so the sparkline
     # SVG string is reused (cheap; no re-build).
@@ -200,8 +218,12 @@ def write_etf_html(
     asof: date,
     rendered_at_pt: str,
     history_days: int = 30,
+    names_path: str | Path | None = None,
 ) -> Path:
-    """Convenience wrapper: load parquets, render, atomic-write output."""
+    """Convenience wrapper: load parquets, render, atomic-write output.
+
+    ``names_path`` is forwarded to ``render_etf_html``; see that docstring.
+    """
     features = pd.read_parquet(features_path)
     registry = pd.read_parquet(registry_path)
     html = render_etf_html(
@@ -210,6 +232,7 @@ def write_etf_html(
         asof=asof,
         rendered_at_pt=rendered_at_pt,
         history_days=history_days,
+        names_path=names_path,
     )
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -266,7 +289,40 @@ def _build_history_lookup(
     return out
 
 
-def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
+def _build_name_lookup(names_path: str | Path | None) -> dict[str, str]:
+    """Build a {symbol: long_name} dict from the optional names parquet.
+
+    Returns an EMPTY dict when:
+      * ``names_path`` is None,
+      * the file doesn't exist,
+      * the file fails to read (corrupt parquet, etc.).
+
+    Per-row fallback in ``_row_to_dict`` handles the missing-symbol case
+    so callers don't have to defend against missing entries here.
+    """
+    if names_path is None:
+        return {}
+    path = Path(names_path)
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_parquet(path)
+    except Exception:  # noqa: BLE001 — corrupt parquet → degrade to fallback
+        return {}
+    if df.empty or "symbol" not in df.columns or "long_name" not in df.columns:
+        return {}
+    out: dict[str, str] = {}
+    for sym, name in zip(df["symbol"].astype(str), df["long_name"].astype(str)):
+        sym = sym.strip()
+        name = name.strip()
+        # Only register non-empty names; blanks fall through to the
+        # symbol-as-name fallback the same way "missing from parquet" does.
+        if sym and name:
+            out[sym] = name
+    return out
+
+
+def _row_to_dict(row: dict, history_lookup: dict[str, list[int]], name_lookup: dict[str, str]) -> dict:
     """Pre-format every cell for jinja consumption.
 
     The template is dumb on purpose — strings only, no conditionals beyond
@@ -298,8 +354,14 @@ def _row_to_dict(row: dict, history_lookup: dict[str, list[int]]) -> dict:
     r5_missing = r5_raw < 0
     r10_missing = r10_raw < 0
     r20_missing = r20_raw < 0
+    # Name column source-of-truth: yfinance long_name from etf_names.parquet
+    # via name_lookup. Falls back to the symbol when missing — preserves
+    # the table shape and visually flags the gap (Symbol cell and Name cell
+    # both show the ticker).
+    long_name = name_lookup.get(sym) or sym
     return {
         "sector_name": str(row["sector_name"]),
+        "long_name": long_name,
         "symbol": sym,
         "rank_int": rank,
         "rank_text": "—" if rank_missing else str(rank),
@@ -537,12 +599,21 @@ table.etf-table th {
   font-weight: 600;
   color: var(--gray-mute);
 }
-/* Column 1 = Symbol (ticker, mono + bold). Column 2 = Sector (plain text). */
+/* Column 1 = Symbol (ticker, mono + bold). Column 2 = Name (descriptive,
+   width-capped + ellipsis on overflow so long ETF names don't blow the
+   table out horizontally). */
 table.etf-table th:first-child, table.etf-table td:first-child {
   text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 600;
 }
-table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) { text-align: left; }
+table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) {
+  text-align: left;
+  min-width: 200px;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rank-cell {
   font-weight: 700;
   color: #1a1a1a;
@@ -575,7 +646,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
   <table class="etf-table" id="etf-{{ sec.tab }}">
     <thead><tr>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 0, 'text')">Symbol</th>
-      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 1, 'text')">Sector</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 1, 'text')">Name</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 2, 'num')">Rank</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 3, 'num')">&Delta;1d</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 4, 'num')">&Delta;5d</th>
@@ -589,7 +660,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     {% for r in sec.rows %}
       <tr>
         <td>{{ r.symbol }}</td>
-        <td>{{ r.sector_name }}</td>
+        <td title="{{ r.long_name }}">{{ r.long_name }}</td>
         <td class="rank-cell" data-sort="{{ r.rank_int }}"{% if r.rank_missing %} data-missing="1"{% endif %} style="background: {{ r.rank_color }}">{{ r.rank_text }}</td>
         <td data-sort="{{ r.rank_delta_1d }}" class="{% if r.rank_delta_1d > 0 %}pos{% elif r.rank_delta_1d < 0 %}neg{% endif %}">{{ r.rank_delta_1d_text }}</td>
         <td data-sort="{{ r.rank_delta_5d }}" class="{% if r.rank_delta_5d > 0 %}pos{% elif r.rank_delta_5d < 0 %}neg{% endif %}">{{ r.rank_delta_5d_text }}</td>
@@ -734,7 +805,14 @@ table.etf-table th:first-child, table.etf-table td:first-child {
   text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 600;
 }
-table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) { text-align: left; }
+table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) {
+  text-align: left;
+  min-width: 200px;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rank-cell {
   font-weight: 700;
   color: #1a1a1a;
@@ -765,7 +843,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
   <table class="etf-table" id="etf-{{ sec.tab }}">
     <thead><tr>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 0, 'text')">Symbol</th>
-      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 1, 'text')">Sector</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 1, 'text')">Name</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 2, 'num')">Rank</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 3, 'num')">&Delta;1d</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 4, 'num')">&Delta;5d</th>
@@ -779,7 +857,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     {% for r in sec.rows %}
       <tr>
         <td>{{ r.symbol }}</td>
-        <td>{{ r.sector_name }}</td>
+        <td title="{{ r.long_name }}">{{ r.long_name }}</td>
         <td class="rank-cell" data-sort="{{ r.rank_int }}"{% if r.rank_missing %} data-missing="1"{% endif %} style="background: {{ r.rank_color }}">{{ r.rank_text }}</td>
         <td data-sort="{{ r.rank_delta_1d }}" class="{% if r.rank_delta_1d > 0 %}pos{% elif r.rank_delta_1d < 0 %}neg{% endif %}">{{ r.rank_delta_1d_text }}</td>
         <td data-sort="{{ r.rank_delta_5d }}" class="{% if r.rank_delta_5d > 0 %}pos{% elif r.rank_delta_5d < 0 %}neg{% endif %}">{{ r.rank_delta_5d_text }}</td>
