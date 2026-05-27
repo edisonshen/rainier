@@ -1406,6 +1406,11 @@ svg.chart-alt-spy-price-all { display: none; }
 
 _FRAGMENT_TEMPLATE = """\
 <style>
+/* Breadth-only CSS tokens not promoted to shared_styles.py (only this
+   renderer draws axes). Keep the light + dark pair so the dark-mode
+   axis color survives composition under the combined page. */
+:root { --axis: #cbd2d9; }
+@media (prefers-color-scheme: dark) { :root { --axis: #3a4156; } }
 h1 { font-size: 1.4rem; margin: 0 0 4px; color: var(--fg); }
 .subtitle { color: var(--mute); margin: 0 0 16px; font-size: 0.85rem; }
 .snapshot {
@@ -1427,8 +1432,8 @@ svg[class^="chart-"], svg[class*=" chart-"] {
   fill: none; stroke-width: 1.5;
   background: var(--bg-elevated); border: 1px solid var(--line); border-radius: 4px;
 }
-svg .axes line { stroke: var(--axis, #cbd2d9); stroke-width: 1; }
-svg .axes line.grid { stroke: var(--axis, #cbd2d9); stroke-width: 0.5; opacity: 0.35; }
+svg .axes line { stroke: var(--axis); stroke-width: 1; }
+svg .axes line.grid { stroke: var(--axis); stroke-width: 0.5; opacity: 0.35; }
 svg text.xtick, svg text.ytick {
   fill: var(--mute); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 9px; stroke: none;
@@ -1440,7 +1445,7 @@ svg .hover-zone { fill: transparent; }
 svg .hover-zone:hover { fill: var(--fg); opacity: 0.05; }
 svg .tooltip { pointer-events: none; }
 svg .tooltip .tt-bg {
-  fill: var(--bg-elevated); stroke: var(--axis, #cbd2d9); stroke-width: 0.5; opacity: 0.95;
+  fill: var(--bg-elevated); stroke: var(--axis); stroke-width: 0.5; opacity: 0.95;
 }
 svg .tooltip .tt-date, svg .tooltip .tt-line {
   fill: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

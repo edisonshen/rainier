@@ -658,29 +658,56 @@ function sortEtfTable(tableId, idx, kind) {
 
 _FRAGMENT_TEMPLATE = """\
 <style>
-h1 { font-size: 1.4rem; margin: 0 0 4px; color: var(--gray-fg, var(--fg)); }
+/* ETF-only CSS tokens — the standalone page declares these in its own
+   :root (along with the shared --bg-page/--fg group). In fragment mode
+   the shared subset comes from shared_styles.py; the names below stay
+   local so the table-specific selectors below don't have to rewrite
+   their var() references. Light + dark pair preserves dark-mode parity. */
+:root {
+  --accent: #2337ff;
+  --gray-fg: #1f2933;
+  --gray-mute: #52606d;
+  --gray-line: #e4e7eb;
+  --gray-stripe: #f7fafc;
+  --pos: #1b9e3a;
+  --neg: #c92a2a;
+  --spark: #2337ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #8b9dff;
+    --gray-fg: #d2d6df;
+    --gray-mute: #8a93a6;
+    --gray-line: #2a3040;
+    --gray-stripe: #11141d;
+    --pos: #2bd86d;
+    --neg: #ff6e6e;
+    --spark: #8b9dff;
+  }
+}
+h1 { font-size: 1.4rem; margin: 0 0 4px; color: var(--gray-fg); }
 .subtitle {
-  color: var(--gray-mute, var(--mute));
+  color: var(--gray-mute);
   margin: 0 0 16px;
   font-size: 0.85rem;
 }
-.tabs { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid var(--gray-line, var(--line)); }
+.tabs { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid var(--gray-line); }
 input[type=radio]#tab-all,
 input[type=radio]#tab-top15,
 input[type=radio]#tab-movers { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
 .tabs label {
   padding: 6px 16px;
   cursor: pointer;
-  color: var(--gray-mute, var(--mute));
+  color: var(--gray-mute);
   font-size: 0.9rem;
   border-bottom: 2px solid transparent;
   user-select: none;
 }
-.tabs label:hover { color: var(--accent, var(--bull)); }
+.tabs label:hover { color: var(--accent); }
 section[data-tab] { display: none; margin-top: 16px; }
-#tab-all:checked    ~ .tabs label[for=tab-all]    { color: var(--accent, var(--bull)); border-bottom-color: var(--accent, var(--bull)); }
-#tab-top15:checked  ~ .tabs label[for=tab-top15]  { color: var(--accent, var(--bull)); border-bottom-color: var(--accent, var(--bull)); }
-#tab-movers:checked ~ .tabs label[for=tab-movers] { color: var(--accent, var(--bull)); border-bottom-color: var(--accent, var(--bull)); }
+#tab-all:checked    ~ .tabs label[for=tab-all]    { color: var(--accent); border-bottom-color: var(--accent); }
+#tab-top15:checked  ~ .tabs label[for=tab-top15]  { color: var(--accent); border-bottom-color: var(--accent); }
+#tab-movers:checked ~ .tabs label[for=tab-movers] { color: var(--accent); border-bottom-color: var(--accent); }
 #tab-all:checked    ~ section[data-tab="all"]    { display: block; }
 #tab-top15:checked  ~ section[data-tab="top15"]  { display: block; }
 #tab-movers:checked ~ section[data-tab="movers"] { display: block; }
@@ -693,15 +720,15 @@ table.etf-table {
 table.etf-table th, table.etf-table td {
   padding: 6px 12px;
   text-align: right;
-  border-bottom: 1px solid var(--gray-line, var(--line));
+  border-bottom: 1px solid var(--gray-line);
   font-variant-numeric: tabular-nums;
 }
 table.etf-table th {
-  background: var(--gray-stripe, var(--bg-elevated));
+  background: var(--gray-stripe);
   cursor: pointer;
   user-select: none;
   font-weight: 600;
-  color: var(--gray-mute, var(--mute));
+  color: var(--gray-mute);
 }
 table.etf-table th:first-child, table.etf-table td:first-child {
   text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -714,9 +741,9 @@ table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) { text-align: l
   text-align: center;
   min-width: 30px;
 }
-.pos { color: var(--pos, var(--bull)); }
-.neg { color: var(--neg, var(--bear)); }
-svg.spark { vertical-align: middle; fill: none; stroke: var(--spark, var(--bull)); stroke-width: 1.25; }
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-width: 1.25; }
 </style>
 <h1>ETF Ranks — as of {{ asof_str }}</h1>
 <p class="subtitle">
