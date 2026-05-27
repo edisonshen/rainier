@@ -817,7 +817,11 @@ def test_html_escapes_untrusted_name_strings(tmp_path):
     features["asof_date"] = features["asof_date"].astype("string")
     registry = pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
 
-    payload = "<script>document.title='PWNED'</script>"
+    # Embed a double-quote in the payload so we exercise BOTH the body-cell
+    # autoescape AND the title="..." attribute-value autoescape — a regex
+    # like the one below would miss attribute-boundary breaks if the
+    # template ever swapped autoescape for raw Markup on the title path.
+    payload = "<script>document.title='PWNED'</script> evil\"onload=alert(1)"
     names_df = pd.DataFrame(
         [
             {
@@ -840,6 +844,16 @@ def test_html_escapes_untrusted_name_strings(tmp_path):
     )
     assert payload not in html, "untrusted long_name leaked into HTML unescaped"
     assert "&lt;script&gt;" in html, "long_name was not HTML-escaped"
+    # The Name column also renders long_name inside the cell's `title="..."`
+    # attribute for the hover tooltip. Autoescape escapes attribute values
+    # too, but the test asserted only the body cell — guard the title path
+    # explicitly so a future template tweak that bypasses autoescape on the
+    # attribute (e.g., wrapping in Markup) is caught by CI, not by a live
+    # XSS in /trading/etf-ranks/.
+    attr_break = '"onload='  # what an unescaped double-quote would produce
+    assert attr_break not in html, (
+        f"unescaped double-quote in title attribute (XSS surface): {attr_break!r}"
+    )
     # Sparkline SVG (pre-rendered, marked Markup) must still pass through
     # raw — verify the autoescape didn't double-escape pre-built HTML.
     assert "<svg" in html and "<path" in html, "sparkline SVG was double-escaped"
