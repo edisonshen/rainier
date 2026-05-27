@@ -537,6 +537,180 @@ def test_render_combined_cli_smoke(tmp_path):
     assert 'id="etf-all"' in html, "CLI output missing ETF table"
 
 
+# ---------------------------------------------------------------------------
+# names_path threading — PR #100 follow-up.
+# ---------------------------------------------------------------------------
+#
+# The standalone `/trading/etf-ranks/` page already accepts `names_path` and
+# renders yfinance longName in the Name column (PR #100). The combined
+# `/trading/` page — the operator's primary surface — did NOT thread the
+# kwarg through, so the ETF tab inside `/trading/` always showed
+# symbol-as-name. These four tests close that gap.
+
+
+def _names_parquet_for(symbol: str, long_name: str, tmp_path: Path) -> Path:
+    """Write a one-row etf_names parquet and return its path.
+
+    Schema matches `etf_names_backfill.py` output: ``symbol``, ``long_name``,
+    ``short_name``, ``fetched_at``. Only ``symbol`` + ``long_name`` are read
+    by the renderer's name lookup.
+    """
+    names_df = pd.DataFrame(
+        [
+            {
+                "symbol": symbol,
+                "long_name": long_name,
+                "short_name": long_name,
+                "fetched_at": pd.Timestamp("2026-05-20", tz="UTC"),
+            }
+        ]
+    )
+    out = tmp_path / "etf_names.parquet"
+    names_df.to_parquet(out)
+    return out
+
+
+def test_combined_threads_names_path_when_provided(
+    breadth_df, spy_df, features_df, registry_df, tmp_path
+):
+    """`render_combined_html(names_path=...)` must pass it through to the ETF
+    sub-renderer so the resulting HTML reflects the lookup.
+
+    Heuristic: the standalone Name-column behavior is "long_name shows in
+    the Name cell when the symbol is in the parquet". Re-rendering the
+    combined page with the same fixture but a names_path that maps
+    XLE → 'Energy Select Sector SPDR Fund' must move that string into the
+    HTML — and the symbol-only fallback ('<td>XLE</td><td title="XLE">XLE</td>')
+    must no longer appear for XLE.
+    """
+    from rainier.dashboard.render_combined import render_combined_html
+
+    names_path = _names_parquet_for("XLE", "Energy Select Sector SPDR Fund", tmp_path)
+
+    html = render_combined_html(
+        breadth=breadth_df,
+        spy_ohlcv=spy_df,
+        features=features_df,
+        registry=registry_df,
+        asof=date(2026, 5, 25),
+        rendered_at_pt="14:32",
+        names_path=names_path,
+    )
+
+    assert "Energy Select Sector SPDR Fund" in html, (
+        "combined HTML missing the XLE long_name — names_path was not "
+        "threaded through render_combined_html → render_etf_html"
+    )
+
+
+def test_combined_name_column_shows_long_name_in_etf_tab(
+    breadth_df, spy_df, features_df, registry_df, tmp_path
+):
+    """Inside the ETF tab pane the Name cell renders long_name, not the symbol.
+
+    Stronger check than the previous test — locates the actual `<tr>` row
+    for XLE and inspects its second cell.
+    """
+    from rainier.dashboard.render_combined import render_combined_html
+
+    names_path = _names_parquet_for("XLE", "Energy Select Sector SPDR Fund", tmp_path)
+
+    html = render_combined_html(
+        breadth=breadth_df,
+        spy_ohlcv=spy_df,
+        features=features_df,
+        registry=registry_df,
+        asof=date(2026, 5, 25),
+        rendered_at_pt="14:32",
+        names_path=names_path,
+    )
+
+    row = re.search(r"<tr>\s*<td>XLE</td>\s*<td[^>]*>([^<]+)</td>", html, re.DOTALL)
+    assert row, "XLE row not found in combined HTML (ETF tab pane missing?)"
+    assert row.group(1).strip() == "Energy Select Sector SPDR Fund", (
+        f"Name cell for XLE should be 'Energy Select Sector SPDR Fund'; "
+        f"got {row.group(1)!r}"
+    )
+
+
+def test_combined_name_column_falls_back_to_symbol_when_path_missing(
+    breadth_df, spy_df, features_df, registry_df, tmp_path
+):
+    """When `names_path` is None or points at a missing file, Name = symbol.
+
+    Mirrors the standalone renderer's fallback semantics (PR #100). The
+    combined renderer must NOT crash on a missing path — it degrades to
+    symbol-only display.
+    """
+    from rainier.dashboard.render_combined import render_combined_html
+
+    # Case 1: names_path=None — kwarg omitted entirely.
+    html_none = render_combined_html(
+        breadth=breadth_df,
+        spy_ohlcv=spy_df,
+        features=features_df,
+        registry=registry_df,
+        asof=date(2026, 5, 25),
+        rendered_at_pt="14:32",
+        names_path=None,
+    )
+    row = re.search(r"<tr>\s*<td>XLE</td>\s*<td[^>]*>([^<]+)</td>", html_none, re.DOTALL)
+    assert row, "XLE row not found when names_path=None"
+    assert row.group(1).strip() == "XLE", (
+        f"Name cell should fall back to symbol when names_path=None; "
+        f"got {row.group(1)!r}"
+    )
+
+    # Case 2: names_path points at a file that does NOT exist on disk.
+    missing_path = tmp_path / "does_not_exist.parquet"
+    assert not missing_path.exists(), "test setup error: path must NOT exist"
+    html_missing = render_combined_html(
+        breadth=breadth_df,
+        spy_ohlcv=spy_df,
+        features=features_df,
+        registry=registry_df,
+        asof=date(2026, 5, 25),
+        rendered_at_pt="14:32",
+        names_path=missing_path,
+    )
+    row2 = re.search(r"<tr>\s*<td>XLE</td>\s*<td[^>]*>([^<]+)</td>", html_missing, re.DOTALL)
+    assert row2, "XLE row not found when names_path is a missing file"
+    assert row2.group(1).strip() == "XLE", (
+        f"Name cell should fall back to symbol when names_path file is missing; "
+        f"got {row2.group(1)!r}"
+    )
+
+
+def test_combined_byte_identical_with_names_path_supplied(
+    breadth_df, spy_df, features_df, registry_df, tmp_path
+):
+    """3x render with names_path supplied must produce identical bytes.
+
+    Extends the existing determinism test (which uses names_path=None) so
+    that the names-lookup path can't introduce dict-ordering or
+    timestamp leaks via the parquet read.
+    """
+    from rainier.dashboard.render_combined import render_combined_html
+
+    names_path = _names_parquet_for("XLE", "Energy Select Sector SPDR Fund", tmp_path)
+
+    kwargs = dict(
+        breadth=breadth_df,
+        spy_ohlcv=spy_df,
+        features=features_df,
+        registry=registry_df,
+        asof=date(2026, 5, 25),
+        rendered_at_pt="14:32",
+        names_path=names_path,
+    )
+    a = render_combined_html(**kwargs)
+    b = render_combined_html(**kwargs)
+    c = render_combined_html(**kwargs)
+    assert a == b == c, (
+        "combined render with names_path is non-deterministic across runs"
+    )
+
+
 def test_render_combined_missing_input_errors_cleanly(tmp_path):
     """Missing input parquet → non-zero exit + a useful error message."""
     import subprocess
