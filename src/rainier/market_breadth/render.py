@@ -289,6 +289,21 @@ def _to_wide(breadth: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
+def _stat_fields(
+    *, current, prior, key: str, threshold: float
+) -> dict[str, object]:
+    """Build the 3-field cluster a hero stat needs (value class, Δ, Δ class).
+
+    Used by ``_build_header`` to avoid repeating the same 3-line shape for
+    each of the 6 canonical breadth stats.
+    """
+    return {
+        f"{key}_class": _bull_bear_class(current, threshold),
+        f"{key}_delta": _signed_delta(current, prior),
+        f"{key}_delta_class": _delta_class(current, prior),
+    }
+
+
 def _build_header(wide: pd.DataFrame, asof_str: str) -> dict:
     """Pull the latest row for the header — 6 canonical breadth stats.
 
@@ -303,58 +318,48 @@ def _build_header(wide: pd.DataFrame, asof_str: str) -> dict:
     if candidate.empty:
         return _empty_header()
     row = candidate.iloc[-1]
-    prior = candidate.iloc[-2] if len(candidate) >= 2 else None
+    prior_row = candidate.iloc[-2] if len(candidate) >= 2 else None
 
-    def _delta_signed(col: str) -> str:
-        if prior is None:
-            return "+0"
-        return _signed_delta(row.get(col), prior.get(col))
+    def _curr(col: str):
+        return row.get(col)
 
-    # New highs - new lows is the canonical "net new highs" stat.
-    nh = row.get("new_52w_high")
-    nl = row.get("new_52w_low")
-    net_hl = (_safe_int(nh) - _safe_int(nl))
-    nh_prior = prior.get("new_52w_high") if prior is not None else None
-    nl_prior = prior.get("new_52w_low") if prior is not None else None
-    if prior is not None and not _is_nan(nh_prior) and not _is_nan(nl_prior):
-        net_hl_prior = _safe_int(nh_prior) - _safe_int(nl_prior)
-        net_hl_delta = f"{(net_hl - net_hl_prior):+d}"
-    else:
-        net_hl_delta = "+0"
+    def _prior(col: str):
+        return None if prior_row is None else prior_row.get(col)
 
-    return {
-        "pct_20": _safe_int(row.get("pct_above_ma_20")),
-        "pct_50": _safe_int(row.get("pct_above_ma_50")),
-        "pct_200": _safe_int(row.get("pct_above_ma_200")),
+    # Net new highs is highs - lows. Compute as a synthetic stat so its
+    # threshold/delta plumbing reads identically to the others.
+    nh, nl = _curr("new_52w_high"), _curr("new_52w_low")
+    nh_p, nl_p = _prior("new_52w_high"), _prior("new_52w_low")
+    net_hl = _safe_int(nh) - _safe_int(nl)
+    net_hl_prior = None
+    if prior_row is not None and not _is_nan(nh_p) and not _is_nan(nl_p):
+        net_hl_prior = _safe_int(nh_p) - _safe_int(nl_p)
+
+    # (key, current_value, prior_value, threshold) tuples drive the 6-stat fan-out.
+    stat_specs = [
+        ("pct_20", _curr("pct_above_ma_20"), _prior("pct_above_ma_20"), 50.0),
+        ("pct_50", _curr("pct_above_ma_50"), _prior("pct_above_ma_50"), 50.0),
+        ("pct_200", _curr("pct_above_ma_200"), _prior("pct_above_ma_200"), 50.0),
+        ("net_hl", net_hl, net_hl_prior, 0.0),
+        ("ad", _curr("ad_diff"), _prior("ad_diff"), 0.0),
+        ("mcc", _curr("mcclellan_oscillator"), _prior("mcclellan_oscillator"), 0.0),
+    ]
+    out: dict[str, object] = {
+        # Raw integer values for the template's value-cell renderer.
+        "pct_20": _safe_int(_curr("pct_above_ma_20")),
+        "pct_50": _safe_int(_curr("pct_above_ma_50")),
+        "pct_200": _safe_int(_curr("pct_above_ma_200")),
         "new_high": _safe_int(nh),
         "new_low": _safe_int(nl),
         "net_hl": net_hl,
-        "ad": _safe_int(row.get("ad_diff")),
-        "ad_signed": _signed(row.get("ad_diff")),
-        "mcc": _safe_int(row.get("mcclellan_oscillator")),
-        "mcc_signed": _signed(row.get("mcclellan_oscillator")),
-        # Δ chips vs prior trading day.
-        "pct_20_delta": _delta_signed("pct_above_ma_20"),
-        "pct_50_delta": _delta_signed("pct_above_ma_50"),
-        "pct_200_delta": _delta_signed("pct_above_ma_200"),
-        "net_hl_delta": net_hl_delta,
-        "ad_delta": _delta_signed("ad_diff"),
-        "mcc_delta": _delta_signed("mcclellan_oscillator"),
-        # Color classes — %-above-MA midline at 50; rest use 0.
-        "pct_20_class": _bull_bear_class(row.get("pct_above_ma_20"), 50.0),
-        "pct_50_class": _bull_bear_class(row.get("pct_above_ma_50"), 50.0),
-        "pct_200_class": _bull_bear_class(row.get("pct_above_ma_200"), 50.0),
-        "net_hl_class": _bull_bear_class(net_hl, 0.0),
-        "ad_class": _bull_bear_class(row.get("ad_diff"), 0.0),
-        "mcc_class": _bull_bear_class(row.get("mcclellan_oscillator"), 0.0),
-        # Δ chip classes — bull if up, bear if down, neutral if flat.
-        "pct_20_delta_class": _delta_class(row.get("pct_above_ma_20"), prior.get("pct_above_ma_20") if prior is not None else None),
-        "pct_50_delta_class": _delta_class(row.get("pct_above_ma_50"), prior.get("pct_above_ma_50") if prior is not None else None),
-        "pct_200_delta_class": _delta_class(row.get("pct_above_ma_200"), prior.get("pct_above_ma_200") if prior is not None else None),
-        "net_hl_delta_class": _delta_class(net_hl, (_safe_int(nh_prior) - _safe_int(nl_prior)) if (prior is not None and not _is_nan(nh_prior) and not _is_nan(nl_prior)) else None),
-        "ad_delta_class": _delta_class(row.get("ad_diff"), prior.get("ad_diff") if prior is not None else None),
-        "mcc_delta_class": _delta_class(row.get("mcclellan_oscillator"), prior.get("mcclellan_oscillator") if prior is not None else None),
+        "ad": _safe_int(_curr("ad_diff")),
+        "ad_signed": _signed(_curr("ad_diff")),
+        "mcc": _safe_int(_curr("mcclellan_oscillator")),
+        "mcc_signed": _signed(_curr("mcclellan_oscillator")),
     }
+    for key, curr, pr, thr in stat_specs:
+        out.update(_stat_fields(current=curr, prior=pr, key=key, threshold=thr))
+    return out
 
 
 def _empty_header() -> dict:
@@ -487,25 +492,6 @@ def _line_path(series: pd.Series, vmin: float, vmax: float) -> str:
         parts.append(f"{prefix}{x:.1f},{y:.1f}")
         pending_move = False
     return " ".join(parts)
-
-
-def _axes_g() -> str:
-    """A tiny baseline + frame group shared by all 4 charts.
-
-    Drawn first so paths overlay. Geometry only — colors come from the
-    template's `--axis` CSS var.
-
-    Legacy stub kept for compatibility — most callers now use
-    ``_axes_with_labels`` which emits the same frame plus tick labels.
-    """
-    x0, x1 = CHART_PAD_X, CHART_W - CHART_PAD_X
-    y0, y1 = CHART_PAD_Y, CHART_H - CHART_PAD_Y
-    return (
-        f'<g class="axes">'
-        f'<line x1="{x0}" y1="{y1}" x2="{x1}" y2="{y1}" />'
-        f'<line x1="{x0}" y1="{y0}" x2="{x0}" y2="{y1}" />'
-        f"</g>"
-    )
 
 
 # ---------------------------------------------------------------------------
