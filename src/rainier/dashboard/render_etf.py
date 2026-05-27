@@ -44,7 +44,43 @@ from markupsafe import Markup
 __all__ = [
     "render_etf_html",
     "write_etf_html",
+    "IMPORTANCE_TIER",
+    "TIER_DEFAULT",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Importance tiers — operator-curated row ordering
+# ---------------------------------------------------------------------------
+#
+# Lower tier number = higher importance = appears earlier in the default view.
+# Tier 3 is the implicit default for any symbol not explicitly mapped.
+#
+# Tier 0: broad-index + semiconductor leveraged ETFs (operator "highest").
+# Tier 1: the eleven S&P 500 GICS sector ETFs (operator "most important").
+# Tier 2: major industry / sub-sector ETFs (coord-decided per operator
+#         delegation in the 64dc task brief).
+#
+# The mapping deliberately includes symbols (QQQ, DIA, IWM, SPY, SOXL,
+# USD, XSD) that aren't in the current `thematic_universe.yaml`. They'll
+# simply be absent from the rendered table until the universe is widened;
+# carrying them here costs nothing and means the constant is already
+# correct when that future expansion lands.
+IMPORTANCE_TIER: dict[str, int] = {
+    # Tier 0 — broad indexes + semiconductors (operator-set "highest").
+    **{s: 0 for s in ("QQQ", "DIA", "IWM", "SPY",
+                       "SMH", "SOXX", "SOXL", "USD", "XSD")},
+    # Tier 1 — S&P 500 GICS sector ETFs (operator-set "most important").
+    **{s: 1 for s in ("XLE", "XLF", "XLK", "XLV", "XLY",
+                       "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC")},
+    # Tier 2 — major industry / sub-sector ETFs.
+    **{s: 2 for s in ("VGT", "IXN", "QTEC", "IBB", "XBI", "IHI",
+                       "IYT", "JETS", "ITA", "ITB", "XHB",
+                       "KRE", "KBE", "IAI",
+                       "GDX", "COPX", "XRT", "XOP", "OIH",
+                       "VNQ", "KWEB", "FDN", "IGV", "PAVE")},
+}
+TIER_DEFAULT: int = 3
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +143,18 @@ def render_etf_html(
     # to a single mid-line.
     history_lookup = _build_history_lookup(features, asof_str, history_days)
 
-    # Default sort: sector ASC → rank DESC (within sector) → symbol ASC tiebreaker.
+    # Default sort: IMPORTANCE_TIER ASC → rank DESC within tier →
+    # symbol ASC tiebreaker. The inline JS on column headers re-sorts on
+    # click; the tier-based order only governs the default-rendered state.
+    latest["_tier"] = (
+        latest["symbol"].astype(str).map(IMPORTANCE_TIER).fillna(TIER_DEFAULT).astype(int)
+    )
     latest = latest.sort_values(
-        by=["sector_name", "rank", "symbol"],
+        by=["_tier", "rank", "symbol"],
         ascending=[True, False, True],
         kind="mergesort",  # stable
     ).reset_index(drop=True)
+    latest = latest.drop(columns=["_tier"])
 
     rows_all = [_row_to_dict(r, history_lookup) for r in latest.to_dict(orient="records")]
 
@@ -485,11 +527,12 @@ table.etf-table th {
   font-weight: 600;
   color: var(--gray-mute);
 }
-table.etf-table th:first-child, table.etf-table td:first-child { text-align: left; }
-table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) {
+/* Column 1 = Symbol (ticker, mono + bold). Column 2 = Sector (plain text). */
+table.etf-table th:first-child, table.etf-table td:first-child {
   text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 600;
 }
+table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) { text-align: left; }
 .rank-cell {
   font-weight: 700;
   color: #1a1a1a;
@@ -521,8 +564,8 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
 <section data-tab="{{ sec.tab }}">
   <table class="etf-table" id="etf-{{ sec.tab }}">
     <thead><tr>
-      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 0, 'text')">Sector</th>
-      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 1, 'text')">Symbol</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 0, 'text')">Symbol</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 1, 'text')">Sector</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 2, 'num')">Rank</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 3, 'num')">&Delta;1d</th>
       <th onclick="sortEtfTable('etf-{{ sec.tab }}', 4, 'num')">&Delta;5d</th>
@@ -535,8 +578,8 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     <tbody>
     {% for r in sec.rows %}
       <tr>
-        <td>{{ r.sector_name }}</td>
         <td>{{ r.symbol }}</td>
+        <td>{{ r.sector_name }}</td>
         <td class="rank-cell" data-sort="{{ r.rank_int }}"{% if r.rank_missing %} data-missing="1"{% endif %} style="background: {{ r.rank_color }}">{{ r.rank_text }}</td>
         <td data-sort="{{ r.rank_delta_1d }}" class="{% if r.rank_delta_1d > 0 %}pos{% elif r.rank_delta_1d < 0 %}neg{% endif %}">{{ r.rank_delta_1d_text }}</td>
         <td data-sort="{{ r.rank_delta_5d }}" class="{% if r.rank_delta_5d > 0 %}pos{% elif r.rank_delta_5d < 0 %}neg{% endif %}">{{ r.rank_delta_5d_text }}</td>
