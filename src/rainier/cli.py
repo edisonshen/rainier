@@ -4374,3 +4374,142 @@ def dashboard_render_etf_html(
         history_days=history_days,
     )
     click.echo(f"wrote ETF dashboard -> {written}")
+
+
+@dashboard.command("render-combined")
+@click.option(
+    "--breadth-input",
+    "breadth_path",
+    type=click.Path(exists=True),
+    default="data/cache/sp500_breadth_daily.parquet",
+    show_default=True,
+    help="Long-format breadth parquet (asof_date, indicator, value).",
+)
+@click.option(
+    "--etf-features",
+    "features_path",
+    type=click.Path(exists=True),
+    default="data/cache/thematic_features_daily.parquet",
+    show_default=True,
+    help="ETF features parquet (asof_date × symbol × rank/delta fields).",
+)
+@click.option(
+    "--etf-registry",
+    "registry_path",
+    type=click.Path(exists=True),
+    default="data/cache/sector_registry.parquet",
+    show_default=True,
+    help="Sector registry parquet (sector_id, sector_name).",
+)
+@click.option(
+    "--spy-path",
+    "spy_path",
+    type=click.Path(),
+    default="data/cache/spy_history.parquet",
+    show_default=True,
+    help=(
+        "Optional SPY OHLCV parquet (from `market-breadth backfill-spy`). "
+        "Missing file → SPY pane is omitted in the breadth section."
+    ),
+)
+@click.option(
+    "--asof",
+    default=None,
+    help=(
+        "Display + filter date (YYYY-MM-DD). Defaults to the most recent "
+        "asof_date in the breadth parquet (cron-friendly)."
+    ),
+)
+@click.option(
+    "--rendered-at-pt",
+    required=True,
+    help="Wall-clock HH:MM (Pacific) for the header. Caller-supplied so the "
+    "renderer stays deterministic (no datetime.now inside).",
+)
+@click.option(
+    "--history-days",
+    type=int,
+    default=30,
+    show_default=True,
+    help="ETF sparkline history window per ticker.",
+)
+@click.option(
+    "--window-days",
+    type=int,
+    default=504,
+    show_default=True,
+    help="Trailing-window cap for breadth charts (~2y default).",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(),
+    default="out/dashboards/trading.html",
+    show_default=True,
+)
+def dashboard_render_combined(
+    breadth_path: str,
+    features_path: str,
+    registry_path: str,
+    spy_path: str,
+    asof: str | None,
+    rendered_at_pt: str,
+    history_days: int,
+    window_days: int,
+    output_path: str,
+) -> None:
+    """Render the combined trading dashboard (breadth + ETF ranks) to HTML.
+
+    DESIGN-trading-dashboard-combined-v1.md §2 — one URL
+    (`/trading/dashboard/`) with shared header + top-level tabs over both
+    the S&P 500 breadth view and the ETF ranks table. Standalone breadth +
+    ETF render-html commands still ship the per-page URLs (D4 — keep all
+    three URLs, no 301).
+    """
+    import sys
+    from datetime import date as _date
+
+    import pandas as _pd
+
+    from rainier.dashboard.render_combined import write_combined_html
+
+    if asof is None:
+        # Same auto-asof resolution as `market-breadth render-html` —
+        # latest row of the breadth parquet wins. Keeps the cron caller
+        # agnostic to weekend / holiday timing + avoids the `%`-in-crontab
+        # footgun (the script wrapper computes nothing date-related).
+        breadth = _pd.read_parquet(breadth_path)
+        if breadth.empty:
+            click.echo(
+                f"error: breadth parquet has no rows: {breadth_path}",
+                err=True,
+            )
+            sys.exit(1)
+        asof_max = breadth["asof_date"].max()
+        if _pd.isna(asof_max):
+            click.echo(
+                f"error: breadth parquet has no usable asof_date: {breadth_path}",
+                err=True,
+            )
+            sys.exit(1)
+        if hasattr(asof_max, "date"):
+            asof_dt = asof_max.date()
+        elif isinstance(asof_max, _date):
+            asof_dt = asof_max
+        else:
+            asof_dt = _date.fromisoformat(str(asof_max))
+    else:
+        asof_dt = _date.fromisoformat(asof)
+
+    written = write_combined_html(
+        breadth_path=breadth_path,
+        features_path=features_path,
+        registry_path=registry_path,
+        spy_path=spy_path,
+        output_path=output_path,
+        asof=asof_dt,
+        rendered_at_pt=rendered_at_pt,
+        history_days=history_days,
+        window_days=window_days,
+    )
+    click.echo(f"wrote trading dashboard -> {written}")

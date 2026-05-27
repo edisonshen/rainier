@@ -97,6 +97,7 @@ def render_breadth_html(
     rendered_at_pt: str,
     window_days: int = DEFAULT_WINDOW_DAYS,
     spy_ohlcv: pd.DataFrame | None = None,
+    include_shared_styles: bool = True,
 ) -> str:
     """Render the market-breadth dashboard to an HTML string.
 
@@ -124,6 +125,14 @@ def render_breadth_html(
         present, renders the SPY price pane at the top of the page with
         a 1m/3m/6m/1y/2y/5y/all window toggle. When None/empty, the SPY
         pane is omitted (back-compat path).
+    include_shared_styles:
+        Default ``True`` — emits a complete self-contained HTML document
+        (the standalone path, byte-identical to pre-refactor output).
+        When ``False`` the renderer emits a body fragment only (no
+        ``<!DOCTYPE>``, no ``<html>``, no ``<head>``, no full ``<style>``
+        block), suitable for embedding under the combined trading
+        dashboard's shared shell (`shared_styles.shared_styles()` is
+        emitted once at page top by ``render_combined_html``).
     """
     asof_str = asof.isoformat()
     wide = _to_wide(breadth)
@@ -135,6 +144,7 @@ def render_breadth_html(
             charts={},
             has_data=False,
             has_spy=False,
+            include_shared_styles=include_shared_styles,
         )
 
     # Filter to asof FIRST so historical renders never publish future data.
@@ -155,6 +165,7 @@ def render_breadth_html(
             charts={},
             has_data=False,
             has_spy=False,
+            include_shared_styles=include_shared_styles,
         )
 
     # Slice trailing N for default-view charts.
@@ -219,6 +230,7 @@ def render_breadth_html(
         charts=charts,
         has_data=True,
         has_spy=has_spy,
+        include_shared_styles=include_shared_styles,
     )
 
 
@@ -1372,6 +1384,252 @@ svg.chart-alt-spy-price-all { display: none; }
 """
 
 
+# ---------------------------------------------------------------------------
+# Fragment template — combined-dashboard embedding mode (NO doctype/html/head).
+# ---------------------------------------------------------------------------
+#
+# Used when `include_shared_styles=False` (combined renderer composes the
+# shared <head> + tab shell + both panes). Emits:
+#
+#   <style>...breadth-only selectors...</style>
+#   <h1>...</h1> ... breadth body content ...
+#
+# The breadth-only CSS subset OMITS the shared declarations already in
+# `shared_styles.shared_styles()`: `:root` color tokens (light + dark),
+# `body { ... }`. Everything else (snapshot grid, chart-row, toggle radios,
+# axes/tooltip, disclaimer) stays — those selectors are page-specific and
+# would not appear in the ETF section.
+#
+# The body markup mirrors `_TEMPLATE` verbatim from `<h1>` through
+# `</p>` of the disclaimer so behavior is identical to standalone mode
+# minus the document shell.
+
+_FRAGMENT_TEMPLATE = """\
+<style>
+h1 { font-size: 1.4rem; margin: 0 0 4px; color: var(--fg); }
+.subtitle { color: var(--mute); margin: 0 0 16px; font-size: 0.85rem; }
+.snapshot {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px; margin: 12px 0 24px;
+  padding: 12px 16px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg-elevated);
+}
+.snapshot .label { color: var(--mute); font-size: 0.8rem; }
+.snapshot .value { font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bull { color: var(--bull); }
+.bear { color: var(--bear); }
+.neutral { color: var(--fg); }
+.chart-row { margin: 16px 0 24px; }
+.chart-row h2 { font-size: 1rem; margin: 0 0 4px; color: var(--fg); }
+.chart-row .legend { color: var(--mute); font-size: 0.8rem; margin: 0 0 6px; }
+svg[class^="chart-"], svg[class*=" chart-"] {
+  display: block; width: 100%; height: auto;
+  fill: none; stroke-width: 1.5;
+  background: var(--bg-elevated); border: 1px solid var(--line); border-radius: 4px;
+}
+svg .axes line { stroke: var(--axis, #cbd2d9); stroke-width: 1; }
+svg .axes line.grid { stroke: var(--axis, #cbd2d9); stroke-width: 0.5; opacity: 0.35; }
+svg text.xtick, svg text.ytick {
+  fill: var(--mute); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px; stroke: none;
+}
+svg .midline { stroke: var(--mute); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.6; }
+svg .zone-overbought { fill: var(--bull); opacity: 0.08; stroke: none; }
+svg .zone-oversold { fill: var(--bear); opacity: 0.08; stroke: none; }
+svg .hover-zone { fill: transparent; }
+svg .hover-zone:hover { fill: var(--fg); opacity: 0.05; }
+svg .tooltip { pointer-events: none; }
+svg .tooltip .tt-bg {
+  fill: var(--bg-elevated); stroke: var(--axis, #cbd2d9); stroke-width: 0.5; opacity: 0.95;
+}
+svg .tooltip .tt-date, svg .tooltip .tt-line {
+  fill: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px; stroke: none;
+}
+svg .tooltip .crosshair {
+  stroke: var(--mute); stroke-width: 0.5; stroke-dasharray: 2 2; opacity: 0.7;
+}
+.snapshot .delta {
+  font-size: 0.75rem; padding: 1px 6px; margin-left: 6px;
+  border-radius: 9px; font-variant-numeric: tabular-nums; vertical-align: middle;
+  border: 1px solid var(--line);
+}
+.snapshot .delta.bull { color: var(--bull); border-color: var(--bull); }
+.snapshot .delta.bear { color: var(--bear); border-color: var(--bear); }
+.snapshot .delta.neutral { color: var(--mute); }
+input[type=radio].window-toggle {
+  position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0;
+}
+.toggle-row { display: flex; gap: 8px; margin: 8px 0; }
+.toggle-row label {
+  font-size: 0.8rem; color: var(--mute); cursor: pointer;
+  padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px;
+  user-select: none;
+}
+#window-ad-2y:checked  ~ section .toggle-row label[for=window-ad-2y]  { color: var(--bull); border-color: var(--bull); }
+#window-ad-all:checked ~ section .toggle-row label[for=window-ad-all] { color: var(--bull); border-color: var(--bull); }
+#window-ad-2y:checked  ~ section svg.chart-ad-cumulative          { display: block; }
+#window-ad-2y:checked  ~ section svg.chart-alt-ad-cumulative-all  { display: none; }
+#window-ad-all:checked ~ section svg.chart-ad-cumulative          { display: none; }
+#window-ad-all:checked ~ section svg.chart-alt-ad-cumulative-all  { display: block; }
+svg.chart-alt-ad-cumulative-all { display: none; }
+svg.chart-alt-mcclellan-all     { display: none; }
+#window-mc-2y:checked  ~ section .toggle-row label[for=window-mc-2y]  { color: var(--bull); border-color: var(--bull); }
+#window-mc-all:checked ~ section .toggle-row label[for=window-mc-all] { color: var(--bull); border-color: var(--bull); }
+#window-mc-2y:checked  ~ section svg.chart-mcclellan          { display: block; }
+#window-mc-2y:checked  ~ section svg.chart-alt-mcclellan-all  { display: none; }
+#window-mc-all:checked ~ section svg.chart-mcclellan          { display: none; }
+#window-mc-all:checked ~ section svg.chart-alt-mcclellan-all  { display: block; }
+svg.chart-alt-spy-price-1m,
+svg.chart-alt-spy-price-3m,
+svg.chart-alt-spy-price-6m,
+svg.chart-alt-spy-price-1y,
+svg.chart-alt-spy-price-5y,
+svg.chart-alt-spy-price-all { display: none; }
+#window-spy-1m:checked  ~ section svg.chart-spy-price            { display: none; }
+#window-spy-1m:checked  ~ section svg.chart-alt-spy-price-1m     { display: block; }
+#window-spy-3m:checked  ~ section svg.chart-spy-price            { display: none; }
+#window-spy-3m:checked  ~ section svg.chart-alt-spy-price-3m     { display: block; }
+#window-spy-6m:checked  ~ section svg.chart-spy-price            { display: none; }
+#window-spy-6m:checked  ~ section svg.chart-alt-spy-price-6m     { display: block; }
+#window-spy-1y:checked  ~ section svg.chart-spy-price            { display: none; }
+#window-spy-1y:checked  ~ section svg.chart-alt-spy-price-1y     { display: block; }
+#window-spy-5y:checked  ~ section svg.chart-spy-price            { display: none; }
+#window-spy-5y:checked  ~ section svg.chart-alt-spy-price-5y     { display: block; }
+#window-spy-all:checked ~ section svg.chart-spy-price            { display: none; }
+#window-spy-all:checked ~ section svg.chart-alt-spy-price-all    { display: block; }
+#window-spy-1m:checked  ~ section .toggle-row label[for=window-spy-1m]  { color: var(--bull); border-color: var(--bull); }
+#window-spy-3m:checked  ~ section .toggle-row label[for=window-spy-3m]  { color: var(--bull); border-color: var(--bull); }
+#window-spy-6m:checked  ~ section .toggle-row label[for=window-spy-6m]  { color: var(--bull); border-color: var(--bull); }
+#window-spy-1y:checked  ~ section .toggle-row label[for=window-spy-1y]  { color: var(--bull); border-color: var(--bull); }
+#window-spy-2y:checked  ~ section .toggle-row label[for=window-spy-2y]  { color: var(--bull); border-color: var(--bull); }
+#window-spy-5y:checked  ~ section .toggle-row label[for=window-spy-5y]  { color: var(--bull); border-color: var(--bull); }
+#window-spy-all:checked ~ section .toggle-row label[for=window-spy-all] { color: var(--bull); border-color: var(--bull); }
+.disclaimer {
+  margin-top: 32px; padding-top: 12px; border-top: 1px solid var(--line);
+  color: var(--mute); font-size: 0.8rem; line-height: 1.5;
+}
+</style>
+<h1>S&amp;P 500 Market Breadth</h1>
+<p class="subtitle">
+  Last updated: {{ asof_str }} {{ rendered_at_pt }} PT
+  &middot; Universe: current S&amp;P 500 constituents (survivorship-bias applied retroactively — see footer)
+</p>
+
+{% if has_data %}
+<section class="snapshot" aria-label="Today's snapshot">
+  <div>
+    <div class="label">% above 20d MA</div>
+    <div class="value {{ header.pct_20_class }}">{{ header.pct_20 }}%<span class="delta {{ header.pct_20_delta_class }}">{{ header.pct_20_delta }}</span></div>
+  </div>
+  <div>
+    <div class="label">% above 50d MA</div>
+    <div class="value {{ header.pct_50_class }}">{{ header.pct_50 }}%<span class="delta {{ header.pct_50_delta_class }}">{{ header.pct_50_delta }}</span></div>
+  </div>
+  <div>
+    <div class="label">% above 200d MA</div>
+    <div class="value {{ header.pct_200_class }}">{{ header.pct_200 }}%<span class="delta {{ header.pct_200_delta_class }}">{{ header.pct_200_delta }}</span></div>
+  </div>
+  <div>
+    <div class="label">Net new highs</div>
+    <div class="value {{ header.net_hl_class }}">{{ header.net_hl }}<span class="delta {{ header.net_hl_delta_class }}">{{ header.net_hl_delta }}</span></div>
+  </div>
+  <div>
+    <div class="label">A/D today</div>
+    <div class="value {{ header.ad_class }}">{{ header.ad_signed }}<span class="delta {{ header.ad_delta_class }}">{{ header.ad_delta }}</span></div>
+  </div>
+  <div>
+    <div class="label">McClellan oscillator</div>
+    <div class="value {{ header.mcc_class }}">{{ header.mcc_signed }}<span class="delta {{ header.mcc_delta_class }}">{{ header.mcc_delta }}</span></div>
+  </div>
+</section>
+
+{% if has_spy %}
+<input type="radio" name="window-spy" id="window-spy-1m" class="window-toggle">
+<input type="radio" name="window-spy" id="window-spy-3m" class="window-toggle">
+<input type="radio" name="window-spy" id="window-spy-6m" class="window-toggle">
+<input type="radio" name="window-spy" id="window-spy-1y" class="window-toggle">
+<input type="radio" name="window-spy" id="window-spy-2y" class="window-toggle" checked>
+<input type="radio" name="window-spy" id="window-spy-5y" class="window-toggle">
+<input type="radio" name="window-spy" id="window-spy-all" class="window-toggle">
+<section class="chart-row">
+  <h2>SPY price</h2>
+  <p class="legend">S&amp;P 500 ETF close &middot; divergence reference for the breadth panes below</p>
+  <div class="toggle-row">
+    <label for="window-spy-1m">1m</label>
+    <label for="window-spy-3m">3m</label>
+    <label for="window-spy-6m">6m</label>
+    <label for="window-spy-1y">1y</label>
+    <label for="window-spy-2y">2y</label>
+    <label for="window-spy-5y">5y</label>
+    <label for="window-spy-all">all</label>
+  </div>
+  {{ charts.spy_1m }}
+  {{ charts.spy_3m }}
+  {{ charts.spy_6m }}
+  {{ charts.spy_1y }}
+  {{ charts.spy_2y }}
+  {{ charts.spy_5y }}
+  {{ charts.spy_all }}
+</section>
+{% endif %}
+
+<section class="chart-row">
+  <h2>% above moving average</h2>
+  <p class="legend">
+    <span style="color: #1b9e3a">20d</span> &middot;
+    <span style="color: #2b6cb0">50d</span> &middot;
+    <span style="color: #c92a2a">200d</span> &middot; trailing 2y
+  </p>
+  {{ charts.pct_above_ma }}
+</section>
+
+<section class="chart-row">
+  <h2>New 52-week highs vs lows</h2>
+  <p class="legend">
+    <span class="bull">new highs</span> &middot;
+    <span class="bear">new lows</span> &middot; trailing 2y
+  </p>
+  {{ charts.new_highs_lows }}
+</section>
+
+<input type="radio" name="window-ad" id="window-ad-2y" class="window-toggle" checked>
+<input type="radio" name="window-ad" id="window-ad-all" class="window-toggle">
+<section class="chart-row">
+  <h2>Advance / Decline (cumulative)</h2>
+  <p class="legend">cumulative since 2020-01-01</p>
+  <div class="toggle-row">
+    <label for="window-ad-2y">2y</label>
+    <label for="window-ad-all">all</label>
+  </div>
+  {{ charts.ad_cumulative_2y }}
+  {{ charts.ad_cumulative_all }}
+</section>
+
+<input type="radio" name="window-mc" id="window-mc-2y" class="window-toggle" checked>
+<input type="radio" name="window-mc" id="window-mc-all" class="window-toggle">
+<section class="chart-row">
+  <h2>McClellan oscillator + summation</h2>
+  <p class="legend">
+    oscillator (foreground, green &gt; 0 / red &lt; 0) &middot; summation (background, blue)
+  </p>
+  <div class="toggle-row">
+    <label for="window-mc-2y">2y</label>
+    <label for="window-mc-all">all</label>
+  </div>
+  {{ charts.mcclellan_2y }}
+  {{ charts.mcclellan_all }}
+</section>
+{% else %}
+<p class="subtitle">No breadth data available for this asof_date.</p>
+{% endif %}
+
+<p class="disclaimer">
+  Universe = current S&amp;P 500 constituents applied retroactively. Historical view does not adjust for past index add/drop events; breadth may appear slightly stronger than reality. v1 will add point-in-time membership.
+</p>
+"""
+
+
 _ENV = Environment(
     autoescape=select_autoescape(default=True, default_for_string=True),
     undefined=StrictUndefined,
@@ -1389,8 +1647,14 @@ def _render_template(
     charts: dict,
     has_data: bool,
     has_spy: bool,
+    include_shared_styles: bool = True,
 ) -> str:
-    template = _ENV.from_string(_TEMPLATE)
+    # When `include_shared_styles=True` (the standalone path), emit the
+    # full document via `_TEMPLATE`. The fragment path skips doctype/html/
+    # head + the shared CSS subset (those move to `shared_styles.py` and
+    # are emitted once at page top by the combined renderer).
+    src = _TEMPLATE if include_shared_styles else _FRAGMENT_TEMPLATE
+    template = _ENV.from_string(src)
     # Pre-build SVG strings flow through as Markup so autoescape doesn't
     # double-escape `<svg>` / `<path>`. The charts dict is internal — every
     # value originates from `_chart_*` helpers which assemble HTML from

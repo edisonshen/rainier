@@ -29,7 +29,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 BREADTH_FIX = FIXTURES / "sp500_breadth_small.parquet"
 FEATURES_FIX = FIXTURES / "etf_features_small.parquet"
@@ -192,19 +191,23 @@ def test_combined_breadth_is_default_active_tab(rendered_combined):
 def test_shared_styles_emits_once_in_combined(rendered_combined):
     """Shared style block is emitted exactly once.
 
-    Heuristic: count occurrences of a load-bearing shared-style signature
-    (`--bg-page:` from the CSS color tokens). In the combined output it
-    should appear once total — each tabbed renderer must NOT re-emit it
-    when invoked with include_shared_styles=False.
+    Heuristic: the shared CSS module declares `--bg-page` in two `:root`
+    blocks (one light, one dark-mode `@media (prefers-color-scheme: dark)`).
+    The combined output must hold exactly those 2 declarations — neither
+    sub-renderer is allowed to duplicate them when invoked with
+    `include_shared_styles=False`.
+
+    Equivalently: the count is identical to the count in `shared_styles()`
+    alone; any extra is duplication.
     """
-    html = rendered_combined
-    # --bg-page is declared in shared_styles (color tokens). Both standalone
-    # renderers also declare it today; once the shared subset moves out, the
-    # combined page should see it exactly once.
-    occurrences = html.count("--bg-page:")
-    assert occurrences == 1, (
-        f"--bg-page declared {occurrences}x in combined HTML; expected exactly 1 "
-        "(shared styles must emit once at the top, not duplicate per section)"
+    from rainier.dashboard.shared_styles import shared_styles
+
+    expected = shared_styles().count("--bg-page:")
+    actual = rendered_combined.count("--bg-page:")
+    assert actual == expected, (
+        f"--bg-page declared {actual}x in combined HTML; expected exactly "
+        f"{expected} (shared styles must emit once at the top, not "
+        "duplicate per section)"
     )
 
 

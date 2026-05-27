@@ -95,6 +95,7 @@ def render_etf_html(
     asof: date,
     rendered_at_pt: str,
     history_days: int = 30,
+    include_shared_styles: bool = True,
 ) -> str:
     """Render the ETF-ranks dashboard to an HTML string.
 
@@ -119,6 +120,13 @@ def render_etf_html(
     history_days:
         Sparkline history window. Tickers with shorter history degrade to a
         flat midpoint line.
+    include_shared_styles:
+        Default ``True`` — emits a complete self-contained HTML document
+        (the standalone path, byte-identical to pre-refactor output).
+        When ``False`` emits a body fragment only (no ``<!DOCTYPE>``,
+        no ``<html>``, no ``<head>``, no full ``<style>`` block — the
+        combined trading dashboard's shared ``<head>`` provides the
+        common CSS via ``shared_styles.shared_styles()``).
     """
     asof_str = asof.isoformat()
     features = _normalise_asof_column(features)
@@ -132,6 +140,7 @@ def render_etf_html(
             rendered_at_pt=rendered_at_pt,
             universe_size=0,
             sparklines_present=False,
+            include_shared_styles=include_shared_styles,
         )
 
     # Join sector_name onto the latest slice.
@@ -179,6 +188,7 @@ def render_etf_html(
         rendered_at_pt=rendered_at_pt,
         universe_size=len(rows_all),
         sparklines_present=True,
+        include_shared_styles=include_shared_styles,
     )
 
 
@@ -634,6 +644,166 @@ function sortEtfTable(tableId, idx, kind) {
 """
 
 
+# ---------------------------------------------------------------------------
+# Fragment template — combined-dashboard embedding mode.
+# ---------------------------------------------------------------------------
+#
+# Identical body markup to `_TEMPLATE` minus doctype/html/head + minus the
+# shared CSS subset (color tokens, body base, dark-mode :root, top-level
+# trading tabs). What stays: the ETF-only selectors (`.tabs`, sub-tab
+# radios for All/Top15/Movers, table styles, rank-cell, sparkline `.spark`).
+# These selectors carry the per-page interaction the standalone page
+# already has — the combined renderer composes them inside its `pane-etf`
+# top-level tab pane.
+
+_FRAGMENT_TEMPLATE = """\
+<style>
+h1 { font-size: 1.4rem; margin: 0 0 4px; color: var(--gray-fg, var(--fg)); }
+.subtitle {
+  color: var(--gray-mute, var(--mute));
+  margin: 0 0 16px;
+  font-size: 0.85rem;
+}
+.tabs { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid var(--gray-line, var(--line)); }
+input[type=radio]#tab-all,
+input[type=radio]#tab-top15,
+input[type=radio]#tab-movers { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
+.tabs label {
+  padding: 6px 16px;
+  cursor: pointer;
+  color: var(--gray-mute, var(--mute));
+  font-size: 0.9rem;
+  border-bottom: 2px solid transparent;
+  user-select: none;
+}
+.tabs label:hover { color: var(--accent, var(--bull)); }
+section[data-tab] { display: none; margin-top: 16px; }
+#tab-all:checked    ~ .tabs label[for=tab-all]    { color: var(--accent, var(--bull)); border-bottom-color: var(--accent, var(--bull)); }
+#tab-top15:checked  ~ .tabs label[for=tab-top15]  { color: var(--accent, var(--bull)); border-bottom-color: var(--accent, var(--bull)); }
+#tab-movers:checked ~ .tabs label[for=tab-movers] { color: var(--accent, var(--bull)); border-bottom-color: var(--accent, var(--bull)); }
+#tab-all:checked    ~ section[data-tab="all"]    { display: block; }
+#tab-top15:checked  ~ section[data-tab="top15"]  { display: block; }
+#tab-movers:checked ~ section[data-tab="movers"] { display: block; }
+table.etf-table {
+  border-collapse: collapse;
+  background: var(--bg-elevated);
+  width: 100%;
+  font-size: 0.85rem;
+}
+table.etf-table th, table.etf-table td {
+  padding: 6px 12px;
+  text-align: right;
+  border-bottom: 1px solid var(--gray-line, var(--line));
+  font-variant-numeric: tabular-nums;
+}
+table.etf-table th {
+  background: var(--gray-stripe, var(--bg-elevated));
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  color: var(--gray-mute, var(--mute));
+}
+table.etf-table th:first-child, table.etf-table td:first-child {
+  text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+}
+table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) { text-align: left; }
+.rank-cell {
+  font-weight: 700;
+  color: #1a1a1a;
+  text-align: center;
+  min-width: 30px;
+}
+.pos { color: var(--pos, var(--bull)); }
+.neg { color: var(--neg, var(--bear)); }
+svg.spark { vertical-align: middle; fill: none; stroke: var(--spark, var(--bull)); stroke-width: 1.25; }
+</style>
+<h1>ETF Ranks — as of {{ asof_str }}</h1>
+<p class="subtitle">
+  Last updated: {{ asof_str }} {{ rendered_at_pt }} PT
+  &middot; Universe: {{ universe_size }} sector/theme ETFs
+</p>
+
+<input type="radio" name="tab" id="tab-all" checked>
+<input type="radio" name="tab" id="tab-top15">
+<input type="radio" name="tab" id="tab-movers">
+<div class="tabs">
+  <label for="tab-all">All ETFs</label>
+  <label for="tab-top15">Top 15</label>
+  <label for="tab-movers">Movers</label>
+</div>
+
+{% for sec in sections %}
+<section data-tab="{{ sec.tab }}">
+  <table class="etf-table" id="etf-{{ sec.tab }}">
+    <thead><tr>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 0, 'text')">Symbol</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 1, 'text')">Sector</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 2, 'num')">Rank</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 3, 'num')">&Delta;1d</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 4, 'num')">&Delta;5d</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 5, 'num')">R5</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 6, 'num')">R10</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 7, 'num')">R20</th>
+      <th onclick="sortEtfTable('etf-{{ sec.tab }}', 8, 'num')">YTD</th>
+      <th>30d</th>
+    </tr></thead>
+    <tbody>
+    {% for r in sec.rows %}
+      <tr>
+        <td>{{ r.symbol }}</td>
+        <td>{{ r.sector_name }}</td>
+        <td class="rank-cell" data-sort="{{ r.rank_int }}"{% if r.rank_missing %} data-missing="1"{% endif %} style="background: {{ r.rank_color }}">{{ r.rank_text }}</td>
+        <td data-sort="{{ r.rank_delta_1d }}" class="{% if r.rank_delta_1d > 0 %}pos{% elif r.rank_delta_1d < 0 %}neg{% endif %}">{{ r.rank_delta_1d_text }}</td>
+        <td data-sort="{{ r.rank_delta_5d }}" class="{% if r.rank_delta_5d > 0 %}pos{% elif r.rank_delta_5d < 0 %}neg{% endif %}">{{ r.rank_delta_5d_text }}</td>
+        <td data-sort="{{ r.r5 }}"{% if r.r5_missing %} data-missing="1"{% endif %}>{{ r.r5_text }}</td>
+        <td data-sort="{{ r.r10 }}"{% if r.r10_missing %} data-missing="1"{% endif %}>{{ r.r10_text }}</td>
+        <td data-sort="{{ r.r20 }}"{% if r.r20_missing %} data-missing="1"{% endif %}>{{ r.r20_text }}</td>
+        <td data-sort="{{ r.ytd_sort_key }}"{% if r.ytd_missing %} data-missing="1"{% endif %}>{{ r.ytd_pct }}</td>
+        <td>{{ r.sparkline_svg }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+
+<script>
+// Tab table sort. Cells with data-missing="1" always sort to the BOTTOM
+// regardless of direction (so the "no data" rows don't show up at the top
+// of ascending order — they're missing, not low). The data-sort attribute
+// drives the comparison for ranked rows.
+function sortEtfTable(tableId, idx, kind) {
+  const table = document.getElementById(tableId);
+  if (!table) return;
+  const tbody = table.tBodies[0];
+  const key = 'sortDir' + idx;
+  const dir = table.dataset[key] === 'asc' ? 'desc' : 'asc';
+  table.dataset[key] = dir;
+  const rows = Array.from(tbody.rows);
+  rows.sort((a, b) => {
+    const ca = a.cells[idx], cb = b.cells[idx];
+    const ma = ca.dataset.missing === '1';
+    const mb = cb.dataset.missing === '1';
+    if (ma && !mb) return 1;
+    if (!ma && mb) return -1;
+    if (ma && mb) return 0;
+    const va = ca.dataset.sort !== undefined ? ca.dataset.sort : ca.textContent;
+    const vb = cb.dataset.sort !== undefined ? cb.dataset.sort : cb.textContent;
+    if (kind === 'num') {
+      const na = parseFloat(va), nb = parseFloat(vb);
+      return dir === 'asc' ? na - nb : nb - na;
+    }
+    return dir === 'asc'
+      ? String(va).localeCompare(String(vb))
+      : String(vb).localeCompare(String(va));
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+</script>
+"""
+
+
 # Module-level jinja environment — autoescape ON, StrictUndefined for safety.
 #
 # Why autoescape ON: the rendered HTML is published to a public path (per
@@ -659,8 +829,12 @@ def _render_template(
     rendered_at_pt: str,
     universe_size: int,
     sparklines_present: bool,
+    include_shared_styles: bool = True,
 ) -> str:
-    template = _ENV.from_string(_TEMPLATE)
+    # See render_breadth's `_render_template`: standalone path uses the
+    # full document template; fragment path strips the shell + shared CSS.
+    src = _TEMPLATE if include_shared_styles else _FRAGMENT_TEMPLATE
+    template = _ENV.from_string(src)
     return template.render(
         sections=sections,
         asof_str=asof_str,
