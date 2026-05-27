@@ -56,7 +56,7 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-from markupsafe import Markup
+from markupsafe import escape
 
 from rainier.dashboard.render_etf import render_etf_html
 from rainier.dashboard.shared_styles import (
@@ -96,11 +96,18 @@ def render_combined_html(
     Pure function — no I/O, no DB, no wall-clock reads inside.
     """
     asof_str = asof.isoformat()
+    # Defense-in-depth — `asof.isoformat()` always returns safe YYYY-MM-DD,
+    # but `rendered_at_pt` is caller-supplied free-form text that lands in
+    # the public `/trading/` page. Both sub-renderers autoescape these
+    # values through their jinja templates; the combined-shell path
+    # hand-assembles HTML with `str.join`, so escape here too for parity.
+    asof_str_safe = str(escape(asof_str))
+    rendered_at_pt_safe = str(escape(rendered_at_pt))
     pct_above_200d = _latest_pct_above_200d(breadth, asof_str)
     regime_chip = (
-        Markup(regime_chip_html(pct_above_200d))
+        regime_chip_html(pct_above_200d)
         if pct_above_200d is not None
-        else Markup('<span class="regime-chip regime-mixed">No data</span>')
+        else '<span class="regime-chip regime-mixed">No data</span>'
     )
 
     breadth_fragment = render_breadth_html(
@@ -124,12 +131,16 @@ def render_combined_html(
     # ETF fragment's inline JS contains literal `{` / `}` (arrow functions,
     # object literals) that would crash `format()` with KeyError. The shell
     # is fixed-shape so simple list-join is the lowest-risk composition.
+    # `asof_str_safe` and `rendered_at_pt_safe` are pre-escaped via
+    # markupsafe to match the autoescape behavior of the nested jinja
+    # renderers; `regime_chip` is renderer-generated HTML (numeric input
+    # only — no caller-controlled strings inside).
     return "".join(
         [
             '<!DOCTYPE html>\n<html lang="en">\n<head>\n',
             '<meta charset="utf-8">\n',
             '<meta name="viewport" content="width=device-width, initial-scale=1">\n',
-            f"<title>Trading Dashboard — {asof_str}</title>\n",
+            f"<title>Trading Dashboard — {asof_str_safe}</title>\n",
             "<style>\n",
             shared_styles(),
             "</style>\n",
@@ -137,11 +148,11 @@ def render_combined_html(
             "<body>\n",
             '<header class="dashboard-header">\n',
             '  <h1 class="dashboard-brand">rainier &middot; trading dashboard</h1>\n',
-            f'  <span class="header-meta">asof {asof_str}</span>\n',
+            f'  <span class="header-meta">asof {asof_str_safe}</span>\n',
             "  ",
-            str(regime_chip),
+            regime_chip,
             "\n",
-            f'  <span class="header-meta">rendered {rendered_at_pt} PT</span>\n',
+            f'  <span class="header-meta">rendered {rendered_at_pt_safe} PT</span>\n',
             "</header>\n\n",
             '<input type="radio" name="trading-tab" id="tab-breadth" class="trading-tab-radio" checked>\n',
             '<input type="radio" name="trading-tab" id="tab-etf" class="trading-tab-radio">\n',

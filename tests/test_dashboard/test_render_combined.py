@@ -367,6 +367,40 @@ def test_combined_responsive_breakpoint_present(rendered_combined):
     )
 
 
+def test_combined_escapes_rendered_at_pt(breadth_df, spy_df, features_df, registry_df):
+    """`rendered_at_pt` is caller-supplied free-form text that lands in the
+    public `/trading/` HTML. The standalone breadth/ETF jinja templates
+    autoescape it; the combined renderer hand-assembles HTML via str.join,
+    so it must escape too. Otherwise an operator passing a malformed value
+    would inject executable markup into the published page (stored XSS).
+
+    Codex iter-2 surfaced this gap.
+    """
+    from rainier.dashboard.render_combined import render_combined_html
+
+    malicious = '<img src=x onerror="alert(1)">'
+    html = render_combined_html(
+        breadth=breadth_df,
+        spy_ohlcv=spy_df,
+        features=features_df,
+        registry=registry_df,
+        asof=date(2026, 5, 25),
+        rendered_at_pt=malicious,
+    )
+    # The raw `<img ...>` payload must NOT appear unescaped anywhere.
+    assert malicious not in html, (
+        "rendered_at_pt was NOT escaped — XSS payload landed verbatim in the "
+        "public HTML. Header writes must go through markupsafe.escape() so "
+        "they match the autoescape behavior of the nested jinja templates."
+    )
+    # The escaped form must appear (proving the value was actually emitted,
+    # just safely). Match either &lt; or &amp;lt; (paranoid double-escape).
+    assert "&lt;img" in html or "&amp;lt;img" in html, (
+        "expected escaped form of the rendered_at_pt payload in the HTML; "
+        "renderer may be dropping the value entirely instead of escaping it"
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI (2)
 # ---------------------------------------------------------------------------
