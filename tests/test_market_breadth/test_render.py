@@ -102,23 +102,23 @@ def test_render_html_is_self_contained(rendered_html):
 
 
 def test_render_includes_4_charts(rendered_html):
-    """Output contains exactly 4 primary chart SVG blocks.
+    """Output contains exactly 5 primary chart SVG blocks.
 
-    The two toggle-window variants (A/D `all` + McClellan `all`) carry a
-    `chart-alt-*` prefix so the default DOM has exactly 4 primary charts
-    visible; the `alt-` variants are hidden until their radio is selected.
+    DESIGN v0.1 §2.1 added a top SPY price pane → 5 primary charts (was 4).
+    The toggle-window variants (A/D `all` + McClellan `all` + 6 SPY windows)
+    carry a `chart-alt-*` prefix so they're hidden until their radio is
+    selected; only the 5 default variants are visible in the default DOM.
     """
     html = rendered_html
     svgs = re.findall(
         r'<svg\b[^>]*\bclass="chart-(?!alt-)([a-z0-9_-]+)"', html
     )
-    assert len(svgs) == 4, f"expected 4 primary chart SVGs, got {len(svgs)}: {svgs}"
-    assert len(set(svgs)) == 4, f"chart slugs not unique: {svgs}"
-    # Sanity-check: the 2 toggle-window variants ARE in the rendered HTML
-    # (hidden until :checked). The CSS-only window toggle test below verifies
-    # the :checked selectors actually exist.
+    assert len(svgs) == 5, f"expected 5 primary chart SVGs, got {len(svgs)}: {svgs}"
+    assert len(set(svgs)) == 5, f"chart slugs not unique: {svgs}"
+    # Sanity-check: the toggle-window variants ARE in the rendered HTML
+    # (hidden until :checked). 2 A/D+McClellan alt + 6 SPY alt = 8.
     alt_svgs = re.findall(r'<svg\b[^>]*\bclass="chart-alt-([a-z0-9_-]+)"', html)
-    assert len(alt_svgs) == 2, f"expected 2 alt-window SVGs, got {len(alt_svgs)}: {alt_svgs}"
+    assert len(alt_svgs) == 8, f"expected 8 alt-window SVGs, got {len(alt_svgs)}: {alt_svgs}"
 
 
 def test_chart_path_count_matches_data(rendered_html):
@@ -387,18 +387,25 @@ def test_line_path_breaks_subpath_on_interior_nan():
 
 
 def test_rendered_html_under_size_budget(rendered_html):
-    """Render output stays under the 150KB byte budget.
+    """Render output stays under the 220KB byte budget.
 
-    Operator's acceptance gate is "sub-100KB" (observed at 97KB during the
-    worker turn). 150KB is the **regression bar**: above that, the page
-    becomes too heavy to ship through fengshen-site's edge cache cleanly,
-    AND the gap usually means a chart blew up its point count or someone
-    embedded a binary blob. Catch it here rather than at deploy time.
+    History:
+      * v0 baseline observed at 97KB; original regression bar was 150KB.
+      * v0.1 canonical layout (DESIGN-market-breadth-v0.1-...) added the
+        SPY pane (7 window variants) + a 6-stat hero with Δ chips + zones +
+        axes + per-datapoint hover zones + inline tooltip JS. This roughly
+        doubled the raw HTML to ~190KB. After gzip the wire size is well
+        under 60KB so the edge-cache cost is still tiny, but the regression
+        bar moved to 220KB to reflect the new feature surface.
+
+    The bar's job is to catch a chart that BLOWS UP its point count or a
+    binary blob slipping in — not to police feature additions. If you bump
+    this, document why in the commit message.
     """
     byte_len = len(rendered_html.encode("utf-8"))
-    assert byte_len < 150_000, (
-        f"rendered HTML exceeds 150KB regression budget: {byte_len:,} bytes "
-        f"(operator target: <100KB, ratchet at >150KB)"
+    assert byte_len < 220_000, (
+        f"rendered HTML exceeds 220KB regression budget: {byte_len:,} bytes "
+        f"(v0.1 budget ratchet; gzipped wire size stays <60KB)"
     )
 
 
@@ -458,7 +465,11 @@ def test_render_deterministic(breadth_df):
 
 
 def test_today_snapshot_values_match_input(rendered_html, breadth_df):
-    """Header headline numbers match the latest row in the fixture parquet."""
+    """Header headline numbers match the latest row in the fixture parquet.
+
+    Updated for DESIGN v0.1 §2.2 (six canonical stats — net new highs replaces
+    the "highs / lows" pair).
+    """
     html = rendered_html
     asof_max = breadth_df["asof_date"].max()
     latest = breadth_df[breadth_df["asof_date"] == asof_max].set_index("indicator")["value"]
@@ -467,13 +478,16 @@ def test_today_snapshot_values_match_input(rendered_html, breadth_df):
     pct_200 = int(round(latest["pct_above_ma_200"])) # 62
     nh = int(latest["new_52w_high"])                  # 24
     nl = int(latest["new_52w_low"])                   # 7
+    net_hl = nh - nl                                  # 17
     ad = int(latest["ad_diff"])                       # 217
 
     # The header MUST render these as integers (no `.0`).
     assert f"{pct_20}%" in html, f"header missing pct_above_ma_20 = {pct_20}%"
     assert f"{pct_200}%" in html, f"header missing pct_above_ma_200 = {pct_200}%"
-    assert f">{nh}<" in html or f" {nh} " in html, f"header missing new_52w_high={nh}"
-    assert f">{nl}<" in html or f" {nl} " in html, f"header missing new_52w_low={nl}"
+    # Net new highs = highs - lows = 17 — must appear in the hero value div.
+    assert f">{net_hl}<" in html or f">{net_hl}<" in html, (
+        f"header missing net_hl={net_hl}"
+    )
     # A/D rendered with explicit sign.
     assert f"+{ad}" in html or f"{ad:+d}" in html, f"header missing ad_diff={ad}"
 

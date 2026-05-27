@@ -3573,6 +3573,51 @@ def market_breadth_backfill_ohlcv(
     click.echo(f"wrote sp500 OHLCV ({mode}, {len(symbols)} symbols) -> {written}")
 
 
+@market_breadth.command("backfill-spy")
+@click.option(
+    "--since",
+    default="2018-01-01",
+    show_default=True,
+    help="One-shot backfill anchor (YYYY-MM-DD). SPY pane needs 5y for the toggle.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(),
+    default="data/cache/spy_history.parquet",
+    show_default=True,
+)
+@click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help="Fetch last 5 calendar days only, upsert into the existing parquet.",
+)
+def market_breadth_backfill_spy(
+    since: str, output_path: str, incremental: bool
+) -> None:
+    """One-shot SPY OHLCV backfill for the breadth dashboard's price pane.
+
+    DESIGN-market-breadth-v0.1-canonical-layout §2.1. Single ticker via the
+    same ``ohlcv_backfill`` plumbing the S&P 500 universe uses — atomic
+    parquet write, retry-on-rate-limit, idempotent (upsert on
+    ``(symbol, date)``). The dashboard renderer loads this parquet on
+    ``--spy-path`` to render the top price pane.
+    """
+    from rainier.market_breadth import ohlcv_backfill
+
+    written = ohlcv_backfill.backfill(
+        symbols=["SPY"],
+        since=since,
+        out_path=Path(output_path),
+        incremental=incremental,
+        # Single-ticker run; coverage check is meaningless here.
+        min_coverage=0.0,
+    )
+    mode = "incremental" if incremental else "one-shot"
+    click.echo(f"wrote SPY OHLCV ({mode}) -> {written}")
+
+
 @market_breadth.command("compute-indicators")
 @click.option(
     "--input",
@@ -3659,12 +3704,25 @@ def market_breadth_compute_indicators(
     default="out/dashboards/market-breadth.html",
     show_default=True,
 )
+@click.option(
+    "--spy-path",
+    "spy_path",
+    type=click.Path(),
+    default="data/cache/spy_history.parquet",
+    show_default=True,
+    help=(
+        "Optional SPY OHLCV parquet (from `market-breadth backfill-spy`). "
+        "When present, the SPY price pane renders at the top of the page. "
+        "Missing file → SPY pane is omitted (back-compat path)."
+    ),
+)
 def market_breadth_render_html(
     input_path: str,
     asof: str | None,
     rendered_at_pt: str,
     window_days: int,
     output_path: str,
+    spy_path: str,
 ) -> None:
     """Render the S&P 500 market-breadth self-contained HTML dashboard.
 
@@ -3721,6 +3779,7 @@ def market_breadth_render_html(
         asof=asof_dt,
         rendered_at_pt=rendered_at_pt,
         window_days=window_days,
+        spy_path=spy_path,
     )
     click.echo(f"wrote market-breadth dashboard -> {written}")
 
