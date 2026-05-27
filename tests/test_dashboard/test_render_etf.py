@@ -83,28 +83,128 @@ def test_render_html_is_self_contained(rendered_html):
     assert "src=\"//" not in html and "href=\"//" not in html, "protocol-relative URL"
 
 
-def test_sort_is_sector_then_rank_desc(rendered_html):
-    """Default All-ETFs table is sorted by sector ASC, then rank DESC within sector."""
+def test_columns_symbol_first_sector_second(rendered_html):
+    """Header row of the All-ETFs table is Symbol, Sector, Rank, Δ1d, Δ5d, R5, R10, R20, YTD, 30d."""
     html = rendered_html
-    # Pull the All-ETFs table block.
     all_block = _extract_tab_block(html, "all")
-    rows = _parse_table_rows(all_block)
-    # Rows are (sector, symbol, rank); pair-wise check.
-    assert rows, "no rows parsed from All ETFs tab"
-    # Sectors must appear in alphabetical order overall.
-    sector_order = []
-    seen = set()
-    for sector, _sym, _rank in rows:
-        if sector not in seen:
-            sector_order.append(sector)
-            seen.add(sector)
-    assert sector_order == sorted(sector_order), f"sectors not alphabetical: {sector_order}"
-    # Within each sector, rank must be monotone non-increasing.
-    by_sector: dict[str, list[int]] = {}
-    for sec, _sym, rk in rows:
-        by_sector.setdefault(sec, []).append(rk)
-    for sec, ranks in by_sector.items():
-        assert ranks == sorted(ranks, reverse=True), f"sector={sec} ranks not desc: {ranks}"
+    # Pull the <thead> row's <th> texts.
+    thead = re.search(r"<thead>(.*?)</thead>", all_block, re.DOTALL)
+    assert thead, "no <thead> in All-ETFs table"
+    th_texts = [_TAGS_RE.sub("", c).strip() for c in re.findall(r"<th\b[^>]*>(.*?)</th>", thead.group(1), re.DOTALL)]
+    # The Δ characters come through as &Delta;; normalise for compare.
+    th_texts = [t.replace("&Delta;", "Δ") for t in th_texts]
+    assert th_texts[0] == "Symbol", f"first column should be Symbol, got: {th_texts}"
+    assert th_texts[1] == "Sector", f"second column should be Sector, got: {th_texts}"
+    assert th_texts[2] == "Rank", f"third column should be Rank, got: {th_texts}"
+    # Tail columns unchanged.
+    assert th_texts[3] == "Δ1d"
+    assert th_texts[4] == "Δ5d"
+    assert th_texts[5] == "R5"
+    assert th_texts[6] == "R10"
+    assert th_texts[7] == "R20"
+    assert th_texts[8] == "YTD"
+    assert th_texts[9] == "30d"
+
+
+def test_tier_default_is_3():
+    """`IMPORTANCE_TIER.get("UNKNOWN_SYMBOL", TIER_DEFAULT)` returns 3."""
+    from rainier.dashboard.render_etf import IMPORTANCE_TIER, TIER_DEFAULT
+
+    assert TIER_DEFAULT == 3
+    assert IMPORTANCE_TIER.get("UNKNOWN_SYMBOL", TIER_DEFAULT) == 3
+    # Spot-check a few known mappings.
+    assert IMPORTANCE_TIER["SMH"] == 0
+    assert IMPORTANCE_TIER["XLE"] == 1
+    assert IMPORTANCE_TIER["XBI"] == 2
+
+
+def _build_tier_features(rows: list[dict]) -> pd.DataFrame:
+    """Build a features DataFrame for tier-sort tests. Each row needs the
+    required numeric columns; tests vary symbol/sector_id/rank."""
+    base_cols = {
+        "rank_delta_1d": 0,
+        "rank_delta_5d": 0,
+        "r_5": 50,
+        "r_10": 50,
+        "r_20": 50,
+        "ret_ytd": 0.05,
+        "top15_streak": 0,
+    }
+    full_rows = []
+    for r in rows:
+        full_rows.append({**base_cols, "asof_date": "2026-05-25", **r})
+    df = pd.DataFrame(full_rows)
+    df["asof_date"] = df["asof_date"].astype("string")
+    return df
+
+
+def test_default_sort_is_importance_then_rank_desc():
+    """Tier dominates rank: tier 0 first, then 1, then 2, then 3."""
+    from rainier.dashboard.render_etf import render_etf_html
+
+    features = _build_tier_features([
+        {"symbol": "XLE",  "sector_id": 1, "rank": 80},   # tier 1
+        {"symbol": "XBI",  "sector_id": 2, "rank": 95},   # tier 2
+        {"symbol": "MEME", "sector_id": 3, "rank": 99},   # tier 3
+        {"symbol": "SMH",  "sector_id": 4, "rank": 50},   # tier 0
+    ])
+    registry = pd.DataFrame([
+        {"sector_id": 1, "sector_name": "energy"},
+        {"sector_id": 2, "sector_name": "biotech"},
+        {"sector_id": 3, "sector_name": "meme"},
+        {"sector_id": 4, "sector_name": "semis"},
+    ])
+    html = render_etf_html(
+        features=features, registry=registry,
+        asof=date(2026, 5, 25), rendered_at_pt="12:40",
+    )
+    all_block = _extract_tab_block(html, "all")
+    symbols = _extract_symbols(all_block)
+    assert symbols == ["SMH", "XLE", "XBI", "MEME"], (
+        f"tier sort wrong; got {symbols}, expected [SMH, XLE, XBI, MEME]"
+    )
+
+
+def test_default_sort_within_tier_uses_rank_desc():
+    """Within the same tier, higher rank comes first."""
+    from rainier.dashboard.render_etf import render_etf_html
+
+    # Two tier-1 ETFs with different ranks.
+    features = _build_tier_features([
+        {"symbol": "XLE", "sector_id": 1, "rank": 80},
+        {"symbol": "XLF", "sector_id": 1, "rank": 90},
+    ])
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
+    html = render_etf_html(
+        features=features, registry=registry,
+        asof=date(2026, 5, 25), rendered_at_pt="12:40",
+    )
+    all_block = _extract_tab_block(html, "all")
+    symbols = _extract_symbols(all_block)
+    assert symbols == ["XLF", "XLE"], (
+        f"within-tier rank-desc wrong; got {symbols}, expected [XLF, XLE]"
+    )
+
+
+def test_within_tier_ties_sort_alphabetically():
+    """Within the same (tier, rank), tiebreak by symbol ascending."""
+    from rainier.dashboard.render_etf import render_etf_html
+
+    # Two tier-1 ETFs with identical ranks.
+    features = _build_tier_features([
+        {"symbol": "XLC", "sector_id": 1, "rank": 85},
+        {"symbol": "XLB", "sector_id": 1, "rank": 85},
+    ])
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": "materials"}])
+    html = render_etf_html(
+        features=features, registry=registry,
+        asof=date(2026, 5, 25), rendered_at_pt="12:40",
+    )
+    all_block = _extract_tab_block(html, "all")
+    symbols = _extract_symbols(all_block)
+    assert symbols == ["XLB", "XLC"], (
+        f"alphabetical tiebreak wrong; got {symbols}, expected [XLB, XLC]"
+    )
 
 
 def test_sparkline_path_count(rendered_html, features_df):
@@ -265,8 +365,8 @@ def test_missing_cells_get_data_missing_marker():
         asof=date(2026, 5, 25), rendered_at_pt="12:40",
     )
 
-    miss_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>MISS</td>(.*?)</tr>", html, re.DOTALL)
-    full_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>FULL</td>(.*?)</tr>", html, re.DOTALL)
+    miss_block = re.search(r"<tr>\s*<td>MISS</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
+    full_block = re.search(r"<tr>\s*<td>FULL</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
     assert miss_block and full_block, "rows not found"
 
     # MISS row: every numeric cell with a missing value must carry data-missing="1"
@@ -339,7 +439,7 @@ def test_negative_rank_sentinels_render_as_em_dash():
 
     # NEW row's <td> cells should NOT contain a literal `>-1<` for any
     # rank-like column.
-    new_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>NEW</td>(.*?)</tr>", html, re.DOTALL)
+    new_block = re.search(r"<tr>\s*<td>NEW</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
     assert new_block, "NEW row not found in rendered HTML"
     new_cells = new_block.group(1)
     assert ">-1<" not in new_cells, (
@@ -351,7 +451,7 @@ def test_negative_rank_sentinels_render_as_em_dash():
     assert 'data-sort="-1"' in new_cells, "rank sort key not preserved"
 
     # OLD row still displays its real values.
-    old_block = re.search(r"<tr>\s*<td>energy</td>\s*<td>OLD</td>(.*?)</tr>", html, re.DOTALL)
+    old_block = re.search(r"<tr>\s*<td>OLD</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
     assert old_block, "OLD row not found"
     old_cells = old_block.group(1)
     assert ">90<" in old_cells, "OLD rank display value missing"
@@ -598,15 +698,20 @@ _TAGS_RE = re.compile(r"<[^>]+>")
 
 
 def _parse_table_rows(html_block: str) -> list[tuple[str, str, int]]:
-    """Return list of (sector, symbol, rank) tuples from data rows."""
+    """Return list of (sector, symbol, rank) tuples from data rows.
+
+    Column order in the rendered table is Symbol | Sector | Rank | ...,
+    but the returned tuple keeps the legacy (sector, symbol, rank) shape
+    so test assertions don't need to flip.
+    """
     rows: list[tuple[str, str, int]] = []
     for tr in _TR_RE.finditer(html_block):
         cells = _TD_RE.findall(tr.group(1))
         if len(cells) < 3:
             continue
-        # Strip inner tags + whitespace.
-        sector = _TAGS_RE.sub("", cells[0]).strip()
-        symbol = _TAGS_RE.sub("", cells[1]).strip()
+        # Strip inner tags + whitespace. Column order: symbol, sector, rank.
+        symbol = _TAGS_RE.sub("", cells[0]).strip()
+        sector = _TAGS_RE.sub("", cells[1]).strip()
         rank_text = _TAGS_RE.sub("", cells[2]).strip()
         try:
             rank = int(rank_text)
