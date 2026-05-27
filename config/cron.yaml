@@ -80,6 +80,24 @@ jobs:
     discord_on_failure: true
     enabled: false
 
+  # ETF names cache refresh — DESIGN-etf-dashboard-name-column.md §3.4.
+  #
+  # The ETF dashboard's Name column reads from data/cache/etf_names.parquet.
+  # Names rarely change so we refresh on a 30-day stale window: `--refresh-stale`
+  # is a no-op when the parquet is < 30 days old, keeping daily yfinance load
+  # near zero. The one-shot initial seed is operator-run via
+  # `uv run rainier thematic backfill-names`; from there cron keeps it fresh.
+  #
+  # Slot 12:35 — 5 min before the ETF publish job below so a refresh-day
+  # write is in place by the time the publish chain renders the HTML.
+  - name: etf-names-refresh
+    description: "Refresh ETF names cache (yfinance longName) if >30 days old"
+    schedule: "35 12 * * 1-5"   # 12:35 PST, 5 min before etf-dashboard-publish
+    command: "uv run rainier thematic backfill-names --refresh-stale"
+    log: "data/etf-names-refresh.log"
+    discord_on_failure: true
+    enabled: true
+
   # ETF ranks dashboard — DESIGN-etf-dashboard-publish.md §4/§5.
   # 20 min before US market close: render today's snapshot, publish to
   # fengshen.dev/trading/etf-ranks/ via git push to fengshen-site (Cloudflare

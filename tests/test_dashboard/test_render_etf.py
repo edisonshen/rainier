@@ -4,10 +4,12 @@ The renderer is a pure function over parquet inputs → HTML output. Tests
 exercise it on a small deterministic fixture (3 sectors × 4 tickers × 35
 days) and assert on the rendered HTML.
 
-Acceptance gates (from docs/TASK-PLAN-etf-dashboard-renderer-efed.md):
+Acceptance gates (from docs/TASK-PLAN-etf-dashboard-renderer-efed.md +
+docs/TASK-PLAN-etf-dashboard-name-column.md):
     - self-contained HTML (no external <link>, <script src>, <img src=http>)
-    - default sort = sector ASC → rank DESC within sector
+    - default sort = importance-tier ASC → rank DESC within tier
     - one <path> per ticker in the All-ETFs tab sparkline column
+    - Symbol | Name | Rank | ... column order (sector dropped)
     - Top-15 tab filters rank ≥ 85
     - Movers tab filters |Δ1d|≥10 OR |Δ5d|≥15
     - header timestamp: literal "Last updated: YYYY-MM-DD HH:MM PT"
@@ -83,8 +85,8 @@ def test_render_html_is_self_contained(rendered_html):
     assert "src=\"//" not in html and "href=\"//" not in html, "protocol-relative URL"
 
 
-def test_columns_symbol_first_sector_second(rendered_html):
-    """Header row of the All-ETFs table is Symbol, Sector, Rank, Δ1d, Δ5d, R5, R10, R20, YTD, 30d."""
+def test_columns_symbol_first_name_second(rendered_html):
+    """Header row: Symbol, Name, Rank, Δ1d, Δ5d, R5, R10, R20, YTD, 30d."""
     html = rendered_html
     all_block = _extract_tab_block(html, "all")
     # Pull the <thead> row's <th> texts.
@@ -94,7 +96,7 @@ def test_columns_symbol_first_sector_second(rendered_html):
     # The Δ characters come through as &Delta;; normalise for compare.
     th_texts = [t.replace("&Delta;", "Δ") for t in th_texts]
     assert th_texts[0] == "Symbol", f"first column should be Symbol, got: {th_texts}"
-    assert th_texts[1] == "Sector", f"second column should be Sector, got: {th_texts}"
+    assert th_texts[1] == "Name", f"second column should be Name, got: {th_texts}"
     assert th_texts[2] == "Rank", f"third column should be Rank, got: {th_texts}"
     # Tail columns unchanged.
     assert th_texts[3] == "Δ1d"
@@ -104,6 +106,189 @@ def test_columns_symbol_first_sector_second(rendered_html):
     assert th_texts[7] == "R20"
     assert th_texts[8] == "YTD"
     assert th_texts[9] == "30d"
+
+
+def test_sector_column_not_rendered(rendered_html):
+    """Explicit regression: the Sector column header must not appear in the table.
+
+    Sector column was dropped per DESIGN-etf-dashboard-name-column §2.1.
+    sector_name still lives on the underlying parquet for other consumers
+    but the rendered ETF table no longer surfaces it as a visible column.
+    """
+    html = rendered_html
+    all_block = _extract_tab_block(html, "all")
+    thead = re.search(r"<thead>(.*?)</thead>", all_block, re.DOTALL)
+    assert thead, "no <thead> in All-ETFs table"
+    th_texts = [_TAGS_RE.sub("", c).strip() for c in re.findall(r"<th\b[^>]*>(.*?)</th>", thead.group(1), re.DOTALL)]
+    assert "Sector" not in th_texts, (
+        f"Sector column header still present after name-column refactor: {th_texts}"
+    )
+
+
+def test_no_section_group_bands_in_html(rendered_html):
+    """No yellow-band group headers or sector-band <thead> rows.
+
+    Operator design doc explicitly excluded the screenshot's yellow
+    "Global Markets" / "U.S. Market" bands. Future tasks must not
+    re-introduce them. Guard: no group-band css class, no extra
+    <thead> rows beyond the column-header row inside each table.
+    """
+    html = rendered_html
+    # 1) No CSS classes that look like band headers.
+    forbidden_classes = [
+        "section-band",
+        "group-band",
+        "yellow-band",
+        "sector-band",
+        "tier-band",
+    ]
+    for cls in forbidden_classes:
+        assert cls not in html, f"forbidden group-band css class present: {cls!r}"
+    # 2) Each etf table should have exactly ONE <thead> (the column header row),
+    #    not a sequence of group headers.
+    for tab in ("all", "top15", "movers"):
+        block = _extract_tab_block(html, tab)
+        # If the tab is empty there may be no thead — only count when the
+        # table has at least one body row.
+        theads = re.findall(r"<thead\b", block)
+        assert len(theads) <= 1, (
+            f"tab {tab!r}: expected at most 1 <thead> (column headers only), "
+            f"got {len(theads)} — group-band reintroduction?"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Name column — yfinance longName + parquet-driven cache + fallback
+# ---------------------------------------------------------------------------
+
+
+def _name_features_single(symbol: str) -> pd.DataFrame:
+    """Single-row features frame for name-column tests."""
+    df = pd.DataFrame(
+        [
+            {
+                "asof_date": "2026-05-25",
+                "symbol": symbol,
+                "sector_id": 1,
+                "rank": 50,
+                "rank_delta_1d": 0,
+                "rank_delta_5d": 0,
+                "r_5": 50,
+                "r_10": 50,
+                "r_20": 50,
+                "ret_ytd": 0.05,
+                "top15_streak": 0,
+            }
+        ]
+    )
+    df["asof_date"] = df["asof_date"].astype("string")
+    return df
+
+
+def _energy_registry() -> pd.DataFrame:
+    return pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
+
+
+def test_name_cell_shows_long_name_when_parquet_present(tmp_path):
+    """When etf_names.parquet has the symbol, the Name cell renders longName."""
+    from rainier.dashboard.render_etf import render_etf_html
+
+    names_df = pd.DataFrame(
+        [
+            {
+                "symbol": "EFA",
+                "long_name": "iShares MSCI EAFE ETF",
+                "short_name": "iShares MSCI EAFE",
+                "fetched_at": pd.Timestamp("2026-05-20", tz="UTC"),
+            }
+        ]
+    )
+    names_path = tmp_path / "etf_names.parquet"
+    names_df.to_parquet(names_path)
+
+    html = render_etf_html(
+        features=_name_features_single("EFA"),
+        registry=_energy_registry(),
+        asof=date(2026, 5, 25),
+        rendered_at_pt="12:40",
+        names_path=names_path,
+    )
+    # Row's cell 2 contains the long name.
+    row = re.search(r"<tr>\s*<td>EFA</td>\s*<td[^>]*>([^<]+)</td>", html, re.DOTALL)
+    assert row, "EFA row not found in rendered HTML"
+    assert row.group(1).strip() == "iShares MSCI EAFE ETF", (
+        f"Name cell should show longName; got {row.group(1)!r}"
+    )
+
+
+def test_name_cell_falls_back_to_symbol_when_parquet_missing(tmp_path):
+    """When names_path is None or the file does not exist, render symbol in the cell."""
+    from rainier.dashboard.render_etf import render_etf_html
+
+    # Path that does not exist on disk.
+    missing_path = tmp_path / "does_not_exist.parquet"
+
+    html = render_etf_html(
+        features=_name_features_single("XYZ"),
+        registry=_energy_registry(),
+        asof=date(2026, 5, 25),
+        rendered_at_pt="12:40",
+        names_path=missing_path,
+    )
+    row = re.search(r"<tr>\s*<td>XYZ</td>\s*<td[^>]*>([^<]+)</td>", html, re.DOTALL)
+    assert row, "XYZ row not found in rendered HTML"
+    assert row.group(1).strip() == "XYZ", (
+        f"Name cell should fall back to the symbol when parquet missing; "
+        f"got {row.group(1)!r}"
+    )
+
+    # And the None case — no parquet path supplied at all.
+    html2 = render_etf_html(
+        features=_name_features_single("XYZ"),
+        registry=_energy_registry(),
+        asof=date(2026, 5, 25),
+        rendered_at_pt="12:40",
+        names_path=None,
+    )
+    row2 = re.search(r"<tr>\s*<td>XYZ</td>\s*<td[^>]*>([^<]+)</td>", html2, re.DOTALL)
+    assert row2, "XYZ row not found when names_path=None"
+    assert row2.group(1).strip() == "XYZ", (
+        f"Name cell should fall back to the symbol when names_path=None; "
+        f"got {row2.group(1)!r}"
+    )
+
+
+def test_name_cell_falls_back_to_symbol_for_unknown_ticker(tmp_path):
+    """When the parquet exists but the symbol is missing from it, render symbol."""
+    from rainier.dashboard.render_etf import render_etf_html
+
+    names_df = pd.DataFrame(
+        [
+            {
+                "symbol": "EFA",
+                "long_name": "iShares MSCI EAFE ETF",
+                "short_name": "iShares MSCI EAFE",
+                "fetched_at": pd.Timestamp("2026-05-20", tz="UTC"),
+            }
+        ]
+    )
+    names_path = tmp_path / "etf_names.parquet"
+    names_df.to_parquet(names_path)
+
+    # Render with a ticker that is NOT in the parquet (NEWETF).
+    html = render_etf_html(
+        features=_name_features_single("NEWETF"),
+        registry=_energy_registry(),
+        asof=date(2026, 5, 25),
+        rendered_at_pt="12:40",
+        names_path=names_path,
+    )
+    row = re.search(r"<tr>\s*<td>NEWETF</td>\s*<td[^>]*>([^<]+)</td>", html, re.DOTALL)
+    assert row, "NEWETF row not found in rendered HTML"
+    assert row.group(1).strip() == "NEWETF", (
+        f"Unknown ticker should fall back to symbol in Name cell; "
+        f"got {row.group(1)!r}"
+    )
 
 
 def test_tier_default_is_3():
@@ -228,7 +413,7 @@ def test_top15_tab_filters_rank_ge_85(rendered_html, features_df):
     block = _extract_tab_block(html, "top15")
     rows = _parse_table_rows(block)
     assert rows, "no rows in Top-15 tab"
-    for _sec, _sym, rk in rows:
+    for _sym, _name, rk in rows:
         assert rk >= 85, f"Top-15 row has rank<85: {_sym}={rk}"
     # Cross-check against the fixture: count of rank≥85 on latest day.
     latest_asof = features_df["asof_date"].max()
@@ -365,8 +550,11 @@ def test_missing_cells_get_data_missing_marker():
         asof=date(2026, 5, 25), rendered_at_pt="12:40",
     )
 
-    miss_block = re.search(r"<tr>\s*<td>MISS</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
-    full_block = re.search(r"<tr>\s*<td>FULL</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
+    # After the sector→name refactor, cell 2 is the name (or symbol fallback
+    # when no names_path was supplied). The fixture above doesn't pass
+    # names_path so cell 2 == cell 1 (the symbol).
+    miss_block = re.search(r"<tr>\s*<td>MISS</td>\s*<td[^>]*>MISS</td>(.*?)</tr>", html, re.DOTALL)
+    full_block = re.search(r"<tr>\s*<td>FULL</td>\s*<td[^>]*>FULL</td>(.*?)</tr>", html, re.DOTALL)
     assert miss_block and full_block, "rows not found"
 
     # MISS row: every numeric cell with a missing value must carry data-missing="1"
@@ -439,7 +627,7 @@ def test_negative_rank_sentinels_render_as_em_dash():
 
     # NEW row's <td> cells should NOT contain a literal `>-1<` for any
     # rank-like column.
-    new_block = re.search(r"<tr>\s*<td>NEW</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
+    new_block = re.search(r"<tr>\s*<td>NEW</td>\s*<td[^>]*>NEW</td>(.*?)</tr>", html, re.DOTALL)
     assert new_block, "NEW row not found in rendered HTML"
     new_cells = new_block.group(1)
     assert ">-1<" not in new_cells, (
@@ -451,7 +639,7 @@ def test_negative_rank_sentinels_render_as_em_dash():
     assert 'data-sort="-1"' in new_cells, "rank sort key not preserved"
 
     # OLD row still displays its real values.
-    old_block = re.search(r"<tr>\s*<td>OLD</td>\s*<td>energy</td>(.*?)</tr>", html, re.DOTALL)
+    old_block = re.search(r"<tr>\s*<td>OLD</td>\s*<td[^>]*>OLD</td>(.*?)</tr>", html, re.DOTALL)
     assert old_block, "OLD row not found"
     old_cells = old_block.group(1)
     assert ">90<" in old_cells, "OLD rank display value missing"
@@ -599,13 +787,13 @@ def test_tab_radios_are_hidden_by_a_matching_selector(rendered_html):
     )
 
 
-def test_html_escapes_untrusted_registry_strings():
-    """Regression: sector_name from sector_registry.parquet must be HTML-escaped.
+def test_html_escapes_untrusted_name_strings(tmp_path):
+    """Regression: ETF long_name from etf_names.parquet must be HTML-escaped.
 
     The rendered dashboard is published to a public path. Even though the
-    registry is operator-edited, treating it as trusted means a typo with
-    a stray `<` breaks the page and a copy/paste with `<script>` becomes
-    an XSS in any browser that opens the file. Autoescape MUST be on.
+    names parquet is yfinance-sourced, treating it as trusted means a
+    delisted-rename containing `<script>` becomes an XSS in any browser
+    that opens the file. Autoescape MUST be on.
     """
     from rainier.dashboard.render_etf import render_etf_html
 
@@ -627,17 +815,45 @@ def test_html_escapes_untrusted_registry_strings():
         ]
     )
     features["asof_date"] = features["asof_date"].astype("string")
-    payload = "<script>document.title='PWNED'</script>"
-    registry = pd.DataFrame([{"sector_id": 1, "sector_name": payload}])
+    registry = pd.DataFrame([{"sector_id": 1, "sector_name": "energy"}])
+
+    # Embed a double-quote in the payload so we exercise BOTH the body-cell
+    # autoescape AND the title="..." attribute-value autoescape — a regex
+    # like the one below would miss attribute-boundary breaks if the
+    # template ever swapped autoescape for raw Markup on the title path.
+    payload = "<script>document.title='PWNED'</script> evil\"onload=alert(1)"
+    names_df = pd.DataFrame(
+        [
+            {
+                "symbol": "XLE",
+                "long_name": payload,
+                "short_name": "XLE",
+                "fetched_at": pd.Timestamp("2026-05-20", tz="UTC"),
+            }
+        ]
+    )
+    names_path = tmp_path / "etf_names.parquet"
+    names_df.to_parquet(names_path)
 
     html = render_etf_html(
         features=features,
         registry=registry,
         asof=date(2026, 5, 25),
         rendered_at_pt="12:40",
+        names_path=names_path,
     )
-    assert payload not in html, "untrusted sector_name leaked into HTML unescaped"
-    assert "&lt;script&gt;" in html, "sector_name was not HTML-escaped"
+    assert payload not in html, "untrusted long_name leaked into HTML unescaped"
+    assert "&lt;script&gt;" in html, "long_name was not HTML-escaped"
+    # The Name column also renders long_name inside the cell's `title="..."`
+    # attribute for the hover tooltip. Autoescape escapes attribute values
+    # too, but the test asserted only the body cell — guard the title path
+    # explicitly so a future template tweak that bypasses autoescape on the
+    # attribute (e.g., wrapping in Markup) is caught by CI, not by a live
+    # XSS in /trading/etf-ranks/.
+    attr_break = '"onload='  # what an unescaped double-quote would produce
+    assert attr_break not in html, (
+        f"unescaped double-quote in title attribute (XSS surface): {attr_break!r}"
+    )
     # Sparkline SVG (pre-rendered, marked Markup) must still pass through
     # raw — verify the autoescape didn't double-escape pre-built HTML.
     assert "<svg" in html and "<path" in html, "sparkline SVG was double-escaped"
@@ -674,7 +890,7 @@ def test_render_works_with_missing_history(features_df, registry_df):
 # The HTML structure is a contract between the renderer and the test:
 #   - Each tab is a <section data-tab="all|top15|movers"> ... </section>
 #   - Inside each section there's a <table class="etf-table"> ... </table>
-#   - Each data <tr> has cells in order: sector, symbol, rank, ...
+#   - Each data <tr> has cells in order: symbol, name, rank, ...
 # Tests parse via cheap regex; if the renderer changes the surface the
 # tests update alongside.
 
@@ -698,31 +914,30 @@ _TAGS_RE = re.compile(r"<[^>]+>")
 
 
 def _parse_table_rows(html_block: str) -> list[tuple[str, str, int]]:
-    """Return list of (sector, symbol, rank) tuples from data rows.
+    """Return list of (symbol, name, rank) tuples from data rows.
 
-    Column order in the rendered table is Symbol | Sector | Rank | ...,
-    but the returned tuple keeps the legacy (sector, symbol, rank) shape
-    so test assertions don't need to flip.
+    Column order in the rendered table is Symbol | Name | Rank | ...
+    after the sector→name refactor (DESIGN-etf-dashboard-name-column).
     """
     rows: list[tuple[str, str, int]] = []
     for tr in _TR_RE.finditer(html_block):
         cells = _TD_RE.findall(tr.group(1))
         if len(cells) < 3:
             continue
-        # Strip inner tags + whitespace. Column order: symbol, sector, rank.
+        # Strip inner tags + whitespace. Column order: symbol, name, rank.
         symbol = _TAGS_RE.sub("", cells[0]).strip()
-        sector = _TAGS_RE.sub("", cells[1]).strip()
+        name = _TAGS_RE.sub("", cells[1]).strip()
         rank_text = _TAGS_RE.sub("", cells[2]).strip()
         try:
             rank = int(rank_text)
         except ValueError:
             # header row or non-numeric — skip.
             continue
-        if not sector or not symbol:
+        if not symbol:
             continue
-        rows.append((sector, symbol, rank))
+        rows.append((symbol, name, rank))
     return rows
 
 
 def _extract_symbols(html_block: str) -> list[str]:
-    return [sym for _sec, sym, _rk in _parse_table_rows(html_block)]
+    return [sym for sym, _name, _rk in _parse_table_rows(html_block)]

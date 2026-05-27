@@ -3435,6 +3435,63 @@ def thematic_backfill(
     click.echo(f"seeded sector registry  -> {sector_registry}")
 
 
+@thematic.command("backfill-names")
+@click.option(
+    "--universe-yaml",
+    "yaml_path",
+    type=click.Path(exists=True),
+    default="config/thematic_universe.yaml",
+    show_default=True,
+    help="Path to the thematic universe YAML — flattens to the symbol list.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(),
+    default="data/cache/etf_names.parquet",
+    show_default=True,
+    help="Destination parquet cache for yfinance long/short names.",
+)
+@click.option(
+    "--refresh-stale",
+    is_flag=True,
+    default=False,
+    help=(
+        "When set, skip the backfill if the parquet exists and is newer "
+        "than 30 days. Cron-friendly: ETF names rarely change so daily "
+        "refetch is wasteful."
+    ),
+)
+def thematic_backfill_names(
+    yaml_path: str, output_path: str, refresh_stale: bool
+) -> None:
+    """One-shot backfill: fetch yfinance long/short names for the thematic universe.
+
+    Writes ``data/cache/etf_names.parquet`` (schema:
+    ``symbol, long_name, short_name, fetched_at``). The ETF dashboard
+    renderer reads this on each invocation to populate the Name column.
+
+    Idempotent — re-running upserts on ``symbol``. yfinance rate-limit
+    triggers ONE retry, then surfaces a clean non-zero exit so the cron
+    Discord alert fires.
+    """
+    from rainier.breadth import universe_loader
+    from rainier.dashboard import etf_names_backfill
+
+    out = Path(output_path)
+    if refresh_stale and not etf_names_backfill.is_stale(out):
+        click.echo(f"etf_names parquet is fresh (<30d); skipping -> {out}")
+        return
+
+    spec = universe_loader.load_universe(Path(yaml_path))
+    symbols = list(spec.all_tickers)
+    if not symbols:
+        raise click.ClickException("thematic_universe.yaml flattened to zero tickers")
+
+    written = etf_names_backfill.backfill_names(symbols=symbols, out_path=out)
+    click.echo(f"wrote etf_names ({len(symbols)} symbols) -> {written}")
+
+
 @thematic.command("snapshot-universe")
 @click.option(
     "--yaml",
@@ -4346,6 +4403,18 @@ def dashboard() -> None:
     default="out/dashboards/etf-ranks.html",
     show_default=True,
 )
+@click.option(
+    "--names-path",
+    "names_path",
+    type=click.Path(),
+    default="data/cache/etf_names.parquet",
+    show_default=True,
+    help=(
+        "Optional ETF names parquet (from `thematic backfill-names`). "
+        "When present, the Name column renders yfinance longName; "
+        "missing or unreadable → falls back to the symbol itself."
+    ),
+)
 def dashboard_render_etf_html(
     features_path: str,
     registry_path: str,
@@ -4353,6 +4422,7 @@ def dashboard_render_etf_html(
     rendered_at_pt: str,
     history_days: int,
     output_path: str,
+    names_path: str,
 ) -> None:
     """Render the ETF-ranks self-contained HTML dashboard.
 
@@ -4365,6 +4435,10 @@ def dashboard_render_etf_html(
     from rainier.dashboard.render_etf import write_etf_html
 
     asof_dt = _date.fromisoformat(asof)
+    # CLI default points at the cache path; pass None to the renderer when
+    # the file doesn't exist so the renderer's fallback kicks in cleanly
+    # (no spurious "file not found" surprise).
+    names_arg: str | None = names_path if Path(names_path).exists() else None
     written = write_etf_html(
         features_path=features_path,
         registry_path=registry_path,
@@ -4372,6 +4446,7 @@ def dashboard_render_etf_html(
         asof=asof_dt,
         rendered_at_pt=rendered_at_pt,
         history_days=history_days,
+        names_path=names_arg,
     )
     click.echo(f"wrote ETF dashboard -> {written}")
 

@@ -87,12 +87,21 @@ table.etf-table th {
   font-weight: 600;
   color: var(--gray-mute);
 }
-/* Column 1 = Symbol (ticker, mono + bold). Column 2 = Sector (plain text). */
+/* Column 1 = Symbol (ticker, mono + bold). Column 2 = Name (descriptive,
+   width-capped + ellipsis on overflow so long ETF names don't blow the
+   table out horizontally). */
 table.etf-table th:first-child, table.etf-table td:first-child {
   text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 600;
 }
-table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) { text-align: left; }
+table.etf-table th:nth-child(2), table.etf-table td:nth-child(2) {
+  text-align: left;
+  min-width: 200px;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rank-cell {
   font-weight: 700;
   color: #1a1a1a;
@@ -125,7 +134,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
   <table class="etf-table" id="etf-all">
     <thead><tr>
       <th onclick="sortEtfTable('etf-all', 0, 'text')">Symbol</th>
-      <th onclick="sortEtfTable('etf-all', 1, 'text')">Sector</th>
+      <th onclick="sortEtfTable('etf-all', 1, 'text')">Name</th>
       <th onclick="sortEtfTable('etf-all', 2, 'num')">Rank</th>
       <th onclick="sortEtfTable('etf-all', 3, 'num')">&Delta;1d</th>
       <th onclick="sortEtfTable('etf-all', 4, 'num')">&Delta;5d</th>
@@ -139,7 +148,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>SOXX</td>
-        <td>technology</td>
+        <td title="SOXX">SOXX</td>
         <td class="rank-cell" data-sort="58" style="background: #bcc52e">58</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -152,7 +161,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>SMH</td>
-        <td>technology</td>
+        <td title="SMH">SMH</td>
         <td class="rank-cell" data-sort="33" style="background: #d5952b">33</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="-16" class="neg">-16</td>
@@ -165,7 +174,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XLE</td>
-        <td>energy</td>
+        <td title="XLE">XLE</td>
         <td class="rank-cell" data-sort="95" style="background: #2aa138">95</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -178,7 +187,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XLK</td>
-        <td>technology</td>
+        <td title="XLK">XLK</td>
         <td class="rank-cell" data-sort="95" style="background: #2aa138">95</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -191,7 +200,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XLF</td>
-        <td>finance</td>
+        <td title="XLF">XLF</td>
         <td class="rank-cell" data-sort="73" style="background: #81b632">73</td>
         <td data-sort="12" class="pos">+12</td>
         <td data-sort="0" class="">0</td>
@@ -204,7 +213,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>KRE</td>
-        <td>finance</td>
+        <td title="KRE">KRE</td>
         <td class="rank-cell" data-sort="95" style="background: #2aa138">95</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -217,7 +226,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>VGT</td>
-        <td>technology</td>
+        <td title="VGT">VGT</td>
         <td class="rank-cell" data-sort="73" style="background: #81b632">73</td>
         <td data-sort="12" class="pos">+12</td>
         <td data-sort="0" class="">0</td>
@@ -230,7 +239,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XOP</td>
-        <td>energy</td>
+        <td title="XOP">XOP</td>
         <td class="rank-cell" data-sort="73" style="background: #81b632">73</td>
         <td data-sort="12" class="pos">+12</td>
         <td data-sort="0" class="">0</td>
@@ -243,7 +252,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>KBE</td>
-        <td>finance</td>
+        <td title="KBE">KBE</td>
         <td class="rank-cell" data-sort="58" style="background: #bcc52e">58</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -256,7 +265,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>OIH</td>
-        <td>energy</td>
+        <td title="OIH">OIH</td>
         <td class="rank-cell" data-sort="58" style="background: #bcc52e">58</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -269,7 +278,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>IAI</td>
-        <td>finance</td>
+        <td title="IAI">IAI</td>
         <td class="rank-cell" data-sort="33" style="background: #d5952b">33</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="-16" class="neg">-16</td>
@@ -282,7 +291,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XES</td>
-        <td>energy</td>
+        <td title="XES">XES</td>
         <td class="rank-cell" data-sort="33" style="background: #d5952b">33</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="-16" class="neg">-16</td>
@@ -301,7 +310,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
   <table class="etf-table" id="etf-top15">
     <thead><tr>
       <th onclick="sortEtfTable('etf-top15', 0, 'text')">Symbol</th>
-      <th onclick="sortEtfTable('etf-top15', 1, 'text')">Sector</th>
+      <th onclick="sortEtfTable('etf-top15', 1, 'text')">Name</th>
       <th onclick="sortEtfTable('etf-top15', 2, 'num')">Rank</th>
       <th onclick="sortEtfTable('etf-top15', 3, 'num')">&Delta;1d</th>
       <th onclick="sortEtfTable('etf-top15', 4, 'num')">&Delta;5d</th>
@@ -315,7 +324,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XLE</td>
-        <td>energy</td>
+        <td title="XLE">XLE</td>
         <td class="rank-cell" data-sort="95" style="background: #2aa138">95</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -328,7 +337,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XLK</td>
-        <td>technology</td>
+        <td title="XLK">XLK</td>
         <td class="rank-cell" data-sort="95" style="background: #2aa138">95</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -341,7 +350,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>KRE</td>
-        <td>finance</td>
+        <td title="KRE">KRE</td>
         <td class="rank-cell" data-sort="95" style="background: #2aa138">95</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="0" class="">0</td>
@@ -360,7 +369,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
   <table class="etf-table" id="etf-movers">
     <thead><tr>
       <th onclick="sortEtfTable('etf-movers', 0, 'text')">Symbol</th>
-      <th onclick="sortEtfTable('etf-movers', 1, 'text')">Sector</th>
+      <th onclick="sortEtfTable('etf-movers', 1, 'text')">Name</th>
       <th onclick="sortEtfTable('etf-movers', 2, 'num')">Rank</th>
       <th onclick="sortEtfTable('etf-movers', 3, 'num')">&Delta;1d</th>
       <th onclick="sortEtfTable('etf-movers', 4, 'num')">&Delta;5d</th>
@@ -374,7 +383,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>SMH</td>
-        <td>technology</td>
+        <td title="SMH">SMH</td>
         <td class="rank-cell" data-sort="33" style="background: #d5952b">33</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="-16" class="neg">-16</td>
@@ -387,7 +396,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XLF</td>
-        <td>finance</td>
+        <td title="XLF">XLF</td>
         <td class="rank-cell" data-sort="73" style="background: #81b632">73</td>
         <td data-sort="12" class="pos">+12</td>
         <td data-sort="0" class="">0</td>
@@ -400,7 +409,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>VGT</td>
-        <td>technology</td>
+        <td title="VGT">VGT</td>
         <td class="rank-cell" data-sort="73" style="background: #81b632">73</td>
         <td data-sort="12" class="pos">+12</td>
         <td data-sort="0" class="">0</td>
@@ -413,7 +422,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XOP</td>
-        <td>energy</td>
+        <td title="XOP">XOP</td>
         <td class="rank-cell" data-sort="73" style="background: #81b632">73</td>
         <td data-sort="12" class="pos">+12</td>
         <td data-sort="0" class="">0</td>
@@ -426,7 +435,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>IAI</td>
-        <td>finance</td>
+        <td title="IAI">IAI</td>
         <td class="rank-cell" data-sort="33" style="background: #d5952b">33</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="-16" class="neg">-16</td>
@@ -439,7 +448,7 @@ svg.spark { vertical-align: middle; fill: none; stroke: var(--spark); stroke-wid
     
       <tr>
         <td>XES</td>
-        <td>energy</td>
+        <td title="XES">XES</td>
         <td class="rank-cell" data-sort="33" style="background: #d5952b">33</td>
         <td data-sort="0" class="">0</td>
         <td data-sort="-16" class="neg">-16</td>
