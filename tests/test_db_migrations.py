@@ -279,3 +279,96 @@ def test_foreign_keys_to_registries(database_url):
     referred = {(fk["referred_schema"], fk["referred_table"]) for fk in fks}
     assert ("market", "tickers") in referred, f"FK→market.tickers missing; got {fks}"
     assert ("market", "sectors") in referred, f"FK→market.sectors missing; got {fks}"
+
+
+# ---------------------------------------------------------------------------
+# Migration 0002 — schema-seam fixes for the dual-write writers (task plan §3)
+# ---------------------------------------------------------------------------
+
+
+def _column(insp, table, name):
+    """Return the introspected column dict for ``name`` or None."""
+    for col in insp.get_columns(table, schema="market"):
+        if col["name"] == name:
+            return col
+    return None
+
+
+def test_0002_adds_trading_day_ordinal(database_url):
+    """`upgrade head` (through 0002) adds market.thematic_features_daily.
+    trading_day_ordinal as a nullable integer column."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    col = _column(insp, "thematic_features_daily", "trading_day_ordinal")
+    eng.dispose()
+
+    assert col is not None, "trading_day_ordinal column missing after 0002"
+    assert col["nullable"] is True, f"trading_day_ordinal should be nullable; got {col}"
+    # Integer (int4) — matches the int32 ordinal the feature compute emits.
+    assert "INT" in str(col["type"]).upper(), f"unexpected type {col['type']}"
+
+
+def test_0002_relaxes_label_complete_through_nullable(database_url):
+    """After 0002, market.thematic_labels_daily.label_complete_through is
+    nullable (was NOT NULL in 0001)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    col = _column(insp, "thematic_labels_daily", "label_complete_through")
+    eng.dispose()
+
+    assert col is not None, "label_complete_through column missing"
+    assert col["nullable"] is True, (
+        f"label_complete_through should be nullable after 0002; got {col}"
+    )
+
+
+def test_0002_downgrade_reverts_both_seams(database_url):
+    """`downgrade -1` (0002 -> 0001) drops trading_day_ordinal and re-tightens
+    label_complete_through to NOT NULL."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0001")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    ord_col = _column(insp, "thematic_features_daily", "trading_day_ordinal")
+    lbl_col = _column(insp, "thematic_labels_daily", "label_complete_through")
+    eng.dispose()
+
+    assert ord_col is None, "trading_day_ordinal should be dropped on downgrade"
+    assert lbl_col is not None
+    assert lbl_col["nullable"] is False, (
+        f"label_complete_through should be NOT NULL again after downgrade; got {lbl_col}"
+    )
+
+
+def test_0002_upgrade_downgrade_upgrade_round_trips(database_url):
+    """0002 is fully reversible: head -> 0001 -> head leaves the column present
+    and the constraint relaxed again."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0001")
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    ord_col = _column(insp, "thematic_features_daily", "trading_day_ordinal")
+    lbl_col = _column(insp, "thematic_labels_daily", "label_complete_through")
+    eng.dispose()
+
+    assert ord_col is not None and ord_col["nullable"] is True
+    assert lbl_col is not None and lbl_col["nullable"] is True
