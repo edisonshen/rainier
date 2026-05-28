@@ -240,6 +240,37 @@ def test_upsert_omitted_column_not_nulled_on_conflict(migrated_engine):
     assert ls == dt.date(2024, 6, 1), "omitted last_seen must not be clobbered to NULL"
 
 
+def test_upsert_immutable_identity_not_remapped_on_conflict(migrated_engine):
+    """Registry safety ([D-015]): with the identity name column immutable, a
+    conflict on the stable id must NOT remap symbol. A diverged caller (id=1
+    now claims a different symbol) leaves the original row untouched rather
+    than silently repointing existing feature FK rows at the wrong ticker."""
+    from rainier.db import schema
+    from rainier.db.upsert import market_upsert
+
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [{"ticker_id": 1, "symbol": "AAA", "first_seen": dt.date(2024, 1, 1)}],
+        ["ticker_id"],
+        immutable_cols=["symbol", "first_seen"],
+    )
+    # Diverged re-run: id 1 now carries a DIFFERENT symbol — must be ignored.
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [{"ticker_id": 1, "symbol": "ZZZ", "first_seen": dt.date(2024, 2, 2)}],
+        ["ticker_id"],
+        immutable_cols=["symbol", "first_seen"],
+    )
+    with migrated_engine.connect() as conn:
+        sym = conn.execute(
+            select(schema.tickers.c.symbol).where(schema.tickers.c.ticker_id == 1)
+        ).scalar_one()
+    assert sym == "AAA", "stable ticker_id must not be remapped to a new symbol"
+    assert _count(migrated_engine, "tickers") == 1
+
+
 def test_upsert_fk_child_after_parents(migrated_engine):
     """thematic_ohlcv has no FK, but features does: parents (tickers/sectors)
     upserted first, then the FK child inserts without violation."""

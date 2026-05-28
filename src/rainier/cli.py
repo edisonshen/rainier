@@ -4063,21 +4063,24 @@ def _dual_write_features_pg(
                 "sector_name": sec_name,
                 "first_seen": sector_first_seen.get(sec_name, asof_dt),
             }
-        # first_seen is insert-only so a re-run keeps the original first-seen
-        # date instead of re-stamping asof_dt onto an existing registry row.
+        # Registry identity is insert-only: sector_name/symbol AND first_seen
+        # are immutable so a conflict on the stable id never remaps the name
+        # (which would point existing feature FK rows at the wrong ticker —
+        # [D-015]: IDs are never remapped) or re-stamp the date. All non-PK
+        # cols immutable -> the upsert degrades to ON CONFLICT DO NOTHING.
         market_upsert(
             eng,
             schema.sectors,
             list(sector_rows.values()),
             ["sector_id"],
-            immutable_cols=["first_seen"],
+            immutable_cols=["sector_name", "first_seen"],
         )
         market_upsert(
             eng,
             schema.tickers,
             list(ticker_rows.values()),
             ["ticker_id"],
-            immutable_cols=["first_seen"],
+            immutable_cols=["symbol", "first_seen"],
         )
 
         feature_cols = list(schema.thematic_features_daily.columns.keys())

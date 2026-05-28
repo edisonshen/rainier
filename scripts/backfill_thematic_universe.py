@@ -405,15 +405,26 @@ def _dual_write_pg(
             for sym, tid in ticker_reg.items()
         ]
 
-        # last_seen column is NULL (active) — registry parquet doesn't track it.
-        # first_seen is insert-only (immutable_cols): a later-day re-run must
-        # keep the original first-seen date, not re-stamp it. last_seen is
-        # omitted entirely so a re-run never resets an existing value to NULL.
+        # Registry identity is insert-only. sector_name/symbol AND first_seen
+        # are immutable_cols so a conflict on the stable id never remaps the
+        # name or re-stamps the date — that would silently point existing
+        # thematic_features_daily FK rows at the wrong ticker/sector ([D-015]:
+        # IDs are never remapped). With all non-PK cols immutable the upsert
+        # degrades to ON CONFLICT DO NOTHING (leave the known row untouched).
+        # last_seen is omitted entirely so a re-run never resets it to NULL.
         market_upsert(
-            eng, schema.sectors, sector_rows, ["sector_id"], immutable_cols=["first_seen"]
+            eng,
+            schema.sectors,
+            sector_rows,
+            ["sector_id"],
+            immutable_cols=["sector_name", "first_seen"],
         )
         market_upsert(
-            eng, schema.tickers, ticker_rows, ["ticker_id"], immutable_cols=["first_seen"]
+            eng,
+            schema.tickers,
+            ticker_rows,
+            ["ticker_id"],
+            immutable_cols=["symbol", "first_seen"],
         )
 
         ohlcv_rows = _ohlcv_rows_for_pg(df)
