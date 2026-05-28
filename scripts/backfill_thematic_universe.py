@@ -342,10 +342,14 @@ def _dual_write_pg(
 ) -> None:
     """Mirror the OHLCV frame + universe registries into market.*.
 
+    Stable-ID assignment mirrors ``rainier.breadth.registry`` exactly: separate
+    sector/ticker counters starting at 1, assigned in YAML iteration order
+    (each sector at its loop entry, then that sector's tickers), so the PG IDs
+    match the parquet registries the feature writer FK-references.
+
     No-op (with a warning) when DATABASE_URL is unset — the parquet write has
     already happened, so the pipeline stays whole.
     """
-    from rainier.breadth import registry as _reg
     from rainier.db import schema
     from rainier.db.dualwrite import pg_engine_or_skip
     from rainier.db.upsert import market_upsert
@@ -354,9 +358,6 @@ def _dual_write_pg(
     if eng is None:
         return
     try:
-        # Build registry maps in-memory using the stable-ID assignment order
-        # (sector first, then tickers per sector) so IDs are deterministic and
-        # match the parquet registries.
         sector_rows = []
         ticker_rows = []
         next_sid = 1
@@ -388,10 +389,6 @@ def _dual_write_pg(
         market_upsert(eng, schema.thematic_ohlcv, ohlcv_rows, ["symbol", "date"])
     finally:
         eng.dispose()
-
-    # registry import kept to document the stable-ID contract origin; the
-    # in-memory assignment above mirrors _reg.seed_registries_from_universe.
-    _ = _reg  # noqa: F841 — documents the ID-assignment source of truth
 
 
 def _ohlcv_rows_for_pg(df: pd.DataFrame) -> list[dict]:

@@ -372,3 +372,31 @@ def test_0002_upgrade_downgrade_upgrade_round_trips(database_url):
 
     assert ord_col is not None and ord_col["nullable"] is True
     assert lbl_col is not None and lbl_col["nullable"] is True
+
+
+def test_alembic_does_not_disable_existing_loggers(database_url):
+    """Regression: alembic env.py runs ``fileConfig(..., disable_existing_loggers
+    =False)``. The default (True) tears down every logger created before alembic
+    runs, silencing rainier's own loggers in-process — which makes any later
+    caplog-based test that asserts on a rainier log message fail. Guard the flag.
+
+    We register a logger BEFORE running alembic, then assert it still emits
+    (is not disabled) afterward.
+    """
+    import logging
+
+    from alembic import command
+
+    canary = logging.getLogger("rainier._alembic_logging_canary")
+    canary.disabled = False
+    assert canary.disabled is False
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    # If env.py used disable_existing_loggers=True, this canary would now be
+    # disabled (logging.config disables all loggers not named in the ini).
+    assert canary.disabled is False, (
+        "alembic fileConfig disabled a pre-existing logger — env.py must pass "
+        "disable_existing_loggers=False"
+    )

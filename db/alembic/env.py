@@ -41,8 +41,15 @@ from rainier.db.schema import metadata as target_metadata
 config = context.config
 
 # Set up Python logging from alembic.ini (if defined).
+#
+# disable_existing_loggers=False is load-bearing: the default (True) tears down
+# every logger created before alembic runs. When alembic is invoked in-process
+# (e.g. command.upgrade from a pytest fixture, or `rainier db migrate` after the
+# app has configured logging), the default silences rainier's own loggers — and
+# a later caplog-based test asserting on a rainier log message then sees nothing.
+# We only want alembic.ini to ADD handlers, never to disable existing ones.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _database_url() -> str:
