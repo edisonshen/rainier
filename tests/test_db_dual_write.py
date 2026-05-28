@@ -191,6 +191,8 @@ def test_backfill_dual_writes_ohlcv_and_registries(migrated_engine, tmp_path, da
         fetch_fn=fake_fetch,
         yaml_path=yaml_path,
         min_coverage=0.0,
+        ticker_registry_path=tmp_path / "tr.parquet",
+        sector_registry_path=tmp_path / "sr.parquet",
     )
     written = Path(written)
     assert written.exists(), "parquet must still be written"
@@ -237,6 +239,8 @@ def test_backfill_dual_write_idempotent(migrated_engine, tmp_path, database_url)
         symbols=symbols, start="2024-10-01", end="2024-10-31",
         out_path=tmp_path / "u1.parquet", fetch_fn=fake_fetch, yaml_path=yaml_path,
         min_coverage=0.0,
+        ticker_registry_path=tmp_path / "tr.parquet",
+        sector_registry_path=tmp_path / "sr.parquet",
     )
     n_ohlcv = _count(migrated_engine, "thematic_ohlcv")
     n_tick = _count(migrated_engine, "tickers")
@@ -246,9 +250,82 @@ def test_backfill_dual_write_idempotent(migrated_engine, tmp_path, database_url)
         symbols=symbols, start="2024-10-01", end="2024-10-31",
         out_path=tmp_path / "u2.parquet", fetch_fn=fake_fetch, yaml_path=yaml_path,
         min_coverage=0.0,
+        ticker_registry_path=tmp_path / "tr.parquet",
+        sector_registry_path=tmp_path / "sr.parquet",
     )
     assert _count(migrated_engine, "thematic_ohlcv") == n_ohlcv
     assert _count(migrated_engine, "tickers") == n_tick
+
+
+@pytest.mark.requires_postgres
+def test_backfill_and_compute_share_stable_ids_across_yaml_reorder(
+    migrated_engine, tmp_path, database_url
+):
+    """Regression: backfill must use the SAME persistent registry as compute so
+    IDs stay consistent even when the YAML is reordered between runs. A local
+    counter would re-number by YAML order and collide with the compute path's
+    persistent IDs on the market.tickers.symbol UNIQUE constraint."""
+    from rainier.cli import cli
+
+    backfill = _import_backfill()
+    symbols = ["AAA", "BBB", "CCC"]
+    panel = _build_ohlcv_panel(symbols, n_days=40)
+
+    def fake_fetch(syms, start, end):
+        return {
+            s: panel.loc[
+                panel["symbol"] == s,
+                ["date", "open", "high", "low", "close", "volume"],
+            ].reset_index(drop=True)
+            for s in syms
+        }
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    tr = cache / "tr.parquet"
+    sr = cache / "sr.parquet"
+    panel_path = cache / "thematic_universe.parquet"
+    panel.to_parquet(panel_path)
+
+    # Backfill seeds the persistent registry in YAML order AAA,BBB,CCC.
+    yaml1 = tmp_path / "u1.yaml"
+    _write_universe_yaml(yaml1, ["AAA", "BBB", "CCC"])
+    backfill.backfill(
+        symbols=symbols, start="2024-10-01", end="2024-10-31",
+        out_path=cache / "u.parquet", fetch_fn=fake_fetch, yaml_path=yaml1,
+        min_coverage=0.0, ticker_registry_path=tr, sector_registry_path=sr,
+    )
+    # Capture the id the backfill assigned to AAA.
+    with migrated_engine.connect() as conn:
+        aaa_id_after_backfill = conn.execute(
+            text("SELECT ticker_id FROM market.tickers WHERE symbol='AAA'")
+        ).scalar_one()
+
+    # Now compute with a REORDERED YAML (CCC first). A local counter would give
+    # AAA a different id here; the shared persistent registry keeps it stable.
+    yaml2 = tmp_path / "u2.yaml"
+    _write_universe_yaml(yaml2, ["CCC", "BBB", "AAA"])
+    res = CliRunner().invoke(
+        cli,
+        [
+            "thematic", "compute", "--asof", "2024-11-08",
+            "--ohlcv", str(panel_path), "--yaml", str(yaml2),
+            "--out", str(cache / "features.parquet"),
+            "--ticker-registry", str(tr), "--sector-registry", str(sr),
+        ],
+    )
+    assert res.exit_code == 0, res.output  # no UNIQUE(symbol) collision
+
+    with migrated_engine.connect() as conn:
+        # Exactly one row per symbol — no duplicate AAA under two ids.
+        n_aaa = conn.execute(
+            text("SELECT count(*) FROM market.tickers WHERE symbol='AAA'")
+        ).scalar_one()
+        aaa_id_after_compute = conn.execute(
+            text("SELECT ticker_id FROM market.tickers WHERE symbol='AAA'")
+        ).scalar_one()
+    assert n_aaa == 1, "symbol must not be duplicated across backfill+compute"
+    assert aaa_id_after_compute == aaa_id_after_backfill, "ticker_id must stay stable"
 
 
 # ---------------------------------------------------------------------------
