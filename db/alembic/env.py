@@ -1,6 +1,6 @@
 """Alembic environment for the rainier canonical-store schema.
 
-Two non-default flags are CRITICAL:
+Three non-default settings are CRITICAL:
 
 * ``include_schemas=True``
     Without this, autogenerate ignores non-default schemas. Since every
@@ -11,6 +11,16 @@ Two non-default flags are CRITICAL:
     The ``alembic_version`` bookkeeping table belongs in ``public``, not in
     ``market``. Otherwise ``downgrade base`` (which drops the market schema)
     also wipes alembic's own state, making re-upgrade impossible.
+
+* ``include_name=_include_only_market``
+    Pairs with ``include_schemas=True`` to keep autogenerate scoped to the
+    ``market`` schema (plus alembic's own version table in ``public``).
+    Without this filter, ``alembic revision --autogenerate`` against a DB
+    that also contains legacy rainier tables in ``public`` (the existing
+    ORM singleton + LLM thesis tables; design doc dual-write era) would
+    interpret those tables as "removed" and emit destructive ``drop_table``
+    operations in the generated migration. Codex review iter-3 flagged
+    this footgun before any autogenerate migration shipped.
 
 DATABASE_URL is read from the environment. There's no fallback — if the
 operator forgot to set it, alembic should fail loudly, not connect to some
@@ -46,6 +56,35 @@ def _database_url() -> str:
     return url
 
 
+def _include_only_market(name, type_, parent_names):
+    """Scope autogenerate to the ``market`` schema + alembic's version table.
+
+    Alembic calls this for every schema, table, and index it discovers. We
+    accept:
+
+    * The ``market`` schema itself (``type_ == 'schema'``).
+    * Anything whose parent schema is ``market`` (tables, indexes, FKs).
+    * The ``alembic_version`` table in ``public`` (so alembic can manage
+      its own bookkeeping; otherwise autogenerate would try to drop it).
+
+    Everything else — legacy ORM tables in ``public``, hypothetical other
+    schemas — is filtered out so autogenerate never emits destructive
+    operations against tables it doesn't own.
+
+    Signature matches Alembic's ``include_name`` callback contract.
+    """
+    if type_ == "schema":
+        return name == "market"
+    # For tables/indexes/etc, ``parent_names['schema_name']`` holds the
+    # owning schema (may be None for default 'public').
+    schema = parent_names.get("schema_name") if parent_names else None
+    if schema == "market":
+        return True
+    if schema in (None, "public") and type_ == "table" and name == "alembic_version":
+        return True
+    return False
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode (emit SQL to stdout, no live DB)."""
     context.configure(
@@ -54,6 +93,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         include_schemas=True,
+        include_name=_include_only_market,
         version_table_schema="public",
     )
 
@@ -78,8 +118,9 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            include_schemas=True,           # market.* is non-default
-            version_table_schema="public",  # alembic_version in public
+            include_schemas=True,             # market.* is non-default
+            include_name=_include_only_market, # scope autogenerate to market+
+            version_table_schema="public",    # alembic_version in public
         )
 
         with context.begin_transaction():
