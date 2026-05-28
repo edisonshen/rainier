@@ -156,3 +156,34 @@ def test_seed_registries_helper_handles_all_universe(tmp_path: Path):
     s2 = reg.load_sector_registry(sector_out)
     assert t1 == t2
     assert s1 == s2
+
+
+def test_load_first_seen_returns_stored_dates(tmp_path: Path):
+    """load_ticker_first_seen / load_sector_first_seen return the registry's
+    stored first_seen dates (used by the PG dual-write for true provenance)."""
+    ticker_out = tmp_path / "ticker_registry.parquet"
+    sector_out = tmp_path / "sector_registry.parquet"
+    reg.seed_registries_from_universe(
+        {"technology": ["XLK", "SMH"]},
+        asof=date(2024, 1, 1),
+        ticker_registry_path=ticker_out,
+        sector_registry_path=sector_out,
+    )
+    # A later seed adds a new symbol with a newer first_seen; existing ones keep
+    # their original date (append-only, first-seen-wins).
+    reg.seed_registries_from_universe(
+        {"technology": ["XLK", "SMH", "QQQ"]},
+        asof=date(2024, 6, 6),
+        ticker_registry_path=ticker_out,
+        sector_registry_path=sector_out,
+    )
+    tfs = reg.load_ticker_first_seen(ticker_out)
+    sfs = reg.load_sector_first_seen(sector_out)
+    assert tfs["XLK"] == date(2024, 1, 1)
+    assert tfs["QQQ"] == date(2024, 6, 6), "new symbol keeps its own first_seen"
+    assert sfs["technology"] == date(2024, 1, 1)
+
+
+def test_load_first_seen_empty_when_missing(tmp_path: Path):
+    assert reg.load_ticker_first_seen(tmp_path / "nope.parquet") == {}
+    assert reg.load_sector_first_seen(tmp_path / "nope.parquet") == {}

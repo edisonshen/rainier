@@ -381,13 +381,27 @@ def _dual_write_pg(
         )
         ticker_reg = _reg.load_ticker_registry(ticker_registry_path)
         sector_reg = _reg.load_sector_registry(sector_registry_path)
+        # Use the registry's stored first_seen (true provenance), not asof_date,
+        # so enabling PG after the registry already exists records the original
+        # first-seen date. first_seen is insert-only downstream, so getting it
+        # right on the first PG insert is the only chance.
+        ticker_fs = _reg.load_ticker_first_seen(ticker_registry_path)
+        sector_fs = _reg.load_sector_first_seen(sector_registry_path)
 
         sector_rows = [
-            {"sector_id": sid, "sector_name": name, "first_seen": asof_date}
+            {
+                "sector_id": sid,
+                "sector_name": name,
+                "first_seen": sector_fs.get(name, asof_date),
+            }
             for name, sid in sector_reg.items()
         ]
         ticker_rows = [
-            {"ticker_id": tid, "symbol": sym, "first_seen": asof_date}
+            {
+                "ticker_id": tid,
+                "symbol": sym,
+                "first_seen": ticker_fs.get(sym, asof_date),
+            }
             for sym, tid in ticker_reg.items()
         ]
 

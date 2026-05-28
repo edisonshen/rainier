@@ -4013,7 +4013,11 @@ def _frame_to_pg_rows(df: pd.DataFrame, columns: list[str]) -> list[dict]:
 
 
 def _dual_write_features_pg(
-    feat_df: pd.DataFrame, sector_map: dict[str, str], asof_dt: date
+    feat_df: pd.DataFrame,
+    sector_map: dict[str, str],
+    asof_dt: date,
+    ticker_first_seen: dict[str, date] | None = None,
+    sector_first_seen: dict[str, date] | None = None,
 ) -> None:
     """Mirror the computed feature frame into market.thematic_features_daily.
 
@@ -4021,12 +4025,20 @@ def _dual_write_features_pg(
     feature FK references resolve. IDs come from the feature frame itself
     (ticker_id/sector_id columns), which the compute layer assigned from the
     same stable registry — so PG IDs match parquet.
+
+    ``ticker_first_seen`` / ``sector_first_seen`` carry the registry's stored
+    first-seen dates (``{symbol|sector_name: date}``); when supplied they stamp
+    true provenance instead of the current ``asof_dt`` (matters when PG is
+    enabled after the registry already exists — first_seen is insert-only).
     """
     if feat_df.empty:
         return
     from rainier.db import schema
     from rainier.db.dualwrite import pg_engine_or_skip
     from rainier.db.upsert import market_upsert
+
+    ticker_first_seen = ticker_first_seen or {}
+    sector_first_seen = sector_first_seen or {}
 
     eng = pg_engine_or_skip("thematic compute")
     if eng is None:
@@ -4040,15 +4052,16 @@ def _dual_write_features_pg(
             sym = str(rec["symbol"])
             tid = _pg_value(rec["ticker_id"])
             sid = _pg_value(rec["sector_id"])
+            sec_name = sector_map.get(sym, "unknown")
             ticker_rows[tid] = {
                 "ticker_id": tid,
                 "symbol": sym,
-                "first_seen": asof_dt,
+                "first_seen": ticker_first_seen.get(sym, asof_dt),
             }
             sector_rows[sid] = {
                 "sector_id": sid,
-                "sector_name": sector_map.get(sym, "unknown"),
-                "first_seen": asof_dt,
+                "sector_name": sec_name,
+                "first_seen": sector_first_seen.get(sec_name, asof_dt),
             }
         # first_seen is insert-only so a re-run keeps the original first-seen
         # date instead of re-stamping asof_dt onto an existing registry row.
@@ -4220,8 +4233,15 @@ def thematic_compute(
     click.echo(f"wrote {len(out_df)} rows -> {out_p}")
 
     # Phase 2 dual-write: mirror features into market.* (additive; skips on
-    # DATABASE_URL unset). Parquet above is the load-bearing write.
-    _dual_write_features_pg(out_df, sector_map, asof_dt)
+    # DATABASE_URL unset). Parquet above is the load-bearing write. Pass the
+    # registry's stored first_seen so PG records true provenance, not asof_dt.
+    _dual_write_features_pg(
+        out_df,
+        sector_map,
+        asof_dt,
+        ticker_first_seen=_reg.load_ticker_first_seen(ticker_registry_path),
+        sector_first_seen=_reg.load_sector_first_seen(sector_registry_path),
+    )
 
 
 def _append_features(new_df: pd.DataFrame, path: Path, asof: date, force: bool) -> None:
@@ -4473,8 +4493,15 @@ def thematic_run_daily(
         else:
             _append_features(out_df, features_path, asof_dt, force=False)
             click.echo(f"layer A: wrote {len(out_df)} rows -> {features_path}")
-            # Phase 2 dual-write: mirror layer A features into market.*.
-            _dual_write_features_pg(out_df, sector_map, asof_dt)
+            # Phase 2 dual-write: mirror layer A features into market.* with
+            # the registry's stored first_seen (true provenance, not asof_dt).
+            _dual_write_features_pg(
+                out_df,
+                sector_map,
+                asof_dt,
+                ticker_first_seen=_reg.load_ticker_first_seen(ticker_registry_path),
+                sector_first_seen=_reg.load_sector_first_seen(sector_registry_path),
+            )
 
     # Layer B: always recompute (cheap + freshness drifts forward).
     import os

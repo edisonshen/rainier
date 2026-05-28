@@ -437,6 +437,54 @@ def test_frame_to_pg_rows_omits_absent_optional_column(migrated_engine):
 
 
 @pytest.mark.requires_postgres
+def test_compute_mirror_uses_registry_first_seen_not_asof(
+    migrated_engine, tmp_path, database_url
+):
+    """Regression (codex P2): when the registry parquet already records an
+    older first_seen, the PG ticker/sector rows must carry that date, not the
+    current compute asof_dt (first_seen is insert-only, so the first PG write
+    is the only chance to get provenance right)."""
+    from rainier.breadth import registry as _reg
+    from rainier.cli import cli
+
+    symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+    panel = _build_ohlcv_panel(symbols, n_days=40)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    panel_path = cache / "thematic_universe.parquet"
+    panel.to_parquet(panel_path)
+    yaml_path = tmp_path / "universe.yaml"
+    _write_universe_yaml(yaml_path, symbols)
+    tr = cache / "tr.parquet"
+    sr = cache / "sr.parquet"
+
+    # Pre-seed the registry with an OLD first_seen (PG not yet enabled then).
+    universe = {"test_sector": symbols}
+    _reg.seed_registries_from_universe(
+        universe, asof=date(2024, 1, 1),
+        ticker_registry_path=tr, sector_registry_path=sr,
+    )
+
+    # Now compute with a much later asof; PG enabled. first_seen must be the
+    # registry's 2024-01-01, not 2024-11-08.
+    res = CliRunner().invoke(
+        cli,
+        [
+            "thematic", "compute", "--asof", "2024-11-08",
+            "--ohlcv", str(panel_path), "--yaml", str(yaml_path),
+            "--out", str(cache / "features.parquet"),
+            "--ticker-registry", str(tr), "--sector-registry", str(sr),
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    with migrated_engine.connect() as conn:
+        fs = conn.execute(
+            text("SELECT first_seen FROM market.tickers WHERE symbol='AAA'")
+        ).scalar_one()
+    assert fs == date(2024, 1, 1), "PG first_seen must mirror the registry, not asof"
+
+
+@pytest.mark.requires_postgres
 def test_thematic_backfill_labels_dual_writes(migrated_engine, tmp_path, database_url):
     from rainier.cli import cli
 
