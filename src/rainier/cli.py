@@ -4610,3 +4610,95 @@ def dashboard_render_combined(
         names_path=names_arg,
     )
     click.echo(f"wrote trading dashboard -> {written}")
+
+
+# ---------------------------------------------------------------------------
+# db — canonical Postgres store (Phase 1 of the architecture pivot)
+# ---------------------------------------------------------------------------
+#
+# Surface (per task plan §5):
+#
+#   rainier db ping                          connect, SELECT 1, exit 0 or fail loud
+#   rainier db migrate                       alembic upgrade head
+#   rainier db migrate --downgrade -1        alembic downgrade -1
+#   rainier db migrate --downgrade base      alembic downgrade base
+#
+# Implementation uses Alembic's Python API (not subprocess) so the CLI surface
+# is testable from pytest without spawning processes.
+#
+# This is the NEW `db/` package — separate from the legacy `core/database.py`
+# singleton that backs LLM thesis persistence, monitors, etc. Both engines
+# coexist for the duration of the pivot.
+
+
+@cli.group()
+def db() -> None:
+    """Postgres canonical-store management — schema migrations + ping."""
+
+
+def _resolve_alembic_config():
+    """Build an Alembic Config bound to db/alembic.ini at the repo root.
+
+    Resolves paths so the CLI works regardless of cwd. The .ini file leaves
+    `sqlalchemy.url` empty on purpose — db/alembic/env.py reads DATABASE_URL
+    from the environment so creds never land in git.
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    # cli.py lives at src/rainier/cli.py → repo root is parents[2].
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg_path = repo_root / "db" / "alembic.ini"
+    if not cfg_path.exists():
+        raise click.ClickException(
+            f"alembic config not found at {cfg_path} — "
+            "is this the rainier repo root?"
+        )
+    cfg = Config(str(cfg_path))
+    cfg.set_main_option("script_location", str(repo_root / "db" / "alembic"))
+    return cfg
+
+
+@db.command("ping")
+def db_ping() -> None:
+    """Connect to ``DATABASE_URL``, run ``SELECT 1``, print ``ok`` or fail."""
+    from sqlalchemy import text
+
+    from rainier.db.engine import get_engine
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1")).scalar()
+        engine.dispose()
+    except Exception as exc:  # pragma: no cover — connection-time failure
+        raise click.ClickException(f"db ping failed: {exc}") from exc
+
+    if result != 1:
+        raise click.ClickException(f"db ping returned unexpected value: {result!r}")
+    click.echo("ok")
+
+
+@db.command("migrate")
+@click.option(
+    "--downgrade",
+    "downgrade_to",
+    default=None,
+    help=(
+        "If set, downgrade to this revision (e.g. -1, base, 0001). "
+        "Without this flag, the command upgrades to head."
+    ),
+)
+def db_migrate(downgrade_to: str | None) -> None:
+    """Run Alembic ``upgrade head`` (default) or ``downgrade <rev>``."""
+    from alembic import command
+
+    cfg = _resolve_alembic_config()
+
+    if downgrade_to is None:
+        command.upgrade(cfg, "head")
+        click.echo("alembic upgrade head — ok")
+    else:
+        command.downgrade(cfg, downgrade_to)
+        click.echo(f"alembic downgrade {downgrade_to} — ok")

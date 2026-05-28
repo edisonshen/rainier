@@ -18,6 +18,10 @@ dependencies = [
     # Database
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
+    # psycopg3 driver for the canonical-store pivot (postgresql+psycopg://...).
+    # psycopg2-binary is kept for the legacy core/database.py path so existing
+    # ORM call sites don't have to migrate in this PR; new db/ code uses psycopg3.
+    "psycopg[binary]>=3.1",
     "alembic>=1.13",
     # Visualization
     "plotly>=5.18",
@@ -106,5 +110,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
+    # Spins up a temporary local Postgres for db/ migration tests. Tests
+    # tagged `requires_postgres` skip when this isn't available, so it's
+    # dev-only.
+    "pytest-postgresql>=6.0",
     "ruff>=0.3",
 ]

@@ -40,14 +40,29 @@ except ImportError:  # pragma: no cover
     _HAS_PYTEST_POSTGRESQL = False
 
 
-if _HAS_PYTEST_POSTGRESQL:
+def _local_pg_binary_available() -> bool:
+    """pytest-postgresql needs pg_config + initdb on $PATH. If they're
+    missing we can't spin up an isolated DB and must skip cleanly rather
+    than letting the fixture raise ExecutableMissingException."""
+    import shutil
+
+    return shutil.which("pg_config") is not None and shutil.which("initdb") is not None
+
+
+if _HAS_PYTEST_POSTGRESQL and _local_pg_binary_available():
     postgresql_proc = _pg_factories.postgresql_proc(port=None, unixsocketdir="/tmp")
     postgresql = _pg_factories.postgresql("postgresql_proc")
 
 
 @pytest.fixture
 def database_url(request, monkeypatch):
-    """Return a DATABASE_URL for a clean Postgres + set it on the env."""
+    """Return a DATABASE_URL for a clean Postgres + set it on the env.
+
+    Resolution priority:
+      1. ``RAINIER_TEST_DATABASE_URL`` — operator-supplied sandbox (docker, neon, etc).
+      2. pytest-postgresql — ephemeral local Postgres (needs pg_config + initdb).
+      3. Skip — no Postgres reachable.
+    """
     env_url = os.environ.get("RAINIER_TEST_DATABASE_URL")
     if env_url:
         monkeypatch.setenv("DATABASE_URL", env_url)
@@ -55,8 +70,11 @@ def database_url(request, monkeypatch):
         return
 
     if not _HAS_PYTEST_POSTGRESQL:
+        pytest.skip("pytest-postgresql not installed")
+    if not _local_pg_binary_available():
         pytest.skip(
-            "neither RAINIER_TEST_DATABASE_URL nor pytest-postgresql available"
+            "pg_config / initdb not on PATH — install postgres locally or set "
+            "RAINIER_TEST_DATABASE_URL"
         )
 
     pg = request.getfixturevalue("postgresql")
