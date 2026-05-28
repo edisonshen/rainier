@@ -25,7 +25,6 @@ from sqlalchemy import (
     BigInteger,
     Column,
     Date,
-    Float,
     ForeignKey,
     Index,
     MetaData,
@@ -144,9 +143,8 @@ thematic_labels_daily = Table(
 )
 
 
-# Sentinel-style export so callers don't reach into module-internal names.
+# Public surface — callers reach for the Table objects + the shared metadata.
 __all__ = [
-    "Float",  # re-export for type hints
     "SCHEMA",
     "metadata",
     "sectors",
