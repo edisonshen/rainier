@@ -101,8 +101,10 @@ def _alembic_config():
     repo_root = Path(__file__).resolve().parents[1]
     cfg_path = repo_root / "db" / "alembic.ini"
     cfg = Config(str(cfg_path))
-    # alembic.ini stores `script_location = alembic`, which is relative to
-    # the ini file. Make it absolute so tests can run from any cwd.
+    # alembic.ini stores `script_location = %(here)s/alembic`, which already
+    # resolves relative to the ini file. We override anyway as defense-in-depth
+    # in case a future edit drops the %(here)s prefix — the regression test
+    # `test_raw_alembic_ini_works_from_any_cwd` below catches that footgun.
     cfg.set_main_option("script_location", str(repo_root / "db" / "alembic"))
     return cfg
 
