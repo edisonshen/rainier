@@ -1765,7 +1765,16 @@ async def _recover(settings, dry_run: bool):
 
 @cli.group()
 def db():
-    """Database management commands."""
+    """Database management commands.
+
+    Owns BOTH the legacy core/database.py singleton commands (``init``,
+    ``backfill-prices``) AND the new Postgres canonical-store commands
+    (``ping``, ``migrate``) defined further down in this file. There must
+    be exactly ONE ``@cli.group() def db()`` in this module — declaring a
+    second one shadows this group in click's registry and breaks the
+    legacy subcommands (see CI #102 regression and the
+    ``test_db_group_does_not_shadow_legacy_subcommands`` guard).
+    """
 
 
 @db.command(name="init")
@@ -4616,7 +4625,7 @@ def dashboard_render_combined(
 # db — canonical Postgres store (Phase 1 of the architecture pivot)
 # ---------------------------------------------------------------------------
 #
-# Surface (per task plan §5):
+# New subcommands (per task plan §5):
 #
 #   rainier db ping                          connect, SELECT 1, exit 0 or fail loud
 #   rainier db migrate                       alembic upgrade head
@@ -4629,11 +4638,13 @@ def dashboard_render_combined(
 # This is the NEW `db/` package — separate from the legacy `core/database.py`
 # singleton that backs LLM thesis persistence, monitors, etc. Both engines
 # coexist for the duration of the pivot.
-
-
-@cli.group()
-def db() -> None:
-    """Postgres canonical-store management — schema migrations + ping."""
+#
+# IMPORTANT: ping + migrate decorate the EXISTING `db` group defined at the
+# top of the legacy db block (above, around line 1766) which already owns
+# `init` and `backfill-prices`. Do NOT re-declare `@cli.group() def db()`
+# here — click's registry would replace the legacy group with this one and
+# silently kill `rainier db init` / `db backfill-prices` (CI #102 regression).
+# See tests/test_cli/test_db.py::test_db_group_does_not_shadow_legacy_subcommands.
 
 
 def _resolve_alembic_config():
