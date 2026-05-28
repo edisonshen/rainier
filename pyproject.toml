@@ -70,6 +70,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rainier"]
+# Ship the top-level `db/` tree (alembic.ini + alembic/ migrations) inside the
+# wheel at `rainier/_db_assets/`. `rainier db migrate` resolves the ini via
+# `importlib.resources.files("rainier") / "_db_assets" / "alembic.ini"`, so the
+# CLI works from both editable installs (where the top-level db/ exists on disk)
+# and non-editable wheel installs (where it doesn't). Catches the codex iter-2
+# [P1]: without this, wheel installs would crash with "alembic config not found".
+force-include = { "db" = "rainier/_db_assets" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

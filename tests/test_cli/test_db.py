@@ -45,6 +45,48 @@ def test_db_ping_fails_loud_without_database_url(monkeypatch):
     assert "DATABASE_URL" in combined
 
 
+def test_wheel_packages_db_assets_under_rainier_db_assets():
+    """Regression: pyproject.toml's `[tool.hatch.build.targets.wheel]` must
+    `force-include` the top-level db/ tree at `rainier/_db_assets/` inside
+    the wheel. Without this, non-editable wheel installs crash on
+    `rainier db migrate` because alembic.ini isn't on disk.
+
+    Codex review iter-2 (2026-05-28) caught this footgun before any wheel
+    consumer hit it. We don't actually build a wheel here — that would be
+    slow + flaky in CI — instead we assert the static config that controls
+    wheel layout.
+    """
+    from pathlib import Path
+
+    try:
+        import tomllib  # py311+
+    except ImportError:  # pragma: no cover
+        import tomli as tomllib
+
+    repo_root = Path(__file__).resolve().parents[2]
+    pyproject_path = repo_root / "pyproject.toml"
+    with pyproject_path.open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    wheel_cfg = (
+        pyproject.get("tool", {})
+        .get("hatch", {})
+        .get("build", {})
+        .get("targets", {})
+        .get("wheel", {})
+    )
+    force_include = wheel_cfg.get("force-include", {})
+    assert force_include.get("db") == "rainier/_db_assets", (
+        "pyproject.toml's [tool.hatch.build.targets.wheel] must contain "
+        "`force-include = { \"db\" = \"rainier/_db_assets\" }` so the wheel "
+        "ships alembic.ini + alembic/. Got: " + repr(force_include)
+    )
+
+    # Sanity: the source dir referenced by force-include actually exists.
+    assert (repo_root / "db" / "alembic.ini").exists()
+    assert (repo_root / "db" / "alembic").is_dir()
+
+
 def test_alembic_ini_script_location_is_config_relative(tmp_path, monkeypatch):
     """Regression: alembic.ini's `script_location` must resolve relative to
     the ini file (via `%(here)s`), NOT relative to cwd. Without this, running
