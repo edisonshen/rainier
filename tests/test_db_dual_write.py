@@ -377,6 +377,60 @@ def test_thematic_compute_dual_writes_features(migrated_engine, tmp_path, databa
     assert _count(migrated_engine, "thematic_features_daily") == len(feat_df)
 
 
+@pytest.mark.requires_postgres
+def test_frame_to_pg_rows_omits_absent_optional_column(migrated_engine):
+    """Regression (codex P2): a frame lacking trading_day_ordinal must NOT
+    null out an existing ordinal on re-upsert. _frame_to_pg_rows omits the
+    absent column so market_upsert leaves the prior PG value intact."""
+    from rainier.cli import _frame_to_pg_rows
+    from rainier.db import schema
+    from rainier.db.upsert import market_upsert
+
+    # Parents for the FK.
+    market_upsert(
+        migrated_engine, schema.tickers,
+        [{"ticker_id": 1, "symbol": "AAA", "first_seen": date(2024, 1, 1)}],
+        ["ticker_id"], immutable_cols=["first_seen"],
+    )
+    market_upsert(
+        migrated_engine, schema.sectors,
+        [{"sector_id": 1, "sector_name": "tech", "first_seen": date(2024, 1, 1)}],
+        ["sector_id"], immutable_cols=["first_seen"],
+    )
+
+    feature_cols = list(schema.thematic_features_daily.columns.keys())
+    base = {
+        "asof_date": date(2024, 11, 8), "trading_day_ordinal": 42, "symbol": "AAA",
+        "ticker_id": 1, "sector_id": 1, "close": 100.0, "rank": 1,
+        "rank_delta_1d": 0, "rank_delta_5d": 0, "top15_streak": 0,
+        "universe_size": 1, "universe_yaml_sha": "deadbeef",
+        "computed_at": pd.Timestamp("2024-11-08T16:30:00Z"),
+    }
+    # First write WITH the ordinal.
+    df_with = pd.DataFrame([base])
+    market_upsert(
+        migrated_engine, schema.thematic_features_daily,
+        _frame_to_pg_rows(df_with, feature_cols), ["asof_date", "symbol"],
+    )
+    # Re-write the SAME key from a frame that LACKS trading_day_ordinal.
+    base_no_ord = {k: v for k, v in base.items() if k != "trading_day_ordinal"}
+    df_without = pd.DataFrame([base_no_ord])
+    rows = _frame_to_pg_rows(df_without, feature_cols)
+    assert "trading_day_ordinal" not in rows[0], "absent column must be omitted, not None"
+    market_upsert(
+        migrated_engine, schema.thematic_features_daily, rows, ["asof_date", "symbol"],
+    )
+    with migrated_engine.connect() as conn:
+        ordn = conn.execute(
+            text(
+                "SELECT trading_day_ordinal FROM market.thematic_features_daily "
+                "WHERE symbol='AAA' AND asof_date=:a"
+            ),
+            {"a": date(2024, 11, 8)},
+        ).scalar_one()
+    assert ordn == 42, "existing ordinal must survive a re-upsert that omits the column"
+
+
 # ---------------------------------------------------------------------------
 # thematic backfill-labels -> market.thematic_labels_daily
 # ---------------------------------------------------------------------------

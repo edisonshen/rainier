@@ -3994,8 +3994,11 @@ def _pg_value(v):
 def _frame_to_pg_rows(df: pd.DataFrame, columns: list[str]) -> list[dict]:
     """Project ``df`` to ``columns`` and coerce each cell for psycopg binding.
 
-    Columns absent from ``df`` are emitted as None so a writer whose frame
-    lacks an optional column (e.g. trading_day_ordinal) still produces a row.
+    A column absent from ``df`` is OMITTED from the row dict, not emitted as
+    None. Emitting None would make ``market_upsert`` treat the column as
+    "supplied" and overwrite an existing PG value with NULL on conflict,
+    defeating its omitted-column protection. Omitting it leaves any prior PG
+    value intact (e.g. a ``trading_day_ordinal`` a fuller run already wrote).
     """
     if df.empty:
         return []
@@ -4004,7 +4007,7 @@ def _frame_to_pg_rows(df: pd.DataFrame, columns: list[str]) -> list[dict]:
     records = df.to_dict(orient="records")
     for rec in records:
         rows.append(
-            {col: _pg_value(rec.get(col)) if col in present else None for col in columns}
+            {col: _pg_value(rec.get(col)) for col in columns if col in present}
         )
     return rows
 
