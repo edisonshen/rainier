@@ -583,6 +583,37 @@ def test_backfill_skips_pg_when_database_url_unset(tmp_path, monkeypatch, capsys
     assert "database_url" in combined
 
 
+def test_mirror_guard_swallows_sqlalchemy_error(monkeypatch, capsys):
+    """DATABASE_URL set but PG unreachable -> the SQLAlchemyError raised inside
+    the mirror body is caught + warned, NOT propagated (parquet load-bearing)."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from rainier.db.dualwrite import mirror_guard
+
+    # Point at a host that cannot connect; the engine object is created lazily,
+    # so begin()/execute() inside the body is what raises.
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql+psycopg://nouser@127.0.0.1:1/nodb"
+    )
+    with mirror_guard("unit-test-writer") as eng:
+        assert eng is not None, "engine object should be returned when URL is set"
+        # Simulate the upsert raising an operational error.
+        with eng.begin():  # pragma: no cover - the connect itself raises
+            pass
+    # No exception escaped; a warning naming the writer was emitted.
+    combined = (capsys.readouterr().err).lower()
+    assert "unit-test-writer" in combined
+    assert "dual-write failed" in combined
+
+    # Sanity: a non-SQLAlchemy error inside the body still propagates.
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://nouser@127.0.0.1:1/nodb")
+    with pytest.raises(ValueError):
+        with mirror_guard("unit-test-writer"):
+            raise ValueError("programmer bug must not be swallowed")
+    # Guard against the SQLAlchemyError import being unused if the body changes.
+    assert issubclass(SQLAlchemyError, Exception)
+
+
 def test_compute_skips_pg_when_database_url_unset(tmp_path, monkeypatch):
     """thematic compute with DATABASE_URL unset still writes parquet, exit 0."""
     monkeypatch.delenv("DATABASE_URL", raising=False)

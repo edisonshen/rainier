@@ -365,46 +365,49 @@ def _dual_write_pg(
     """
     from rainier.breadth import registry as _reg
     from rainier.db import schema
-    from rainier.db.dualwrite import pg_engine_or_skip
+    from rainier.db.dualwrite import mirror_guard
     from rainier.db.upsert import market_upsert
 
-    eng = pg_engine_or_skip("backfill_thematic_universe")
-    if eng is None:
-        return
-    try:
-        # Seed + load the persistent registry (same call shape as compute).
-        _reg.seed_registries_from_universe(
-            universe,
-            asof=asof_date,
-            ticker_registry_path=ticker_registry_path,
-            sector_registry_path=sector_registry_path,
-        )
-        ticker_reg = _reg.load_ticker_registry(ticker_registry_path)
-        sector_reg = _reg.load_sector_registry(sector_registry_path)
-        # Use the registry's stored first_seen (true provenance), not asof_date,
-        # so enabling PG after the registry already exists records the original
-        # first-seen date. first_seen is insert-only downstream, so getting it
-        # right on the first PG insert is the only chance.
-        ticker_fs = _reg.load_ticker_first_seen(ticker_registry_path)
-        sector_fs = _reg.load_sector_first_seen(sector_registry_path)
+    # Seed + load the persistent registry (same call shape as compute). This is
+    # local-fs work; it runs whether or not PG is reachable.
+    _reg.seed_registries_from_universe(
+        universe,
+        asof=asof_date,
+        ticker_registry_path=ticker_registry_path,
+        sector_registry_path=sector_registry_path,
+    )
+    ticker_reg = _reg.load_ticker_registry(ticker_registry_path)
+    sector_reg = _reg.load_sector_registry(sector_registry_path)
+    # Use the registry's stored first_seen (true provenance), not asof_date,
+    # so enabling PG after the registry already exists records the original
+    # first-seen date. first_seen is insert-only downstream, so getting it
+    # right on the first PG insert is the only chance.
+    ticker_fs = _reg.load_ticker_first_seen(ticker_registry_path)
+    sector_fs = _reg.load_sector_first_seen(sector_registry_path)
 
-        sector_rows = [
-            {
-                "sector_id": sid,
-                "sector_name": name,
-                "first_seen": sector_fs.get(name, asof_date),
-            }
-            for name, sid in sector_reg.items()
-        ]
-        ticker_rows = [
-            {
-                "ticker_id": tid,
-                "symbol": sym,
-                "first_seen": ticker_fs.get(sym, asof_date),
-            }
-            for sym, tid in ticker_reg.items()
-        ]
+    sector_rows = [
+        {
+            "sector_id": sid,
+            "sector_name": name,
+            "first_seen": sector_fs.get(name, asof_date),
+        }
+        for name, sid in sector_reg.items()
+    ]
+    ticker_rows = [
+        {
+            "ticker_id": tid,
+            "symbol": sym,
+            "first_seen": ticker_fs.get(sym, asof_date),
+        }
+        for sym, tid in ticker_reg.items()
+    ]
 
+    # mirror_guard: None when DATABASE_URL unset; any SQLAlchemyError inside the
+    # body (PG down / unmigrated) is caught + warned so this never aborts the
+    # already-written parquet pipeline.
+    with mirror_guard("backfill_thematic_universe") as eng:
+        if eng is None:
+            return
         # Registry identity is insert-only. sector_name/symbol AND first_seen
         # are immutable_cols so a conflict on the stable id never remaps the
         # name or re-stamps the date — that would silently point existing
@@ -429,8 +432,6 @@ def _dual_write_pg(
 
         ohlcv_rows = _ohlcv_rows_for_pg(df)
         market_upsert(eng, schema.thematic_ohlcv, ohlcv_rows, ["symbol", "date"])
-    finally:
-        eng.dispose()
 
 
 def _ohlcv_rows_for_pg(df: pd.DataFrame) -> list[dict]:

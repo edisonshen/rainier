@@ -88,31 +88,43 @@ def market_upsert(
     pk_set = set(pk_cols)
     immutable_set = set(immutable_cols)
     table_cols = set(table.columns.keys())
-    # Only update columns the caller supplied (union of all row keys) AND that
-    # exist on the table, excluding PK + immutable provenance columns. This is
-    # what keeps a re-run from NULL-ing out columns it never meant to write.
-    supplied_cols = {k for row in rows for k in row.keys()}
-    update_cols = [
-        c
-        for c in table.columns.keys()  # preserve table column order, deterministic
-        if c in table_cols
-        and c in supplied_cols
-        and c not in pk_set
-        and c not in immutable_set
-    ]
+
+    # Rows are grouped by their exact supplied key-set, and each group runs as
+    # its own homogeneous batch. Reason: pg_insert(...).values(chunk) derives
+    # the INSERT column list from the FIRST row, so a chunk that mixes key-sets
+    # would (a) silently drop columns a later row supplies but the first omits,
+    # and (b) UPDATE a column to NULL for rows that didn't supply it. Grouping
+    # makes update_cols exactly the columns THIS group supplied -> the
+    # omitted-column protection holds per group. dict preserves first-seen
+    # group order so behaviour is deterministic.
+    groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        key = tuple(sorted(row.keys()))
+        groups.setdefault(key, []).append(row)
 
     with engine.begin() as conn:
-        for start in range(0, len(rows), batch_size):
-            chunk = rows[start : start + batch_size]
-            stmt = pg_insert(table).values(chunk)
-            if update_cols:
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=list(pk_cols),
-                    set_={c: stmt.excluded[c] for c in update_cols},
-                )
-            else:
-                # PK-only table: nothing to update on conflict, just skip.
-                stmt = stmt.on_conflict_do_nothing(index_elements=list(pk_cols))
-            conn.execute(stmt)
+        for _key, group_rows in groups.items():
+            supplied_cols = set(group_rows[0].keys())  # uniform within a group
+            update_cols = [
+                c
+                for c in table.columns.keys()  # table order -> deterministic SQL
+                if c in table_cols
+                and c in supplied_cols
+                and c not in pk_set
+                and c not in immutable_set
+            ]
+            for start in range(0, len(group_rows), batch_size):
+                chunk = group_rows[start : start + batch_size]
+                stmt = pg_insert(table).values(chunk)
+                if update_cols:
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=list(pk_cols),
+                        set_={c: stmt.excluded[c] for c in update_cols},
+                    )
+                else:
+                    # Nothing left to update on conflict (PK-only or all-immutable
+                    # group) — leave the existing row untouched.
+                    stmt = stmt.on_conflict_do_nothing(index_elements=list(pk_cols))
+                conn.execute(stmt)
 
     return len(rows)

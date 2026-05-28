@@ -4034,16 +4034,17 @@ def _dual_write_features_pg(
     if feat_df.empty:
         return
     from rainier.db import schema
-    from rainier.db.dualwrite import pg_engine_or_skip
+    from rainier.db.dualwrite import mirror_guard
     from rainier.db.upsert import market_upsert
 
     ticker_first_seen = ticker_first_seen or {}
     sector_first_seen = sector_first_seen or {}
 
-    eng = pg_engine_or_skip("thematic compute")
-    if eng is None:
-        return
-    try:
+    # mirror_guard: None when DATABASE_URL unset; any SQLAlchemyError inside is
+    # caught + warned so a broken mirror DB never aborts the parquet pipeline.
+    with mirror_guard("thematic compute") as eng:
+        if eng is None:
+            return
         # Parents: derive (ticker_id, symbol) and (sector_id, sector_name) from
         # the frame + sector_map. Dedupe so a multi-row frame upserts each once.
         ticker_rows = {}
@@ -4088,8 +4089,6 @@ def _dual_write_features_pg(
         market_upsert(
             eng, schema.thematic_features_daily, rows, ["asof_date", "symbol"]
         )
-    finally:
-        eng.dispose()
 
 
 def _dual_write_labels_pg(label_df: pd.DataFrame) -> None:
@@ -4097,20 +4096,19 @@ def _dual_write_labels_pg(label_df: pd.DataFrame) -> None:
     if label_df.empty:
         return
     from rainier.db import schema
-    from rainier.db.dualwrite import pg_engine_or_skip
+    from rainier.db.dualwrite import mirror_guard
     from rainier.db.upsert import market_upsert
 
-    eng = pg_engine_or_skip("thematic backfill-labels")
-    if eng is None:
-        return
-    try:
+    # mirror_guard: None when DATABASE_URL unset; SQLAlchemyError inside is
+    # caught + warned so a broken mirror DB never aborts the parquet pipeline.
+    with mirror_guard("thematic backfill-labels") as eng:
+        if eng is None:
+            return
         label_cols = list(schema.thematic_labels_daily.columns.keys())
         rows = _frame_to_pg_rows(label_df, label_cols)
         market_upsert(
             eng, schema.thematic_labels_daily, rows, ["asof_date", "symbol"]
         )
-    finally:
-        eng.dispose()
 
 
 @thematic.command("compute")

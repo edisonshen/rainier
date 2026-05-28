@@ -271,6 +271,49 @@ def test_upsert_immutable_identity_not_remapped_on_conflict(migrated_engine):
     assert _count(migrated_engine, "tickers") == 1
 
 
+def test_upsert_heterogeneous_key_batch_preserves_omitted_protection(migrated_engine):
+    """A batch mixing row dicts with different key-sets must not drop a column
+    a later row supplies, nor NULL-clobber a column an earlier row omitted.
+    Rows are grouped by key-set so each group's update set is exactly its keys."""
+    from rainier.db import schema
+    from rainier.db.upsert import market_upsert
+
+    # Seed id=1 WITH last_seen, id=2 WITHOUT.
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [
+            {"ticker_id": 1, "symbol": "AAA", "first_seen": dt.date(2024, 1, 1),
+             "last_seen": dt.date(2024, 6, 1)},
+            {"ticker_id": 2, "symbol": "BBB", "first_seen": dt.date(2024, 1, 1)},
+        ],
+        ["ticker_id"],
+        immutable_cols=["first_seen"],
+    )
+    # Re-upsert a MIXED batch: id=1 omits last_seen (must keep 2024-06-01),
+    # id=2 now supplies last_seen (must be written), in one call.
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [
+            {"ticker_id": 1, "symbol": "AAA", "first_seen": dt.date(2024, 1, 1)},
+            {"ticker_id": 2, "symbol": "BBB", "first_seen": dt.date(2024, 1, 1),
+             "last_seen": dt.date(2024, 7, 7)},
+        ],
+        ["ticker_id"],
+        immutable_cols=["first_seen"],
+    )
+    with migrated_engine.connect() as conn:
+        ls1 = conn.execute(
+            select(schema.tickers.c.last_seen).where(schema.tickers.c.ticker_id == 1)
+        ).scalar_one()
+        ls2 = conn.execute(
+            select(schema.tickers.c.last_seen).where(schema.tickers.c.ticker_id == 2)
+        ).scalar_one()
+    assert ls1 == dt.date(2024, 6, 1), "id=1 omitted last_seen must survive"
+    assert ls2 == dt.date(2024, 7, 7), "id=2 supplied last_seen must be written"
+
+
 def test_upsert_fk_child_after_parents(migrated_engine):
     """thematic_ohlcv has no FK, but features does: parents (tickers/sectors)
     upserted first, then the FK child inserts without violation."""
