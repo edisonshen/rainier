@@ -17,7 +17,6 @@ PG-backed tests gated on ``requires_postgres``; the skip-path test runs always.
 
 from __future__ import annotations
 
-import datetime as dt
 import importlib
 import os
 import sys
@@ -28,7 +27,6 @@ import pandas as pd
 import pytest
 from click.testing import CliRunner
 from sqlalchemy import create_engine, text
-
 
 # ---------------------------------------------------------------------------
 # Shared synthetic OHLCV builder (matches backfill_thematic_universe schema)
