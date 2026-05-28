@@ -176,6 +176,70 @@ def test_upsert_empty_rows_is_noop(migrated_engine):
     assert _count(migrated_engine, "sectors") == 0
 
 
+def test_upsert_immutable_first_seen_not_overwritten(migrated_engine):
+    """immutable_cols keeps first_seen stable: a later-day re-run with a newer
+    first_seen value must NOT re-stamp the original (registry provenance)."""
+    from rainier.db import schema
+    from rainier.db.upsert import market_upsert
+
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [{"ticker_id": 1, "symbol": "AAA", "first_seen": dt.date(2024, 1, 1)}],
+        ["ticker_id"],
+        immutable_cols=["first_seen"],
+    )
+    # Re-run on a later day: same key, newer first_seen — must be ignored.
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [{"ticker_id": 1, "symbol": "AAA", "first_seen": dt.date(2024, 2, 2)}],
+        ["ticker_id"],
+        immutable_cols=["first_seen"],
+    )
+    with migrated_engine.connect() as conn:
+        fs = conn.execute(
+            select(schema.tickers.c.first_seen).where(schema.tickers.c.ticker_id == 1)
+        ).scalar_one()
+    assert fs == dt.date(2024, 1, 1), "first_seen must stay at the original date"
+
+
+def test_upsert_omitted_column_not_nulled_on_conflict(migrated_engine):
+    """A column the caller omits on re-run must NOT be reset to NULL. The
+    registry write omits last_seen; an existing last_seen value must survive."""
+    from rainier.db import schema
+    from rainier.db.upsert import market_upsert
+
+    # Initial: explicitly set last_seen (simulates a later delist marker).
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [
+            {
+                "ticker_id": 1,
+                "symbol": "AAA",
+                "first_seen": dt.date(2024, 1, 1),
+                "last_seen": dt.date(2024, 6, 1),
+            }
+        ],
+        ["ticker_id"],
+        immutable_cols=["first_seen"],
+    )
+    # Re-run as the registry writers do: omit last_seen entirely.
+    market_upsert(
+        migrated_engine,
+        schema.tickers,
+        [{"ticker_id": 1, "symbol": "AAA", "first_seen": dt.date(2024, 1, 1)}],
+        ["ticker_id"],
+        immutable_cols=["first_seen"],
+    )
+    with migrated_engine.connect() as conn:
+        ls = conn.execute(
+            select(schema.tickers.c.last_seen).where(schema.tickers.c.ticker_id == 1)
+        ).scalar_one()
+    assert ls == dt.date(2024, 6, 1), "omitted last_seen must not be clobbered to NULL"
+
+
 def test_upsert_fk_child_after_parents(migrated_engine):
     """thematic_ohlcv has no FK, but features does: parents (tickers/sectors)
     upserted first, then the FK child inserts without violation."""

@@ -4047,8 +4047,22 @@ def _dual_write_features_pg(
                 "sector_name": sector_map.get(sym, "unknown"),
                 "first_seen": asof_dt,
             }
-        market_upsert(eng, schema.sectors, list(sector_rows.values()), ["sector_id"])
-        market_upsert(eng, schema.tickers, list(ticker_rows.values()), ["ticker_id"])
+        # first_seen is insert-only so a re-run keeps the original first-seen
+        # date instead of re-stamping asof_dt onto an existing registry row.
+        market_upsert(
+            eng,
+            schema.sectors,
+            list(sector_rows.values()),
+            ["sector_id"],
+            immutable_cols=["first_seen"],
+        )
+        market_upsert(
+            eng,
+            schema.tickers,
+            list(ticker_rows.values()),
+            ["ticker_id"],
+            immutable_cols=["first_seen"],
+        )
 
         feature_cols = list(schema.thematic_features_daily.columns.keys())
         rows = _frame_to_pg_rows(feat_df, feature_cols)

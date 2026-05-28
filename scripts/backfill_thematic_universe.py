@@ -382,8 +382,15 @@ def _dual_write_pg(
                 next_tid += 1
 
         # last_seen column is NULL (active) — registry parquet doesn't track it.
-        market_upsert(eng, schema.sectors, sector_rows, ["sector_id"])
-        market_upsert(eng, schema.tickers, ticker_rows, ["ticker_id"])
+        # first_seen is insert-only (immutable_cols): a later-day re-run must
+        # keep the original first-seen date, not re-stamp it. last_seen is
+        # omitted entirely so a re-run never resets an existing value to NULL.
+        market_upsert(
+            eng, schema.sectors, sector_rows, ["sector_id"], immutable_cols=["first_seen"]
+        )
+        market_upsert(
+            eng, schema.tickers, ticker_rows, ["ticker_id"], immutable_cols=["first_seen"]
+        )
 
         ohlcv_rows = _ohlcv_rows_for_pg(df)
         market_upsert(eng, schema.thematic_ohlcv, ohlcv_rows, ["symbol", "date"])
