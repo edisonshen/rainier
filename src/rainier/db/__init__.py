@@ -18,5 +18,6 @@ docs/TASK-PLAN-rainier-pg-schema-bootst-966f.md.
 
 from rainier.db.engine import get_engine
 from rainier.db.schema import metadata
+from rainier.db.upsert import market_upsert
 
-__all__ = ["get_engine", "metadata"]
+__all__ = ["get_engine", "market_upsert", "metadata"]
