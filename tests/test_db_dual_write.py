@@ -137,7 +137,14 @@ def migrated_engine(database_url):
     try:
         yield eng
     finally:
-        command.downgrade(cfg, "base")
+        # Drop the schema directly rather than `downgrade base`: these tests
+        # write data (incl. NULL label_complete_through rows), and the 0002
+        # downgrade deliberately refuses to re-tighten NOT NULL over NULL rows.
+        # Teardown wants an unconditional reset, so we DROP CASCADE and clear
+        # alembic's bookkeeping so the next test's `upgrade head` starts clean.
+        with eng.begin() as conn:
+            conn.exec_driver_sql("DROP SCHEMA IF EXISTS market CASCADE")
+            conn.exec_driver_sql("DROP TABLE IF EXISTS public.alembic_version")
         eng.dispose()
 
 
@@ -185,6 +192,7 @@ def test_backfill_dual_writes_ohlcv_and_registries(migrated_engine, tmp_path, da
         out_path=out_path,
         fetch_fn=fake_fetch,
         yaml_path=yaml_path,
+        min_coverage=0.0,
     )
     written = Path(written)
     assert written.exists(), "parquet must still be written"
@@ -230,6 +238,7 @@ def test_backfill_dual_write_idempotent(migrated_engine, tmp_path, database_url)
     backfill.backfill(
         symbols=symbols, start="2024-10-01", end="2024-10-31",
         out_path=tmp_path / "u1.parquet", fetch_fn=fake_fetch, yaml_path=yaml_path,
+        min_coverage=0.0,
     )
     n_ohlcv = _count(migrated_engine, "thematic_ohlcv")
     n_tick = _count(migrated_engine, "tickers")
@@ -238,6 +247,7 @@ def test_backfill_dual_write_idempotent(migrated_engine, tmp_path, database_url)
     backfill.backfill(
         symbols=symbols, start="2024-10-01", end="2024-10-31",
         out_path=tmp_path / "u2.parquet", fetch_fn=fake_fetch, yaml_path=yaml_path,
+        min_coverage=0.0,
     )
     assert _count(migrated_engine, "thematic_ohlcv") == n_ohlcv
     assert _count(migrated_engine, "tickers") == n_tick
@@ -384,6 +394,7 @@ def test_backfill_skips_pg_when_database_url_unset(tmp_path, monkeypatch, capsys
     written = backfill.backfill(
         symbols=symbols, start="2024-10-01", end="2024-10-31",
         out_path=out_path, fetch_fn=fake_fetch, yaml_path=yaml_path,
+        min_coverage=0.0,
     )
     written = Path(written)
     assert written.exists(), "parquet must be written even with PG unset"

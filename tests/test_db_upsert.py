@@ -86,8 +86,12 @@ def migrated_engine(database_url):
     try:
         yield eng
     finally:
-        # Reset so a re-run against the same DB starts clean.
-        command.downgrade(cfg, "base")
+        # Reset so a re-run against the same DB starts clean. DROP CASCADE +
+        # clear alembic bookkeeping (unconditional; doesn't depend on the
+        # data-protecting 0002 downgrade succeeding).
+        with eng.begin() as conn:
+            conn.exec_driver_sql("DROP SCHEMA IF EXISTS market CASCADE")
+            conn.exec_driver_sql("DROP TABLE IF EXISTS public.alembic_version")
         eng.dispose()
 
 
