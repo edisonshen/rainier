@@ -26,6 +26,35 @@ def test_db_group_registered():
     assert "migrate" in result.output
 
 
+def test_db_group_does_not_shadow_legacy_subcommands():
+    """Regression for CI #102: declaring a second `@cli.group() def db()` in
+    cli.py replaces the first one in click's registry, silently killing the
+    legacy `init` + `backfill-prices` subcommands. The fix is to register
+    every db subcommand on a SINGLE `db` group.
+
+    This test asserts the full surface — legacy + new — is reachable via
+    `rainier db --help`. If anyone re-introduces a duplicate `@cli.group()
+    def db()`, this test goes red before CI does.
+    """
+    runner = CliRunner()
+    result = runner.invoke(cli, ["db", "--help"])
+    assert result.exit_code == 0, result.output
+
+    for subcmd in ("init", "backfill-prices", "ping", "migrate"):
+        assert subcmd in result.output, (
+            f"`rainier db --help` is missing `{subcmd}` — likely caused by a "
+            f"duplicate `@cli.group() def db()` shadowing the original. "
+            f"Help output was:\n{result.output}"
+        )
+
+    # And each legacy subcommand must actually invoke (--help is a no-op
+    # that proves click can resolve the subcommand off the merged group).
+    legacy_init = runner.invoke(cli, ["db", "init", "--help"])
+    assert legacy_init.exit_code == 0, legacy_init.output
+    legacy_backfill = runner.invoke(cli, ["db", "backfill-prices", "--help"])
+    assert legacy_backfill.exit_code == 0, legacy_backfill.output
+
+
 def test_db_migrate_help_exposes_downgrade_flag():
     """`rainier db migrate --help` shows the --downgrade option."""
     runner = CliRunner()
