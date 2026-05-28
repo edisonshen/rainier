@@ -1765,7 +1765,16 @@ async def _recover(settings, dry_run: bool):
 
 @cli.group()
 def db():
-    """Database management commands."""
+    """Database management commands.
+
+    Owns BOTH the legacy core/database.py singleton commands (``init``,
+    ``backfill-prices``) AND the new Postgres canonical-store commands
+    (``ping``, ``migrate``) defined further down in this file. There must
+    be exactly ONE ``@cli.group() def db()`` in this module — declaring a
+    second one shadows this group in click's registry and breaks the
+    legacy subcommands (see CI #102 regression and the
+    ``test_db_group_does_not_shadow_legacy_subcommands`` guard).
+    """
 
 
 @db.command(name="init")
@@ -4610,3 +4619,133 @@ def dashboard_render_combined(
         names_path=names_arg,
     )
     click.echo(f"wrote trading dashboard -> {written}")
+
+
+# ---------------------------------------------------------------------------
+# db — canonical Postgres store (Phase 1 of the architecture pivot)
+# ---------------------------------------------------------------------------
+#
+# New subcommands (per task plan §5):
+#
+#   rainier db ping                          connect, SELECT 1, exit 0 or fail loud
+#   rainier db migrate                       alembic upgrade head
+#   rainier db migrate --downgrade -1        alembic downgrade -1
+#   rainier db migrate --downgrade base      alembic downgrade base
+#
+# Implementation uses Alembic's Python API (not subprocess) so the CLI surface
+# is testable from pytest without spawning processes.
+#
+# This is the NEW `db/` package — separate from the legacy `core/database.py`
+# singleton that backs LLM thesis persistence, monitors, etc. Both engines
+# coexist for the duration of the pivot.
+#
+# IMPORTANT: ping + migrate decorate the EXISTING `db` group defined at the
+# top of the legacy db block (above, around line 1766) which already owns
+# `init` and `backfill-prices`. Do NOT re-declare `@cli.group() def db()`
+# here — click's registry would replace the legacy group with this one and
+# silently kill `rainier db init` / `db backfill-prices` (CI #102 regression).
+# See tests/test_cli/test_db.py::test_db_group_does_not_shadow_legacy_subcommands.
+
+
+def _resolve_alembic_config():
+    """Build an Alembic Config bound to the packaged ``db/alembic.ini``.
+
+    Resolves the config in two ways, in priority order:
+
+    1. **Wheel install** — pulls ``alembic.ini`` + the ``alembic/`` migration
+       tree via ``importlib.resources.files("rainier") / "_db_assets"``.
+       Hatchling's ``force-include`` in pyproject.toml ships the top-level
+       ``db/`` tree into the wheel at ``rainier/_db_assets/``, so wheel
+       installs don't need a source checkout to run ``rainier db migrate``.
+
+    2. **Editable / source checkout** — falls back to ``<repo>/db/alembic.ini``
+       (resolved via ``__file__``). Editable installs of hatch projects place
+       ``__file__`` inside the source tree, so we resolve the repo root via
+       ``Path(__file__).resolve().parents[2]``.
+
+    The .ini file leaves ``sqlalchemy.url`` empty on purpose — db/alembic/
+    env.py reads DATABASE_URL from the environment so creds never land in
+    git. We override ``script_location`` defensively after loading so the
+    Config works even if a future ini edit drops the ``%(here)s`` prefix
+    (the regression test ``test_alembic_ini_script_location_is_config_relative``
+    in tests/test_cli/test_db.py guards the raw ini path too).
+    """
+    from importlib import resources
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    # 1. Wheel-friendly path via importlib.resources.
+    try:
+        anchor = resources.files("rainier") / "_db_assets"
+        cfg_resource = anchor / "alembic.ini"
+        script_resource = anchor / "alembic"
+        with resources.as_file(cfg_resource) as cfg_path_obj:
+            cfg_path = Path(cfg_path_obj)
+        with resources.as_file(script_resource) as script_path_obj:
+            script_path = Path(script_path_obj)
+        if cfg_path.exists() and script_path.exists():
+            cfg = Config(str(cfg_path))
+            cfg.set_main_option("script_location", str(script_path))
+            return cfg
+    except (ModuleNotFoundError, FileNotFoundError):
+        pass  # fall through to source-checkout path
+
+    # 2. Editable / source-checkout fallback. cli.py at src/rainier/cli.py
+    #    → repo root is parents[2], db/ lives at the repo root.
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg_path = repo_root / "db" / "alembic.ini"
+    script_path = repo_root / "db" / "alembic"
+    if not cfg_path.exists():
+        raise click.ClickException(
+            f"alembic config not found at {cfg_path} and no packaged "
+            "rainier/_db_assets/ in the installed package. Reinstall "
+            "rainier (e.g. `uv sync`) or run from a source checkout."
+        )
+    cfg = Config(str(cfg_path))
+    cfg.set_main_option("script_location", str(script_path))
+    return cfg
+
+
+@db.command("ping")
+def db_ping() -> None:
+    """Connect to ``DATABASE_URL``, run ``SELECT 1``, print ``ok`` or fail."""
+    from sqlalchemy import text
+
+    from rainier.db.engine import get_engine
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1")).scalar()
+        engine.dispose()
+    except Exception as exc:  # pragma: no cover — connection-time failure
+        raise click.ClickException(f"db ping failed: {exc}") from exc
+
+    if result != 1:
+        raise click.ClickException(f"db ping returned unexpected value: {result!r}")
+    click.echo("ok")
+
+
+@db.command("migrate")
+@click.option(
+    "--downgrade",
+    "downgrade_to",
+    default=None,
+    help=(
+        "If set, downgrade to this revision (e.g. -1, base, 0001). "
+        "Without this flag, the command upgrades to head."
+    ),
+)
+def db_migrate(downgrade_to: str | None) -> None:
+    """Run Alembic ``upgrade head`` (default) or ``downgrade <rev>``."""
+    from alembic import command
+
+    cfg = _resolve_alembic_config()
+
+    if downgrade_to is None:
+        command.upgrade(cfg, "head")
+        click.echo("alembic upgrade head — ok")
+    else:
+        command.downgrade(cfg, downgrade_to)
+        click.echo(f"alembic downgrade {downgrade_to} — ok")
