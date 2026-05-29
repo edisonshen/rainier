@@ -3493,14 +3493,32 @@ def thematic_backfill_names(
     from rainier.dashboard import etf_names_backfill
 
     out = Path(output_path)
-    if refresh_stale and not etf_names_backfill.is_stale(out):
-        click.echo(f"etf_names parquet is fresh (<30d); skipping -> {out}")
-        return
 
+    # Load the universe FIRST so --refresh-stale can carve out newly-added
+    # tickers that aren't in the cache yet. Without this, the 30-day stale
+    # gate short-circuits the whole run on a fresh parquet, so a just-added
+    # symbol renders as a fallback for up to 30 days.
+    #
+    #   refresh-stale + stale parquet      -> full-universe backfill
+    #   refresh-stale + fresh, new symbols -> fetch ONLY the new symbols
+    #   refresh-stale + fresh, none new    -> skip (existing rows keep cadence)
+    #   no refresh-stale                   -> full-universe backfill
     spec = universe_loader.load_universe(Path(yaml_path))
     symbols = list(spec.all_tickers)
     if not symbols:
         raise click.ClickException("thematic_universe.yaml flattened to zero tickers")
+
+    if refresh_stale and not etf_names_backfill.is_stale(out):
+        missing = etf_names_backfill.missing_from_cache(symbols, out)
+        if not missing:
+            click.echo(f"etf_names parquet is fresh (<30d); skipping -> {out}")
+            return
+        written = etf_names_backfill.backfill_names(symbols=missing, out_path=out)
+        click.echo(
+            f"etf_names parquet is fresh (<30d) but {len(missing)} new "
+            f"symbol(s) missing; force-refreshed {missing} -> {written}"
+        )
+        return
 
     written = etf_names_backfill.backfill_names(symbols=symbols, out_path=out)
     click.echo(f"wrote etf_names ({len(symbols)} symbols) -> {written}")

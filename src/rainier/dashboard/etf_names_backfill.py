@@ -62,6 +62,7 @@ import pyarrow.parquet as pq
 __all__ = [
     "RateLimitError",
     "backfill_names",
+    "missing_from_cache",
     "DEFAULT_OUT",
 ]
 
@@ -298,6 +299,44 @@ def backfill_names(
 # ---------------------------------------------------------------------------
 # Stale check (cron --refresh-stale)
 # ---------------------------------------------------------------------------
+
+
+def missing_from_cache(symbols: Iterable[str], out_path: str | Path) -> list[str]:
+    """Return the universe ``symbols`` absent from the cache parquet, in order.
+
+    Powers the ``--refresh-stale`` new-ticker carve-out: a freshly-added
+    universe symbol must be force-refreshed even when the parquet is < 30
+    days old, otherwise it renders as a symbol fallback for up to 30 days
+    until the global stale gate trips. Symbols already cached keep the
+    30-day cadence (they are NOT reported as missing).
+
+    A missing / empty / corrupt parquet means *nothing* is cached, so every
+    universe symbol is reported as missing.
+
+    Order: universe order is preserved (deterministic) so the resulting
+    fetch set + tests stay stable. Duplicates in ``symbols`` are de-duped,
+    keeping first occurrence.
+    """
+    out = Path(out_path)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for s in symbols:
+        sym = str(s)
+        if sym not in seen:
+            seen.add(sym)
+            ordered.append(sym)
+
+    if not out.exists():
+        return ordered
+    try:
+        df = pd.read_parquet(out)
+    except Exception:  # noqa: BLE001 — corrupt parquet → treat as nothing cached
+        return ordered
+    if df.empty or "symbol" not in df.columns:
+        return ordered
+
+    cached = set(df["symbol"].astype(str))
+    return [sym for sym in ordered if sym not in cached]
 
 
 def is_stale(out_path: str | Path, threshold_days: int = STALE_THRESHOLD_DAYS) -> bool:
