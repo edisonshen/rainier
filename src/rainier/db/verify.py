@@ -45,6 +45,7 @@ sentinel date ``None``.
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 from dataclasses import dataclass, field
 from datetime import date
@@ -98,7 +99,13 @@ def _canon_cell(v, is_real: bool) -> object:
     Floats in REAL columns are cast through float32 so the parquet float64
     original and the round-tripped PG REAL value collapse to the identical
     32-bit value. DOUBLE_PRECISION floats round-trip exactly, so they pass
-    through unchanged. None and non-floats are tagged + stringified.
+    through unchanged. Timezone-aware datetimes are normalized to UTC so the
+    SAME instant hashes identically regardless of the session timezone PG
+    rendered it in (TIMESTAMPTZ columns like ``fetched_at``/``computed_at``
+    come back in the connection's timezone, e.g. ``08:30-08:00``, while the
+    parquet original is ``16:30+00:00`` — both are the same instant and must
+    not false-positive drift). None and other non-floats are tagged +
+    stringified.
     """
     if isinstance(v, float):
         if is_real:
@@ -106,6 +113,9 @@ def _canon_cell(v, is_real: bool) -> object:
         return ("f", v)
     if v is None:
         return ("n",)
+    if isinstance(v, _dt.datetime) and v.tzinfo is not None:
+        # Same instant, stable repr: convert to UTC before stringifying.
+        return ("s", str(v.astimezone(_dt.timezone.utc)))
     return ("s", str(v))
 
 
@@ -251,8 +261,6 @@ def verify_coverage(
 
 def _coerce_date(v):
     """Return a ``datetime.date`` for a date/datetime/Timestamp cell, else v."""
-    import datetime as _dt
-
     if isinstance(v, pd.Timestamp):
         return v.date()
     if isinstance(v, _dt.datetime):

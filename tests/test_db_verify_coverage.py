@@ -272,6 +272,75 @@ def test_verify_real_column_float32_boundary_no_false_positive(
 
 
 # ---------------------------------------------------------------------------
+# Timezone-aware datetime parity (TIMESTAMPTZ columns)
+# ---------------------------------------------------------------------------
+
+
+def test_checksum_tz_aware_same_instant_matches():
+    """Same instant in different tz offsets must hash identically.
+
+    PG returns TIMESTAMPTZ (fetched_at/computed_at) in the session timezone, so
+    a clean backfill can yield ``08:30-08:00`` on the PG side vs ``16:30+00:00``
+    in parquet — the SAME instant. The checksum must normalize to UTC so this
+    is NOT flagged as drift. (Regression: a session TZ != UTC would otherwise
+    false-positive a clean parity run.)"""
+    import datetime as _dt
+
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fetched_at"]
+    pk = ("symbol",)
+    utc = _dt.datetime(2024, 11, 8, 16, 30, tzinfo=_dt.timezone.utc)
+    pacific = utc.astimezone(_dt.timezone(_dt.timedelta(hours=-8)))
+    assert utc != pacific or str(utc) != str(pacific)  # reprs differ pre-norm
+    parquet_rows = [{"symbol": "AAA", "fetched_at": utc}]
+    pg_rows = [{"symbol": "AAA", "fetched_at": pacific}]
+    assert _checksum(parquet_rows, cols, pk, frozenset()) == _checksum(
+        pg_rows, cols, pk, frozenset()
+    ), "same instant in a different tz offset must hash equal"
+
+
+@pytest.mark.requires_postgres
+def test_verify_clean_under_non_utc_session_tz(migrated_engine, tmp_path, database_url):
+    """A clean backfill verifies clean even when the PG session timezone is not
+    UTC (TIMESTAMPTZ columns then render in that zone). End-to-end guard for the
+    tz-normalization fix."""
+    from sqlalchemy import event
+
+    from rainier.db.backfill import backfill_from_parquet
+    from rainier.db.verify import verify_coverage
+
+    cache = tmp_path / "cache"
+    _write_cache(cache, ["AAA", "BBB"], n_days=6)
+    backfill_from_parquet(migrated_engine, cache)
+
+    # Force a non-UTC timezone on EVERY connection verify_coverage opens (it
+    # opens its own connection in _read_pg, so a one-off SET on a separate
+    # connection would not reach it). With this, TIMESTAMPTZ columns render in
+    # US/Pacific while parquet stays UTC — the case the fix must absorb.
+    pac_engine = create_engine(database_url)
+
+    @event.listens_for(pac_engine, "connect")
+    def _set_pacific(dbapi_conn, _rec):  # noqa: ANN001
+        cur = dbapi_conn.cursor()
+        cur.execute("SET TIME ZONE 'America/Los_Angeles'")
+        cur.close()
+
+    try:
+        # Sanity: a TIMESTAMPTZ really renders in the session zone now.
+        with pac_engine.connect() as conn:
+            rendered = conn.exec_driver_sql(
+                "SELECT fetched_at::text FROM market.thematic_ohlcv LIMIT 1"
+            ).scalar_one()
+        assert "+00" not in rendered, f"expected non-UTC render, got {rendered!r}"
+
+        report = verify_coverage(pac_engine, cache)
+        assert report.ok, f"non-UTC session must not false-positive drift: {report.drift}"
+    finally:
+        pac_engine.dispose()
+
+
+# ---------------------------------------------------------------------------
 # CLI surface: exit codes
 # ---------------------------------------------------------------------------
 
