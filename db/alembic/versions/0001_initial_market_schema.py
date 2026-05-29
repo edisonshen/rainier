@@ -170,9 +170,14 @@ def upgrade() -> None:
 
 
 # Tables this revision's upgrade() created, in reverse dependency order so a
-# plain DROP TABLE works without CASCADE-ing into anything outside this set.
-# CASCADE is still passed to clean up each table's own indexes/constraints; it
-# does NOT reach foreign objects because we name each table explicitly.
+# non-cascading DROP TABLE works: our own FK (thematic_features_daily → tickers,
+# sectors) is gone before its parents are dropped. We deliberately do NOT pass
+# CASCADE — a plain DROP TABLE removes the table's own indexes/constraints but
+# RESTRICTs against *foreign* dependents (a non-rainier view/FK/materialized
+# view over one of these tables), failing loudly instead of silently destroying
+# them. That loud failure is the correct outcome in the multi-writer scenario
+# this revision's downgrade is meant to protect: the operator sees the foreign
+# dependency and resolves it rather than losing it.
 #
 #     thematic_features_daily ──FK──► tickers, sectors   (drop dependent first)
 #     thematic_ohlcv          (standalone)
@@ -196,9 +201,12 @@ def downgrade() -> None:
 
     Guarded reversal:
 
-      1. Drop only the 5 tables THIS revision's ``upgrade()`` created (reverse
-         dependency order; CASCADE reaches each table's own indexes/constraints
-         but never foreign objects because every name is listed explicitly).
+      1. Drop only the 5 tables THIS revision's ``upgrade()`` created, in
+         reverse dependency order with NON-cascading ``DROP TABLE``. A plain
+         drop removes each table's own indexes/constraints but RESTRICTs
+         against foreign dependents (a non-rainier view/FK over one of these
+         tables), so the downgrade fails loudly rather than silently dropping
+         or mutating a foreign object. CASCADE is intentionally NOT used.
       2. Drop the ``market`` schema only if it is now empty. If any foreign
          object remains, leave the (now rainier-free) schema in place. Using
          ``DROP SCHEMA ... RESTRICT`` (no CASCADE) is the belt-and-suspenders
@@ -209,7 +217,7 @@ def downgrade() -> None:
     survives regardless.
     """
     for table in _REVISION_TABLES:
-        op.execute(f"DROP TABLE IF EXISTS {SCHEMA}.{table} CASCADE")
+        op.execute(f"DROP TABLE IF EXISTS {SCHEMA}.{table} RESTRICT")
 
     # Drop the schema only when nothing else lives in it. RESTRICT makes the
     # DROP a no-op-or-error against a populated schema; we gate on the object

@@ -421,6 +421,58 @@ def test_downgrade_base_clean_round_trip(database_url):
     eng.dispose()
 
 
+def test_downgrade_base_fails_loudly_on_foreign_dependent(database_url):
+    """A foreign object DEPENDING ON one of this revision's tables is never
+    silently destroyed: the non-cascading ``DROP TABLE ... RESTRICT`` aborts
+    the downgrade instead.
+
+    codex iter-2 (P1): the original ``DROP TABLE ... CASCADE`` would silently
+    drop a foreign view/FK built on top of ``market.tickers`` even though the
+    schema is preserved — the exact data/DDL loss this revision is meant to
+    prevent. With RESTRICT, the drop raises; the operator sees the foreign
+    dependency and resolves it rather than losing it. We assert both the raise
+    AND that the foreign view + our table are still intact afterward (the
+    downgrade transaction rolled back).
+    """
+    import sqlalchemy.exc as sa_exc
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    # Foreign view built on a revision-owned table. CASCADE would have dropped
+    # it silently; RESTRICT must refuse.
+    with eng.begin() as conn:
+        conn.execute(
+            text("CREATE VIEW market.foreign_view AS SELECT ticker_id FROM market.tickers")
+        )
+
+    with pytest.raises(sa_exc.DBAPIError):
+        command.downgrade(cfg, "base")
+
+    # The aborted downgrade left everything intact: the foreign view, the table
+    # it depends on, and the schema all survive.
+    insp = inspect(eng)
+    assert "market" in set(insp.get_schema_names()), "schema was dropped despite a foreign dependent"
+    assert "tickers" in set(insp.get_table_names(schema="market")), (
+        "market.tickers was dropped despite a foreign view depending on it"
+    )
+    with eng.connect() as conn:
+        view_exists = conn.execute(
+            text(
+                "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'market' AND c.relname = 'foreign_view' AND c.relkind = 'v'"
+            )
+        ).fetchone()
+    assert view_exists is not None, "foreign view market.foreign_view was wiped by downgrade"
+
+    _reset_market(eng)
+    eng.dispose()
+
+
 # ---------------------------------------------------------------------------
 # Migration 0002 — schema-seam fixes for the dual-write writers (task plan §3)
 # ---------------------------------------------------------------------------
