@@ -302,6 +302,29 @@ def test_cli_backfill_requires_database_url(tmp_path, monkeypatch):
     assert "DATABASE_URL" in res.output
 
 
+def test_cli_backfill_rejects_reversed_window(tmp_path, monkeypatch):
+    """--asof-start > --asof-end -> clean ClickException, never a silent
+    registries-only run. A reversed window filters every date-keyed row out, so
+    without this guard backfill would 'succeed' having written nothing but the
+    FK parents. Validation runs before the DB engine is required, so no
+    DATABASE_URL is needed."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    from rainier.cli import cli
+
+    res = CliRunner().invoke(
+        cli,
+        [
+            "db", "backfill-from-parquet", "--cache-dir", str(tmp_path / "cache"),
+            "--asof-start", "2026-05-10", "--asof-end", "2026-05-01",
+        ],
+    )
+    assert res.exit_code != 0
+    assert res.exception is None or isinstance(res.exception, SystemExit), (
+        f"expected a clean ClickException, got {res.exception!r}"
+    )
+    assert "asof-start" in res.output and "asof-end" in res.output
+
+
 def test_cli_backfill_registered():
     """`rainier db --help` lists backfill-from-parquet alongside the legacy cmds."""
     from rainier.cli import cli

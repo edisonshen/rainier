@@ -4931,6 +4931,24 @@ def _parse_asof(value: str | None, flag: str) -> date | None:
         raise click.ClickException(f"{flag} must be YYYY-MM-DD, got {value!r}") from exc
 
 
+def _asof_window(asof_start: str | None, asof_end: str | None) -> tuple[date | None, date | None]:
+    """Parse + validate the inclusive [start, end] as-of window.
+
+    A reversed range (start > end) is rejected loudly: it would filter every
+    date-keyed row out, so backfill would write only the registries and
+    verify-coverage would report a CLEAN empty window — silently passing the
+    parity gate it exists to enforce. Fail fast instead.
+    """
+    start = _parse_asof(asof_start, "--asof-start")
+    end = _parse_asof(asof_end, "--asof-end")
+    if start is not None and end is not None and start > end:
+        raise click.ClickException(
+            f"--asof-start ({start}) must be <= --asof-end ({end}); "
+            f"a reversed window filters out every row."
+        )
+    return start, end
+
+
 @db.command("backfill-from-parquet")
 @click.option(
     "--cache-dir",
@@ -4955,8 +4973,7 @@ def db_backfill_from_parquet(
     """
     from rainier.db.backfill import backfill_from_parquet
 
-    start = _parse_asof(asof_start, "--asof-start")
-    end = _parse_asof(asof_end, "--asof-end")
+    start, end = _asof_window(asof_start, asof_end)
     engine = _require_db_engine("db backfill-from-parquet")
     try:
         counts = backfill_from_parquet(
@@ -4995,8 +5012,7 @@ def db_verify_coverage(
     """
     from rainier.db.verify import verify_coverage
 
-    start = _parse_asof(asof_start, "--asof-start")
-    end = _parse_asof(asof_end, "--asof-end")
+    start, end = _asof_window(asof_start, asof_end)
     engine = _require_db_engine("db verify-coverage")
     try:
         report = verify_coverage(engine, cache_dir, asof_start=start, asof_end=end)

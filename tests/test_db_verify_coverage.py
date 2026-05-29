@@ -407,6 +407,29 @@ def test_cli_verify_requires_database_url(tmp_path, monkeypatch):
     assert "DATABASE_URL" in res.output
 
 
+def test_cli_verify_rejects_reversed_window(tmp_path, monkeypatch):
+    """--asof-start > --asof-end -> clean ClickException, never a silent CLEAN
+    pass. A reversed window compares an empty parquet slice against an empty PG
+    slice and both 'match', so verify-coverage would falsely report parity. The
+    guard must reject it before any comparison (and before DATABASE_URL is even
+    required)."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    from rainier.cli import cli
+
+    res = CliRunner().invoke(
+        cli,
+        [
+            "db", "verify-coverage", "--cache-dir", str(tmp_path / "cache"),
+            "--asof-start", "2026-05-10", "--asof-end", "2026-05-01",
+        ],
+    )
+    assert res.exit_code != 0
+    assert res.exception is None or isinstance(res.exception, SystemExit), (
+        f"expected a clean ClickException, got {res.exception!r}"
+    )
+    assert "asof-start" in res.output and "asof-end" in res.output
+
+
 def test_cli_verify_registered():
     from rainier.cli import cli
 
