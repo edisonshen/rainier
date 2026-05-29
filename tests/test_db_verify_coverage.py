@@ -17,6 +17,7 @@ tests/test_db_backfill.py.
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -191,6 +192,82 @@ def test_verify_float_roundtrip_no_false_positive(migrated_engine, tmp_path, dat
     label_drift = [d for d in report.drift if d.table == "thematic_labels_daily"]
     assert feat_drift == [], f"float features falsely flagged: {feat_drift}"
     assert label_drift == [], f"float labels falsely flagged: {label_drift}"
+    assert report.ok
+
+
+@pytest.mark.requires_postgres
+def test_verify_real_column_float32_boundary_no_false_positive(
+    migrated_engine, tmp_path, database_url
+):
+    """Regression (real-data smoke): a parquet float64 in a PG REAL column whose
+    float32 round-trip straddles a significant-figure rounding boundary must NOT
+    be flagged. Earlier sig-fig rounding gave parquet 0.07677094638... -> 0.0767709
+    but PG's float32 0.07677095 -> 0.076771, a false positive. Casting both sides
+    through float32 makes them bit-identical. Also exercises NaN -> NULL parity
+    (recent asof dates have incomplete forward returns)."""
+    import math
+
+    import numpy as np
+    import pandas as pd
+    from sqlalchemy import text
+
+    from rainier.db import schema
+    from rainier.db.rows import frame_to_pg_rows
+    from rainier.db.upsert import market_upsert
+    from rainier.db.verify import verify_coverage
+
+    cache = tmp_path / "cache"
+    cache.mkdir(parents=True)
+    asof = date(2026, 5, 8)
+    # Values picked from the real-data smoke that broke sig-fig rounding, plus a
+    # NaN forward-return row (incomplete horizon).
+    boundary = [
+        0.07677094638347626,
+        0.007865045219659805,
+        0.0001843344944063574,
+        0.022905850782990456,
+        -0.03227955102920532,
+    ]
+    rows = []
+    for i, sym in enumerate(["AAA", "BBB", "CCC", "DDD", "EEE"]):
+        v = boundary[i]
+        rows.append(
+            {
+                "asof_date": asof, "symbol": sym,
+                "fwd_3d_ret": v, "fwd_5d_ret": v * 1.5, "fwd_10d_ret": v * 2.0,
+                "fwd_20d_ret": float("nan"), "fwd_30d_ret": float("nan"),
+                "fwd_5d_excess_ret": v * 0.5, "fwd_10d_excess_ret": v * 0.25,
+                "fwd_20d_excess_ret": float("nan"),
+                "fwd_10d_max_drawdown": abs(v), "fwd_10d_max_runup": abs(v) * 0.3,
+                "label_complete_through": None,
+            }
+        )
+    label_df = pd.DataFrame(rows)
+    label_df.to_parquet(cache / "thematic_labels_daily.parquet")
+
+    # Backfill ONLY labels (write directly; no FK on labels).
+    label_cols = list(schema.thematic_labels_daily.columns.keys())
+    market_upsert(
+        migrated_engine, schema.thematic_labels_daily,
+        frame_to_pg_rows(label_df, label_cols), ["asof_date", "symbol"],
+    )
+
+    # Sanity: the parquet float64 and the PG REAL round-trip really do differ in
+    # the low bits (so the test would catch a naive repr/hash regression).
+    with migrated_engine.connect() as conn:
+        pg_v = conn.execute(
+            text(
+                "SELECT fwd_3d_ret FROM market.thematic_labels_daily "
+                "WHERE asof_date=:a AND symbol='AAA'"
+            ),
+            {"a": asof},
+        ).scalar_one()
+    assert pg_v != boundary[0], "PG REAL must lose precision vs parquet float64"
+    assert math.isclose(float(np.float32(boundary[0])), float(np.float32(pg_v)))
+
+    report = verify_coverage(migrated_engine, cache)
+    drift = [d for d in report.drift if d.table == "thematic_labels_daily"]
+    assert drift == [], f"float32-boundary values falsely flagged drift: {drift}"
     assert report.ok
 
 

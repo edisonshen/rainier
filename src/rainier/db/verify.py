@@ -15,17 +15,28 @@ daily dual-write runs) to confirm PG mirrors parquet.
 Checksum determinism + float tolerance (task plan §3)
 -----------------------------------------------------
 The checksum must NOT depend on row order (PG and parquet return rows in
-different orders), and must NOT false-positive on storage-precision drift:
-parquet stores float64 originals, but several ``market.*`` columns are PG
-``REAL`` (float32, ~7 significant digits), so a clean round-trip differs in the
-low bits. We absorb that by:
+different orders), and must NOT false-positive on storage-precision drift.
+Parquet stores float64 originals, but several ``market.*`` columns are PG
+``REAL`` (float32, ~7 significant digits). A clean ``REAL`` round-trip returns a
+value whose float64 repr differs from the parquet original in the low bits, so a
+naive repr/hash falsely flags drift.
 
-  * coercing every cell through ``pg_value`` (NaN/NaT -> None, numpy -> Python);
-  * rounding floats to ``FLOAT_SIG_DIGITS`` significant figures so the float32
-    storage delta is below the comparison granularity;
-  * building a per-row tuple in fixed table-column order, sorting the rows
-    within a date group by primary key, then BLAKE2b-hashing the canonical
-    repr of the sorted rows.
+The fix is *exact*, not a fuzzy tolerance: PG ``REAL`` columns are normalized on
+BOTH sides by casting through ``numpy.float32``. The PG value already carries
+only float32 precision, and casting the parquet float64 down to float32
+reproduces the IDENTICAL 32-bit value — so both sides hash bit-for-bit equal.
+``DOUBLE_PRECISION`` columns round-trip float64 exactly and need no
+normalization. (Significant-figure rounding was rejected: a value can straddle a
+rounding boundary at the Nth digit so the two equal-float32 reprs round to
+different decimals — boundary instability that float32-casting avoids entirely.)
+
+The per-spec set of ``REAL`` columns is derived from the schema column types
+(``_real_columns``). Steps:
+
+  * coerce every cell through ``pg_value`` (NaN/NaT -> None, numpy -> Python);
+  * cast REAL-column floats through float32 (exact, stable);
+  * build a per-row tuple in fixed table-column order, sort the rows within a
+    date group by primary key, then BLAKE2b-hash the canonical repr.
 
 Identical (count, checksum) for a ``(date, table)`` => parity. The registries
 (``date_col=None``) are checked as a single whole-table group keyed on the
@@ -35,21 +46,17 @@ sentinel date ``None``.
 from __future__ import annotations
 
 import hashlib
-import math
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import REAL
 from sqlalchemy.engine import Engine
 
 from rainier.db.rows import TABLE_SPECS, TableSpec, frame_to_pg_rows
-
-# float32 (PG REAL) carries ~7 significant decimal digits; round to 6 so a clean
-# float64->float32->float64 round-trip never trips the checksum. Documented
-# tolerance: two values agree if they match to 6 significant figures.
-FLOAT_SIG_DIGITS = 6
 
 
 @dataclass(frozen=True)
@@ -74,28 +81,46 @@ class VerifyReport:
         return not self.drift
 
 
-def _round_sig(x: float, sig: int = FLOAT_SIG_DIGITS) -> float:
-    """Round ``x`` to ``sig`` significant figures (0.0 and non-finite pass through)."""
-    if x == 0.0 or not math.isfinite(x):
-        return 0.0 if x == 0.0 else x
-    return round(x, sig - 1 - int(math.floor(math.log10(abs(x)))))
+def _real_columns(spec: TableSpec) -> frozenset[str]:
+    """Column names stored as PG ``REAL`` (float32) for this table.
+
+    Those are the columns whose parquet float64 originals must be cast through
+    float32 to compare exactly against their round-tripped PG values.
+    """
+    return frozenset(
+        c.name for c in spec.table.columns if isinstance(c.type, REAL)
+    )
 
 
-def _canon_cell(v) -> object:
-    """Canonicalize a coerced cell for hashing (floats -> rounded; rest -> str)."""
+def _canon_cell(v, is_real: bool) -> object:
+    """Canonicalize a coerced cell for hashing.
+
+    Floats in REAL columns are cast through float32 so the parquet float64
+    original and the round-tripped PG REAL value collapse to the identical
+    32-bit value. DOUBLE_PRECISION floats round-trip exactly, so they pass
+    through unchanged. None and non-floats are tagged + stringified.
+    """
     if isinstance(v, float):
-        return ("f", _round_sig(v))
+        if is_real:
+            return ("f", float(np.float32(v)))
+        return ("f", v)
     if v is None:
         return ("n",)
     return ("s", str(v))
 
 
-def _checksum(rows: list[dict], columns: list[str], pk_cols: tuple[str, ...]) -> str:
+def _checksum(
+    rows: list[dict],
+    columns: list[str],
+    pk_cols: tuple[str, ...],
+    real_cols: frozenset[str],
+) -> str:
     """Order-independent content hash of ``rows`` projected to ``columns``.
 
     Rows are sorted by primary key (None sorts first via a (is_none, repr) key)
     so PG vs parquet row order is irrelevant, then each row is rendered as a
-    fixed-column-order tuple of canonical cells and BLAKE2b-hashed.
+    fixed-column-order tuple of canonical cells (REAL columns float32-normalized)
+    and BLAKE2b-hashed.
     """
 
     def sort_key(row: dict):
@@ -103,7 +128,7 @@ def _checksum(rows: list[dict], columns: list[str], pk_cols: tuple[str, ...]) ->
 
     h = hashlib.blake2b(digest_size=16)
     for row in sorted(rows, key=sort_key):
-        cells = tuple(_canon_cell(row.get(c)) for c in columns)
+        cells = tuple(_canon_cell(row.get(c), c in real_cols) for c in columns)
         h.update(repr(cells).encode("utf-8"))
         h.update(b"\x1e")  # record separator
     return h.hexdigest()
@@ -176,6 +201,7 @@ def verify_coverage(
 
     for spec in TABLE_SPECS:
         columns = list(spec.table.columns.keys())
+        real_cols = _real_columns(spec)
         path = cache_dir / f"{spec.parquet_name}.parquet"
 
         if path.exists():
@@ -211,8 +237,8 @@ def verify_coverage(
                 )
                 match = False
             else:
-                pq_sum = _checksum(pq_g, columns, spec.pk_cols)
-                pg_sum = _checksum(pg_g, columns, spec.pk_cols)
+                pq_sum = _checksum(pq_g, columns, spec.pk_cols, real_cols)
+                pg_sum = _checksum(pg_g, columns, spec.pk_cols, real_cols)
                 if pq_sum != pg_sum:
                     report.drift.append(
                         Drift(spec.name, key, "checksum mismatch")
