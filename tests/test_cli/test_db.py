@@ -74,6 +74,71 @@ def test_db_ping_fails_loud_without_database_url(monkeypatch):
     assert "DATABASE_URL" in combined
 
 
+def test_db_migrate_fails_loud_without_database_url(monkeypatch):
+    """`db migrate` without DATABASE_URL exits non-zero with a clean message.
+
+    Mirrors `test_db_ping_fails_loud_without_database_url`: alembic env.py
+    raises RuntimeError("DATABASE_URL not set ...") the moment `command.upgrade`
+    resolves the engine config. Without wrapping, that surfaced as a raw
+    traceback (codex iter-5 / PR #102 deferred [P2]). The command must catch it
+    and re-raise as a ClickException so the CLI prints a single `Error:` line.
+    """
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["db", "migrate"])
+    assert result.exit_code != 0
+    # A wrapped ClickException is rendered as a clean `Error:` line and click
+    # exits via SystemExit — a bare RuntimeError would leave a traceback and a
+    # non-SystemExit exception on the result instead.
+    assert not isinstance(result.exception, RuntimeError), (
+        f"db migrate leaked a raw RuntimeError instead of wrapping it in "
+        f"click.ClickException: {result.exception!r}"
+    )
+    assert "Traceback" not in (result.output or "")
+    # The wrapped message names the concrete cause (the missing env var).
+    assert "DATABASE_URL" in (result.output or "")
+
+
+def test_db_migrate_wraps_unreachable_db_in_click_exception(monkeypatch):
+    """`db migrate` against an unreachable DB exits clean, not with a traceback.
+
+    Stub `alembic.command.upgrade` to raise OperationalError (what a real
+    unreachable host produces). The command must catch any migration-time
+    failure and re-raise as ClickException — no traceback, non-zero exit.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@unreachable:5432/x")
+
+    from sqlalchemy.exc import OperationalError
+
+    from rainier import cli as cli_mod
+
+    def _boom(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    # Patch the alembic command surface the migrate body calls into. The body
+    # does `from alembic import command` then `command.upgrade(...)`, so we
+    # patch the attribute on the alembic.command module itself.
+    import alembic.command as alembic_command
+
+    monkeypatch.setattr(alembic_command, "upgrade", _boom)
+    # Avoid touching the real filesystem-resolved config (irrelevant here).
+    monkeypatch.setattr(cli_mod, "_resolve_alembic_config", lambda: object())
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["db", "migrate"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    # The OperationalError must be wrapped, not leaked: a wrapped ClickException
+    # exits via SystemExit, while an unwrapped failure leaves the OperationalError
+    # on result.exception.
+    assert not isinstance(result.exception, OperationalError), (
+        f"db migrate leaked a raw OperationalError instead of wrapping it in "
+        f"click.ClickException: {result.exception!r}"
+    )
+    # And the clean error line names the command + carries the cause.
+    assert "db migrate" in (result.output or "")
+
+
 def test_wheel_packages_db_assets_under_rainier_db_assets():
     """Regression: pyproject.toml's `[tool.hatch.build.targets.wheel]` must
     `force-include` the top-level db/ tree at `rainier/_db_assets/` inside
