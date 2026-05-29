@@ -53,7 +53,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from statistics import median
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 from sqlalchemy import (
     Column,
@@ -68,6 +68,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from rainier.core.config import Settings
 
 # --------------------------------------------------------------------------- #
 # Test table — mirrors the production money_flow_snapshots logical shape but
@@ -509,12 +512,33 @@ def compute_report(
 
 
 @contextmanager
-def _open_session() -> Iterator[Session]:
-    """Yield a production DB session (postgres / timescale)."""
-    from rainier.core.database import get_session as _get_session
+def _open_session(settings: Settings | None = None) -> Iterator[Session]:
+    """Yield a production DB session (postgres / timescale).
 
-    with _get_session() as s:
-        yield s
+    When ``settings`` is provided (the CLI threads ``ctx.obj["settings"]`` here
+    so ``--config staging.yaml`` selects the right DB), bind the session to the
+    config-derived engine. Without it, fall back to the process-default
+    singleton session — preserving prior behaviour for callers that don't pass
+    a config-context.
+    """
+    if settings is None:
+        from rainier.core.database import get_session as _get_session
+
+        with _get_session() as s:
+            yield s
+        return
+
+    from rainier.core.database import get_session_factory
+
+    session = get_session_factory(settings)()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 # --------------------------------------------------------------------------- #
