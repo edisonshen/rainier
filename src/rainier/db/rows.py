@@ -143,6 +143,26 @@ TABLE_SPECS: list[TableSpec] = [
         pk_cols=("asof_date", "symbol"),
         date_col="asof_date",
     ),
+    # Market-breadth (breadth-pg-write-path). LONG == parquet, so verify's
+    # one-parquet->table projection works directly (design D-1/D-5).
+    TableSpec(
+        parquet_name="sp500_breadth_daily",
+        table=schema.breadth_indicator_daily,
+        pk_cols=("asof_date", "indicator"),
+        date_col="asof_date",
+    ),
+    # SPY/benchmark OHLCV. No immutable_cols — mirrors thematic_ohlcv (which
+    # also pins none): the parquet _upsert is latest-write-wins, so an
+    # incremental backfill-spy re-stamps fetched_at/yfinance_version on
+    # overlapping dates. PG must adopt the same values to stay byte-for-parity
+    # under verify-coverage (design D-5); pinning them immutable would drift PG
+    # from the parquet and fail the checksum.
+    TableSpec(
+        parquet_name="spy_history",
+        table=schema.benchmark_ohlcv,
+        pk_cols=("symbol", "date"),
+        date_col="date",
+    ),
 ]
 
 

@@ -151,9 +151,53 @@ thematic_labels_daily = Table(
 )
 
 
+# market.breadth_indicator_daily — S&P 500 market-breadth indicators, LONG.
+#
+# Mirrors data/cache/sp500_breadth_daily.parquet 1:1 (asof_date, indicator,
+# value) so the Phase 2/3 dual-write + verify machinery works with NO transform
+# layer (design D-1). ``value`` is DOUBLE_PRECISION + nullable to mirror the
+# parquet float64 column EXACTLY, including warm-up-tainted early rows (MAs
+# before N days; new_52w_high/low use min_periods=1 "max so far" before 252
+# days). We deliberately store whatever the parquet holds — divergent NULL
+# logic here would break parquet<->PG checksum parity (design D-4).
+breadth_indicator_daily = Table(
+    "breadth_indicator_daily",
+    metadata,
+    Column("asof_date", Date, nullable=False),
+    Column("indicator", Text, nullable=False),
+    Column("value", DOUBLE_PRECISION, nullable=True),
+    PrimaryKeyConstraint("asof_date", "indicator", name="breadth_indicator_daily_pkey"),
+    Index("ix_breadth_indicator_daily_asof_date", "asof_date"),
+)
+
+
+# market.benchmark_ohlcv — benchmark/index OHLCV (SPY today; generalizes to
+# QQQ/DIA/IWM/sector ETFs/VIX). Schema mirrors thematic_ohlcv +
+# spy_history.parquet (design D-2). Named benchmark, not index, because SPY is
+# an ETF benchmark. ``fetched_at``/``yfinance_version`` are insert-only
+# provenance at the write call sites (immutable_cols), as in thematic_ohlcv.
+benchmark_ohlcv = Table(
+    "benchmark_ohlcv",
+    metadata,
+    Column("symbol", Text, nullable=False),
+    Column("date", Date, nullable=False),
+    Column("open", DOUBLE_PRECISION, nullable=False),
+    Column("high", DOUBLE_PRECISION, nullable=False),
+    Column("low", DOUBLE_PRECISION, nullable=False),
+    Column("close", DOUBLE_PRECISION, nullable=False),
+    Column("volume", BigInteger, nullable=False),
+    Column("fetched_at", TIMESTAMP(timezone=True), nullable=False),
+    Column("yfinance_version", Text, nullable=False),
+    PrimaryKeyConstraint("symbol", "date", name="benchmark_ohlcv_pkey"),
+    Index("ix_benchmark_ohlcv_date", "date"),
+)
+
+
 # Public surface — callers reach for the Table objects + the shared metadata.
 __all__ = [
     "SCHEMA",
+    "benchmark_ohlcv",
+    "breadth_indicator_daily",
     "metadata",
     "sectors",
     "thematic_features_daily",

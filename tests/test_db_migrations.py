@@ -110,13 +110,19 @@ def _alembic_config():
 
 
 def _expected_tables() -> set[str]:
-    """The 5 tables declared in the design + task plan §4."""
+    """All market.* tables after migration head.
+
+    Phase 1/2 (task plan §4): the 5 thematic tables.
+    breadth-pg-write-path (0003): + breadth_indicator_daily + benchmark_ohlcv.
+    """
     return {
         "tickers",
         "sectors",
         "thematic_ohlcv",
         "thematic_features_daily",
         "thematic_labels_daily",
+        "breadth_indicator_daily",
+        "benchmark_ohlcv",
     }
 
 
@@ -564,6 +570,150 @@ def test_0002_upgrade_downgrade_upgrade_round_trips(database_url):
 
     assert ord_col is not None and ord_col["nullable"] is True
     assert lbl_col is not None and lbl_col["nullable"] is True
+
+
+# ---------------------------------------------------------------------------
+# Migration 0003 — breadth_indicator_daily + benchmark_ohlcv (breadth-pg)
+# ---------------------------------------------------------------------------
+
+
+def test_0003_creates_breadth_indicator_daily(database_url):
+    """`upgrade head` (through 0003) creates market.breadth_indicator_daily
+    with the LONG shape (asof_date, indicator, value) and PK (asof_date,
+    indicator)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    cols = {c["name"]: c for c in insp.get_columns("breadth_indicator_daily", schema="market")}
+    pk = insp.get_pk_constraint("breadth_indicator_daily", schema="market")
+    eng.dispose()
+
+    assert set(cols) == {"asof_date", "indicator", "value"}, f"got {set(cols)}"
+    # value mirrors parquet float64 -> double precision, nullable for NaN.
+    assert "DOUBLE" in str(cols["value"]["type"]).upper(), cols["value"]["type"]
+    assert cols["value"]["nullable"] is True
+    assert cols["asof_date"]["nullable"] is False
+    assert cols["indicator"]["nullable"] is False
+    assert set(pk["constrained_columns"]) == {"asof_date", "indicator"}, pk
+
+
+def test_0003_creates_benchmark_ohlcv(database_url):
+    """`upgrade head` creates market.benchmark_ohlcv mirroring thematic_ohlcv
+    (symbol/date PK, OHLCV double precision, volume bigint, provenance cols)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    cols = {c["name"]: c for c in insp.get_columns("benchmark_ohlcv", schema="market")}
+    pk = insp.get_pk_constraint("benchmark_ohlcv", schema="market")
+    eng.dispose()
+
+    assert set(cols) == {
+        "symbol",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "fetched_at",
+        "yfinance_version",
+    }, f"got {set(cols)}"
+    assert "BIGINT" in str(cols["volume"]["type"]).upper(), cols["volume"]["type"]
+    for c in ("open", "high", "low", "close"):
+        assert "DOUBLE" in str(cols[c]["type"]).upper(), cols[c]["type"]
+    assert set(pk["constrained_columns"]) == {"symbol", "date"}, pk
+
+
+def test_0003_breadth_indicator_index(database_url):
+    """breadth_indicator_daily has an index on (asof_date) like the other
+    date-keyed tables (verify-coverage groups by asof_date)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    idx = insp.get_indexes("breadth_indicator_daily", schema="market")
+    eng.dispose()
+    assert any(
+        i["column_names"] == ["asof_date"] for i in idx
+    ), f"missing index on breadth_indicator_daily(asof_date); got {idx}"
+
+
+def test_0003_benchmark_ohlcv_index(database_url):
+    """benchmark_ohlcv has an index on (date) like thematic_ohlcv."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    idx = insp.get_indexes("benchmark_ohlcv", schema="market")
+    eng.dispose()
+    assert any(
+        i["column_names"] == ["date"] for i in idx
+    ), f"missing index on benchmark_ohlcv(date); got {idx}"
+
+
+def test_0003_no_stray_public_tables(database_url):
+    """Acceptance gate (design D-6): 0003 must NOT leak tables into the public
+    schema. The include_schemas=True footgun would put schema-unqualified
+    tables in public; assert public holds only alembic_version."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    public_tables = set(insp.get_table_names(schema="public"))
+    eng.dispose()
+    # The only public table should be alembic's bookkeeping; the two new
+    # market.* tables must live under market, not public.
+    assert public_tables <= {"alembic_version"}, (
+        f"0003 leaked tables into public: {public_tables - {'alembic_version'}}"
+    )
+
+
+def test_0003_downgrade_round_trips(database_url):
+    """0003 is reversible: head -> 0002 drops the two new tables; -> head
+    recreates them. Downgrade is guarded (does NOT unconditionally drop the
+    market schema — that belongs to 0001)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0002")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    after_down = set(insp.get_table_names(schema="market"))
+    # market schema still exists (0001 owns it); only the 0003 tables are gone.
+    schemas = set(insp.get_schema_names())
+    eng.dispose()
+    assert "market" in schemas, "0003 downgrade must NOT drop the market schema"
+    assert "breadth_indicator_daily" not in after_down
+    assert "benchmark_ohlcv" not in after_down
+    # thematic tables survive (owned by 0001).
+    assert "thematic_ohlcv" in after_down
+
+    command.upgrade(cfg, "head")
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    after_up = set(insp.get_table_names(schema="market"))
+    eng.dispose()
+    assert "breadth_indicator_daily" in after_up
+    assert "benchmark_ohlcv" in after_up
 
 
 def test_alembic_does_not_disable_existing_loggers(database_url):
