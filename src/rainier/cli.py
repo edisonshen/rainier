@@ -1416,13 +1416,17 @@ def qu_group() -> None:
     default=False,
     help="Emit JSON instead of the textual report (for cron + structured logs).",
 )
-def qu_money_flow_coverage(asof_str: str | None, lookback_days: int, as_json: bool) -> None:
+@click.pass_context
+def qu_money_flow_coverage(
+    ctx, asof_str: str | None, lookback_days: int, as_json: bool,
+) -> None:
     """Audit money_flow_snapshots coverage; exit non-zero on alarm.
 
-    Reads the production DB (via core.database.get_session) unless tests
-    monkey-patch coverage._open_session — keeps the CLI a thin wrapper
-    over the pure-function audit so the same code path runs in unit tests
-    against an in-memory sqlite session.
+    Reads the DB selected by the root ``--config`` flag (we thread
+    ``ctx.obj["settings"]`` into ``coverage._open_session`` so
+    ``rainier --config staging.yaml qu money-flow-coverage`` hits staging,
+    not the default DB). Tests monkey-patch ``coverage._open_session`` to run
+    the same code path against an in-memory sqlite session.
     """
     import json as _json
     import sys
@@ -1439,7 +1443,8 @@ def qu_money_flow_coverage(asof_str: str | None, lookback_days: int, as_json: bo
     else:
         asof = date.today()
 
-    with coverage._open_session() as session:
+    settings = (getattr(ctx, "obj", None) or {}).get("settings")
+    with coverage._open_session(settings) as session:
         report = coverage.compute_report(
             session=session, asof=asof, lookback_days=lookback_days,
         )
