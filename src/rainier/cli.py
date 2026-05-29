@@ -4891,12 +4891,24 @@ def db_migrate(downgrade_to: str | None) -> None:
 
     cfg = _resolve_alembic_config()
 
-    if downgrade_to is None:
-        command.upgrade(cfg, "head")
-        click.echo("alembic upgrade head — ok")
-    else:
-        command.downgrade(cfg, downgrade_to)
-        click.echo(f"alembic downgrade {downgrade_to} — ok")
+    # Mirror db_ping's wrapping idiom: misconfig (missing DATABASE_URL, an
+    # unreachable host, or an Alembic config error) raises RuntimeError /
+    # OperationalError / alembic.* exceptions from the upgrade/downgrade call.
+    # Catch them all and re-raise as ClickException so the CLI prints a single
+    # actionable `Error:` line instead of a raw traceback. (_resolve_alembic_config
+    # already raises ClickException on its own failure path, so it stays outside.)
+    try:
+        if downgrade_to is None:
+            command.upgrade(cfg, "head")
+            click.echo("alembic upgrade head — ok")
+        else:
+            command.downgrade(cfg, downgrade_to)
+            click.echo(f"alembic downgrade {downgrade_to} — ok")
+    except click.ClickException:
+        raise
+    except Exception as exc:  # pragma: no cover — exercised via stubbed tests
+        action = "upgrade head" if downgrade_to is None else f"downgrade {downgrade_to}"
+        raise click.ClickException(f"db migrate ({action}) failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

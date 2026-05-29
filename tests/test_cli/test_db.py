@@ -87,19 +87,16 @@ def test_db_migrate_fails_loud_without_database_url(monkeypatch):
     runner = CliRunner()
     result = runner.invoke(cli, ["db", "migrate"])
     assert result.exit_code != 0
-    # A wrapped ClickException leaves no traceback frames on stdout/stderr.
+    # A wrapped ClickException is rendered as a clean `Error:` line and click
+    # exits via SystemExit — a bare RuntimeError would leave a traceback and a
+    # non-SystemExit exception on the result instead.
+    assert not isinstance(result.exception, RuntimeError), (
+        f"db migrate leaked a raw RuntimeError instead of wrapping it in "
+        f"click.ClickException: {result.exception!r}"
+    )
     assert "Traceback" not in (result.output or "")
-    # The ClickException carries the underlying RuntimeError text (DATABASE_URL).
-    combined = (result.output or "") + (str(result.exception) if result.exception else "")
-    assert "DATABASE_URL" in combined
-    # And it must be a ClickException, not a bare RuntimeError leaking through.
-    if result.exception is not None:
-        import click
-
-        assert isinstance(result.exception, click.ClickException), (
-            f"db migrate leaked a {type(result.exception).__name__} instead of "
-            f"wrapping it in click.ClickException: {result.exception!r}"
-        )
+    # The wrapped message names the concrete cause (the missing env var).
+    assert "DATABASE_URL" in (result.output or "")
 
 
 def test_db_migrate_wraps_unreachable_db_in_click_exception(monkeypatch):
@@ -131,13 +128,15 @@ def test_db_migrate_wraps_unreachable_db_in_click_exception(monkeypatch):
     result = runner.invoke(cli, ["db", "migrate"])
     assert result.exit_code != 0
     assert "Traceback" not in (result.output or "")
-    if result.exception is not None:
-        import click
-
-        assert isinstance(result.exception, click.ClickException), (
-            f"db migrate leaked a {type(result.exception).__name__}: "
-            f"{result.exception!r}"
-        )
+    # The OperationalError must be wrapped, not leaked: a wrapped ClickException
+    # exits via SystemExit, while an unwrapped failure leaves the OperationalError
+    # on result.exception.
+    assert not isinstance(result.exception, OperationalError), (
+        f"db migrate leaked a raw OperationalError instead of wrapping it in "
+        f"click.ClickException: {result.exception!r}"
+    )
+    # And the clean error line names the command + carries the cause.
+    assert "db migrate" in (result.output or "")
 
 
 def test_wheel_packages_db_assets_under_rainier_db_assets():
