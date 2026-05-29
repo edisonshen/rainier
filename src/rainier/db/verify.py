@@ -114,6 +114,26 @@ def _normalize_dates(values: pd.Series) -> pd.Series:
     return pd.to_datetime(values).dt.date
 
 
+def _window_df(
+    df: pd.DataFrame, spec: TableSpec, asof_start: date | None, asof_end: date | None
+) -> pd.DataFrame:
+    """Restrict ``df`` to [asof_start, asof_end] on the spec's date column.
+
+    Registries (``date_col=None``) and an empty window are pass-through.
+    Applied identically to the parquet and PG sides so they compare apples-to-
+    apples.
+    """
+    if spec.date_col is None or (asof_start is None and asof_end is None) or df.empty:
+        return df
+    norm = _normalize_dates(df[spec.date_col])
+    mask = pd.Series(True, index=df.index)
+    if asof_start is not None:
+        mask &= norm >= asof_start
+    if asof_end is not None:
+        mask &= norm <= asof_end
+    return df[mask]
+
+
 def _read_pg(engine: Engine, spec: TableSpec, columns: list[str]) -> pd.DataFrame:
     """Plain SELECT of all rows for ``spec`` (no ORM)."""
     # Column + table names come from the schema definition (TABLE_SPECS), never
@@ -163,25 +183,9 @@ def verify_coverage(
         else:
             pq_df = pd.DataFrame(columns=columns)
 
-        # Window the date-keyed tables.
-        if spec.date_col is not None and (asof_start or asof_end) and not pq_df.empty:
-            norm = _normalize_dates(pq_df[spec.date_col])
-            mask = pd.Series(True, index=pq_df.index)
-            if asof_start is not None:
-                mask &= norm >= asof_start
-            if asof_end is not None:
-                mask &= norm <= asof_end
-            pq_df = pq_df[mask]
-
-        pg_df = _read_pg(engine, spec, columns)
-        if spec.date_col is not None and (asof_start or asof_end) and not pg_df.empty:
-            norm = _normalize_dates(pg_df[spec.date_col])
-            mask = pd.Series(True, index=pg_df.index)
-            if asof_start is not None:
-                mask &= norm >= asof_start
-            if asof_end is not None:
-                mask &= norm <= asof_end
-            pg_df = pg_df[mask]
+        # Window both sides identically before comparing (registries pass through).
+        pq_df = _window_df(pq_df, spec, asof_start, asof_end)
+        pg_df = _window_df(_read_pg(engine, spec, columns), spec, asof_start, asof_end)
 
         # Coerce both sides through the SAME path so float/Decimal/Timestamp
         # representations are comparable.
