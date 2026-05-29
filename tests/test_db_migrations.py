@@ -282,6 +282,198 @@ def test_foreign_keys_to_registries(database_url):
 
 
 # ---------------------------------------------------------------------------
+# downgrade base must not wipe foreign objects (task plan migrate-downgrade-base)
+# ---------------------------------------------------------------------------
+# codex iter-4 of PR #102 (deferred P2): 0001's downgrade() issued an
+# unconditional `DROP SCHEMA market CASCADE`. Acceptable while rainier solely
+# owns `market`, but if the schema ever holds a non-rainier object, downgrade
+# base would silently wipe it. The guard: downgrade() drops only the objects
+# THIS revision's upgrade() created, and removes the schema only when no
+# foreign objects remain.
+
+
+def _reset_market(eng) -> None:
+    """Force the DB back to a pre-0001 state regardless of prior test runs.
+
+    The ``database_url`` fixture gives a per-test isolated DB only via
+    pytest-postgresql; when an operator points ``RAINIER_TEST_DATABASE_URL`` at
+    a reused sandbox there is no isolation. Dropping ``market`` + the alembic
+    bookkeeping row makes this test deterministic on either path."""
+    with eng.begin() as conn:
+        conn.execute(text("DROP SCHEMA IF EXISTS market CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+
+
+def test_downgrade_base_preserves_foreign_objects(database_url):
+    """A non-rainier object living in ``market`` survives ``downgrade base``.
+
+    Regression for the unconditional ``DROP SCHEMA market CASCADE`` footgun:
+    seed a foreign table into ``market`` AFTER upgrade head, then downgrade
+    base. The foreign table (and the ``market`` schema it lives in) must
+    survive; this revision's own tables must be gone.
+    """
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    # Seed a foreign object that this revision did NOT create.
+    with eng.begin() as conn:
+        conn.execute(text("CREATE TABLE market.foreign_owned (id integer primary key)"))
+        conn.execute(text("INSERT INTO market.foreign_owned (id) VALUES (1), (2)"))
+
+    command.downgrade(cfg, "base")
+
+    insp = inspect(eng)
+    schemas = set(insp.get_schema_names())
+    assert "market" in schemas, (
+        "downgrade base dropped the whole market schema while a foreign object "
+        f"was present; surviving schemas={schemas}"
+    )
+
+    tables = set(insp.get_table_names(schema="market"))
+    # Foreign object survives untouched.
+    assert "foreign_owned" in tables, (
+        f"foreign object market.foreign_owned was wiped by downgrade; tables={tables}"
+    )
+    with eng.connect() as conn:
+        rows = conn.execute(text("SELECT id FROM market.foreign_owned ORDER BY id")).fetchall()
+    assert [r[0] for r in rows] == [1, 2], "foreign object rows were not preserved"
+
+    # This revision's own tables are gone.
+    leftover = tables & _expected_tables()
+    assert leftover == set(), (
+        f"downgrade base left this revision's own tables behind: {leftover}"
+    )
+
+    _reset_market(eng)
+    eng.dispose()
+
+
+def test_downgrade_base_preserves_foreign_sequence(database_url):
+    """The emptiness gate covers non-table objects too: a foreign SEQUENCE in
+    ``market`` survives ``downgrade base`` and keeps the schema alive.
+
+    A tables-only gate would think the schema empty, attempt the RESTRICT drop,
+    and abort the downgrade with an error — this locks in the pg_class/pg_proc/
+    pg_type probe."""
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    with eng.begin() as conn:
+        conn.execute(text("CREATE SEQUENCE market.foreign_seq"))
+
+    command.downgrade(cfg, "base")
+
+    insp = inspect(eng)
+    assert "market" in set(insp.get_schema_names()), (
+        "downgrade base dropped market while a foreign sequence was present"
+    )
+    with eng.connect() as conn:
+        exists = conn.execute(
+            text(
+                "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'market' AND c.relname = 'foreign_seq' AND c.relkind = 'S'"
+            )
+        ).fetchone()
+    assert exists is not None, "foreign sequence market.foreign_seq was wiped by downgrade"
+    assert set(insp.get_table_names(schema="market")) & _expected_tables() == set(), (
+        "downgrade base left this revision's own tables behind"
+    )
+
+    _reset_market(eng)
+    eng.dispose()
+
+
+def test_downgrade_base_clean_round_trip(database_url):
+    """On a DB where ``market`` is exclusively this revision's, upgrade ->
+    downgrade -> upgrade still round-trips: the schema is fully removed on
+    downgrade and re-created on the next upgrade."""
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "base")
+
+    insp = inspect(eng)
+    # No foreign objects → schema is fully removed, returning to empty state.
+    assert "market" not in set(insp.get_schema_names()), (
+        "downgrade base should drop the now-empty market schema on a clean DB"
+    )
+
+    # Re-upgrade rebuilds everything.
+    command.upgrade(cfg, "head")
+    insp = inspect(eng)
+    assert set(insp.get_table_names(schema="market")) == _expected_tables()
+
+    _reset_market(eng)
+    eng.dispose()
+
+
+def test_downgrade_base_fails_loudly_on_foreign_dependent(database_url):
+    """A foreign object DEPENDING ON one of this revision's tables is never
+    silently destroyed: the non-cascading ``DROP TABLE ... RESTRICT`` aborts
+    the downgrade instead.
+
+    codex iter-2 (P1): the original ``DROP TABLE ... CASCADE`` would silently
+    drop a foreign view/FK built on top of ``market.tickers`` even though the
+    schema is preserved — the exact data/DDL loss this revision is meant to
+    prevent. With RESTRICT, the drop raises; the operator sees the foreign
+    dependency and resolves it rather than losing it. We assert both the raise
+    AND that the foreign view + our table are still intact afterward (the
+    downgrade transaction rolled back).
+    """
+    import sqlalchemy.exc as sa_exc
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    # Foreign view built on a revision-owned table. CASCADE would have dropped
+    # it silently; RESTRICT must refuse.
+    with eng.begin() as conn:
+        conn.execute(
+            text("CREATE VIEW market.foreign_view AS SELECT ticker_id FROM market.tickers")
+        )
+
+    with pytest.raises(sa_exc.DBAPIError):
+        command.downgrade(cfg, "base")
+
+    # The aborted downgrade left everything intact: the foreign view, the table
+    # it depends on, and the schema all survive.
+    insp = inspect(eng)
+    assert "market" in set(insp.get_schema_names()), "schema was dropped despite a foreign dependent"
+    assert "tickers" in set(insp.get_table_names(schema="market")), (
+        "market.tickers was dropped despite a foreign view depending on it"
+    )
+    with eng.connect() as conn:
+        view_exists = conn.execute(
+            text(
+                "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'market' AND c.relname = 'foreign_view' AND c.relkind = 'v'"
+            )
+        ).fetchone()
+    assert view_exists is not None, "foreign view market.foreign_view was wiped by downgrade"
+
+    _reset_market(eng)
+    eng.dispose()
+
+
+# ---------------------------------------------------------------------------
 # Migration 0002 — schema-seam fixes for the dual-write writers (task plan §3)
 # ---------------------------------------------------------------------------
 
