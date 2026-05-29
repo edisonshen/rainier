@@ -353,6 +353,46 @@ def test_downgrade_base_preserves_foreign_objects(database_url):
     eng.dispose()
 
 
+def test_downgrade_base_preserves_foreign_sequence(database_url):
+    """The emptiness gate covers non-table objects too: a foreign SEQUENCE in
+    ``market`` survives ``downgrade base`` and keeps the schema alive.
+
+    A tables-only gate would think the schema empty, attempt the RESTRICT drop,
+    and abort the downgrade with an error — this locks in the pg_class/pg_proc/
+    pg_type probe."""
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    with eng.begin() as conn:
+        conn.execute(text("CREATE SEQUENCE market.foreign_seq"))
+
+    command.downgrade(cfg, "base")
+
+    insp = inspect(eng)
+    assert "market" in set(insp.get_schema_names()), (
+        "downgrade base dropped market while a foreign sequence was present"
+    )
+    with eng.connect() as conn:
+        exists = conn.execute(
+            text(
+                "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'market' AND c.relname = 'foreign_seq' AND c.relkind = 'S'"
+            )
+        ).fetchone()
+    assert exists is not None, "foreign sequence market.foreign_seq was wiped by downgrade"
+    assert set(insp.get_table_names(schema="market")) & _expected_tables() == set(), (
+        "downgrade base left this revision's own tables behind"
+    )
+
+    _reset_market(eng)
+    eng.dispose()
+
+
 def test_downgrade_base_clean_round_trip(database_url):
     """On a DB where ``market`` is exclusively this revision's, upgrade ->
     downgrade -> upgrade still round-trips: the schema is fully removed on

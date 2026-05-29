@@ -169,11 +169,82 @@ def upgrade() -> None:
     )
 
 
-def downgrade() -> None:
-    """Drop the whole market schema (cascades through tables + indexes).
+# Tables this revision's upgrade() created, in reverse dependency order so a
+# plain DROP TABLE works without CASCADE-ing into anything outside this set.
+# CASCADE is still passed to clean up each table's own indexes/constraints; it
+# does NOT reach foreign objects because we name each table explicitly.
+#
+#     thematic_features_daily ──FK──► tickers, sectors   (drop dependent first)
+#     thematic_ohlcv          (standalone)
+#     thematic_labels_daily   (standalone)
+_REVISION_TABLES = (
+    "thematic_features_daily",
+    "thematic_labels_daily",
+    "thematic_ohlcv",
+    "tickers",
+    "sectors",
+)
 
-    Cleaner than dropping tables one-by-one: avoids FK ordering issues and
-    matches the semantics of "go back to before this migration ran". The
-    alembic_version table lives in `public`, so it survives this drop.
+
+def downgrade() -> None:
+    """Reverse this revision without wiping foreign objects.
+
+    The original implementation issued an unconditional
+    ``DROP SCHEMA market CASCADE``. That is safe only while rainier solely owns
+    ``market``; the moment the schema holds a non-rainier object (a future
+    multi-writer deployment), a ``downgrade base`` would silently destroy it.
+
+    Guarded reversal:
+
+      1. Drop only the 5 tables THIS revision's ``upgrade()`` created (reverse
+         dependency order; CASCADE reaches each table's own indexes/constraints
+         but never foreign objects because every name is listed explicitly).
+      2. Drop the ``market`` schema only if it is now empty. If any foreign
+         object remains, leave the (now rainier-free) schema in place. Using
+         ``DROP SCHEMA ... RESTRICT`` (no CASCADE) is the belt-and-suspenders
+         guard — even a logic error in the emptiness check cannot wipe a
+         populated schema, because RESTRICT refuses to drop a non-empty schema.
+
+    The ``alembic_version`` table lives in ``public`` (see env.py), so it
+    survives regardless.
     """
-    op.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
+    for table in _REVISION_TABLES:
+        op.execute(f"DROP TABLE IF EXISTS {SCHEMA}.{table} CASCADE")
+
+    # Drop the schema only when nothing else lives in it. RESTRICT makes the
+    # DROP a no-op-or-error against a populated schema; we gate on the object
+    # count so it's a clean no-op (foreign objects survive) rather than a
+    # raised error that would abort the downgrade.
+    #
+    # Probe pg_class (tables, views, sequences, materialized views, indexes),
+    # pg_proc (functions/procedures), and pg_type (user-defined types). A
+    # tables-only check (information_schema.tables) would miss a foreign
+    # sequence/function/type, letting the RESTRICT drop raise and abort the
+    # downgrade. Dropping our 5 tables above also removed their auto-created
+    # composite rowtypes, array types, and indexes (verified: a clean schema
+    # has zero rows across all three catalogs), so any remaining row here is a
+    # foreign object and the schema must be left in place.
+    op.execute(
+        f"""
+        DO $$
+        DECLARE
+            ns oid;
+            obj_count integer;
+        BEGIN
+            SELECT oid INTO ns FROM pg_namespace WHERE nspname = '{SCHEMA}';
+            IF ns IS NULL THEN
+                RETURN;  -- schema already gone (idempotent downgrade)
+            END IF;
+
+            SELECT
+                (SELECT count(*) FROM pg_class WHERE relnamespace = ns)
+              + (SELECT count(*) FROM pg_proc  WHERE pronamespace = ns)
+              + (SELECT count(*) FROM pg_type  WHERE typnamespace = ns)
+            INTO obj_count;
+
+            IF obj_count = 0 THEN
+                EXECUTE 'DROP SCHEMA IF EXISTS {SCHEMA} RESTRICT';
+            END IF;
+        END $$;
+        """
+    )
