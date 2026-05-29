@@ -4141,10 +4141,18 @@ def _dual_write_benchmark_pg(spy_df: pd.DataFrame) -> None:
     """Mirror the SPY/benchmark OHLCV frame into market.benchmark_ohlcv.
 
     The parquet (symbol, date, open, high, low, close, volume, fetched_at,
-    yfinance_version) mirrors the table 1:1. ``fetched_at``/``yfinance_version``
-    are insert-only provenance (immutable_cols) — a re-run that re-fetches with a
-    newer version updates the prices but never re-stamps the original fetch
-    metadata (mirrors thematic_ohlcv provenance handling).
+    yfinance_version) mirrors the table 1:1.
+
+    All columns (including ``fetched_at``/``yfinance_version``) are MUTABLE on
+    conflict — exactly like thematic_ohlcv's dual-write (which passes no
+    immutable_cols). The parquet ``ohlcv_backfill._upsert`` is latest-write-wins,
+    so a ``backfill-spy --incremental`` run that overlaps existing dates (the
+    default 5-day window) re-stamps those rows' provenance in the parquet. PG is
+    a byte-for-parity mirror checked by ``verify-coverage`` (design D-5), so it
+    MUST adopt the same new provenance — pinning it immutable here would leave PG
+    holding stale fetched_at/version while the parquet moved on, failing the
+    checksum. Provenance immutability belongs to the append-only registries
+    (first_seen), not to a mirror of a mutable cache.
     """
     if spy_df.empty:
         return
@@ -4162,7 +4170,6 @@ def _dual_write_benchmark_pg(spy_df: pd.DataFrame) -> None:
             schema.benchmark_ohlcv,
             rows,
             ["symbol", "date"],
-            immutable_cols=["fetched_at", "yfinance_version"],
         )
 
 

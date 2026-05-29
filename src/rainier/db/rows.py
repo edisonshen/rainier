@@ -151,14 +151,16 @@ TABLE_SPECS: list[TableSpec] = [
         pk_cols=("asof_date", "indicator"),
         date_col="asof_date",
     ),
-    # SPY/benchmark OHLCV. fetched_at/yfinance_version are insert-only
-    # provenance (mirrors the thematic_ohlcv dual-write handling): a re-run
-    # never re-stamps the original fetch metadata.
+    # SPY/benchmark OHLCV. No immutable_cols — mirrors thematic_ohlcv (which
+    # also pins none): the parquet _upsert is latest-write-wins, so an
+    # incremental backfill-spy re-stamps fetched_at/yfinance_version on
+    # overlapping dates. PG must adopt the same values to stay byte-for-parity
+    # under verify-coverage (design D-5); pinning them immutable would drift PG
+    # from the parquet and fail the checksum.
     TableSpec(
         parquet_name="spy_history",
         table=schema.benchmark_ohlcv,
         pk_cols=("symbol", "date"),
-        immutable_cols=("fetched_at", "yfinance_version"),
         date_col="date",
     ),
 ]

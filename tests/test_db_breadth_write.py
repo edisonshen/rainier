@@ -302,10 +302,16 @@ def test_benchmark_dual_write_ohlcv(migrated_engine, database_url):
 
 
 @pytest.mark.requires_postgres
-def test_benchmark_provenance_immutable_on_conflict(migrated_engine, database_url):
-    """fetched_at / yfinance_version are insert-only: a re-run that supplies a
-    newer fetched_at/version must NOT overwrite the original (mirrors
-    thematic_ohlcv immutable provenance)."""
+def test_benchmark_provenance_mutable_for_parquet_parity(migrated_engine, database_url):
+    """fetched_at / yfinance_version are MUTABLE on conflict (codex iter-1 P1).
+
+    The parquet ``ohlcv_backfill._upsert`` is latest-write-wins, so an
+    incremental backfill-spy run that overlaps existing dates re-stamps those
+    rows' provenance in the parquet. PG is a byte-for-parity mirror checked by
+    verify-coverage (design D-5), so it must adopt the SAME new provenance —
+    pinning these columns immutable would leave PG holding stale metadata while
+    the parquet moved on, failing the checksum. Mirrors thematic_ohlcv (which
+    also keeps provenance mutable)."""
     from rainier.cli import _dual_write_benchmark_pg
 
     days = _trading_days(date(2024, 1, 2), 3)
@@ -313,8 +319,8 @@ def test_benchmark_provenance_immutable_on_conflict(migrated_engine, database_ur
     _dual_write_benchmark_pg(df)
 
     df2 = df.copy()
-    df2["close"] = df2["close"] + 5.0  # price corrections DO update
-    df2["fetched_at"] = pd.Timestamp("2025-01-01T00:00:00Z")  # provenance: immutable
+    df2["close"] = df2["close"] + 5.0  # price corrections update
+    df2["fetched_at"] = pd.Timestamp("2025-01-01T00:00:00Z")  # provenance updates too
     df2["yfinance_version"] = "9.9.9"
     _dual_write_benchmark_pg(df2)
 
@@ -327,7 +333,10 @@ def test_benchmark_provenance_immutable_on_conflict(migrated_engine, database_ur
             {"d": days[0]},
         ).mappings().one()
     assert row["close"] == pytest.approx(df2.iloc[0]["close"]), "price should update"
-    assert row["yfinance_version"] == "1.2.0", "provenance must stay immutable"
+    assert row["yfinance_version"] == "9.9.9", (
+        "provenance must update to match the latest-write-wins parquet so PG "
+        "stays byte-for-parity under verify-coverage"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +463,49 @@ def test_backfill_from_parquet_seeds_both_tables(migrated_engine, tmp_path, data
     assert "breadth_indicator_daily" not in drift_tables, report.drift
     assert "benchmark_ohlcv" not in drift_tables, report.drift
     assert report.ok, report.drift
+
+
+@pytest.mark.requires_postgres
+def test_benchmark_incremental_overlap_keeps_verify_parity(
+    migrated_engine, tmp_path, database_url
+):
+    """REGRESSION (codex iter-1 P1): an incremental backfill-spy that overlaps
+    existing dates re-stamps fetched_at/yfinance_version in the parquet
+    (latest-write-wins). The PG mirror MUST adopt the same provenance so
+    verify-coverage stays clean — if benchmark provenance were pinned immutable,
+    PG would keep stale metadata and the checksum would drift.
+
+    Simulates the production sequence: parquet on disk -> dual-write -> a later
+    overlapping run rewrites the same dates' provenance in BOTH parquet and PG.
+    """
+    from rainier.cli import _dual_write_benchmark_pg
+    from rainier.db.verify import verify_coverage
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    spy_path = cache / "spy_history.parquet"
+
+    days = _trading_days(date(2024, 1, 2), 5)
+    spy = _build_spy_history(days)
+    spy.to_parquet(spy_path)
+    _dual_write_benchmark_pg(spy)
+    assert verify_coverage(migrated_engine, cache).ok
+
+    # Overlapping incremental refresh: same dates, new fetch provenance (and a
+    # tiny price correction). Parquet is latest-write-wins, so on disk these
+    # dates now carry the NEW fetched_at/version.
+    spy2 = spy.copy()
+    spy2["close"] = spy2["close"] + 0.25
+    spy2["fetched_at"] = pd.Timestamp("2025-03-01T16:30:00Z")
+    spy2["yfinance_version"] = "9.9.9"
+    spy2.to_parquet(spy_path)
+    _dual_write_benchmark_pg(spy2)
+
+    report = verify_coverage(migrated_engine, cache)
+    assert report.ok, (
+        f"benchmark_ohlcv drifted from parquet after an overlapping incremental "
+        f"refresh — provenance must be mutable: {report.drift}"
+    )
 
 
 @pytest.mark.requires_postgres
