@@ -374,7 +374,7 @@ def test_cli_money_flow_coverage_exit_code(in_memory_session, monkeypatch):
     from contextlib import contextmanager
 
     @contextmanager
-    def _fake_session():
+    def _fake_session(settings=None):
         yield in_memory_session
 
     monkeypatch.setattr(coverage, "_open_session", _fake_session)
@@ -395,3 +395,57 @@ def test_cli_money_flow_coverage_exit_code(in_memory_session, monkeypatch):
     )
     assert result.exit_code == 1
     assert "missing" in result.output.lower()
+
+
+# --------------------------------------------------------------------------- #
+# Regression: --config threads config-derived settings into the coverage session
+# (codex iter-2 of PR #92, deferred [P2]). Before the fix, the coverage command
+# opened the session via the no-arg singleton get_session(), silently ignoring
+# `--config staging.yaml` and reading the default DB.
+# --------------------------------------------------------------------------- #
+
+
+def test_cli_money_flow_coverage_honors_config(in_memory_session, tmp_path, monkeypatch):
+    """`rainier --config <yaml> qu money-flow-coverage` must open the session
+    with the settings resolved from that YAML — not the process default.
+
+    Deterministic: spy on ``coverage._open_session`` to capture the settings it
+    receives, and use a distinguishing ``database.pool_size`` (7) in the temp
+    config that the default (5) would never produce.
+    """
+    from contextlib import contextmanager
+
+    from rainier import cli as cli_module
+
+    asof = date(2026, 5, 21)
+    start = date(2026, 5, 7)
+    _seed_clean_window(in_memory_session, start=start, end=asof, rows_per_day=20)
+
+    # A config whose database.pool_size (7) is distinct from the default (5),
+    # so we can prove the --config-resolved settings reached _open_session.
+    config_path = tmp_path / "staging.yaml"
+    config_path.write_text("database:\n  pool_size: 7\n")
+
+    captured: dict[str, object] = {}
+
+    @contextmanager
+    def _spy_open_session(settings=None):
+        captured["settings"] = settings
+        yield in_memory_session
+
+    monkeypatch.setattr(coverage, "_open_session", _spy_open_session)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_module.cli,
+        ["--config", str(config_path), "qu", "money-flow-coverage",
+         "--asof", asof.isoformat()],
+    )
+
+    assert result.exit_code == 0, result.output
+    settings = captured.get("settings")
+    assert settings is not None, "_open_session was called without config-derived settings"
+    assert settings.database.pool_size == 7, (
+        "coverage session did not receive --config-resolved settings "
+        f"(got pool_size={settings.database.pool_size!r})"
+    )
