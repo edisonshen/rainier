@@ -200,3 +200,100 @@ def test_backfill_names_surfaces_persistent_rate_limit(tmp_path):
     )
     # No partial parquet on the failure path — prior file (if any) is preserved.
     assert not out.exists(), "no parquet should be written when backfill fails"
+
+
+# ---------------------------------------------------------------------------
+# missing_from_cache — new-ticker detection for --refresh-stale
+# ---------------------------------------------------------------------------
+
+
+def test_missing_from_cache_returns_empty_when_all_present(tmp_path):
+    """Every universe symbol already cached → no missing symbols."""
+    from rainier.dashboard.etf_names_backfill import (
+        backfill_names,
+        missing_from_cache,
+    )
+
+    out = tmp_path / "etf_names.parquet"
+    backfill_names(
+        symbols=["EFA", "SPY"],
+        out_path=out,
+        fetch_fn=_stub_fetch(
+            {
+                "EFA": {"long_name": "iShares MSCI EAFE ETF", "short_name": "EAFE"},
+                "SPY": {"long_name": "SPDR S&P 500 ETF Trust", "short_name": "SPDR"},
+            }
+        ),
+        retry_sleep=lambda _: None,
+    )
+    assert missing_from_cache(["EFA", "SPY"], out) == []
+
+
+def test_missing_from_cache_detects_new_universe_symbol(tmp_path):
+    """A universe symbol absent from the cache is reported as missing.
+
+    Regression guard for the bug: a freshly-added ticker (QQQ) must be
+    detected as missing even when the parquet itself is < 30 days old, while
+    the already-cached symbols (EFA, SPY) are NOT reported.
+    """
+    from rainier.dashboard.etf_names_backfill import (
+        backfill_names,
+        missing_from_cache,
+    )
+
+    out = tmp_path / "etf_names.parquet"
+    backfill_names(
+        symbols=["EFA", "SPY"],
+        out_path=out,
+        fetch_fn=_stub_fetch(
+            {
+                "EFA": {"long_name": "iShares MSCI EAFE ETF", "short_name": "EAFE"},
+                "SPY": {"long_name": "SPDR S&P 500 ETF Trust", "short_name": "SPDR"},
+            }
+        ),
+        retry_sleep=lambda _: None,
+    )
+    # QQQ is brand-new in the universe; EFA + SPY are already cached.
+    assert missing_from_cache(["EFA", "SPY", "QQQ"], out) == ["QQQ"]
+
+
+def test_missing_from_cache_preserves_universe_order(tmp_path):
+    """Missing symbols are returned in universe order (deterministic)."""
+    from rainier.dashboard.etf_names_backfill import (
+        backfill_names,
+        missing_from_cache,
+    )
+
+    out = tmp_path / "etf_names.parquet"
+    backfill_names(
+        symbols=["EFA"],
+        out_path=out,
+        fetch_fn=_stub_fetch(
+            {"EFA": {"long_name": "iShares MSCI EAFE ETF", "short_name": "EAFE"}}
+        ),
+        retry_sleep=lambda _: None,
+    )
+    # ZZZ before QQQ in the universe → preserved in the result.
+    assert missing_from_cache(["EFA", "ZZZ", "QQQ"], out) == ["ZZZ", "QQQ"]
+
+
+def test_missing_from_cache_all_missing_when_parquet_absent(tmp_path):
+    """No parquet on disk → every universe symbol counts as missing."""
+    from rainier.dashboard.etf_names_backfill import missing_from_cache
+
+    out = tmp_path / "does_not_exist.parquet"
+    assert missing_from_cache(["EFA", "SPY"], out) == ["EFA", "SPY"]
+
+
+def test_missing_from_cache_treats_empty_parquet_as_all_missing(tmp_path):
+    """An empty / column-less parquet → every universe symbol is missing."""
+    import pandas as pd
+
+    from rainier.dashboard.etf_names_backfill import missing_from_cache
+
+    out = tmp_path / "empty.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(columns=["symbol", "long_name", "short_name", "fetched_at"]).to_parquet(
+        out
+    )
+    assert missing_from_cache(["EFA", "SPY"], out) == ["EFA", "SPY"]
