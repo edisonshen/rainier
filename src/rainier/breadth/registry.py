@@ -166,6 +166,19 @@ def load_ticker_registry(registry_path: Path) -> dict[str, int]:
     return {row.symbol: int(row.ticker_id) for row in df.itertuples(index=False)}
 
 
+def load_ticker_first_seen(registry_path: Path) -> dict[str, date]:
+    """Return ``{symbol: first_seen}`` from the ticker registry (empty if missing).
+
+    Lets a downstream mirror (e.g. the PG dual-write) stamp the registry's
+    stored first-seen date instead of the current as-of date — so enabling the
+    mirror after the registry already exists preserves true provenance.
+    """
+    df = _read_registry(Path(registry_path), "ticker_id", "symbol")
+    if df.empty:
+        return {}
+    return {row.symbol: row.first_seen for row in df.itertuples(index=False)}
+
+
 # ---------------------------------------------------------------------------
 # Sector registry
 # ---------------------------------------------------------------------------
@@ -195,6 +208,14 @@ def load_sector_registry(registry_path: Path) -> dict[str, int]:
     return {
         row.sector_name: int(row.sector_id) for row in df.itertuples(index=False)
     }
+
+
+def load_sector_first_seen(registry_path: Path) -> dict[str, date]:
+    """Return ``{sector_name: first_seen}`` from the sector registry (empty if missing)."""
+    df = _read_registry(Path(registry_path), "sector_id", "sector_name")
+    if df.empty:
+        return {}
+    return {row.sector_name: row.first_seen for row in df.itertuples(index=False)}
 
 
 # ---------------------------------------------------------------------------

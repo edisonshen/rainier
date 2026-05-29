@@ -3949,6 +3949,168 @@ def _check_ohlcv_freshness(
         )
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 dual-write (task plan §2/§4): mirror the feature/label frames into
+# market.thematic_features_daily / market.thematic_labels_daily alongside the
+# parquet write. Additive + non-fatal: DATABASE_URL unset -> warn + skip.
+#
+#   compute -> registries (parents) -> features (FK child)
+#   backfill-labels -> labels (no FK)
+# ---------------------------------------------------------------------------
+
+
+def _pg_value(v):
+    """Coerce a pandas/numpy cell into a plain Python scalar psycopg can bind.
+
+    NaN/NaT -> None; numpy ints/floats -> int/float; Timestamp -> datetime;
+    date32 stays date. Keeps the dual-write tolerant of the mixed-dtype frames
+    the compute layer produces (float32 NaNs, int8 sentinels, etc.).
+    """
+    import datetime as _dt
+
+    import numpy as _np
+
+    if v is None:
+        return None
+    # pandas NA / NaN / NaT
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, _np.integer):
+        return int(v)
+    if isinstance(v, _np.floating):
+        return float(v)
+    if isinstance(v, pd.Timestamp):
+        return v.to_pydatetime()
+    if isinstance(v, _dt.datetime):
+        return v
+    if isinstance(v, _dt.date):
+        return v
+    return v
+
+
+def _frame_to_pg_rows(df: pd.DataFrame, columns: list[str]) -> list[dict]:
+    """Project ``df`` to ``columns`` and coerce each cell for psycopg binding.
+
+    A column absent from ``df`` is OMITTED from the row dict, not emitted as
+    None. Emitting None would make ``market_upsert`` treat the column as
+    "supplied" and overwrite an existing PG value with NULL on conflict,
+    defeating its omitted-column protection. Omitting it leaves any prior PG
+    value intact (e.g. a ``trading_day_ordinal`` a fuller run already wrote).
+    """
+    if df.empty:
+        return []
+    rows: list[dict] = []
+    present = set(df.columns)
+    records = df.to_dict(orient="records")
+    for rec in records:
+        rows.append(
+            {col: _pg_value(rec.get(col)) for col in columns if col in present}
+        )
+    return rows
+
+
+def _dual_write_features_pg(
+    feat_df: pd.DataFrame,
+    sector_map: dict[str, str],
+    asof_dt: date,
+    ticker_first_seen: dict[str, date] | None = None,
+    sector_first_seen: dict[str, date] | None = None,
+) -> None:
+    """Mirror the computed feature frame into market.thematic_features_daily.
+
+    Registries (market.tickers + market.sectors) are upserted FIRST so the
+    feature FK references resolve. IDs come from the feature frame itself
+    (ticker_id/sector_id columns), which the compute layer assigned from the
+    same stable registry — so PG IDs match parquet.
+
+    ``ticker_first_seen`` / ``sector_first_seen`` carry the registry's stored
+    first-seen dates (``{symbol|sector_name: date}``); when supplied they stamp
+    true provenance instead of the current ``asof_dt`` (matters when PG is
+    enabled after the registry already exists — first_seen is insert-only).
+    """
+    if feat_df.empty:
+        return
+    from rainier.db import schema
+    from rainier.db.dualwrite import mirror_guard
+    from rainier.db.upsert import market_upsert
+
+    ticker_first_seen = ticker_first_seen or {}
+    sector_first_seen = sector_first_seen or {}
+
+    # mirror_guard: None when DATABASE_URL unset; any SQLAlchemyError inside is
+    # caught + warned so a broken mirror DB never aborts the parquet pipeline.
+    with mirror_guard("thematic compute") as eng:
+        if eng is None:
+            return
+        # Parents: derive (ticker_id, symbol) and (sector_id, sector_name) from
+        # the frame + sector_map. Dedupe so a multi-row frame upserts each once.
+        ticker_rows = {}
+        sector_rows = {}
+        for rec in feat_df.to_dict(orient="records"):
+            sym = str(rec["symbol"])
+            tid = _pg_value(rec["ticker_id"])
+            sid = _pg_value(rec["sector_id"])
+            sec_name = sector_map.get(sym, "unknown")
+            ticker_rows[tid] = {
+                "ticker_id": tid,
+                "symbol": sym,
+                "first_seen": ticker_first_seen.get(sym, asof_dt),
+            }
+            sector_rows[sid] = {
+                "sector_id": sid,
+                "sector_name": sec_name,
+                "first_seen": sector_first_seen.get(sec_name, asof_dt),
+            }
+        # Registry identity is insert-only: sector_name/symbol AND first_seen
+        # are immutable so a conflict on the stable id never remaps the name
+        # (which would point existing feature FK rows at the wrong ticker —
+        # [D-015]: IDs are never remapped) or re-stamp the date. All non-PK
+        # cols immutable -> the upsert degrades to ON CONFLICT DO NOTHING.
+        market_upsert(
+            eng,
+            schema.sectors,
+            list(sector_rows.values()),
+            ["sector_id"],
+            immutable_cols=["sector_name", "first_seen"],
+        )
+        market_upsert(
+            eng,
+            schema.tickers,
+            list(ticker_rows.values()),
+            ["ticker_id"],
+            immutable_cols=["symbol", "first_seen"],
+        )
+
+        feature_cols = list(schema.thematic_features_daily.columns.keys())
+        rows = _frame_to_pg_rows(feat_df, feature_cols)
+        market_upsert(
+            eng, schema.thematic_features_daily, rows, ["asof_date", "symbol"]
+        )
+
+
+def _dual_write_labels_pg(label_df: pd.DataFrame) -> None:
+    """Mirror the label frame into market.thematic_labels_daily (no FK)."""
+    if label_df.empty:
+        return
+    from rainier.db import schema
+    from rainier.db.dualwrite import mirror_guard
+    from rainier.db.upsert import market_upsert
+
+    # mirror_guard: None when DATABASE_URL unset; SQLAlchemyError inside is
+    # caught + warned so a broken mirror DB never aborts the parquet pipeline.
+    with mirror_guard("thematic backfill-labels") as eng:
+        if eng is None:
+            return
+        label_cols = list(schema.thematic_labels_daily.columns.keys())
+        rows = _frame_to_pg_rows(label_df, label_cols)
+        market_upsert(
+            eng, schema.thematic_labels_daily, rows, ["asof_date", "symbol"]
+        )
+
+
 @thematic.command("compute")
 @click.option("--asof", required=True, help="Compute date (YYYY-MM-DD).")
 @click.option(
@@ -4071,6 +4233,17 @@ def thematic_compute(
     _append_features(out_df, out_p, asof_dt, force=force)
     click.echo(f"wrote {len(out_df)} rows -> {out_p}")
 
+    # Phase 2 dual-write: mirror features into market.* (additive; skips on
+    # DATABASE_URL unset). Parquet above is the load-bearing write. Pass the
+    # registry's stored first_seen so PG records true provenance, not asof_dt.
+    _dual_write_features_pg(
+        out_df,
+        sector_map,
+        asof_dt,
+        ticker_first_seen=_reg.load_ticker_first_seen(ticker_registry_path),
+        sector_first_seen=_reg.load_sector_first_seen(sector_registry_path),
+    )
+
 
 def _append_features(new_df: pd.DataFrame, path: Path, asof: date, force: bool) -> None:
     """Append new_df to the parquet at path, replacing any existing rows for
@@ -4128,6 +4301,9 @@ def thematic_backfill_labels(ohlcv_path: str, out_path: str) -> None:
     out_df.to_parquet(tmp, index=False)
     os.replace(tmp, out_p)
     click.echo(f"wrote {len(out_df)} label rows -> {out_p}")
+
+    # Phase 2 dual-write: mirror labels into market.thematic_labels_daily.
+    _dual_write_labels_pg(out_df)
 
 
 @thematic.command("render")
@@ -4318,6 +4494,15 @@ def thematic_run_daily(
         else:
             _append_features(out_df, features_path, asof_dt, force=False)
             click.echo(f"layer A: wrote {len(out_df)} rows -> {features_path}")
+            # Phase 2 dual-write: mirror layer A features into market.* with
+            # the registry's stored first_seen (true provenance, not asof_dt).
+            _dual_write_features_pg(
+                out_df,
+                sector_map,
+                asof_dt,
+                ticker_first_seen=_reg.load_ticker_first_seen(ticker_registry_path),
+                sector_first_seen=_reg.load_sector_first_seen(sector_registry_path),
+            )
 
     # Layer B: always recompute (cheap + freshness drifts forward).
     import os
@@ -4329,6 +4514,8 @@ def thematic_run_daily(
     label_df.to_parquet(tmp, index=False)
     os.replace(tmp, labels_path)
     click.echo(f"layer B: wrote {len(label_df)} rows -> {labels_path}")
+    # Phase 2 dual-write: mirror layer B labels into market.*.
+    _dual_write_labels_pg(label_df)
 
     # Render dashboard. Guard against a missing features parquet (would only
     # happen if the OHLCV panel had zero rows AND no prior features had ever

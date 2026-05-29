@@ -50,6 +50,11 @@ DEFAULT_YAML = ROOT / "config" / "thematic_universe.yaml"
 DEFAULT_OUT = Path("data/cache/thematic_universe.parquet")
 DEFAULT_START = "2024-10-01"
 DEFAULT_END = "2026-05-01"
+# Same persistent registries the `thematic compute` / `run-daily` path uses, so
+# the PG ticker_id/sector_id the backfill mirrors match the IDs the feature
+# writer FK-references. (See _dual_write_pg for why a local counter is wrong.)
+DEFAULT_TICKER_REGISTRY = Path("data/cache/ticker_registry.parquet")
+DEFAULT_SECTOR_REGISTRY = Path("data/cache/sector_registry.parquet")
 
 # Parquet column order — kept stable so the on-disk schema is deterministic.
 _COLUMN_ORDER: tuple[str, ...] = (
@@ -70,21 +75,32 @@ _COLUMN_ORDER: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
+def load_universe_from_yaml(yaml_path: Path) -> dict[str, list[str]]:
+    """Return the ``{sector_name: [ticker, ...]}`` map from the universe YAML.
+
+    Preserves YAML iteration order so stable-ID assignment is deterministic.
+    """
+    with Path(yaml_path).open("r") as fh:
+        parsed = yaml.safe_load(fh)
+    universe: dict[str, list[str]] = {}
+    for sector, tickers in (parsed.get("universe") or {}).items():
+        if not isinstance(tickers, list):
+            raise ValueError(
+                f"universe block in {yaml_path} must be sector -> list[ticker]; "
+                f"got {type(tickers).__name__}"
+            )
+        universe[sector] = list(tickers)
+    return universe
+
+
 def load_symbols_from_yaml(yaml_path: Path) -> list[str]:
     """Return the flat ticker list from ``thematic_universe.yaml``.
 
     Preserves YAML iteration order (sector buckets, then within-bucket order).
     Section bucket names themselves are display-only and not returned.
     """
-    with Path(yaml_path).open("r") as fh:
-        parsed = yaml.safe_load(fh)
     out: list[str] = []
-    for tickers in (parsed.get("universe") or {}).values():
-        if not isinstance(tickers, list):
-            raise ValueError(
-                f"universe block in {yaml_path} must be sector -> list[ticker]; "
-                f"got {type(tickers).__name__}"
-            )
+    for tickers in load_universe_from_yaml(yaml_path).values():
         out.extend(tickers)
     return out
 
@@ -313,6 +329,146 @@ def _validate_coverage(
 
 
 # ---------------------------------------------------------------------------
+# Postgres dual-write (Phase 2 — task plan §2/§4)
+# ---------------------------------------------------------------------------
+#
+# Additive mirror of the parquet write into market.tickers/sectors/ohlcv.
+# Ordering matters: registries (parents) BEFORE thematic_ohlcv would matter if
+# ohlcv had an FK — it does not, but tickers/sectors are still written first so
+# the feature writer (which DOES FK them) finds them.
+#
+# IDs come from the SAME persistent registry the compute/run-daily path uses
+# (rainier.breadth.registry, first-seen-stable per [D-015]). A local counter
+# would assign IDs by current YAML order, which diverges from the persistent
+# registry the moment the YAML is reordered or a symbol is removed-then-readded
+# — then the compute path upserts (persistent_id, symbol) into the same
+# market.tickers and collides with the backfill's (local_id, symbol) row on the
+# `symbol` UNIQUE constraint. Sharing the persistent registry removes that
+# second, inconsistent ID source entirely.
+
+
+def _dual_write_pg(
+    df: pd.DataFrame,
+    universe: dict[str, list[str]],
+    asof_date,
+    ticker_registry_path: Path,
+    sector_registry_path: Path,
+) -> None:
+    """Mirror the OHLCV frame + universe registries into market.*.
+
+    Stable IDs are read from the persistent parquet registries (seeded here
+    from ``universe`` if they don't exist yet) so the PG ticker_id/sector_id
+    match the IDs the feature writer FK-references — even across YAML reorders.
+
+    No-op (with a warning) when DATABASE_URL is unset — the parquet write has
+    already happened, so the pipeline stays whole.
+    """
+    from rainier.breadth import registry as _reg
+    from rainier.db import schema
+    from rainier.db.dualwrite import mirror_guard
+    from rainier.db.upsert import market_upsert
+
+    # Seed + load the persistent registry (same call shape as compute). This is
+    # local-fs work; it runs whether or not PG is reachable.
+    _reg.seed_registries_from_universe(
+        universe,
+        asof=asof_date,
+        ticker_registry_path=ticker_registry_path,
+        sector_registry_path=sector_registry_path,
+    )
+    ticker_reg = _reg.load_ticker_registry(ticker_registry_path)
+    sector_reg = _reg.load_sector_registry(sector_registry_path)
+    # Use the registry's stored first_seen (true provenance), not asof_date,
+    # so enabling PG after the registry already exists records the original
+    # first-seen date. first_seen is insert-only downstream, so getting it
+    # right on the first PG insert is the only chance.
+    ticker_fs = _reg.load_ticker_first_seen(ticker_registry_path)
+    sector_fs = _reg.load_sector_first_seen(sector_registry_path)
+
+    sector_rows = [
+        {
+            "sector_id": sid,
+            "sector_name": name,
+            "first_seen": sector_fs.get(name, asof_date),
+        }
+        for name, sid in sector_reg.items()
+    ]
+    ticker_rows = [
+        {
+            "ticker_id": tid,
+            "symbol": sym,
+            "first_seen": ticker_fs.get(sym, asof_date),
+        }
+        for sym, tid in ticker_reg.items()
+    ]
+
+    # mirror_guard: None when DATABASE_URL unset; any SQLAlchemyError inside the
+    # body (PG down / unmigrated) is caught + warned so this never aborts the
+    # already-written parquet pipeline.
+    with mirror_guard("backfill_thematic_universe") as eng:
+        if eng is None:
+            return
+        # Registry identity is insert-only. sector_name/symbol AND first_seen
+        # are immutable_cols so a conflict on the stable id never remaps the
+        # name or re-stamps the date — that would silently point existing
+        # thematic_features_daily FK rows at the wrong ticker/sector ([D-015]:
+        # IDs are never remapped). With all non-PK cols immutable the upsert
+        # degrades to ON CONFLICT DO NOTHING (leave the known row untouched).
+        # last_seen is omitted entirely so a re-run never resets it to NULL.
+        market_upsert(
+            eng,
+            schema.sectors,
+            sector_rows,
+            ["sector_id"],
+            immutable_cols=["sector_name", "first_seen"],
+        )
+        market_upsert(
+            eng,
+            schema.tickers,
+            ticker_rows,
+            ["ticker_id"],
+            immutable_cols=["symbol", "first_seen"],
+        )
+
+        ohlcv_rows = _ohlcv_rows_for_pg(df)
+        market_upsert(eng, schema.thematic_ohlcv, ohlcv_rows, ["symbol", "date"])
+
+
+def _ohlcv_rows_for_pg(df: pd.DataFrame) -> list[dict]:
+    """Convert the normalized OHLCV frame into market.thematic_ohlcv row dicts.
+
+    pandas/pyarrow types are coerced to plain Python so psycopg binds them:
+    date32 -> datetime.date, Timestamp -> datetime, numpy scalars -> int/float.
+    """
+    if df.empty:
+        return []
+    rows: list[dict] = []
+    for r in df.itertuples(index=False):
+        d = r.date
+        if hasattr(d, "to_pydatetime"):
+            d = d.to_pydatetime().date()
+        elif isinstance(d, datetime):
+            d = d.date()
+        fetched = r.fetched_at
+        if hasattr(fetched, "to_pydatetime"):
+            fetched = fetched.to_pydatetime()
+        rows.append(
+            {
+                "symbol": str(r.symbol),
+                "date": d,
+                "open": float(r.open),
+                "high": float(r.high),
+                "low": float(r.low),
+                "close": float(r.close),
+                "volume": int(r.volume),
+                "fetched_at": fetched,
+                "yfinance_version": str(r.yfinance_version),
+            }
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -329,6 +485,9 @@ def backfill(
     allow_empty: Iterable[str] | None = None,
     allow_gaps: Iterable[str] | None = None,
     min_coverage: float = DEFAULT_MIN_COVERAGE_RATIO,
+    yaml_path: Path | None = None,
+    ticker_registry_path: Path = DEFAULT_TICKER_REGISTRY,
+    sector_registry_path: Path = DEFAULT_SECTOR_REGISTRY,
 ) -> Path | dict[str, object]:
     """Run the backfill.
 
@@ -336,6 +495,14 @@ def backfill(
     ``force=True`` and the destination already exists). In ``dry_run`` mode
     returns the planned ticker × date matrix without touching the network or
     the filesystem.
+
+    When ``yaml_path`` is provided, the OHLCV frame + ticker/sector registries
+    are also mirrored into the ``market.*`` Postgres tables (Phase 2 dual-write,
+    task plan §2). The parquet write is unchanged and always happens first; the
+    PG mirror is additive and skipped (with a warning) if DATABASE_URL is unset.
+    Registry IDs come from the persistent parquet registries at
+    ``ticker_registry_path`` / ``sector_registry_path`` (same ones the compute
+    path uses), so the mirrored IDs match the feature writer's FK referents.
     """
     symbols = list(symbols)
     fetch_fn = fetch_fn or _yfinance_fetch
@@ -384,6 +551,20 @@ def backfill(
         else out_path
     )
     _write_parquet_atomic(df, target)
+
+    # Phase 2 dual-write: mirror into market.* AFTER the parquet write (parquet
+    # is the load-bearing output; PG is additive). Only when a universe YAML is
+    # supplied so we can derive the registries.
+    if yaml_path is not None:
+        universe = load_universe_from_yaml(Path(yaml_path))
+        _dual_write_pg(
+            df,
+            universe,
+            asof_date=fetched_at.date(),
+            ticker_registry_path=Path(ticker_registry_path),
+            sector_registry_path=Path(sector_registry_path),
+        )
+
     return target
 
 
@@ -428,6 +609,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--allow-empty", default="")
     p.add_argument("--allow-gaps", default="")
     p.add_argument(
+        "--ticker-registry",
+        default=str(DEFAULT_TICKER_REGISTRY),
+        help="Persistent ticker_id registry parquet (shared with `thematic compute`).",
+    )
+    p.add_argument(
+        "--sector-registry",
+        default=str(DEFAULT_SECTOR_REGISTRY),
+        help="Persistent sector_id registry parquet (shared with `thematic compute`).",
+    )
+    p.add_argument(
         "--min-coverage",
         type=float,
         default=DEFAULT_MIN_COVERAGE_RATIO,
@@ -448,6 +639,10 @@ def main(argv: list[str] | None = None) -> int:
     allow_empty = [s.strip() for s in ns.allow_empty.split(",") if s.strip()]
     allow_gaps = [s.strip() for s in ns.allow_gaps.split(",") if s.strip()]
     out_path = Path(ns.out)
+    # Pass the universe YAML through for the Phase 2 PG dual-write — but only on
+    # a full-universe run. An ad-hoc --symbols subset has no sector structure to
+    # build registries from, so we skip the PG mirror for those (parquet only).
+    pg_yaml = None if ns.symbols else Path(ns.yaml)
     result = backfill(
         symbols=symbols,
         start=ns.start,
@@ -458,6 +653,9 @@ def main(argv: list[str] | None = None) -> int:
         allow_empty=allow_empty,
         allow_gaps=allow_gaps,
         min_coverage=ns.min_coverage,
+        yaml_path=pg_yaml,
+        ticker_registry_path=Path(ns.ticker_registry),
+        sector_registry_path=Path(ns.sector_registry),
     )
     if ns.dry_run:
         plan = result  # type: ignore[assignment]

@@ -27,6 +27,7 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Index,
+    Integer,
     MetaData,
     PrimaryKeyConstraint,
     SmallInteger,
@@ -83,6 +84,11 @@ thematic_features_daily = Table(
     "thematic_features_daily",
     metadata,
     Column("asof_date", Date, nullable=False),
+    # Panel-relative trading-day index emitted by the feature compute. Added
+    # in migration 0002 to mirror the parquet schema (see task plan §3). It is
+    # nullable: short backfills can produce rows without an ordinal, and the
+    # value shifts on re-backfill so it is provenance, not a key.
+    Column("trading_day_ordinal", Integer, nullable=True),
     Column("symbol", Text, nullable=False),
     # FK referent uses schema-qualified name so Alembic emits it correctly.
     Column(
@@ -137,7 +143,9 @@ thematic_labels_daily = Table(
     Column("fwd_20d_excess_ret", REAL),
     Column("fwd_10d_max_drawdown", REAL),
     Column("fwd_10d_max_runup", REAL),
-    Column("label_complete_through", Date, nullable=False),
+    # Relaxed to nullable in migration 0002: a panel too short to complete any
+    # forward horizon yields label_complete_through=None for valid rows.
+    Column("label_complete_through", Date, nullable=True),
     PrimaryKeyConstraint("asof_date", "symbol", name="thematic_labels_daily_pkey"),
     Index("ix_thematic_labels_daily_asof_date", "asof_date"),
 )
