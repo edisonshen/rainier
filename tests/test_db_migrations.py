@@ -282,6 +282,106 @@ def test_foreign_keys_to_registries(database_url):
 
 
 # ---------------------------------------------------------------------------
+# downgrade base must not wipe foreign objects (task plan migrate-downgrade-base)
+# ---------------------------------------------------------------------------
+# codex iter-4 of PR #102 (deferred P2): 0001's downgrade() issued an
+# unconditional `DROP SCHEMA market CASCADE`. Acceptable while rainier solely
+# owns `market`, but if the schema ever holds a non-rainier object, downgrade
+# base would silently wipe it. The guard: downgrade() drops only the objects
+# THIS revision's upgrade() created, and removes the schema only when no
+# foreign objects remain.
+
+
+def _reset_market(eng) -> None:
+    """Force the DB back to a pre-0001 state regardless of prior test runs.
+
+    The ``database_url`` fixture gives a per-test isolated DB only via
+    pytest-postgresql; when an operator points ``RAINIER_TEST_DATABASE_URL`` at
+    a reused sandbox there is no isolation. Dropping ``market`` + the alembic
+    bookkeeping row makes this test deterministic on either path."""
+    with eng.begin() as conn:
+        conn.execute(text("DROP SCHEMA IF EXISTS market CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+
+
+def test_downgrade_base_preserves_foreign_objects(database_url):
+    """A non-rainier object living in ``market`` survives ``downgrade base``.
+
+    Regression for the unconditional ``DROP SCHEMA market CASCADE`` footgun:
+    seed a foreign table into ``market`` AFTER upgrade head, then downgrade
+    base. The foreign table (and the ``market`` schema it lives in) must
+    survive; this revision's own tables must be gone.
+    """
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    # Seed a foreign object that this revision did NOT create.
+    with eng.begin() as conn:
+        conn.execute(text("CREATE TABLE market.foreign_owned (id integer primary key)"))
+        conn.execute(text("INSERT INTO market.foreign_owned (id) VALUES (1), (2)"))
+
+    command.downgrade(cfg, "base")
+
+    insp = inspect(eng)
+    schemas = set(insp.get_schema_names())
+    assert "market" in schemas, (
+        "downgrade base dropped the whole market schema while a foreign object "
+        f"was present; surviving schemas={schemas}"
+    )
+
+    tables = set(insp.get_table_names(schema="market"))
+    # Foreign object survives untouched.
+    assert "foreign_owned" in tables, (
+        f"foreign object market.foreign_owned was wiped by downgrade; tables={tables}"
+    )
+    with eng.connect() as conn:
+        rows = conn.execute(text("SELECT id FROM market.foreign_owned ORDER BY id")).fetchall()
+    assert [r[0] for r in rows] == [1, 2], "foreign object rows were not preserved"
+
+    # This revision's own tables are gone.
+    leftover = tables & _expected_tables()
+    assert leftover == set(), (
+        f"downgrade base left this revision's own tables behind: {leftover}"
+    )
+
+    _reset_market(eng)
+    eng.dispose()
+
+
+def test_downgrade_base_clean_round_trip(database_url):
+    """On a DB where ``market`` is exclusively this revision's, upgrade ->
+    downgrade -> upgrade still round-trips: the schema is fully removed on
+    downgrade and re-created on the next upgrade."""
+    from alembic import command
+
+    eng = create_engine(database_url)
+    _reset_market(eng)
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "base")
+
+    insp = inspect(eng)
+    # No foreign objects → schema is fully removed, returning to empty state.
+    assert "market" not in set(insp.get_schema_names()), (
+        "downgrade base should drop the now-empty market schema on a clean DB"
+    )
+
+    # Re-upgrade rebuilds everything.
+    command.upgrade(cfg, "head")
+    insp = inspect(eng)
+    assert set(insp.get_table_names(schema="market")) == _expected_tables()
+
+    _reset_market(eng)
+    eng.dispose()
+
+
+# ---------------------------------------------------------------------------
 # Migration 0002 — schema-seam fixes for the dual-write writers (task plan §3)
 # ---------------------------------------------------------------------------
 
