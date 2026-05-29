@@ -3706,6 +3706,11 @@ def market_breadth_backfill_spy(
     mode = "incremental" if incremental else "one-shot"
     click.echo(f"wrote SPY OHLCV ({mode}) -> {written}")
 
+    # Dual-write into market.benchmark_ohlcv (non-fatal mirror; parquet above is
+    # load-bearing). Read back the parquet — for an incremental run this is the
+    # merged full history, so PG mirrors the on-disk file exactly.
+    _dual_write_benchmark_pg(pd.read_parquet(written))
+
 
 @market_breadth.command("compute-indicators")
 @click.option(
@@ -3754,6 +3759,11 @@ def market_breadth_compute_indicators(
         epoch=epoch_d,
     )
     click.echo(f"wrote sp500 breadth indicators -> {written}")
+
+    # Dual-write the FULL breadth history into market.breadth_indicator_daily
+    # (non-fatal mirror; parquet above is load-bearing). Read back the parquet
+    # we just wrote so PG mirrors exactly what landed on disk.
+    _dual_write_breadth_pg(pd.read_parquet(written))
 
 
 @market_breadth.command("render-html")
@@ -4087,6 +4097,72 @@ def _dual_write_labels_pg(label_df: pd.DataFrame) -> None:
         rows = _frame_to_pg_rows(label_df, label_cols)
         market_upsert(
             eng, schema.thematic_labels_daily, rows, ["asof_date", "symbol"]
+        )
+
+
+def _dual_write_breadth_pg(breadth_df: pd.DataFrame) -> None:
+    """Mirror the LONG breadth frame into market.breadth_indicator_daily.
+
+    The table is LONG == the parquet (asof_date, indicator, value), so we
+    project those three columns directly — NO pivot/transform (design D-1).
+
+    FULL-HISTORY upsert (design D-3): ``compute_indicators`` recomputes the
+    ENTIRE breadth history every run, and the cumulative indicators
+    (ad_cumulative, mcclellan_summation) rewrite every subsequent row when a
+    late OHLCV correction lands. So we upsert the whole frame, not just the
+    latest asof_date — writing only today would leave PG stale on the corrected
+    past dates. Full upsert is cheap at this volume (~12 indicators x N days).
+
+    Values mirror the parquet byte-for-parity, including NaN warm-up rows
+    (-> NULL via pg_value) — no divergent NULL logic (would break checksum
+    parity, design D-4).
+    """
+    if breadth_df.empty:
+        return
+    from rainier.db import schema
+    from rainier.db.dualwrite import mirror_guard
+    from rainier.db.upsert import market_upsert
+
+    # mirror_guard: None when DATABASE_URL unset; any SQLAlchemyError inside is
+    # caught + warned so a broken mirror DB never aborts the parquet pipeline.
+    with mirror_guard("breadth compute") as eng:
+        if eng is None:
+            return
+        rows = _frame_to_pg_rows(breadth_df, ["asof_date", "indicator", "value"])
+        market_upsert(
+            eng,
+            schema.breadth_indicator_daily,
+            rows,
+            ["asof_date", "indicator"],
+        )
+
+
+def _dual_write_benchmark_pg(spy_df: pd.DataFrame) -> None:
+    """Mirror the SPY/benchmark OHLCV frame into market.benchmark_ohlcv.
+
+    The parquet (symbol, date, open, high, low, close, volume, fetched_at,
+    yfinance_version) mirrors the table 1:1. ``fetched_at``/``yfinance_version``
+    are insert-only provenance (immutable_cols) — a re-run that re-fetches with a
+    newer version updates the prices but never re-stamps the original fetch
+    metadata (mirrors thematic_ohlcv provenance handling).
+    """
+    if spy_df.empty:
+        return
+    from rainier.db import schema
+    from rainier.db.dualwrite import mirror_guard
+    from rainier.db.upsert import market_upsert
+
+    with mirror_guard("breadth backfill-spy") as eng:
+        if eng is None:
+            return
+        cols = list(schema.benchmark_ohlcv.columns.keys())
+        rows = _frame_to_pg_rows(spy_df, cols)
+        market_upsert(
+            eng,
+            schema.benchmark_ohlcv,
+            rows,
+            ["symbol", "date"],
+            immutable_cols=["fetched_at", "yfinance_version"],
         )
 
 

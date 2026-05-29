@@ -143,6 +143,24 @@ TABLE_SPECS: list[TableSpec] = [
         pk_cols=("asof_date", "symbol"),
         date_col="asof_date",
     ),
+    # Market-breadth (breadth-pg-write-path). LONG == parquet, so verify's
+    # one-parquet->table projection works directly (design D-1/D-5).
+    TableSpec(
+        parquet_name="sp500_breadth_daily",
+        table=schema.breadth_indicator_daily,
+        pk_cols=("asof_date", "indicator"),
+        date_col="asof_date",
+    ),
+    # SPY/benchmark OHLCV. fetched_at/yfinance_version are insert-only
+    # provenance (mirrors the thematic_ohlcv dual-write handling): a re-run
+    # never re-stamps the original fetch metadata.
+    TableSpec(
+        parquet_name="spy_history",
+        table=schema.benchmark_ohlcv,
+        pk_cols=("symbol", "date"),
+        immutable_cols=("fetched_at", "yfinance_version"),
+        date_col="date",
+    ),
 ]
 
 
