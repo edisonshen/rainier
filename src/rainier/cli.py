@@ -4906,7 +4906,7 @@ def db_migrate(downgrade_to: str | None) -> None:
             click.echo(f"alembic downgrade {downgrade_to} — ok")
     except click.ClickException:
         raise
-    except Exception as exc:  # pragma: no cover — exercised via stubbed tests
+    except Exception as exc:
         action = "upgrade head" if downgrade_to is None else f"downgrade {downgrade_to}"
         raise click.ClickException(f"db migrate ({action}) failed: {exc}") from exc
 
