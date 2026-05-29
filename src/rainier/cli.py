@@ -3959,57 +3959,13 @@ def _check_ohlcv_freshness(
 # ---------------------------------------------------------------------------
 
 
-def _pg_value(v):
-    """Coerce a pandas/numpy cell into a plain Python scalar psycopg can bind.
-
-    NaN/NaT -> None; numpy ints/floats -> int/float; Timestamp -> datetime;
-    date32 stays date. Keeps the dual-write tolerant of the mixed-dtype frames
-    the compute layer produces (float32 NaNs, int8 sentinels, etc.).
-    """
-    import datetime as _dt
-
-    import numpy as _np
-
-    if v is None:
-        return None
-    # pandas NA / NaN / NaT
-    try:
-        if pd.isna(v):
-            return None
-    except (TypeError, ValueError):
-        pass
-    if isinstance(v, _np.integer):
-        return int(v)
-    if isinstance(v, _np.floating):
-        return float(v)
-    if isinstance(v, pd.Timestamp):
-        return v.to_pydatetime()
-    if isinstance(v, _dt.datetime):
-        return v
-    if isinstance(v, _dt.date):
-        return v
-    return v
-
-
-def _frame_to_pg_rows(df: pd.DataFrame, columns: list[str]) -> list[dict]:
-    """Project ``df`` to ``columns`` and coerce each cell for psycopg binding.
-
-    A column absent from ``df`` is OMITTED from the row dict, not emitted as
-    None. Emitting None would make ``market_upsert`` treat the column as
-    "supplied" and overwrite an existing PG value with NULL on conflict,
-    defeating its omitted-column protection. Omitting it leaves any prior PG
-    value intact (e.g. a ``trading_day_ordinal`` a fuller run already wrote).
-    """
-    if df.empty:
-        return []
-    rows: list[dict] = []
-    present = set(df.columns)
-    records = df.to_dict(orient="records")
-    for rec in records:
-        rows.append(
-            {col: _pg_value(rec.get(col)) for col in columns if col in present}
-        )
-    return rows
+# Phase 3 factored these shared frame->rows helpers into rainier.db.rows so the
+# dual-write call sites here, the one-shot backfill, and verify-coverage share
+# one implementation (task plan §3). Re-exported under their original private
+# names to keep these call sites (and existing tests that import
+# ``rainier.cli._frame_to_pg_rows``) unchanged.
+from rainier.db.rows import frame_to_pg_rows as _frame_to_pg_rows  # noqa: E402
+from rainier.db.rows import pg_value as _pg_value  # noqa: E402
 
 
 def _dual_write_features_pg(
@@ -4936,3 +4892,139 @@ def db_migrate(downgrade_to: str | None) -> None:
     else:
         command.downgrade(cfg, downgrade_to)
         click.echo(f"alembic downgrade {downgrade_to} — ok")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (task plan §2): one-shot parquet -> market.* backfill +
+# verify-coverage parity gate. Both are EXPLICIT DB ops (unlike the Phase 2
+# dual-write skip path) — DATABASE_URL must be set or we fail loud with a
+# ClickException rather than a raw traceback.
+# ---------------------------------------------------------------------------
+
+
+def _require_db_engine(op_name: str):
+    """Return a fresh Engine, or raise a clean ClickException if unconfigured.
+
+    Phase 3 backfill/verify are explicit DB operations: a missing DATABASE_URL
+    is an operator error, not a skip path. ``get_engine()`` raises RuntimeError
+    in that case; we translate it to a ClickException so the CLI prints an
+    actionable message instead of a traceback.
+    """
+    from rainier.db.engine import get_engine
+
+    try:
+        return get_engine()
+    except RuntimeError as exc:
+        raise click.ClickException(
+            f"{op_name} requires DATABASE_URL to be set (e.g. "
+            f"postgresql+psycopg://user:pass@host:5432/db). {exc}"
+        ) from exc
+
+
+def _parse_asof(value: str | None, flag: str) -> date | None:
+    """Parse a YYYY-MM-DD option into a date, or None when unset."""
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise click.ClickException(f"{flag} must be YYYY-MM-DD, got {value!r}") from exc
+
+
+@db.command("backfill-from-parquet")
+@click.option(
+    "--cache-dir",
+    "cache_dir",
+    type=click.Path(file_okay=False),
+    default="data/cache",
+    show_default=True,
+    help="Directory holding the parquet caches to backfill from.",
+)
+@click.option("--asof-start", default=None, help="Inclusive start date (YYYY-MM-DD).")
+@click.option("--asof-end", default=None, help="Inclusive end date (YYYY-MM-DD).")
+@click.option(
+    "--dry-run", is_flag=True, help="Report per-table row counts without writing."
+)
+def db_backfill_from_parquet(
+    cache_dir: str, asof_start: str | None, asof_end: str | None, dry_run: bool
+) -> None:
+    """Backfill the full parquet history into ``market.*`` (registries first).
+
+    Idempotent (UPSERT). ``--asof-start/--asof-end`` window the date-keyed
+    tables; the ticker/sector registries always load fully (FK parents).
+    """
+    from rainier.db.backfill import backfill_from_parquet
+
+    start = _parse_asof(asof_start, "--asof-start")
+    end = _parse_asof(asof_end, "--asof-end")
+    engine = _require_db_engine("db backfill-from-parquet")
+    try:
+        counts = backfill_from_parquet(
+            engine, cache_dir, asof_start=start, asof_end=end, dry_run=dry_run
+        )
+    finally:
+        engine.dispose()
+
+    label = "would write" if dry_run else "wrote"
+    for table, n in counts.items():
+        click.echo(f"  {table}: {label} {n} rows")
+    total = sum(counts.values())
+    suffix = " (dry-run, no mutation)" if dry_run else ""
+    click.echo(f"backfill-from-parquet — {label} {total} rows total{suffix}")
+
+
+@db.command("verify-coverage")
+@click.option(
+    "--cache-dir",
+    "cache_dir",
+    type=click.Path(file_okay=False),
+    default="data/cache",
+    show_default=True,
+    help="Directory holding the parquet caches to verify against.",
+)
+@click.option("--asof-start", default=None, help="Inclusive start date (YYYY-MM-DD).")
+@click.option("--asof-end", default=None, help="Inclusive end date (YYYY-MM-DD).")
+def db_verify_coverage(
+    cache_dir: str, asof_start: str | None, asof_end: str | None
+) -> None:
+    """Verify parquet and Postgres agree per (asof_date, table).
+
+    Compares row counts + an order-independent, float-tolerant checksum. Prints
+    a per-table report; exits 0 if everything matches, nonzero (naming each
+    offending (asof_date, table)) on any drift — so it is CI/cron-usable.
+    """
+    from rainier.db.verify import verify_coverage
+
+    start = _parse_asof(asof_start, "--asof-start")
+    end = _parse_asof(asof_end, "--asof-end")
+    engine = _require_db_engine("db verify-coverage")
+    try:
+        report = verify_coverage(engine, cache_dir, asof_start=start, asof_end=end)
+    finally:
+        engine.dispose()
+
+    # Per-table summary: matched groups / total groups + parquet/pg row totals.
+    by_table: dict[str, list] = {}
+    for table, _key, pq_n, pg_n, ok in report.rows:
+        by_table.setdefault(table, []).append((pq_n, pg_n, ok))
+    for table, groups in by_table.items():
+        matched = sum(1 for _pq, _pg, ok in groups if ok)
+        pq_total = sum(pq for pq, _pg, _ok in groups)
+        pg_total = sum(pg for _pq, pg, _ok in groups)
+        status = "OK" if matched == len(groups) else "DRIFT"
+        click.echo(
+            f"  {table}: {status} — {matched}/{len(groups)} date-groups match, "
+            f"parquet={pq_total} pg={pg_total} rows"
+        )
+
+    if report.ok:
+        click.echo("verify-coverage — all match")
+        return
+
+    click.echo("verify-coverage — DRIFT detected:", err=True)
+    for d in report.drift:
+        click.echo(f"  {d.table} asof={d.asof_date}: {d.reason}", err=True)
+    raise click.ClickException(
+        f"{len(report.drift)} (asof_date, table) group(s) drifted — "
+        f"parquet and Postgres disagree."
+    )
