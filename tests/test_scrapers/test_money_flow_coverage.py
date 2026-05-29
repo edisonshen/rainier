@@ -449,3 +449,43 @@ def test_cli_money_flow_coverage_honors_config(in_memory_session, tmp_path, monk
         "coverage session did not receive --config-resolved settings "
         f"(got pool_size={settings.database.pool_size!r})"
     )
+
+
+def test_open_session_bypasses_engine_singleton(tmp_path, monkeypatch):
+    """``_open_session(settings)`` must bind to an engine built from ``settings``
+    even when ``core.database``'s global ``_engine`` singleton was already
+    initialized to a *different* DB earlier in the process.
+
+    Regression for codex iter-1 [P2]: ``get_session_factory(settings)`` routed
+    through ``get_engine``, which returns the cached singleton and ignores its
+    ``settings`` arg once set — so a prior DB-using command in the same process
+    silently pinned ``--config staging.yaml`` to the wrong DB. The fix builds a
+    dedicated engine directly from ``settings`` instead.
+
+    Deterministic: pre-seed the singleton with a sentinel ``default.sqlite``
+    engine, then assert the session yielded for a ``staging.sqlite`` settings
+    binds to staging, not the sentinel.
+    """
+    from rainier.core import database
+    from rainier.core.config import Settings
+
+    default_db = tmp_path / "default.sqlite"
+    staging_db = tmp_path / "staging.sqlite"
+
+    # Pre-initialize the global singleton against the default DB, as any earlier
+    # DB-using command in the same process would.
+    sentinel = create_engine(f"sqlite:///{default_db}")
+    monkeypatch.setattr(database, "_engine", sentinel)
+    monkeypatch.setattr(database, "_session_factory", None)
+
+    staging_settings = Settings(database_url=f"sqlite:///{staging_db}")
+
+    with coverage._open_session(staging_settings) as session:
+        bound_url = str(session.get_bind().url)
+
+    assert bound_url == f"sqlite:///{staging_db}", (
+        "config-scoped session bound to the wrong DB — singleton leaked through "
+        f"(got {bound_url!r})"
+    )
+    # Sentinel singleton remains untouched (we never mutated it).
+    assert database._engine is sentinel

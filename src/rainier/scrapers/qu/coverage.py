@@ -516,10 +516,16 @@ def _open_session(settings: Settings | None = None) -> Iterator[Session]:
     """Yield a production DB session (postgres / timescale).
 
     When ``settings`` is provided (the CLI threads ``ctx.obj["settings"]`` here
-    so ``--config staging.yaml`` selects the right DB), bind the session to the
-    config-derived engine. Without it, fall back to the process-default
-    singleton session — preserving prior behaviour for callers that don't pass
-    a config-context.
+    so ``--config staging.yaml`` selects the right DB), bind the session to a
+    dedicated engine built from those settings. We deliberately bypass
+    ``core.database.get_engine`` here: that helper caches a process-global
+    ``_engine`` singleton and ignores its ``settings`` arg once initialized, so
+    a prior DB-using command in the same process (scheduler/test harness or an
+    embedded CLI) would otherwise pin us to the wrong DB and silently defeat
+    ``--config``. The per-call engine is disposed in ``finally`` to avoid
+    leaking a connection pool. Without ``settings``, fall back to the
+    process-default singleton session — preserving prior behaviour for callers
+    that don't pass a config-context.
     """
     if settings is None:
         from rainier.core.database import get_session as _get_session
@@ -528,9 +534,16 @@ def _open_session(settings: Settings | None = None) -> Iterator[Session]:
             yield s
         return
 
-    from rainier.core.database import get_session_factory
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
 
-    session = get_session_factory(settings)()
+    engine = create_engine(
+        settings.database_url,
+        echo=settings.database.echo,
+        pool_size=settings.database.pool_size,
+        pool_pre_ping=True,
+    )
+    session = sessionmaker(bind=engine)()
     try:
         yield session
         session.commit()
@@ -539,6 +552,7 @@ def _open_session(settings: Settings | None = None) -> Iterator[Session]:
         raise
     finally:
         session.close()
+        engine.dispose()
 
 
 # --------------------------------------------------------------------------- #
