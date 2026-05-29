@@ -215,6 +215,10 @@ def test_breadth_dual_write_idempotent_updates_value(migrated_engine, database_u
     _dual_write_breadth_pg(df2)
     assert _count(migrated_engine, "breadth_indicator_daily") == n
 
+    expected = df2.loc[
+        (df2["asof_date"] == days[0]) & (df2["indicator"] == "ad_cumulative"),
+        "value",
+    ].iloc[0]
     with migrated_engine.connect() as conn:
         v = conn.execute(
             text(
@@ -223,8 +227,7 @@ def test_breadth_dual_write_idempotent_updates_value(migrated_engine, database_u
             ),
             {"d": days[0]},
         ).scalar_one()
-    assert v == pytest.approx(df2.iloc[0]["value"] if df2.iloc[0]["indicator"] == "ad_cumulative" else
-                              df2.loc[(df2["asof_date"] == days[0]) & (df2["indicator"] == "ad_cumulative"), "value"].iloc[0])
+    assert v == pytest.approx(expected)
 
 
 @pytest.mark.requires_postgres
