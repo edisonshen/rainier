@@ -407,6 +407,47 @@ def test_float32_columns_derives_from_parquet_dtypes():
     assert _float32_columns(df) == frozenset({"fwd_20d_ret"})
 
 
+def test_real_columns_from_schema():
+    """``_real_columns`` reports the PG ``REAL`` columns of a table spec — the
+    second normalization signal (float64-parquet-into-REAL direction)."""
+    from rainier.db import rows as rows_mod
+    from rainier.db.verify import _real_columns
+
+    labels_spec = next(
+        s for s in rows_mod.TABLE_SPECS if s.name == "thematic_labels_daily"
+    )
+    real_cols = _real_columns(labels_spec)
+    # The schema declares the forward-return columns REAL; assert a representative
+    # one is present and a non-float key column is absent.
+    assert "fwd_3d_ret" in real_cols
+    assert "symbol" not in real_cols
+
+
+def test_checksum_float64_parquet_into_real_pg_no_false_positive():
+    """codex iter-1 P1 regression: a column stored float64 in parquet but
+    ``REAL`` in PG must NOT false-positive. PG rounds the value to float32 on
+    round-trip while the parquet float64 keeps full bits; because the column is
+    in the schema-``REAL`` set the checksum normalizes both sides through float32
+    and they hash equal. (Parquet-dtype alone returns empty here and would
+    falsely flag drift.)"""
+    import numpy as np
+
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_3d_ret"]
+    pk = ("symbol",)
+    orig64 = 0.06948674738744653  # what the float64 parquet holds
+    pg_real = float(np.float32(orig64))  # what PG REAL returns after rounding
+    assert orig64 != pg_real
+    # Union set includes the schema-REAL column even though parquet dtype is f64.
+    f32_cols = frozenset({"fwd_3d_ret"})
+    parquet_rows = [{"symbol": "AAA", "fwd_3d_ret": orig64}]
+    pg_rows = [{"symbol": "AAA", "fwd_3d_ret": pg_real}]
+    assert _checksum(parquet_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "float64 parquet vs rounded PG REAL must hash equal (schema-REAL signal)"
+
+
 # ---------------------------------------------------------------------------
 # Timezone-aware datetime parity (TIMESTAMPTZ columns)
 # ---------------------------------------------------------------------------
