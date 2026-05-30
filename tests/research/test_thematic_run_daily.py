@@ -509,8 +509,36 @@ def test_check_freshness_rejects_shallow_history():
     )
 
 
+def test_check_freshness_shallow_boundary_off_by_one():
+    """Boundary: exactly 20 distinct dates still fails (asof_idx=19 ->
+    prior_idx=-1 for rel_20 -> sentinel), 21 passes. Locks the off-by-one
+    (codex iter-5): the guard requires >= 21 observations, not 20.
+    """
+    from types import SimpleNamespace
+
+    import click
+
+    from rainier.cli import _check_ohlcv_freshness
+
+    symbols = ["AAA", "BBB"]
+    spec = SimpleNamespace(sectors={"test_sector": symbols})
+
+    # Exactly 20 trading days -> must still REJECT.
+    panel20 = _build_ohlcv_panel(symbols, n_days=20)
+    panel20["date"] = pd.to_datetime(panel20["date"]).dt.date
+    asof20 = panel20["date"].max()
+    with pytest.raises(click.ClickException, match="shallow"):
+        _check_ohlcv_freshness(panel20, asof20, "data/cache/thematic_universe.parquet", spec)
+
+    # 21 trading days -> must ACCEPT (boundary just clears).
+    panel21 = _build_ohlcv_panel(symbols, n_days=21)
+    panel21["date"] = pd.to_datetime(panel21["date"]).dt.date
+    asof21 = panel21["date"].max()
+    _check_ohlcv_freshness(panel21, asof21, "data/cache/thematic_universe.parquet", spec)
+
+
 def test_check_freshness_accepts_deep_history():
-    """A cache with >= 20 trading days at/before asof passes the guard."""
+    """A cache with >= 21 trading days at/before asof passes the guard."""
     from types import SimpleNamespace
 
     from rainier.cli import _check_ohlcv_freshness

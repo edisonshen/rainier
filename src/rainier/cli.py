@@ -3992,20 +3992,32 @@ def _check_ohlcv_freshness(
             f"  3. uv run rainier thematic run-daily  # retry"
         )
 
-    # Shallow-history guard: Layer A needs >= 20 trading days of history for
-    # the rel_20 / vol_20 windows. Count distinct dates at or before asof.
-    MIN_HISTORY_TRADING_DAYS = 20
+    # Shallow-history guard: Layer A's longest lookback is the 20-trading-day
+    # rel_20 window. compute_thematic_features indexes the asof row at
+    # asof_idx = (#dates <= asof) - 1 and reads prior_idx = asof_idx - 20; that
+    # is only valid (non-negative) when asof_idx >= 20, i.e. there are >= 21
+    # distinct dates at/before asof. With exactly 20, prior_idx = -1 and rel_20
+    # /vol_20 stay NaN -> sentinel ranks (codex iter-5 off-by-one). Require 21.
+    MIN_HISTORY_TRADING_DAYS = 21
     distinct_dates = panel.loc[panel["date"] <= asof_dt, "date"].nunique()
     if distinct_dates < MIN_HISTORY_TRADING_DAYS:
+        # The shallow cache already exists (--incremental created it), so the
+        # seed must replace it: the one-shot backfill refuses to overwrite
+        # without --force, and --force writes a sibling cohort that must be
+        # moved into place (revision-immutability) — same flow as the stale
+        # branch above (codex iter-5).
         raise click.ClickException(
             f"OHLCV cache too shallow: only {distinct_dates} trading day(s) "
             f"<= asof={asof_dt}; Layer A needs >= {MIN_HISTORY_TRADING_DAYS} "
             f"(rel_20/vol_20 windows) or every rank is the no-data sentinel. "
             f"The --incremental refresh only fetches a few days and is NOT a "
-            f"substitute for the full-history seed. Seed first:\n"
+            f"substitute for the full-history seed. Replace the shallow cache:\n"
             f"  1. uv run python scripts/backfill_thematic_universe.py "
-            f"--start 2024-10-01 --end {asof_dt}\n"
-            f"  2. uv run rainier thematic run-daily  # retry"
+            f"--start 2024-10-01 --end {asof_dt} --force\n"
+            f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
+            f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
+            f"{ohlcv_path}\n"
+            f"  3. uv run rainier thematic run-daily  # retry"
         )
 
     expected_syms = {sym for syms in spec.sectors.values() for sym in syms}
