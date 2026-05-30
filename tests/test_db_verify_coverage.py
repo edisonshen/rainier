@@ -272,6 +272,96 @@ def test_verify_real_column_float32_boundary_no_false_positive(
 
 
 # ---------------------------------------------------------------------------
+# Float-width + NaN/NULL parity (live-Neon labels artifact, verify#8aab)
+# ---------------------------------------------------------------------------
+#
+# Live verify against Neon flagged ~100 spurious checksum mismatches on
+# market.thematic_labels_daily while every other table was TRUE parity. Root
+# cause: the parquet stores forward-return columns as float32 while the live PG
+# column is DOUBLE PRECISION (the live DDL diverged from the static REAL schema).
+# The old normalization keyed float32-casting off the STATIC schema's REAL
+# membership (_real_columns); when reality is DOUBLE the value never gets
+# normalized and the float32->float64 widen plus NaN<->NULL on recent
+# (incomplete-horizon) rows false-positives drift. The fix makes the checksum
+# value-driven: every float cell is canonicalized through float32 and NaN/NULL
+# collapse to one token — uniformly, with NO schema-type or labels special-case.
+
+
+def _float_truncated_by_f32() -> tuple[float, float]:
+    """A float64 whose float32 cast changes its bit value, plus that cast.
+
+    Returns ``(orig64, parquet_f32)`` where ``orig64`` is what a DOUBLE PRECISION
+    PG column would hold from a full-precision load, and ``parquet_f32`` is the
+    same number after a float32 parquet round-trip. They differ in float64 bits;
+    a float32-canonicalizing checksum must collapse them to equal.
+    """
+    import numpy as np
+
+    orig64 = 0.06948674738744653
+    parquet_f32 = float(np.float32(orig64))
+    assert orig64 != parquet_f32, "value must actually lose bits under float32"
+    return orig64, parquet_f32
+
+
+def test_checksum_float32_vs_double_no_false_positive():
+    """A float column NOT in the schema REAL set (mirrors a live DOUBLE column)
+    must still hash equal across a float32 parquet value and its full-precision
+    float64 PG counterpart. RED before the value-driven fix: with an empty
+    real_cols set the old code skipped float32-canonicalization and the two
+    sides hashed differently."""
+    from rainier.db.verify import _checksum
+
+    orig64, parquet_f32 = _float_truncated_by_f32()
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    parquet_rows = [{"symbol": "AAA", "fwd_20d_ret": parquet_f32}]
+    pg_rows = [{"symbol": "AAA", "fwd_20d_ret": orig64}]
+    # The checksum is value-driven (no schema/REAL input): a DOUBLE live column
+    # gets float32-normalized just like a REAL one, so both sides hash equal.
+    assert _checksum(parquet_rows, cols, pk) == _checksum(
+        pg_rows, cols, pk
+    ), "float32 parquet vs float64 PG must hash equal (value-driven normalize)"
+
+
+def test_checksum_nan_equals_sql_null():
+    """A parquet float NaN and a SQL NULL (None) for the same cell must hash
+    equal. Recent asof dates legitimately carry NaN forward returns (window not
+    elapsed) that are written as NULL in PG; that representation difference must
+    not be flagged as drift."""
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    nan_rows = [{"symbol": "AAA", "fwd_20d_ret": float("nan")}]
+    null_rows = [{"symbol": "AAA", "fwd_20d_ret": None}]
+    assert _checksum(nan_rows, cols, pk) == _checksum(
+        null_rows, cols, pk
+    ), "NaN (parquet) and NULL (PG) must canonicalize to one token"
+
+
+def test_checksum_different_values_still_mismatch():
+    """NEGATIVE gate: genuinely different numbers must STILL mismatch. The
+    width/NaN canonicalization must not blind the gate to real drift — two
+    values that differ beyond float32 precision (and a NaN-vs-real-value pair)
+    must hash differently."""
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    a = [{"symbol": "AAA", "fwd_20d_ret": 0.05}]
+    b = [{"symbol": "AAA", "fwd_20d_ret": 0.06}]
+    assert _checksum(a, cols, pk) != _checksum(
+        b, cols, pk
+    ), "0.05 vs 0.06 is real drift and must mismatch"
+    # NaN/NULL must NOT collapse into a real value: a present number != absent.
+    real_val = [{"symbol": "AAA", "fwd_20d_ret": 0.0}]
+    nan_val = [{"symbol": "AAA", "fwd_20d_ret": float("nan")}]
+    assert _checksum(real_val, cols, pk) != _checksum(
+        nan_val, cols, pk
+    ), "a real 0.0 and a missing (NaN/NULL) cell must remain distinguishable"
+
+
+# ---------------------------------------------------------------------------
 # Timezone-aware datetime parity (TIMESTAMPTZ columns)
 # ---------------------------------------------------------------------------
 
@@ -295,8 +385,8 @@ def test_checksum_tz_aware_same_instant_matches():
     assert utc != pacific or str(utc) != str(pacific)  # reprs differ pre-norm
     parquet_rows = [{"symbol": "AAA", "fetched_at": utc}]
     pg_rows = [{"symbol": "AAA", "fetched_at": pacific}]
-    assert _checksum(parquet_rows, cols, pk, frozenset()) == _checksum(
-        pg_rows, cols, pk, frozenset()
+    assert _checksum(parquet_rows, cols, pk) == _checksum(
+        pg_rows, cols, pk
     ), "same instant in a different tz offset must hash equal"
 
 
