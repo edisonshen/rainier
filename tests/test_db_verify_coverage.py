@@ -279,12 +279,14 @@ def test_verify_real_column_float32_boundary_no_false_positive(
 # market.thematic_labels_daily while every other table was TRUE parity. Root
 # cause: the parquet stores forward-return columns as float32 while the live PG
 # column is DOUBLE PRECISION (the live DDL diverged from the static REAL schema).
-# The old normalization keyed float32-casting off the STATIC schema's REAL
-# membership (_real_columns); when reality is DOUBLE the value never gets
-# normalized and the float32->float64 widen plus NaN<->NULL on recent
-# (incomplete-horizon) rows false-positives drift. The fix makes the checksum
-# value-driven: every float cell is canonicalized through float32 and NaN/NULL
-# collapse to one token — uniformly, with NO schema-type or labels special-case.
+# Keying float32-casting off the STATIC schema's REAL membership missed it.
+#
+# The fix derives the float32 column set from the PARQUET dtypes (the
+# source-of-precision) and applies the float32 round-trip ONLY to those columns
+# — on both sides. A float64-stored column (OHLC prices, breadth value) keeps
+# FULL float64 precision, so genuine sub-float32 drift in a DOUBLE column is
+# still caught (codex P1: an unconditional float32 cast would blind the gate to
+# real drift in DOUBLE columns). NaN<->NULL collapses for every column.
 
 
 def _float_truncated_by_f32() -> tuple[float, float]:
@@ -303,62 +305,106 @@ def _float_truncated_by_f32() -> tuple[float, float]:
     return orig64, parquet_f32
 
 
-def test_checksum_float32_vs_double_no_false_positive():
-    """A float column NOT in the schema REAL set (mirrors a live DOUBLE column)
-    must still hash equal across a float32 parquet value and its full-precision
-    float64 PG counterpart. RED before the value-driven fix: with an empty
-    real_cols set the old code skipped float32-canonicalization and the two
-    sides hashed differently."""
+def test_checksum_float32_column_no_false_positive():
+    """A column the parquet stores as float32 must hash equal across the float32
+    parquet value and its widened-to-float64 PG mirror (REAL *or* a
+    schema-diverged DOUBLE). The column is named in ``float32_cols`` so both
+    sides take the float32 round-trip and collapse to the same 32-bit value."""
     from rainier.db.verify import _checksum
 
     orig64, parquet_f32 = _float_truncated_by_f32()
     cols = ["symbol", "fwd_20d_ret"]
     pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
     parquet_rows = [{"symbol": "AAA", "fwd_20d_ret": parquet_f32}]
     pg_rows = [{"symbol": "AAA", "fwd_20d_ret": orig64}]
-    # The checksum is value-driven (no schema/REAL input): a DOUBLE live column
-    # gets float32-normalized just like a REAL one, so both sides hash equal.
-    assert _checksum(parquet_rows, cols, pk) == _checksum(
-        pg_rows, cols, pk
-    ), "float32 parquet vs float64 PG must hash equal (value-driven normalize)"
+    assert _checksum(parquet_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "float32-stored column: parquet f32 vs widened PG f64 must hash equal"
+
+
+def test_checksum_double_column_catches_subfloat32_drift():
+    """codex P1 regression: a float64-stored (DOUBLE) column must STILL catch
+    real drift below a float32 ULP. ``100.00000001`` vs ``100.00000002`` are
+    distinct float64s that collapse to the same float32 bucket — an
+    unconditional float32 cast would silently pass corrupted data. Because the
+    column is NOT in ``float32_cols`` it is hashed at full float64 precision, so
+    the two values mismatch (drift detected)."""
+    import numpy as np
+
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "close"]
+    pk = ("symbol",)
+    a64, b64 = 100.00000001, 100.00000002
+    # Precondition: these collapse to one float32 bucket (the blinding hazard).
+    assert np.float32(a64) == np.float32(b64), "test premise: same float32 bucket"
+    assert a64 != b64, "but distinct as float64"
+    # close is a DOUBLE-stored column -> NOT in float32_cols -> full precision.
+    a = [{"symbol": "AAA", "close": a64}]
+    b = [{"symbol": "AAA", "close": b64}]
+    assert _checksum(a, cols, pk, frozenset()) != _checksum(
+        b, cols, pk, frozenset()
+    ), "DOUBLE column drift below float32 ULP must STILL be detected"
 
 
 def test_checksum_nan_equals_sql_null():
     """A parquet float NaN and a SQL NULL (None) for the same cell must hash
-    equal. Recent asof dates legitimately carry NaN forward returns (window not
-    elapsed) that are written as NULL in PG; that representation difference must
-    not be flagged as drift."""
+    equal — for every column, float32 or not. Recent asof dates legitimately
+    carry NaN forward returns (window not elapsed) written as NULL in PG; that
+    representation difference must not be flagged as drift."""
     from rainier.db.verify import _checksum
 
     cols = ["symbol", "fwd_20d_ret"]
     pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
     nan_rows = [{"symbol": "AAA", "fwd_20d_ret": float("nan")}]
     null_rows = [{"symbol": "AAA", "fwd_20d_ret": None}]
-    assert _checksum(nan_rows, cols, pk) == _checksum(
-        null_rows, cols, pk
+    assert _checksum(nan_rows, cols, pk, f32_cols) == _checksum(
+        null_rows, cols, pk, f32_cols
     ), "NaN (parquet) and NULL (PG) must canonicalize to one token"
 
 
 def test_checksum_different_values_still_mismatch():
     """NEGATIVE gate: genuinely different numbers must STILL mismatch. The
     width/NaN canonicalization must not blind the gate to real drift — two
-    values that differ beyond float32 precision (and a NaN-vs-real-value pair)
-    must hash differently."""
+    float32-column values that differ beyond float32 precision (and a
+    NaN-vs-real-value pair) must hash differently."""
     from rainier.db.verify import _checksum
 
     cols = ["symbol", "fwd_20d_ret"]
     pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
     a = [{"symbol": "AAA", "fwd_20d_ret": 0.05}]
     b = [{"symbol": "AAA", "fwd_20d_ret": 0.06}]
-    assert _checksum(a, cols, pk) != _checksum(
-        b, cols, pk
+    assert _checksum(a, cols, pk, f32_cols) != _checksum(
+        b, cols, pk, f32_cols
     ), "0.05 vs 0.06 is real drift and must mismatch"
     # NaN/NULL must NOT collapse into a real value: a present number != absent.
     real_val = [{"symbol": "AAA", "fwd_20d_ret": 0.0}]
     nan_val = [{"symbol": "AAA", "fwd_20d_ret": float("nan")}]
-    assert _checksum(real_val, cols, pk) != _checksum(
-        nan_val, cols, pk
+    assert _checksum(real_val, cols, pk, f32_cols) != _checksum(
+        nan_val, cols, pk, f32_cols
     ), "a real 0.0 and a missing (NaN/NULL) cell must remain distinguishable"
+
+
+def test_float32_columns_derives_from_parquet_dtypes():
+    """``_float32_columns`` reports exactly the float32-dtype columns of a frame
+    (the live source-of-precision), so a float64 column is excluded and stays
+    full precision in the checksum."""
+    import numpy as np
+    import pandas as pd
+
+    from rainier.db.verify import _float32_columns
+
+    df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_20d_ret": pd.Series([0.1], dtype=np.float32),
+            "close": pd.Series([100.0], dtype=np.float64),
+        }
+    )
+    assert _float32_columns(df) == frozenset({"fwd_20d_ret"})
 
 
 # ---------------------------------------------------------------------------

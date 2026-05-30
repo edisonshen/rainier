@@ -17,36 +17,45 @@ Checksum determinism + float/NaN canonicalization (task plan §3, verify#8aab)
 The checksum must NOT depend on row order (PG and parquet return rows in
 different orders), and must NOT false-positive on differences that are purely
 about how a faithful value is *stored* on each side. Two such differences are
-neutralized, uniformly for EVERY table (no per-column or per-table special-case
-— ``_canon_cell`` is value-driven, it takes no schema input):
+neutralized:
 
-  1. Float width. The parquet stores some forward-return / feature columns as
-     float32; the PG column may be ``REAL`` *or* ``DOUBLE PRECISION``. The live
-     DDL can diverge from the static schema — observed on
-     ``thematic_labels_daily`` (``DOUBLE`` in Neon, ``REAL`` in the schema
-     source), which produced ~100 spurious mismatches in a live backfill while
-     every other table was true parity. A naive repr/hash flags the
-     float32-vs-float64 low-bit delta as drift. Casting EVERY float through
-     ``numpy.float32`` on BOTH sides collapses a float32 value and its
-     widened-to-float64 counterpart to the IDENTICAL 32-bit value, so they hash
-     bit-for-bit equal regardless of which side stored which width. float32
-     truncation is stable (no rounding-boundary instability) — significant-
-     figure rounding was rejected because a value can straddle a boundary at the
-     Nth digit. It never blinds the gate: two numbers that differ beyond float32
-     precision still hash differently.
+  1. Float width — scoped to columns the PARQUET actually stores as float32.
+     Those forward-return / feature columns carry only float32 precision; the PG
+     mirror may be ``REAL`` *or* ``DOUBLE PRECISION`` (the live DDL can diverge
+     from the static schema — observed on ``thematic_labels_daily``: ``DOUBLE``
+     in Neon, ``REAL`` in the schema source — which produced ~100 spurious
+     mismatches in a live backfill). A naive repr/hash flags the
+     float32-vs-widened-float64 low-bit delta as drift. Casting both sides of a
+     float32-origin column through ``numpy.float32`` collapses the stored
+     float32 value and its widened-to-float64 PG counterpart to the IDENTICAL
+     32-bit value, so they hash equal regardless of which side stored which
+     width. The set of float32 columns is derived from the live parquet dtypes
+     (``_float32_columns``), NOT the static schema — that is what fixed the
+     ``thematic_labels_daily`` divergence the old schema-``REAL`` lookup missed.
 
-  2. NaN vs SQL NULL. Recent asof dates legitimately carry NaN forward returns
-     (the forward window has not elapsed); ``pg_value`` writes NaN as PG NULL
-     (Python ``None``). Both a float NaN and ``None`` canonicalize to the single
-     ``("n",)`` token so this representation difference is not flagged — while a
-     real float value stays a distinct ``("f", ...)`` token, so a
-     NaN/NULL-vs-real-value difference is still caught.
+     Crucially this is NOT applied to float64-origin columns. A column the
+     parquet stores as float64 (OHLC prices, ``breadth_indicator_daily.value``)
+     is hashed at full float64 precision on both sides, so genuine sub-float32
+     drift in a DOUBLE column is still caught — the gate is not blinded for the
+     data that legitimately needs full precision. float32 truncation is stable
+     (no rounding-boundary instability) — significant-figure rounding was
+     rejected because a value can straddle a boundary at the Nth digit.
+
+  2. NaN vs SQL NULL (every column). Recent asof dates legitimately carry NaN
+     forward returns (the forward window has not elapsed); ``pg_value`` writes
+     NaN as PG NULL (Python ``None``). Both a float NaN and ``None`` canonicalize
+     to the single ``("n",)`` token so this representation difference is not
+     flagged — while a real float value stays a distinct ``("f", ...)`` token, so
+     a NaN/NULL-vs-real-value difference is still caught.
 
 Steps:
 
   * coerce every cell through ``pg_value`` (NaN/NaT -> None, numpy -> Python);
-  * canonicalize via ``_canon_cell`` (every float -> float32; NaN/NULL -> one
-    token; tz-aware datetimes -> UTC);
+  * derive the float32-origin column set from the parquet frame's dtypes
+    (``_float32_columns``); the PG side is hashed against the SAME set so a
+    float32 parquet value and its widened PG mirror collapse identically;
+  * canonicalize via ``_canon_cell`` (float in a float32 column -> float32;
+    NaN/NULL -> one token; tz-aware datetimes -> UTC);
   * build a per-row tuple in fixed table-column order, sort the rows within a
     date group by primary key, then BLAKE2b-hash the canonical repr.
 
@@ -93,31 +102,55 @@ class VerifyReport:
         return not self.drift
 
 
-def _canon_cell(v) -> object:
-    """Canonicalize a coerced cell for hashing — value-driven, no schema input.
+def _float32_columns(df: pd.DataFrame) -> frozenset[str]:
+    """Column names the parquet frame stores at float32 precision.
 
-    The checksum must report TRUE parity for data that is faithful but stored at
-    a different float width or with a different missing-value representation on
-    the two sides. Two such differences are neutralized here, uniformly for
-    EVERY table (no per-column or per-table special-case):
+    The parquet is the source-of-precision: a column physically stored as
+    float32 carries only ~7 significant digits, so its PG mirror (REAL or a
+    schema-diverged DOUBLE) can never hold more than the float32 round-trip.
+    Those are exactly the columns whose float64-widened PG values must be cast
+    back through float32 to compare equal. float64-stored columns (OHLC prices,
+    ``breadth_indicator_daily.value``) are NOT in this set, so they stay full
+    precision and real drift in them is still caught.
 
-    1. Float width. The parquet stores some forward-return / feature columns as
-       float32 while the PG column may be REAL *or* DOUBLE PRECISION — the live
-       DDL can diverge from the static schema (observed on
+    Derived from the live parquet dtypes — NOT the static schema — because the
+    live DDL can diverge from the schema (``thematic_labels_daily`` is REAL in
+    the schema source but DOUBLE in Neon), and only the parquet dtype reliably
+    tells us the actual precision the data was persisted at.
+    """
+    return frozenset(
+        str(name)
+        for name, dtype in df.dtypes.items()
+        if dtype == np.float32
+    )
+
+
+def _canon_cell(v, is_float32: bool) -> object:
+    """Canonicalize a coerced cell for hashing.
+
+    ``is_float32`` is True only for columns the parquet stores at float32
+    precision (see ``_float32_columns``). Two storage-only differences are
+    neutralized so faithful data reports TRUE parity:
+
+    1. Float width (float32 columns only). The parquet stores the column at
+       float32 while the PG mirror may be REAL *or* DOUBLE PRECISION (the live
+       DDL can diverge from the static schema — observed on
        ``thematic_labels_daily``: DOUBLE in Neon, REAL in the schema source).
-       Casting EVERY float through float32 collapses a float32 parquet value and
-       its widened-to-float64 PG counterpart to the identical 32-bit value, so
-       they hash equal regardless of which side stored which width. float32
-       truncation is stable (no rounding-boundary instability) and never blinds
-       the gate: two numbers that differ beyond float32 precision still hash
-       differently.
+       Casting both sides of a float32-origin column through float32 collapses a
+       float32 parquet value and its widened-to-float64 PG counterpart to the
+       identical 32-bit value, so they hash equal regardless of which side
+       stored which width. float32 truncation is stable (no rounding-boundary
+       instability). A float64-origin column (``is_float32`` False) is hashed at
+       FULL float64 precision, so genuine sub-float32 drift in a DOUBLE column is
+       still caught — the gate is not blinded for full-precision data.
 
-    2. NaN vs SQL NULL. Recent asof dates carry NaN forward returns (the forward
-       window has not elapsed); ``pg_value`` writes NaN as PG NULL, which comes
-       back as Python ``None``. Both a float NaN and ``None`` canonicalize to the
-       single ``("n",)`` token so the representation difference is not flagged —
-       a *real* float value stays a distinct ``("f", ...)`` token, so a
-       NaN/NULL-vs-real-value difference is still caught as drift.
+    2. NaN vs SQL NULL (every column). Recent asof dates carry NaN forward
+       returns (the forward window has not elapsed); ``pg_value`` writes NaN as
+       PG NULL, which comes back as Python ``None``. Both a float NaN and
+       ``None`` canonicalize to the single ``("n",)`` token so the
+       representation difference is not flagged — a *real* float value stays a
+       distinct ``("f", ...)`` token, so a NaN/NULL-vs-real-value difference is
+       still caught as drift.
 
     Timezone-aware datetimes are normalized to UTC so the SAME instant hashes
     identically regardless of the session timezone PG rendered it in (TIMESTAMPTZ
@@ -130,7 +163,9 @@ def _canon_cell(v) -> object:
     if isinstance(v, float):
         if v != v:  # NaN: collapse to the NULL token (faithful NaN<->NULL).
             return ("n",)
-        return ("f", float(np.float32(v)))
+        if is_float32:
+            return ("f", float(np.float32(v)))
+        return ("f", v)
     if isinstance(v, _dt.datetime) and v.tzinfo is not None:
         # Same instant, stable repr: convert to UTC before stringifying.
         return ("s", str(v.astimezone(_dt.timezone.utc)))
@@ -141,13 +176,16 @@ def _checksum(
     rows: list[dict],
     columns: list[str],
     pk_cols: tuple[str, ...],
+    float32_cols: frozenset[str] = frozenset(),
 ) -> str:
     """Order-independent content hash of ``rows`` projected to ``columns``.
 
     Rows are sorted by primary key (None sorts first via a (is_none, repr) key)
     so PG vs parquet row order is irrelevant, then each row is rendered as a
-    fixed-column-order tuple of canonical cells (every float float32-normalized,
-    NaN/NULL collapsed — see ``_canon_cell``) and BLAKE2b-hashed.
+    fixed-column-order tuple of canonical cells. Floats in ``float32_cols`` are
+    float32-normalized (faithful float32<->widened-float64 parity); all other
+    floats keep full float64 precision; NaN/NULL collapse to one token — see
+    ``_canon_cell``. The result is BLAKE2b-hashed.
     """
 
     def sort_key(row: dict):
@@ -155,7 +193,9 @@ def _checksum(
 
     h = hashlib.blake2b(digest_size=16)
     for row in sorted(rows, key=sort_key):
-        cells = tuple(_canon_cell(row.get(c)) for c in columns)
+        cells = tuple(
+            _canon_cell(row.get(c), c in float32_cols) for c in columns
+        )
         h.update(repr(cells).encode("utf-8"))
         h.update(b"\x1e")  # record separator
     return h.hexdigest()
@@ -235,6 +275,12 @@ def verify_coverage(
         else:
             pq_df = pd.DataFrame(columns=columns)
 
+        # The parquet is the source-of-precision: only columns physically stored
+        # as float32 get the float32 round-trip normalization (applied to BOTH
+        # sides). float64 columns stay full precision so real DOUBLE drift is
+        # still caught. Derived from live dtypes, not the static schema.
+        float32_cols = _float32_columns(pq_df)
+
         # Window both sides identically before comparing (registries pass through).
         pq_df = _window_df(pq_df, spec, asof_start, asof_end)
         pg_df = _window_df(_read_pg(engine, spec, columns), spec, asof_start, asof_end)
@@ -263,8 +309,8 @@ def verify_coverage(
                 )
                 match = False
             else:
-                pq_sum = _checksum(pq_g, columns, spec.pk_cols)
-                pg_sum = _checksum(pg_g, columns, spec.pk_cols)
+                pq_sum = _checksum(pq_g, columns, spec.pk_cols, float32_cols)
+                pg_sum = _checksum(pg_g, columns, spec.pk_cols, float32_cols)
                 if pq_sum != pg_sum:
                     report.drift.append(
                         Drift(spec.name, key, "checksum mismatch")
