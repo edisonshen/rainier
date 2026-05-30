@@ -365,6 +365,99 @@ def test_checksum_nan_equals_sql_null():
     ), "NaN (parquet) and NULL (PG) must canonicalize to one token"
 
 
+def test_canon_cell_numpy_nan_collapses_to_null_token():
+    """RED (verify#0d00): a numpy-dtype NaN must collapse to the SAME NULL token
+    as None and python-float NaN — for both is_float32 settings.
+
+    The forward-return columns are float32 dtype, so their NaN cells arrive as
+    ``numpy.float32`` NaN. The pre-fix ``isinstance(v, float)`` guard missed
+    those (``np.float32`` is NOT a Python ``float`` subclass), leaking them to
+    ``('s', 'nan')`` while the PG NULL side hashed ``('n',)`` — ~100 spurious
+    ``thematic_labels_daily`` mismatches on recent dates. ``np.float64`` happens
+    to subclass ``float`` so it already collapsed; the fix must cover both."""
+    import numpy as np
+
+    from rainier.db.verify import _canon_cell
+
+    null_token = _canon_cell(None, True)
+    for is_f32 in (True, False):
+        assert _canon_cell(np.float32("nan"), is_f32) == _canon_cell(None, is_f32), (
+            f"np.float32 NaN must equal NULL token (is_float32={is_f32})"
+        )
+        assert _canon_cell(np.float64("nan"), is_f32) == _canon_cell(None, is_f32), (
+            f"np.float64 NaN must equal NULL token (is_float32={is_f32})"
+        )
+        assert _canon_cell(float("nan"), is_f32) == _canon_cell(None, is_f32), (
+            f"python float NaN must equal NULL token (is_float32={is_f32})"
+        )
+    # And the None token itself is the canonical NULL token.
+    assert null_token == ("n",)
+
+
+def test_canon_cell_pandas_nat_collapses_to_null_token():
+    """RED (verify#0d00): pandas NaT (the datetime NULL) must also collapse to
+    the NULL token, not stringify to ``('s', 'NaT')`` — TIMESTAMP columns with
+    an absent value would otherwise false-positive against PG NULL."""
+    import pandas as pd
+
+    from rainier.db.verify import _canon_cell
+
+    assert _canon_cell(pd.NaT, False) == _canon_cell(None, False)
+    assert _canon_cell(pd.NaT, True) == _canon_cell(None, True)
+
+
+def test_checksum_numpy_float32_nan_equals_null_end_to_end():
+    """RED (verify#0d00) end-to-end: a frame with a float32 column carrying NaN
+    cells, pushed through the SAME path verify uses (``frame_to_pg_rows`` ->
+    ``_checksum`` with that column in ``float32_cols``), must hash EQUAL to the
+    None/NULL counterpart row.
+
+    This is the exact gap that let #110 through: that fix's tests used
+    python-float NaN (already collapsed). Here the parquet-origin column is a
+    real numpy float32 dtype, so its NaN is ``numpy.float32`` NaN — the leaking
+    representation. The PG-side NULL comes back as Python ``None``."""
+    import numpy as np
+    import pandas as pd
+
+    from rainier.db.rows import frame_to_pg_rows
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
+
+    # Parquet side: a genuine float32 column whose cell is NaN (forward window
+    # not yet elapsed). df.to_dict yields numpy.float32 NaN for this cell.
+    parquet_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_20d_ret": pd.Series([np.float32("nan")], dtype=np.float32),
+        }
+    )
+    # PG side: SQL NULL -> Python None.
+    pg_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_20d_ret": pd.Series([None], dtype="object"),
+        }
+    )
+
+    parquet_rows = frame_to_pg_rows(parquet_df, cols)
+    pg_rows = frame_to_pg_rows(pg_df, cols)
+
+    assert _checksum(parquet_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "float32-dtype NaN cell (parquet) must hash equal to NULL (PG) end-to-end"
+
+    # Also feed a raw numpy.float32 NaN straight into _checksum (bypassing the
+    # pg_value coercion) so this guards _canon_cell directly: even if a numpy NaN
+    # reaches the canon layer un-coerced, it must collapse to the NULL token.
+    raw_f32_nan_rows = [{"symbol": "AAA", "fwd_20d_ret": np.float32("nan")}]
+    assert _checksum(raw_f32_nan_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "raw numpy.float32 NaN must hash equal to NULL at the _checksum layer"
+
+
 def test_checksum_different_values_still_mismatch():
     """NEGATIVE gate: genuinely different numbers must STILL mismatch. The
     width/NaN canonicalization must not blind the gate to real drift — two
@@ -386,6 +479,94 @@ def test_checksum_different_values_still_mismatch():
     assert _checksum(real_val, cols, pk, f32_cols) != _checksum(
         nan_val, cols, pk, f32_cols
     ), "a real 0.0 and a missing (NaN/NULL) cell must remain distinguishable"
+
+
+def test_canon_cell_signed_zero_equals_positive_zero():
+    """RED (verify#0d00 signed-zero): negative zero and positive zero must
+    canonicalize to the SAME float token — for both ``is_float32`` settings.
+
+    ``market.thematic_labels_daily.fwd_10d_max_drawdown`` stores ``-0.0`` (no
+    drawdown) in the parquet; PG normalizes it to ``+0.0`` on round-trip.
+    ``-0.0 == 0.0`` numerically (so every value-diff and both reviewers saw "no
+    difference"), but the checksum hashes ``repr(cells)`` and
+    ``repr(-0.0) == '-0.0' != repr(0.0) == '0.0'`` -> ~100 spurious
+    ``thematic_labels_daily`` mismatches. Normalizing signed zero in the float
+    branch collapses both to one token."""
+    from rainier.db.verify import _canon_cell
+
+    for is_f32 in (True, False):
+        assert _canon_cell(-0.0, is_f32) == _canon_cell(0.0, is_f32), (
+            f"-0.0 and 0.0 must canonicalize identically (is_float32={is_f32})"
+        )
+        # Use float('-0.0') too — guard against any literal-folding surprise.
+        assert _canon_cell(float("-0.0"), is_f32) == _canon_cell(0.0, is_f32), (
+            f"float('-0.0') must equal 0.0 token (is_float32={is_f32})"
+        )
+
+
+def test_checksum_signed_zero_equals_positive_zero_end_to_end():
+    """RED (verify#0d00 signed-zero) end-to-end: a frame carrying ``-0.0`` in a
+    float column, pushed through the SAME path verify uses
+    (``frame_to_pg_rows`` -> ``_checksum``), must hash EQUAL to the ``+0.0``
+    counterpart — for a float32-normalized column AND a full-precision (DOUBLE)
+    column. This is the exact production bug: signed zero in the parquet vs PG's
+    normalized positive zero. Isolated ``_canon_cell`` tests miss the coercion
+    layer; this mirrors ``verify_coverage``'s call shape."""
+    import pandas as pd
+
+    from rainier.db.rows import frame_to_pg_rows
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_10d_max_drawdown"]
+    pk = ("symbol",)
+
+    neg_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_10d_max_drawdown": pd.Series([-0.0], dtype="float64"),
+        }
+    )
+    pos_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_10d_max_drawdown": pd.Series([0.0], dtype="float64"),
+        }
+    )
+    neg_rows = frame_to_pg_rows(neg_df, cols)
+    pos_rows = frame_to_pg_rows(pos_df, cols)
+
+    # Float32-normalized column (mirrors fwd_10d_max_drawdown in the float32 set).
+    f32_cols = frozenset({"fwd_10d_max_drawdown"})
+    assert _checksum(neg_rows, cols, pk, f32_cols) == _checksum(
+        pos_rows, cols, pk, f32_cols
+    ), "-0.0 (parquet) vs +0.0 (PG) must hash equal end-to-end (float32 col)"
+
+    # Full-precision (DOUBLE) column: signed zero can appear here too; the fix
+    # must be uniform, not float32-only.
+    assert _checksum(neg_rows, cols, pk, frozenset()) == _checksum(
+        pos_rows, cols, pk, frozenset()
+    ), "-0.0 vs +0.0 must hash equal end-to-end (full-precision col)"
+
+
+def test_checksum_signed_zero_still_mismatches_real_nonzero():
+    """NEGATIVE gate: normalizing signed zero must NOT blind the gate to a real
+    near-zero drift. ``0.0`` vs ``1e-9`` are genuinely different and must STILL
+    mismatch — for a float32 column AND a DOUBLE column."""
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_10d_max_drawdown"]
+    pk = ("symbol",)
+    zero = [{"symbol": "AAA", "fwd_10d_max_drawdown": 0.0}]
+    tiny = [{"symbol": "AAA", "fwd_10d_max_drawdown": 1e-9}]
+    # float32-normalized column: 1e-9 survives the float32 cast as nonzero.
+    f32_cols = frozenset({"fwd_10d_max_drawdown"})
+    assert _checksum(zero, cols, pk, f32_cols) != _checksum(
+        tiny, cols, pk, f32_cols
+    ), "0.0 vs 1e-9 is real drift and must mismatch (float32 col)"
+    # full-precision column.
+    assert _checksum(zero, cols, pk, frozenset()) != _checksum(
+        tiny, cols, pk, frozenset()
+    ), "0.0 vs 1e-9 is real drift and must mismatch (DOUBLE col)"
 
 
 def test_float32_columns_derives_from_parquet_dtypes():
