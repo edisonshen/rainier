@@ -481,6 +481,94 @@ def test_checksum_different_values_still_mismatch():
     ), "a real 0.0 and a missing (NaN/NULL) cell must remain distinguishable"
 
 
+def test_canon_cell_signed_zero_equals_positive_zero():
+    """RED (verify#0d00 signed-zero): negative zero and positive zero must
+    canonicalize to the SAME float token — for both ``is_float32`` settings.
+
+    ``market.thematic_labels_daily.fwd_10d_max_drawdown`` stores ``-0.0`` (no
+    drawdown) in the parquet; PG normalizes it to ``+0.0`` on round-trip.
+    ``-0.0 == 0.0`` numerically (so every value-diff and both reviewers saw "no
+    difference"), but the checksum hashes ``repr(cells)`` and
+    ``repr(-0.0) == '-0.0' != repr(0.0) == '0.0'`` -> ~100 spurious
+    ``thematic_labels_daily`` mismatches. Normalizing signed zero in the float
+    branch collapses both to one token."""
+    from rainier.db.verify import _canon_cell
+
+    for is_f32 in (True, False):
+        assert _canon_cell(-0.0, is_f32) == _canon_cell(0.0, is_f32), (
+            f"-0.0 and 0.0 must canonicalize identically (is_float32={is_f32})"
+        )
+        # Use float('-0.0') too — guard against any literal-folding surprise.
+        assert _canon_cell(float("-0.0"), is_f32) == _canon_cell(0.0, is_f32), (
+            f"float('-0.0') must equal 0.0 token (is_float32={is_f32})"
+        )
+
+
+def test_checksum_signed_zero_equals_positive_zero_end_to_end():
+    """RED (verify#0d00 signed-zero) end-to-end: a frame carrying ``-0.0`` in a
+    float column, pushed through the SAME path verify uses
+    (``frame_to_pg_rows`` -> ``_checksum``), must hash EQUAL to the ``+0.0``
+    counterpart — for a float32-normalized column AND a full-precision (DOUBLE)
+    column. This is the exact production bug: signed zero in the parquet vs PG's
+    normalized positive zero. Isolated ``_canon_cell`` tests miss the coercion
+    layer; this mirrors ``verify_coverage``'s call shape."""
+    import pandas as pd
+
+    from rainier.db.rows import frame_to_pg_rows
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_10d_max_drawdown"]
+    pk = ("symbol",)
+
+    neg_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_10d_max_drawdown": pd.Series([-0.0], dtype="float64"),
+        }
+    )
+    pos_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_10d_max_drawdown": pd.Series([0.0], dtype="float64"),
+        }
+    )
+    neg_rows = frame_to_pg_rows(neg_df, cols)
+    pos_rows = frame_to_pg_rows(pos_df, cols)
+
+    # Float32-normalized column (mirrors fwd_10d_max_drawdown in the float32 set).
+    f32_cols = frozenset({"fwd_10d_max_drawdown"})
+    assert _checksum(neg_rows, cols, pk, f32_cols) == _checksum(
+        pos_rows, cols, pk, f32_cols
+    ), "-0.0 (parquet) vs +0.0 (PG) must hash equal end-to-end (float32 col)"
+
+    # Full-precision (DOUBLE) column: signed zero can appear here too; the fix
+    # must be uniform, not float32-only.
+    assert _checksum(neg_rows, cols, pk, frozenset()) == _checksum(
+        pos_rows, cols, pk, frozenset()
+    ), "-0.0 vs +0.0 must hash equal end-to-end (full-precision col)"
+
+
+def test_checksum_signed_zero_still_mismatches_real_nonzero():
+    """NEGATIVE gate: normalizing signed zero must NOT blind the gate to a real
+    near-zero drift. ``0.0`` vs ``1e-9`` are genuinely different and must STILL
+    mismatch — for a float32 column AND a DOUBLE column."""
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_10d_max_drawdown"]
+    pk = ("symbol",)
+    zero = [{"symbol": "AAA", "fwd_10d_max_drawdown": 0.0}]
+    tiny = [{"symbol": "AAA", "fwd_10d_max_drawdown": 1e-9}]
+    # float32-normalized column: 1e-9 survives the float32 cast as nonzero.
+    f32_cols = frozenset({"fwd_10d_max_drawdown"})
+    assert _checksum(zero, cols, pk, f32_cols) != _checksum(
+        tiny, cols, pk, f32_cols
+    ), "0.0 vs 1e-9 is real drift and must mismatch (float32 col)"
+    # full-precision column.
+    assert _checksum(zero, cols, pk, frozenset()) != _checksum(
+        tiny, cols, pk, frozenset()
+    ), "0.0 vs 1e-9 is real drift and must mismatch (DOUBLE col)"
+
+
 def test_float32_columns_derives_from_parquet_dtypes():
     """``_float32_columns`` reports exactly the float32-dtype columns of a frame
     (the live source-of-precision), so a float64 column is excluded and stays

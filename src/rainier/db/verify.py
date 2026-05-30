@@ -16,7 +16,7 @@ Checksum determinism + float/NaN canonicalization (task plan §3, verify#8aab)
 -----------------------------------------------------------------------------
 The checksum must NOT depend on row order (PG and parquet return rows in
 different orders), and must NOT false-positive on differences that are purely
-about how a faithful value is *stored* on each side. Two such differences are
+about how a faithful value is *stored* on each side. Three such differences are
 neutralized:
 
   1. Float width — scoped to columns that are float32-precision-limited on at
@@ -57,6 +57,18 @@ neutralized:
      float, so a float-only guard leaked them — verify#0d00). A real float value
      stays a distinct ``("f", ...)`` token, so a NaN/NULL-vs-real-value
      difference is still caught.
+
+  3. Signed zero (every float column). The parquet stores ``-0.0`` (e.g.
+     ``thematic_labels_daily.fwd_10d_max_drawdown`` = "no drawdown") while PG
+     normalizes it to ``+0.0`` on round-trip. ``-0.0 == +0.0`` numerically, but
+     ``_checksum`` hashes ``repr(cells)`` and ``repr(-0.0) == '-0.0' !=
+     repr(0.0) == '0.0'`` — so a value-equal pair hashed unequal (113 negative-
+     zero cells across exactly 100 distinct asof_dates = the exact 100 drifted
+     dates seen against live Neon, verify#0d00 signed-zero). The float branch
+     adds ``0.0`` to the canonicalized float (``(-0.0)+0.0 == +0.0`` under
+     IEEE-754; ``x + 0.0 == x`` for every other finite ``x``), so both signs of
+     zero emit one identical token. A genuine near-zero drift (``0.0`` vs
+     ``1e-9``) stays distinct.
 
 Steps:
 
@@ -203,9 +215,20 @@ def _canon_cell(v, is_float32: bool) -> object:
         # the SAME float token as its pg_value-widened Python-float counterpart
         # rather than stringifying. float() normalizes np.float32/64 -> Python
         # float for a stable repr; the is_float32 branch then collapses width.
+        #
+        # Signed-zero normalization (verify#0d00 signed-zero, the LOAD-BEARING
+        # fix). The parquet stores -0.0 (e.g. fwd_10d_max_drawdown "no drawdown")
+        # while PG normalizes it to +0.0 on round-trip. -0.0 == +0.0 numerically
+        # (so every value-diff and both reviewers saw "no difference"), BUT
+        # _checksum hashes repr(cells) and repr(-0.0) == '-0.0' != repr(0.0) ==
+        # '0.0' -> a spurious mismatch. Adding 0.0 maps -0.0 -> +0.0 under
+        # IEEE-754 ((-0.0)+0.0 == +0.0) while leaving every other value untouched
+        # (x + 0.0 == x for finite x; NaN is already collapsed above). Applied to
+        # BOTH the float32-normalized and full-precision branches so signed zero
+        # in either kind of column produces one identical token.
         if is_float32:
-            return ("f", float(np.float32(v)))
-        return ("f", float(v))
+            return ("f", float(np.float32(v)) + 0.0)
+        return ("f", float(v) + 0.0)
     if isinstance(v, _dt.datetime) and v.tzinfo is not None:
         # Same instant, stable repr: convert to UTC before stringifying.
         return ("s", str(v.astimezone(_dt.timezone.utc)))
