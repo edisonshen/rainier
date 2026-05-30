@@ -3331,6 +3331,17 @@ def thematic() -> None:
     help="When the cache exists, write a timestamped sibling cohort.",
 )
 @click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help=(
+        "Daily-cron refresh: ignore --start/--end, fetch only the last few "
+        "calendar days, and upsert on (symbol, date) into the existing cache "
+        "in place (no --force / cohort). Mirrors "
+        "`market-breadth backfill-ohlcv --incremental`."
+    ),
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     default=False,
@@ -3370,6 +3381,7 @@ def thematic_backfill(
     end: str | None,
     out_path: str,
     force: bool,
+    incremental: bool,
     dry_run: bool,
     allow_empty: str,
     allow_gaps: str,
@@ -3379,7 +3391,8 @@ def thematic_backfill(
 ) -> None:
     """Backfill the OHLCV cache + seed ticker/sector registries.
 
-    Operator-run, not CI-run. Hits the yfinance network.
+    Operator-run for the one-shot mode; cron-driven for ``--incremental``.
+    Hits the yfinance network.
     """
     import importlib.util
     from datetime import date as _date
@@ -3417,6 +3430,7 @@ def thematic_backfill(
         end=end_eff,
         out_path=Path(out_path),
         force=force,
+        incremental=incremental,
         dry_run=dry_run,
         allow_empty=[s.strip() for s in allow_empty.split(",") if s.strip()],
         allow_gaps=[s.strip() for s in allow_gaps.split(",") if s.strip()],
@@ -3425,16 +3439,19 @@ def thematic_backfill(
 
     if dry_run:
         plan = result
+        # backfill() resolves the incremental window internally, so the dry-run
+        # plan reflects the actual window that would be fetched.
         click.echo(
             f"DRY-RUN: would fetch {len(symbols)} symbols "
-            f"{start_eff}..{end_eff} -> {plan['planned_out']}"
+            f"{plan['start']}..{plan['end']} -> {plan['planned_out']}"
         )
         for sym in symbols:
             click.echo(f"  {sym}")
         return
 
     written_path = result
-    click.echo(f"wrote OHLCV cache -> {written_path}")
+    mode = "incremental" if incremental else "one-shot"
+    click.echo(f"wrote OHLCV cache ({mode}) -> {written_path}")
 
     # Seed registries with the just-fetched universe. Idempotent — re-running
     # backfill does not change existing IDs (per [D-015]).

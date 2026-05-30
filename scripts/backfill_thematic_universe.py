@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -50,6 +50,13 @@ DEFAULT_YAML = ROOT / "config" / "thematic_universe.yaml"
 DEFAULT_OUT = Path("data/cache/thematic_universe.parquet")
 DEFAULT_START = "2024-10-01"
 DEFAULT_END = "2026-05-01"
+
+# Daily-refresh window for ``--incremental``. Mirrors the breadth twin
+# (rainier.market_breadth.ohlcv_backfill.INCREMENTAL_WINDOW_DAYS): fetch the
+# last N CALENDAR days and upsert on (symbol, date) into the existing parquet.
+# 5 days is the self-healing margin so a missed cron yesterday is picked up
+# by today's run without a full re-fetch.
+INCREMENTAL_WINDOW_DAYS = 5
 # Same persistent registries the `thematic compute` / `run-daily` path uses, so
 # the PG ticker_id/sector_id the backfill mirrors match the IDs the feature
 # writer FK-references. (See _dual_write_pg for why a local counter is wrong.)
@@ -244,6 +251,40 @@ def _cohort_path(out_path: Path, fetched_at: datetime) -> Path:
         f"could not find an unused cohort path next to {out_path} after 1000 "
         "attempts; refusing to overwrite existing cohort (revision_immutability)."
     )
+
+
+def _upsert_in_place(new_df: pd.DataFrame, out_path: Path) -> pd.DataFrame:
+    """Merge ``new_df`` into the existing parquet (if any) on (symbol, date).
+
+    Mirrors ``rainier.market_breadth.ohlcv_backfill._upsert``. Latest write
+    wins for any overlapping (symbol, date) — rows in ``new_df`` replace prior
+    rows with the same key. The ``--incremental`` path rewrites only the rows
+    inside the recent window; everything else in the existing cache is kept.
+
+    Returns the merged frame in canonical column order. Caller atomic-writes it
+    back onto ``out_path`` (no sibling cohort — incremental refresh is
+    in-place, unlike ``--force``).
+    """
+    if not out_path.exists():
+        return new_df
+
+    existing = pd.read_parquet(out_path)
+    if existing.empty:
+        return new_df
+
+    # Date dtype harmonization: parquet round-trip yields python ``date`` for
+    # date32; new_df already builds ``date`` objects. Compare apples to apples.
+    existing["date"] = pd.to_datetime(existing["date"]).dt.date
+    new_df = new_df.copy()
+    if not new_df.empty:
+        new_df["date"] = pd.to_datetime(new_df["date"]).dt.date
+        key = set(new_df[["symbol", "date"]].apply(tuple, axis=1))
+        existing_key = existing[["symbol", "date"]].apply(tuple, axis=1)
+        existing = existing.loc[~existing_key.isin(key)]
+
+    merged = pd.concat([existing, new_df], ignore_index=True)
+    merged = merged.sort_values(["symbol", "date"]).reset_index(drop=True)
+    return merged[list(_COLUMN_ORDER)]
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +521,7 @@ def backfill(
     out_path: Path,
     force: bool = False,
     dry_run: bool = False,
+    incremental: bool = False,
     fetch_fn: Callable[[Iterable[str], str, str], dict[str, pd.DataFrame]]
     | None = None,
     allow_empty: Iterable[str] | None = None,
@@ -488,13 +530,27 @@ def backfill(
     yaml_path: Path | None = None,
     ticker_registry_path: Path = DEFAULT_TICKER_REGISTRY,
     sector_registry_path: Path = DEFAULT_SECTOR_REGISTRY,
+    today: date | None = None,
 ) -> Path | dict[str, object]:
     """Run the backfill.
 
+    Two write modes:
+
+      * **One-shot** (default): full ``start``..``end`` fetch. Refuses to
+        overwrite an existing cache unless ``force=True`` (which writes a dated
+        sibling cohort, never in place — revision-immutability).
+      * **Incremental** (``incremental=True``): the daily-cron refresh path
+        that mirrors the breadth twin (``market-breadth backfill-ohlcv
+        --incremental``). ``start``/``end`` are ignored; the window is the last
+        ``INCREMENTAL_WINDOW_DAYS`` calendar days ending at ``today``. The
+        fetched rows are upserted on ``(symbol, date)`` into the EXISTING cache
+        in place — no ``--force``, no sibling cohort. Network-light and
+        idempotent: a re-run over the same window adds no new rows.
+
     Returns the parquet path actually written (a sibling cohort path when
-    ``force=True`` and the destination already exists). In ``dry_run`` mode
-    returns the planned ticker × date matrix without touching the network or
-    the filesystem.
+    ``force=True`` and the destination already exists; ``out_path`` otherwise,
+    including the incremental path). In ``dry_run`` mode returns the planned
+    ticker × date matrix without touching the network or the filesystem.
 
     When ``yaml_path`` is provided, the OHLCV frame + ticker/sector registries
     are also mirrored into the ``market.*`` Postgres tables (Phase 2 dual-write,
@@ -510,6 +566,13 @@ def backfill(
     allow_empty_set: set[str] = set(allow_empty or ())
     allow_gaps_set: set[str] = set(allow_gaps or ())
 
+    # Incremental refresh fixes the fetch window to the recent gap (mirrors the
+    # breadth twin). The full-backfill start/end are ignored.
+    if incremental:
+        today_d = today or date.today()
+        start = (today_d - timedelta(days=INCREMENTAL_WINDOW_DAYS)).isoformat()
+        end = today_d.isoformat()
+
     if dry_run:
         return {
             "symbols": symbols,
@@ -518,9 +581,13 @@ def backfill(
             "planned_out": str(out_path),
         }
 
-    if out_path.exists() and not force:
+    # The one-shot path refuses to clobber an existing cache without --force.
+    # The incremental path INTENTIONALLY refreshes in place (upsert), so it
+    # skips this guard — that's the whole point of the daily-cron contract.
+    if not incremental and out_path.exists() and not force:
         raise FileExistsError(
-            f"{out_path} already exists. Pass --force to write a new cohort."
+            f"{out_path} already exists. Pass --force to write a new cohort "
+            f"or --incremental to refresh the recent window in place."
         )
 
     fetched_at = datetime.now(tz=timezone.utc)
@@ -533,24 +600,35 @@ def backfill(
 
     fetched = fetch_fn(symbols, start, end)
 
-    _validate_coverage(
-        fetched=fetched,
-        symbols=symbols,
-        start=start,
-        end=end,
-        allow_empty=allow_empty_set,
-        allow_gaps=allow_gaps_set,
-        min_coverage=min_coverage,
-    )
+    # Coverage gate: the incremental window is only a few calendar days, so the
+    # per-symbol bday-ratio tiers (built for the full-history backfill) don't
+    # apply — skip them. The cron's stale/partial guard in ``run-daily``
+    # (_check_ohlcv_freshness) is the load-bearing freshness check downstream.
+    if not incremental:
+        _validate_coverage(
+            fetched=fetched,
+            symbols=symbols,
+            start=start,
+            end=end,
+            allow_empty=allow_empty_set,
+            allow_gaps=allow_gaps_set,
+            min_coverage=min_coverage,
+        )
 
     df = _to_normalized_frame(fetched, yfinance_version, fetched_at)
 
-    target = (
-        _cohort_path(out_path, fetched_at)
-        if (out_path.exists() and force)
-        else out_path
-    )
-    _write_parquet_atomic(df, target)
+    if incremental:
+        # In-place upsert on (symbol, date) into the existing cache. No cohort.
+        target = out_path
+        merged = _upsert_in_place(df, out_path)
+        _write_parquet_atomic(merged, target)
+    else:
+        target = (
+            _cohort_path(out_path, fetched_at)
+            if (out_path.exists() and force)
+            else out_path
+        )
+        _write_parquet_atomic(df, target)
 
     # Phase 2 dual-write: mirror into market.* AFTER the parquet write (parquet
     # is the load-bearing output; PG is additive). Only when a universe YAML is
@@ -602,6 +680,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="When the cache exists, write a timestamped sibling cohort.",
     )
     p.add_argument(
+        "--incremental",
+        action="store_true",
+        help=(
+            "Daily-cron refresh: ignore --start/--end, fetch the last few "
+            "calendar days, upsert on (symbol, date) into the existing cache "
+            "in place (no --force / cohort)."
+        ),
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the planned ticker × date matrix; do not fetch or write.",
@@ -649,6 +736,7 @@ def main(argv: list[str] | None = None) -> int:
         end=ns.end,
         out_path=out_path,
         force=ns.force,
+        incremental=ns.incremental,
         dry_run=ns.dry_run,
         allow_empty=allow_empty,
         allow_gaps=allow_gaps,
