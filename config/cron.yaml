@@ -155,10 +155,14 @@ jobs:
   # the breadth side reads `sp500_universe.parquet`, schedule it on a later
   # minute (e.g., `45 12`) so this refresh has finished writing.
   #
-  # Disabled at file-commit time so a fresh checkout doesn't immediately
-  # hit yfinance from a host that hasn't yet run the one-shot backfill
-  # (which seeds data/cache/sp500_universe.parquet). Operator flips
-  # `enabled: true` once the one-shot is complete.
+  # PREREQUISITE: the one-shot full-history backfill that seeds
+  # data/cache/sp500_universe.parquet must have run on this host BEFORE this
+  # cron is active. The incremental first run fetches only the last 5 calendar
+  # days, but compute-indicators needs long history (50/100/200-day MAs,
+  # 52-week highs/lows) — without the seed the published dashboard would be
+  # mostly NaN. Enabled here because the operator's deployment host is already
+  # seeded (breadth dashboard is live). On a fresh host, run the one-shot seed
+  # first or flip this back to `enabled: false` until the seed completes.
   - name: market-breadth-daily
     description: "Refresh sp500 OHLCV + compute breadth indicators + render & publish market-breadth dashboard"
     schedule: "45 12 * * 1-5"   # 12:45 PST Mon-Fri (15 min pre-close)
