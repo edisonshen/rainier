@@ -544,6 +544,178 @@ def test_labels_dual_write_handles_null_complete_through(
 
 
 # ---------------------------------------------------------------------------
+# thematic backfill --incremental (CLI surface) -> market.thematic_ohlcv MUST
+# advance. Regression for the daily-cron mirror gap: the CLI subcommand
+# `thematic backfill --incremental` (cli.py:thematic_backfill) must forward
+# yaml_path into module.backfill(...) so _dual_write_pg mirrors the freshly
+# fetched OHLCV into Neon. Before the fix the CLI omitted yaml_path, so the
+# cron-wired `thematic backfill --incremental` advanced ONLY the parquet and
+# left market.thematic_ohlcv STALE (live catch-up 2026-05-30: features/labels
+# reached today but thematic_ohlcv was stuck days behind). The worker's
+# module-level dual-write tests pass yaml_path explicitly, so they could not
+# catch this — the broken seam was the CLI command, which this test drives.
+# ---------------------------------------------------------------------------
+
+
+def _patch_yfinance(monkeypatch, panel: pd.DataFrame) -> None:
+    """Make the real ``_yfinance_fetch`` offline by stubbing ``yf.download``.
+
+    The CLI ``thematic backfill`` command resolves its fetcher internally
+    (no fetch_fn injection point), so to exercise the real CLI seam we stub
+    the network call one layer down. ``_yfinance_fetch`` bumps ``end`` by +1
+    day (exclusive end) and slices [start, end); we honor that window here so
+    the incremental path's recent-window resolution is exercised end to end.
+    """
+    import types
+
+    def fake_download(sym, start=None, end=None, **kwargs):
+        start_d = pd.to_datetime(start).date()
+        end_d = pd.to_datetime(end).date()  # already +1 (exclusive) from caller
+        sub = panel.loc[
+            (panel["symbol"] == sym)
+            & (panel["date"] >= start_d)
+            & (panel["date"] < end_d),
+            ["date", "open", "high", "low", "close", "volume"],
+        ].copy()
+        if sub.empty:
+            return pd.DataFrame()
+        # _yfinance_fetch expects yfinance's capitalized columns + a DatetimeIndex.
+        sub = sub.rename(
+            columns={
+                "date": "Date",
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+                "volume": "Volume",
+            }
+        )
+        sub = sub.set_index("Date")
+        return sub
+
+    fake_yf = types.SimpleNamespace(download=fake_download, __version__="stub-test")
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+
+
+@pytest.mark.requires_postgres
+def test_cli_thematic_backfill_incremental_advances_pg_ohlcv(
+    migrated_engine, tmp_path, database_url, monkeypatch
+):
+    """`thematic backfill --incremental` (CLI) must ADVANCE market.thematic_ohlcv
+    in Postgres, not just the parquet — proves the daily cron keeps Neon's raw
+    OHLCV fresh. This is the load-bearing assertion for the daily-cron wire.
+    """
+    from rainier.cli import cli
+
+    symbols = ["AAA", "BBB", "CCC"]
+    today = date(2026, 5, 29)
+
+    # An existing parquet cache with OLD history, plus the registries the
+    # mirror reads. Built so the incremental window (today-5..today) is a
+    # genuine gap relative to what is already in the cache + PG.
+    old_panel = _build_ohlcv_panel(symbols, n_days=10)  # dates in 2024-10
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    panel_path = cache / "thematic_universe.parquet"
+    old_panel.to_parquet(panel_path)
+    tr = cache / "tr.parquet"
+    sr = cache / "sr.parquet"
+    yaml_path = tmp_path / "universe.yaml"
+    _write_universe_yaml(yaml_path, symbols)
+
+    # Recent-window rows the incremental fetch should pick up.
+    recent_dates = [today - timedelta(days=2), today - timedelta(days=1), today]
+    recent_rows = []
+    for s_idx, sym in enumerate(symbols):
+        for j, d in enumerate(recent_dates):
+            close = 200.0 + s_idx * 10 + j
+            recent_rows.append(
+                {
+                    "symbol": sym, "date": d, "open": close, "high": close * 1.01,
+                    "low": close * 0.99, "close": close, "volume": 2_000_000,
+                    "fetched_at": pd.Timestamp("2026-05-29T16:30:00Z"),
+                    "yfinance_version": "stub-test",
+                }
+            )
+    recent_panel = pd.DataFrame(recent_rows)
+    _patch_yfinance(monkeypatch, recent_panel)
+
+    # Pin "today" so the incremental window is deterministic. backfill() takes a
+    # `today` kwarg; the CLI doesn't forward it, so freeze date.today() at the
+    # source the script reads (scripts/backfill_thematic_universe.date.today).
+    import importlib
+
+    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    bf_mod = importlib.import_module("backfill_thematic_universe")
+
+    class _FrozenDate(bf_mod.date):  # type: ignore[misc, valid-type]
+        @classmethod
+        def today(cls):
+            return today
+
+    monkeypatch.setattr(bf_mod, "date", _FrozenDate)
+
+    # PG starts with zero OHLCV rows.
+    assert _count(migrated_engine, "thematic_ohlcv") == 0
+
+    res = CliRunner().invoke(
+        cli,
+        [
+            "thematic", "backfill", "--incremental",
+            "--yaml", str(yaml_path),
+            "--out", str(panel_path),
+            "--ticker-registry", str(tr),
+            "--sector-registry", str(sr),
+        ],
+    )
+    assert res.exit_code == 0, res.output
+
+    # The recent window landed in PG (3 symbols x 3 recent dates = 9 rows).
+    pg_after = _count(migrated_engine, "thematic_ohlcv")
+    assert pg_after == len(symbols) * len(recent_dates), (
+        f"market.thematic_ohlcv must ADVANCE on the incremental CLI path; "
+        f"got {pg_after} rows, expected {len(symbols) * len(recent_dates)}. "
+        f"output:\n{res.output}"
+    )
+    # Registries mirrored too (the daily cron keeps the FK parents fresh).
+    assert _count(migrated_engine, "tickers") == len(symbols)
+    assert _count(migrated_engine, "sectors") == 1
+
+    # max(date) advanced to today -> run-daily's stale-OHLCV guard passes.
+    with migrated_engine.connect() as conn:
+        max_date = conn.execute(
+            text("SELECT max(date) FROM market.thematic_ohlcv")
+        ).scalar_one()
+        sample_close = conn.execute(
+            text(
+                "SELECT close FROM market.thematic_ohlcv "
+                "WHERE symbol='AAA' AND date=:d"
+            ),
+            {"d": today},
+        ).scalar_one()
+    assert max_date == today, "thematic_ohlcv must reach today's date"
+    assert sample_close == pytest.approx(202.0), "today's AAA close mirrored to PG"
+
+    # Idempotent: a second incremental run over the same window adds no rows.
+    res2 = CliRunner().invoke(
+        cli,
+        [
+            "thematic", "backfill", "--incremental",
+            "--yaml", str(yaml_path),
+            "--out", str(panel_path),
+            "--ticker-registry", str(tr),
+            "--sector-registry", str(sr),
+        ],
+    )
+    assert res2.exit_code == 0, res2.output
+    assert _count(migrated_engine, "thematic_ohlcv") == pg_after, (
+        "re-running incremental must be idempotent (UPSERT, no duplicate rows)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # DATABASE_URL-unset skip path — NO Postgres needed
 # ---------------------------------------------------------------------------
 

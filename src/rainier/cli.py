@@ -3435,6 +3435,17 @@ def thematic_backfill(
         allow_empty=[s.strip() for s in allow_empty.split(",") if s.strip()],
         allow_gaps=[s.strip() for s in allow_gaps.split(",") if s.strip()],
         min_coverage=coverage,
+        # Pass the universe YAML so backfill() mirrors the OHLCV frame +
+        # ticker/sector registries into market.* (Neon). Without this the
+        # daily cron's --incremental refresh advances the PARQUET only and
+        # leaves market.thematic_ohlcv STALE — exactly the gap a live
+        # catch-up found 2026-05-30 (features/labels reached today but
+        # thematic_ohlcv was stuck days behind). _dual_write_pg fires only
+        # when yaml_path is set and is a no-op when DATABASE_URL is unset, so
+        # this is safe on both the one-shot and incremental paths.
+        yaml_path=yaml_p,
+        ticker_registry_path=Path(ticker_registry),
+        sector_registry_path=Path(sector_registry),
     )
 
     if dry_run:
