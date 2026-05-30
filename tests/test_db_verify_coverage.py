@@ -272,6 +272,183 @@ def test_verify_real_column_float32_boundary_no_false_positive(
 
 
 # ---------------------------------------------------------------------------
+# Float-width + NaN/NULL parity (live-Neon labels artifact, verify#8aab)
+# ---------------------------------------------------------------------------
+#
+# Live verify against Neon flagged ~100 spurious checksum mismatches on
+# market.thematic_labels_daily while every other table was TRUE parity. Root
+# cause: the parquet stores forward-return columns as float32 while the live PG
+# column is DOUBLE PRECISION (the live DDL diverged from the static REAL schema).
+# Keying float32-casting off the STATIC schema's REAL membership missed it.
+#
+# The fix derives the float32 column set from the PARQUET dtypes (the
+# source-of-precision) and applies the float32 round-trip ONLY to those columns
+# — on both sides. A float64-stored column (OHLC prices, breadth value) keeps
+# FULL float64 precision, so genuine sub-float32 drift in a DOUBLE column is
+# still caught (codex P1: an unconditional float32 cast would blind the gate to
+# real drift in DOUBLE columns). NaN<->NULL collapses for every column.
+
+
+def _float_truncated_by_f32() -> tuple[float, float]:
+    """A float64 whose float32 cast changes its bit value, plus that cast.
+
+    Returns ``(orig64, parquet_f32)`` where ``orig64`` is what a DOUBLE PRECISION
+    PG column would hold from a full-precision load, and ``parquet_f32`` is the
+    same number after a float32 parquet round-trip. They differ in float64 bits;
+    a float32-canonicalizing checksum must collapse them to equal.
+    """
+    import numpy as np
+
+    orig64 = 0.06948674738744653
+    parquet_f32 = float(np.float32(orig64))
+    assert orig64 != parquet_f32, "value must actually lose bits under float32"
+    return orig64, parquet_f32
+
+
+def test_checksum_float32_column_no_false_positive():
+    """A column the parquet stores as float32 must hash equal across the float32
+    parquet value and its widened-to-float64 PG mirror (REAL *or* a
+    schema-diverged DOUBLE). The column is named in ``float32_cols`` so both
+    sides take the float32 round-trip and collapse to the same 32-bit value."""
+    from rainier.db.verify import _checksum
+
+    orig64, parquet_f32 = _float_truncated_by_f32()
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
+    parquet_rows = [{"symbol": "AAA", "fwd_20d_ret": parquet_f32}]
+    pg_rows = [{"symbol": "AAA", "fwd_20d_ret": orig64}]
+    assert _checksum(parquet_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "float32-stored column: parquet f32 vs widened PG f64 must hash equal"
+
+
+def test_checksum_double_column_catches_subfloat32_drift():
+    """codex P1 regression: a float64-stored (DOUBLE) column must STILL catch
+    real drift below a float32 ULP. ``100.00000001`` vs ``100.00000002`` are
+    distinct float64s that collapse to the same float32 bucket — an
+    unconditional float32 cast would silently pass corrupted data. Because the
+    column is NOT in ``float32_cols`` it is hashed at full float64 precision, so
+    the two values mismatch (drift detected)."""
+    import numpy as np
+
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "close"]
+    pk = ("symbol",)
+    a64, b64 = 100.00000001, 100.00000002
+    # Precondition: these collapse to one float32 bucket (the blinding hazard).
+    assert np.float32(a64) == np.float32(b64), "test premise: same float32 bucket"
+    assert a64 != b64, "but distinct as float64"
+    # close is a DOUBLE-stored column -> NOT in float32_cols -> full precision.
+    a = [{"symbol": "AAA", "close": a64}]
+    b = [{"symbol": "AAA", "close": b64}]
+    assert _checksum(a, cols, pk, frozenset()) != _checksum(
+        b, cols, pk, frozenset()
+    ), "DOUBLE column drift below float32 ULP must STILL be detected"
+
+
+def test_checksum_nan_equals_sql_null():
+    """A parquet float NaN and a SQL NULL (None) for the same cell must hash
+    equal — for every column, float32 or not. Recent asof dates legitimately
+    carry NaN forward returns (window not elapsed) written as NULL in PG; that
+    representation difference must not be flagged as drift."""
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
+    nan_rows = [{"symbol": "AAA", "fwd_20d_ret": float("nan")}]
+    null_rows = [{"symbol": "AAA", "fwd_20d_ret": None}]
+    assert _checksum(nan_rows, cols, pk, f32_cols) == _checksum(
+        null_rows, cols, pk, f32_cols
+    ), "NaN (parquet) and NULL (PG) must canonicalize to one token"
+
+
+def test_checksum_different_values_still_mismatch():
+    """NEGATIVE gate: genuinely different numbers must STILL mismatch. The
+    width/NaN canonicalization must not blind the gate to real drift — two
+    float32-column values that differ beyond float32 precision (and a
+    NaN-vs-real-value pair) must hash differently."""
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
+    a = [{"symbol": "AAA", "fwd_20d_ret": 0.05}]
+    b = [{"symbol": "AAA", "fwd_20d_ret": 0.06}]
+    assert _checksum(a, cols, pk, f32_cols) != _checksum(
+        b, cols, pk, f32_cols
+    ), "0.05 vs 0.06 is real drift and must mismatch"
+    # NaN/NULL must NOT collapse into a real value: a present number != absent.
+    real_val = [{"symbol": "AAA", "fwd_20d_ret": 0.0}]
+    nan_val = [{"symbol": "AAA", "fwd_20d_ret": float("nan")}]
+    assert _checksum(real_val, cols, pk, f32_cols) != _checksum(
+        nan_val, cols, pk, f32_cols
+    ), "a real 0.0 and a missing (NaN/NULL) cell must remain distinguishable"
+
+
+def test_float32_columns_derives_from_parquet_dtypes():
+    """``_float32_columns`` reports exactly the float32-dtype columns of a frame
+    (the live source-of-precision), so a float64 column is excluded and stays
+    full precision in the checksum."""
+    import numpy as np
+    import pandas as pd
+
+    from rainier.db.verify import _float32_columns
+
+    df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_20d_ret": pd.Series([0.1], dtype=np.float32),
+            "close": pd.Series([100.0], dtype=np.float64),
+        }
+    )
+    assert _float32_columns(df) == frozenset({"fwd_20d_ret"})
+
+
+def test_real_columns_from_schema():
+    """``_real_columns`` reports the PG ``REAL`` columns of a table spec — the
+    second normalization signal (float64-parquet-into-REAL direction)."""
+    from rainier.db import rows as rows_mod
+    from rainier.db.verify import _real_columns
+
+    labels_spec = next(
+        s for s in rows_mod.TABLE_SPECS if s.name == "thematic_labels_daily"
+    )
+    real_cols = _real_columns(labels_spec)
+    # The schema declares the forward-return columns REAL; assert a representative
+    # one is present and a non-float key column is absent.
+    assert "fwd_3d_ret" in real_cols
+    assert "symbol" not in real_cols
+
+
+def test_checksum_float64_parquet_into_real_pg_no_false_positive():
+    """codex iter-1 P1 regression: a column stored float64 in parquet but
+    ``REAL`` in PG must NOT false-positive. PG rounds the value to float32 on
+    round-trip while the parquet float64 keeps full bits; because the column is
+    in the schema-``REAL`` set the checksum normalizes both sides through float32
+    and they hash equal. (Parquet-dtype alone returns empty here and would
+    falsely flag drift.)"""
+    import numpy as np
+
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_3d_ret"]
+    pk = ("symbol",)
+    orig64 = 0.06948674738744653  # what the float64 parquet holds
+    pg_real = float(np.float32(orig64))  # what PG REAL returns after rounding
+    assert orig64 != pg_real
+    # Union set includes the schema-REAL column even though parquet dtype is f64.
+    f32_cols = frozenset({"fwd_3d_ret"})
+    parquet_rows = [{"symbol": "AAA", "fwd_3d_ret": orig64}]
+    pg_rows = [{"symbol": "AAA", "fwd_3d_ret": pg_real}]
+    assert _checksum(parquet_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "float64 parquet vs rounded PG REAL must hash equal (schema-REAL signal)"
+
+
+# ---------------------------------------------------------------------------
 # Timezone-aware datetime parity (TIMESTAMPTZ columns)
 # ---------------------------------------------------------------------------
 
@@ -295,8 +472,8 @@ def test_checksum_tz_aware_same_instant_matches():
     assert utc != pacific or str(utc) != str(pacific)  # reprs differ pre-norm
     parquet_rows = [{"symbol": "AAA", "fetched_at": utc}]
     pg_rows = [{"symbol": "AAA", "fetched_at": pacific}]
-    assert _checksum(parquet_rows, cols, pk, frozenset()) == _checksum(
-        pg_rows, cols, pk, frozenset()
+    assert _checksum(parquet_rows, cols, pk) == _checksum(
+        pg_rows, cols, pk
     ), "same instant in a different tz offset must hash equal"
 
 

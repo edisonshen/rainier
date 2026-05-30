@@ -12,29 +12,58 @@ with ``ok`` (all match) + a ``drift`` list naming each offending
 CI/cron-usable as the gate the operator runs after a backfill (and later after
 daily dual-write runs) to confirm PG mirrors parquet.
 
-Checksum determinism + float tolerance (task plan §3)
------------------------------------------------------
+Checksum determinism + float/NaN canonicalization (task plan §3, verify#8aab)
+-----------------------------------------------------------------------------
 The checksum must NOT depend on row order (PG and parquet return rows in
-different orders), and must NOT false-positive on storage-precision drift.
-Parquet stores float64 originals, but several ``market.*`` columns are PG
-``REAL`` (float32, ~7 significant digits). A clean ``REAL`` round-trip returns a
-value whose float64 repr differs from the parquet original in the low bits, so a
-naive repr/hash falsely flags drift.
+different orders), and must NOT false-positive on differences that are purely
+about how a faithful value is *stored* on each side. Two such differences are
+neutralized:
 
-The fix is *exact*, not a fuzzy tolerance: PG ``REAL`` columns are normalized on
-BOTH sides by casting through ``numpy.float32``. The PG value already carries
-only float32 precision, and casting the parquet float64 down to float32
-reproduces the IDENTICAL 32-bit value — so both sides hash bit-for-bit equal.
-``DOUBLE_PRECISION`` columns round-trip float64 exactly and need no
-normalization. (Significant-figure rounding was rejected: a value can straddle a
-rounding boundary at the Nth digit so the two equal-float32 reprs round to
-different decimals — boundary instability that float32-casting avoids entirely.)
+  1. Float width — scoped to columns that are float32-precision-limited on at
+     least one side. A column is float32-normalized when EITHER the parquet
+     stores it as float32 OR the PG schema declares it ``REAL`` (the union, see
+     ``_float32_columns`` + ``_real_columns``). Both signals are needed:
 
-The per-spec set of ``REAL`` columns is derived from the schema column types
-(``_real_columns``). Steps:
+       * Parquet float32 (live dtype): forward-return / feature columns the
+         parquet persisted as float32. Their PG mirror may be ``REAL`` *or*
+         ``DOUBLE PRECISION`` — the live DDL can diverge from the static schema
+         (observed on ``thematic_labels_daily``: ``DOUBLE`` in Neon, ``REAL`` in
+         the schema source), so the schema lookup alone missed it and produced
+         ~100 spurious mismatches in a live backfill.
+       * Schema ``REAL`` (static): when a parquet cache stores a column as
+         float64 but the PG column is ``REAL``, PG rounds the value to float32
+         on round-trip while the parquet float64 keeps full bits, so the parquet
+         dtype alone misses it. The schema ``REAL`` membership catches it.
+
+     For a column in the union, casting both sides through ``numpy.float32``
+     collapses the float32 value (whichever side carries it) and its
+     widened/un-rounded counterpart to the IDENTICAL 32-bit value, so faithful
+     data hashes equal. float32 truncation is stable (no rounding-boundary
+     instability) — significant-figure rounding was rejected because a value can
+     straddle a boundary at the Nth digit.
+
+     Crucially this is NOT applied to columns that are float64 on BOTH sides
+     (parquet float64 + PG ``DOUBLE``: OHLC prices, ``breadth_indicator_daily``
+     ``value``). Those are hashed at full float64 precision, so genuine
+     sub-float32 drift in a DOUBLE column is still caught — the gate is not
+     blinded for the data that legitimately needs full precision.
+
+  2. NaN vs SQL NULL (every column). Recent asof dates legitimately carry NaN
+     forward returns (the forward window has not elapsed); ``pg_value`` writes
+     NaN as PG NULL (Python ``None``). Both a float NaN and ``None`` canonicalize
+     to the single ``("n",)`` token so this representation difference is not
+     flagged — while a real float value stays a distinct ``("f", ...)`` token, so
+     a NaN/NULL-vs-real-value difference is still caught.
+
+Steps:
 
   * coerce every cell through ``pg_value`` (NaN/NaT -> None, numpy -> Python);
-  * cast REAL-column floats through float32 (exact, stable);
+  * derive the float32 column set = parquet float32 dtypes (``_float32_columns``)
+    UNION schema ``REAL`` columns (``_real_columns``); both sides are hashed
+    against the SAME set so a float32 value and its widened/rounded counterpart
+    collapse identically;
+  * canonicalize via ``_canon_cell`` (float in a float32 column -> float32;
+    NaN/NULL -> one token; tz-aware datetimes -> UTC);
   * build a per-row tuple in fixed table-column order, sort the rows within a
     date group by primary key, then BLAKE2b-hash the canonical repr.
 
@@ -83,36 +112,79 @@ class VerifyReport:
 
 
 def _real_columns(spec: TableSpec) -> frozenset[str]:
-    """Column names stored as PG ``REAL`` (float32) for this table.
+    """Column names the static schema declares as PG ``REAL`` (float32) for ``spec``.
 
-    Those are the columns whose parquet float64 originals must be cast through
-    float32 to compare exactly against their round-tripped PG values.
+    Needed because a parquet cache can store a column as float64 while the PG
+    column is ``REAL``: PG rounds it to float32 on round-trip, so the parquet
+    dtype alone (``_float32_columns``) would miss it and false-positive drift on
+    faithful data. The schema lookup catches that direction; the parquet-dtype
+    lookup catches the live-DDL-diverged-DOUBLE direction. Their union is the
+    float32-normalized set.
     """
     return frozenset(
         c.name for c in spec.table.columns if isinstance(c.type, REAL)
     )
 
 
-def _canon_cell(v, is_real: bool) -> object:
+def _float32_columns(df: pd.DataFrame) -> frozenset[str]:
+    """Column names the parquet frame physically stores at float32 precision.
+
+    A column persisted as float32 carries only ~7 significant digits, so its PG
+    mirror (``REAL`` or a schema-diverged ``DOUBLE``) can never hold more than
+    the float32 round-trip — those columns must be float32-normalized on both
+    sides to compare faithfully. Derived from the LIVE parquet dtypes (not the
+    static schema) so it catches ``thematic_labels_daily``, which is ``REAL`` in
+    the schema source but ``DOUBLE`` in Neon. Unioned with ``_real_columns`` to
+    also cover the float64-parquet-into-PG-``REAL`` direction.
+    """
+    return frozenset(
+        str(name)
+        for name, dtype in df.dtypes.items()
+        if dtype == np.float32
+    )
+
+
+def _canon_cell(v, is_float32: bool) -> object:
     """Canonicalize a coerced cell for hashing.
 
-    Floats in REAL columns are cast through float32 so the parquet float64
-    original and the round-tripped PG REAL value collapse to the identical
-    32-bit value. DOUBLE_PRECISION floats round-trip exactly, so they pass
-    through unchanged. Timezone-aware datetimes are normalized to UTC so the
-    SAME instant hashes identically regardless of the session timezone PG
-    rendered it in (TIMESTAMPTZ columns like ``fetched_at``/``computed_at``
-    come back in the connection's timezone, e.g. ``08:30-08:00``, while the
-    parquet original is ``16:30+00:00`` — both are the same instant and must
-    not false-positive drift). None and other non-floats are tagged +
-    stringified.
+    ``is_float32`` is True only for columns the parquet stores at float32
+    precision (see ``_float32_columns``). Two storage-only differences are
+    neutralized so faithful data reports TRUE parity:
+
+    1. Float width (float32 columns only). The parquet stores the column at
+       float32 while the PG mirror may be REAL *or* DOUBLE PRECISION (the live
+       DDL can diverge from the static schema — observed on
+       ``thematic_labels_daily``: DOUBLE in Neon, REAL in the schema source).
+       Casting both sides of a float32-origin column through float32 collapses a
+       float32 parquet value and its widened-to-float64 PG counterpart to the
+       identical 32-bit value, so they hash equal regardless of which side
+       stored which width. float32 truncation is stable (no rounding-boundary
+       instability). A float64-origin column (``is_float32`` False) is hashed at
+       FULL float64 precision, so genuine sub-float32 drift in a DOUBLE column is
+       still caught — the gate is not blinded for full-precision data.
+
+    2. NaN vs SQL NULL (every column). Recent asof dates carry NaN forward
+       returns (the forward window has not elapsed); ``pg_value`` writes NaN as
+       PG NULL, which comes back as Python ``None``. Both a float NaN and
+       ``None`` canonicalize to the single ``("n",)`` token so the
+       representation difference is not flagged — a *real* float value stays a
+       distinct ``("f", ...)`` token, so a NaN/NULL-vs-real-value difference is
+       still caught as drift.
+
+    Timezone-aware datetimes are normalized to UTC so the SAME instant hashes
+    identically regardless of the session timezone PG rendered it in (TIMESTAMPTZ
+    columns like ``fetched_at``/``computed_at`` come back in the connection's
+    timezone, e.g. ``08:30-08:00``, while the parquet original is ``16:30+00:00``
+    — both the same instant). Other non-floats are tagged + stringified.
     """
-    if isinstance(v, float):
-        if is_real:
-            return ("f", float(np.float32(v)))
-        return ("f", v)
     if v is None:
         return ("n",)
+    if isinstance(v, float):
+        if v != v:  # NaN: collapse to the NULL token (faithful NaN<->NULL).
+            return ("n",)
+        if is_float32:
+            return ("f", float(np.float32(v)))
+        return ("f", v)
     if isinstance(v, _dt.datetime) and v.tzinfo is not None:
         # Same instant, stable repr: convert to UTC before stringifying.
         return ("s", str(v.astimezone(_dt.timezone.utc)))
@@ -123,14 +195,16 @@ def _checksum(
     rows: list[dict],
     columns: list[str],
     pk_cols: tuple[str, ...],
-    real_cols: frozenset[str],
+    float32_cols: frozenset[str] = frozenset(),
 ) -> str:
     """Order-independent content hash of ``rows`` projected to ``columns``.
 
     Rows are sorted by primary key (None sorts first via a (is_none, repr) key)
     so PG vs parquet row order is irrelevant, then each row is rendered as a
-    fixed-column-order tuple of canonical cells (REAL columns float32-normalized)
-    and BLAKE2b-hashed.
+    fixed-column-order tuple of canonical cells. Floats in ``float32_cols`` are
+    float32-normalized (faithful float32<->widened-float64 parity); all other
+    floats keep full float64 precision; NaN/NULL collapse to one token — see
+    ``_canon_cell``. The result is BLAKE2b-hashed.
     """
 
     def sort_key(row: dict):
@@ -138,7 +212,9 @@ def _checksum(
 
     h = hashlib.blake2b(digest_size=16)
     for row in sorted(rows, key=sort_key):
-        cells = tuple(_canon_cell(row.get(c), c in real_cols) for c in columns)
+        cells = tuple(
+            _canon_cell(row.get(c), c in float32_cols) for c in columns
+        )
         h.update(repr(cells).encode("utf-8"))
         h.update(b"\x1e")  # record separator
     return h.hexdigest()
@@ -211,13 +287,19 @@ def verify_coverage(
 
     for spec in TABLE_SPECS:
         columns = list(spec.table.columns.keys())
-        real_cols = _real_columns(spec)
         path = cache_dir / f"{spec.parquet_name}.parquet"
 
         if path.exists():
             pq_df = pd.read_parquet(path)
         else:
             pq_df = pd.DataFrame(columns=columns)
+
+        # float32-normalize a column when EITHER the parquet stores it as float32
+        # (live-DDL-diverged DOUBLE case) OR the PG schema declares it REAL
+        # (float64-parquet-into-REAL case). Both signals are needed; their union
+        # is applied to BOTH sides. Columns that are float64 on both sides stay
+        # full precision, so real DOUBLE drift is still caught.
+        float32_cols = _float32_columns(pq_df) | _real_columns(spec)
 
         # Window both sides identically before comparing (registries pass through).
         pq_df = _window_df(pq_df, spec, asof_start, asof_end)
@@ -247,8 +329,8 @@ def verify_coverage(
                 )
                 match = False
             else:
-                pq_sum = _checksum(pq_g, columns, spec.pk_cols, real_cols)
-                pg_sum = _checksum(pg_g, columns, spec.pk_cols, real_cols)
+                pq_sum = _checksum(pq_g, columns, spec.pk_cols, float32_cols)
+                pg_sum = _checksum(pg_g, columns, spec.pk_cols, float32_cols)
                 if pq_sum != pg_sum:
                     report.drift.append(
                         Drift(spec.name, key, "checksum mismatch")
