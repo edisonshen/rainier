@@ -3964,6 +3964,15 @@ def _check_ohlcv_freshness(
     both paths surface the same diagnostic (codex iter-6/8 [P1]/[P2]).
 
     Stale: panel.max(date) < asof_dt.
+    Shallow: fewer than MIN_HISTORY_TRADING_DAYS distinct dates <= asof_dt.
+             Layer A's longest rolling window is 20 trading days (rel_20 +
+             vol_20); with less history compute_thematic_features emits the
+             RANK_SENTINEL for every symbol and the job exits 0 with unusable
+             ranks. This catches the fresh-host / deleted-cache case where
+             `thematic backfill --incremental` writes only the 5-day window
+             (the incremental path is a refresh, not a substitute for the
+             full-history seed). Fail loud so the operator runs the one-shot
+             seed first.
     Partial: > 25% of YAML symbols missing on asof_dt (fail);
              > 10% missing (warning to stderr).
     """
@@ -3981,6 +3990,22 @@ def _check_ohlcv_freshness(
             f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
             f"{ohlcv_path}\n"
             f"  3. uv run rainier thematic run-daily  # retry"
+        )
+
+    # Shallow-history guard: Layer A needs >= 20 trading days of history for
+    # the rel_20 / vol_20 windows. Count distinct dates at or before asof.
+    MIN_HISTORY_TRADING_DAYS = 20
+    distinct_dates = panel.loc[panel["date"] <= asof_dt, "date"].nunique()
+    if distinct_dates < MIN_HISTORY_TRADING_DAYS:
+        raise click.ClickException(
+            f"OHLCV cache too shallow: only {distinct_dates} trading day(s) "
+            f"<= asof={asof_dt}; Layer A needs >= {MIN_HISTORY_TRADING_DAYS} "
+            f"(rel_20/vol_20 windows) or every rank is the no-data sentinel. "
+            f"The --incremental refresh only fetches a few days and is NOT a "
+            f"substitute for the full-history seed. Seed first:\n"
+            f"  1. uv run python scripts/backfill_thematic_universe.py "
+            f"--start 2024-10-01 --end {asof_dt}\n"
+            f"  2. uv run rainier thematic run-daily  # retry"
         )
 
     expected_syms = {sym for syms in spec.sectors.values() for sym in syms}

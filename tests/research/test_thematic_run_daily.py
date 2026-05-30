@@ -451,6 +451,159 @@ def test_run_daily_stale_ohlcv_surfaces_diagnostic(fake_cache):
     )
 
 
+# ---------------------------------------------------------------------------
+# Shallow-history guard — a fresh-host / deleted-cache incremental run writes
+# only the 5-day window; run-daily must FAIL LOUD rather than emit sentinel
+# ranks over <20 trading days of history (codex iter-3 [P1]).
+# ---------------------------------------------------------------------------
+
+
+def _make_universe_yaml(path: Path, symbols: list[str]) -> None:
+    body = (
+        "version: 1\n"
+        "schema: thematic_universe.v1\n"
+        "asof_seeded: 2026-05-01\n"
+        "universe:\n"
+        "  test_sector:\n"
+    )
+    body += "".join(f"    - {s}\n" for s in symbols)
+    path.write_text(body)
+
+
+def test_check_freshness_rejects_shallow_history():
+    """`_check_ohlcv_freshness` raises when the cache has < 20 trading days
+    of history at/before asof — Layer A's rel_20/vol_20 windows would all be
+    the no-data sentinel, so the job must fail loud instead of exiting 0 with
+    unusable ranks. Direct unit test on the shared guard (no DB / no network).
+    """
+    from types import SimpleNamespace
+
+    from rainier.cli import _check_ohlcv_freshness
+
+    symbols = ["AAA", "BBB", "CCC"]
+    # Only 5 trading days ending at asof — exactly what an incremental-only
+    # refresh on a fresh host produces.
+    asof = date(2026, 5, 29)
+    dates = []
+    d = asof
+    while len(dates) < 5:
+        if d.weekday() < 5:
+            dates.append(d)
+        d = d - timedelta(days=1)
+    rows = [
+        {"symbol": s, "date": dd, "close": 100.0}
+        for s in symbols
+        for dd in dates
+    ]
+    panel = pd.DataFrame(rows)
+    spec = SimpleNamespace(sectors={"test_sector": symbols})
+
+    import click
+
+    with pytest.raises(click.ClickException) as exc:
+        _check_ohlcv_freshness(panel, asof, "data/cache/thematic_universe.parquet", spec)
+    msg = str(exc.value)
+    assert "shallow" in msg.lower(), f"diagnostic must say 'shallow'; got: {msg!r}"
+    assert "backfill_thematic_universe" in msg, (
+        f"diagnostic must name the full-history seed command; got: {msg!r}"
+    )
+
+
+def test_check_freshness_accepts_deep_history():
+    """A cache with >= 20 trading days at/before asof passes the guard."""
+    from types import SimpleNamespace
+
+    from rainier.cli import _check_ohlcv_freshness
+
+    symbols = ["AAA", "BBB"]
+    panel = _build_ohlcv_panel(symbols, n_days=25)
+    panel["date"] = pd.to_datetime(panel["date"]).dt.date
+    asof = panel["date"].max()
+    spec = SimpleNamespace(sectors={"test_sector": symbols})
+
+    # Must NOT raise: deep enough history, fresh, full coverage.
+    _check_ohlcv_freshness(panel, asof, "data/cache/thematic_universe.parquet", spec)
+
+
+def test_run_daily_rejects_incremental_only_thin_cache(tmp_path):
+    """End-to-end: a thin (5-day) incremental-only cache makes run-daily fail
+    loud with the shallow-history diagnostic — the fresh-host footgun codex
+    flagged. The incremental refresh is a refresh, not a substitute for the
+    full-history seed.
+    """
+    import importlib.util
+
+    from rainier.cli import cli
+
+    symbols = ["AAA", "BBB", "CCC"]
+    asof = date(2026, 5, 29)
+    panel_path = tmp_path / "thematic_universe.parquet"
+    yaml_path = tmp_path / "universe.yaml"
+    _make_universe_yaml(yaml_path, symbols)
+
+    # Simulate a fresh-host incremental run: no existing cache, only the 5-day
+    # window gets written. Drive the real backfill script's incremental path.
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "backfill_thematic_universe.py"
+    )
+    spec = importlib.util.spec_from_file_location("backfill_thematic_universe", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    recent = [asof - timedelta(days=k) for k in range(5)]
+
+    def _stub(syms, start, end):
+        start_d = pd.to_datetime(start).date()
+        end_d = pd.to_datetime(end).date()
+        return {
+            s: pd.DataFrame(
+                [
+                    {
+                        "date": dd, "open": 100.0, "high": 101.0,
+                        "low": 99.0, "close": 100.5, "volume": 1_000_000,
+                    }
+                    for dd in recent
+                    if start_d <= dd <= end_d
+                ],
+                columns=["date", "open", "high", "low", "close", "volume"],
+            )
+            for s in syms
+        }
+
+    mod.backfill(
+        symbols=symbols,
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=panel_path,
+        incremental=True,
+        fetch_fn=_stub,
+        today=asof,
+        min_coverage=0.0,
+    )
+    # The cache exists but is shallow (< 20 trading days).
+    assert pd.read_parquet(panel_path)["date"].nunique() < 20
+
+    runner = CliRunner()
+    r = runner.invoke(
+        cli,
+        [
+            "thematic", "run-daily", "--asof", asof.isoformat(),
+            "--ohlcv", str(panel_path), "--yaml", str(yaml_path),
+            "--features-out", str(tmp_path / "features.parquet"),
+            "--labels-out", str(tmp_path / "labels.parquet"),
+            "--ticker-registry", str(tmp_path / "tr.parquet"),
+            "--sector-registry", str(tmp_path / "sr.parquet"),
+            "--html-out", str(tmp_path / "out.html"),
+        ],
+    )
+    assert r.exit_code != 0, f"thin cache must fail fast; output={r.output!r}"
+    assert "shallow" in r.output.lower(), (
+        f"diagnostic must mention 'shallow' history; got: {r.output!r}"
+    )
+
+
 def test_thematic_compute_partial_universe_coverage_fails(fake_cache, tmp_path):
     """Regression — codex iter-8 [P2]: the direct `thematic compute` path
     must apply the same partial-coverage gate as `run-daily`, otherwise an
