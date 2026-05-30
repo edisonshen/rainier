@@ -48,12 +48,15 @@ neutralized:
      sub-float32 drift in a DOUBLE column is still caught — the gate is not
      blinded for the data that legitimately needs full precision.
 
-  2. NaN vs SQL NULL (every column). Recent asof dates legitimately carry NaN
-     forward returns (the forward window has not elapsed); ``pg_value`` writes
-     NaN as PG NULL (Python ``None``). Both a float NaN and ``None`` canonicalize
-     to the single ``("n",)`` token so this representation difference is not
-     flagged — while a real float value stays a distinct ``("f", ...)`` token, so
-     a NaN/NULL-vs-real-value difference is still caught.
+  2. NaN/NaT vs SQL NULL (every column). Recent asof dates legitimately carry
+     NaN forward returns (the forward window has not elapsed); ``pg_value``
+     writes NaN as PG NULL (Python ``None``). A numpy-aware scalar ``pd.isna``
+     guard collapses Python-float NaN, numpy.float32 / numpy.float64 NaN, pandas
+     NaT, and ``None`` to the single ``("n",)`` token (the float32-dtype
+     forward-return columns arrive as numpy.float32 NaN, which is NOT a Python
+     float, so a float-only guard leaked them — verify#0d00). A real float value
+     stays a distinct ``("f", ...)`` token, so a NaN/NULL-vs-real-value
+     difference is still caught.
 
 Steps:
 
@@ -163,13 +166,17 @@ def _canon_cell(v, is_float32: bool) -> object:
        FULL float64 precision, so genuine sub-float32 drift in a DOUBLE column is
        still caught — the gate is not blinded for full-precision data.
 
-    2. NaN vs SQL NULL (every column). Recent asof dates carry NaN forward
+    2. NaN/NaT vs SQL NULL (every column). Recent asof dates carry NaN forward
        returns (the forward window has not elapsed); ``pg_value`` writes NaN as
-       PG NULL, which comes back as Python ``None``. Both a float NaN and
-       ``None`` canonicalize to the single ``("n",)`` token so the
-       representation difference is not flagged — a *real* float value stays a
-       distinct ``("f", ...)`` token, so a NaN/NULL-vs-real-value difference is
-       still caught as drift.
+       PG NULL, which comes back as Python ``None``. The numpy-aware guard
+       (``pd.isna`` on the scalar) collapses Python-float NaN, numpy.float32 /
+       numpy.float64 NaN, pandas NaT, and ``None`` to the single ``("n",)``
+       token, so the representation difference is not flagged. The float32
+       forward-return columns arrive as numpy.float32 NaN, which is NOT a Python
+       float — an ``isinstance(float)``-only guard missed those and leaked them
+       to ``("s", "nan")`` vs the NULL side's ``("n",)`` (verify#0d00). A *real*
+       float value stays a distinct ``("f", ...)`` token, so a
+       NaN/NULL-vs-real-value difference is still caught as drift.
 
     Timezone-aware datetimes are normalized to UTC so the SAME instant hashes
     identically regardless of the session timezone PG rendered it in (TIMESTAMPTZ
@@ -179,12 +186,26 @@ def _canon_cell(v, is_float32: bool) -> object:
     """
     if v is None:
         return ("n",)
-    if isinstance(v, float):
-        if v != v:  # NaN: collapse to the NULL token (faithful NaN<->NULL).
-            return ("n",)
+    # Numpy-aware NULL guard, BEFORE any float32-cast / stringify branch. A
+    # forward-return column is float32 dtype, so its NaN cells arrive as
+    # numpy.float32 NaN — which is NOT a Python float, so the isinstance(float)
+    # branch below missed it and leaked it to ("s", "nan") while the PG NULL side
+    # hashed ("n",), causing ~100 spurious thematic_labels_daily mismatches
+    # (verify#0d00; #110 only tested python-float NaN, which the float branch
+    # already caught). pd.isna collapses python-float NaN, numpy.float32 /
+    # numpy.float64 NaN, and pandas NaT to one NULL token. Guarded to SCALARS
+    # only: pd.isna on an array/non-scalar returns an array (ambiguous truth) —
+    # cells here are always scalars, but np.ndim==0 makes that explicit and safe.
+    if np.ndim(v) == 0 and pd.isna(v):
+        return ("n",)
+    if isinstance(v, (float, np.floating)):
+        # np.floating included so a raw (un-coerced) numpy float canonicalizes to
+        # the SAME float token as its pg_value-widened Python-float counterpart
+        # rather than stringifying. float() normalizes np.float32/64 -> Python
+        # float for a stable repr; the is_float32 branch then collapses width.
         if is_float32:
             return ("f", float(np.float32(v)))
-        return ("f", v)
+        return ("f", float(v))
     if isinstance(v, _dt.datetime) and v.tzinfo is not None:
         # Same instant, stable repr: convert to UTC before stringifying.
         return ("s", str(v.astimezone(_dt.timezone.utc)))

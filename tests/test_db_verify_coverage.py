@@ -365,6 +365,99 @@ def test_checksum_nan_equals_sql_null():
     ), "NaN (parquet) and NULL (PG) must canonicalize to one token"
 
 
+def test_canon_cell_numpy_nan_collapses_to_null_token():
+    """RED (verify#0d00): a numpy-dtype NaN must collapse to the SAME NULL token
+    as None and python-float NaN — for both is_float32 settings.
+
+    The forward-return columns are float32 dtype, so their NaN cells arrive as
+    ``numpy.float32`` NaN. The pre-fix ``isinstance(v, float)`` guard missed
+    those (``np.float32`` is NOT a Python ``float`` subclass), leaking them to
+    ``('s', 'nan')`` while the PG NULL side hashed ``('n',)`` — ~100 spurious
+    ``thematic_labels_daily`` mismatches on recent dates. ``np.float64`` happens
+    to subclass ``float`` so it already collapsed; the fix must cover both."""
+    import numpy as np
+
+    from rainier.db.verify import _canon_cell
+
+    null_token = _canon_cell(None, True)
+    for is_f32 in (True, False):
+        assert _canon_cell(np.float32("nan"), is_f32) == _canon_cell(None, is_f32), (
+            f"np.float32 NaN must equal NULL token (is_float32={is_f32})"
+        )
+        assert _canon_cell(np.float64("nan"), is_f32) == _canon_cell(None, is_f32), (
+            f"np.float64 NaN must equal NULL token (is_float32={is_f32})"
+        )
+        assert _canon_cell(float("nan"), is_f32) == _canon_cell(None, is_f32), (
+            f"python float NaN must equal NULL token (is_float32={is_f32})"
+        )
+    # And the None token itself is the canonical NULL token.
+    assert null_token == ("n",)
+
+
+def test_canon_cell_pandas_nat_collapses_to_null_token():
+    """RED (verify#0d00): pandas NaT (the datetime NULL) must also collapse to
+    the NULL token, not stringify to ``('s', 'NaT')`` — TIMESTAMP columns with
+    an absent value would otherwise false-positive against PG NULL."""
+    import pandas as pd
+
+    from rainier.db.verify import _canon_cell
+
+    assert _canon_cell(pd.NaT, False) == _canon_cell(None, False)
+    assert _canon_cell(pd.NaT, True) == _canon_cell(None, True)
+
+
+def test_checksum_numpy_float32_nan_equals_null_end_to_end():
+    """RED (verify#0d00) end-to-end: a frame with a float32 column carrying NaN
+    cells, pushed through the SAME path verify uses (``frame_to_pg_rows`` ->
+    ``_checksum`` with that column in ``float32_cols``), must hash EQUAL to the
+    None/NULL counterpart row.
+
+    This is the exact gap that let #110 through: that fix's tests used
+    python-float NaN (already collapsed). Here the parquet-origin column is a
+    real numpy float32 dtype, so its NaN is ``numpy.float32`` NaN — the leaking
+    representation. The PG-side NULL comes back as Python ``None``."""
+    import numpy as np
+    import pandas as pd
+
+    from rainier.db.rows import frame_to_pg_rows
+    from rainier.db.verify import _checksum
+
+    cols = ["symbol", "fwd_20d_ret"]
+    pk = ("symbol",)
+    f32_cols = frozenset({"fwd_20d_ret"})
+
+    # Parquet side: a genuine float32 column whose cell is NaN (forward window
+    # not yet elapsed). df.to_dict yields numpy.float32 NaN for this cell.
+    parquet_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_20d_ret": pd.Series([np.float32("nan")], dtype=np.float32),
+        }
+    )
+    # PG side: SQL NULL -> Python None.
+    pg_df = pd.DataFrame(
+        {
+            "symbol": pd.Series(["AAA"], dtype="object"),
+            "fwd_20d_ret": pd.Series([None], dtype="object"),
+        }
+    )
+
+    parquet_rows = frame_to_pg_rows(parquet_df, cols)
+    pg_rows = frame_to_pg_rows(pg_df, cols)
+
+    assert _checksum(parquet_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "float32-dtype NaN cell (parquet) must hash equal to NULL (PG) end-to-end"
+
+    # Also feed a raw numpy.float32 NaN straight into _checksum (bypassing the
+    # pg_value coercion) so this guards _canon_cell directly: even if a numpy NaN
+    # reaches the canon layer un-coerced, it must collapse to the NULL token.
+    raw_f32_nan_rows = [{"symbol": "AAA", "fwd_20d_ret": np.float32("nan")}]
+    assert _checksum(raw_f32_nan_rows, cols, pk, f32_cols) == _checksum(
+        pg_rows, cols, pk, f32_cols
+    ), "raw numpy.float32 NaN must hash equal to NULL at the _checksum layer"
+
+
 def test_checksum_different_values_still_mismatch():
     """NEGATIVE gate: genuinely different numbers must STILL mismatch. The
     width/NaN canonicalization must not blind the gate to real drift — two
