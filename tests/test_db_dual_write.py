@@ -608,7 +608,14 @@ def test_cli_thematic_backfill_incremental_advances_pg_ohlcv(
     from rainier.cli import cli
 
     symbols = ["AAA", "BBB", "CCC"]
-    today = date(2026, 5, 29)
+    # Derive `today` from the REAL clock. The CLI loads the backfill script as a
+    # FRESH module instance (importlib.util.module_from_spec), so a monkeypatch
+    # of any pre-imported module's date.today() would NOT reach it — the CLI
+    # always uses the real date.today(). Building the synthetic recent window
+    # relative to the real today keeps this test clock-independent: whatever
+    # incremental window backfill() computes (today-5..today), our stub panel
+    # covers it. (codex iter-2: don't freeze a module the CLI never reuses.)
+    today = date.today()
 
     # An existing parquet cache with OLD history, plus the registries the
     # mirror reads. Built so the incremental window (today-5..today) is a
@@ -623,7 +630,9 @@ def test_cli_thematic_backfill_incremental_advances_pg_ohlcv(
     yaml_path = tmp_path / "universe.yaml"
     _write_universe_yaml(yaml_path, symbols)
 
-    # Recent-window rows the incremental fetch should pick up.
+    # Recent-window rows the incremental fetch should pick up. All within
+    # backfill()'s window (today-INCREMENTAL_WINDOW_DAYS .. today), so the
+    # windowed stub returns them regardless of what real date the CLI sees.
     recent_dates = [today - timedelta(days=2), today - timedelta(days=1), today]
     recent_rows = []
     for s_idx, sym in enumerate(symbols):
@@ -633,29 +642,12 @@ def test_cli_thematic_backfill_incremental_advances_pg_ohlcv(
                 {
                     "symbol": sym, "date": d, "open": close, "high": close * 1.01,
                     "low": close * 0.99, "close": close, "volume": 2_000_000,
-                    "fetched_at": pd.Timestamp("2026-05-29T16:30:00Z"),
+                    "fetched_at": pd.Timestamp.now(tz="UTC"),
                     "yfinance_version": "stub-test",
                 }
             )
     recent_panel = pd.DataFrame(recent_rows)
     _patch_yfinance(monkeypatch, recent_panel)
-
-    # Pin "today" so the incremental window is deterministic. backfill() takes a
-    # `today` kwarg; the CLI doesn't forward it, so freeze date.today() at the
-    # source the script reads (scripts/backfill_thematic_universe.date.today).
-    import importlib
-
-    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    bf_mod = importlib.import_module("backfill_thematic_universe")
-
-    class _FrozenDate(bf_mod.date):  # type: ignore[misc, valid-type]
-        @classmethod
-        def today(cls):
-            return today
-
-    monkeypatch.setattr(bf_mod, "date", _FrozenDate)
 
     # PG starts with zero OHLCV rows.
     assert _count(migrated_engine, "thematic_ohlcv") == 0
