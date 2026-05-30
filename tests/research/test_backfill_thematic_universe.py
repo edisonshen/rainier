@@ -532,3 +532,63 @@ def test_incremental_on_missing_cache_writes_fresh(backfill_mod, tmp_path):
     assert out.exists()
     df = pd.read_parquet(out)
     assert set(df["date"].unique()) == set(recent_dates)
+
+
+def test_incremental_outage_aborts_before_write(backfill_mod, tmp_path):
+    """A provider outage in the incremental window (most/all symbols empty)
+    must raise BEFORE writing, leaving any prior good cache intact (codex P1).
+    Mirrors the breadth twin's incremental coverage gate.
+    """
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic.parquet"
+    # Seed a prior good cache so we can prove the outage doesn't clobber it.
+    backfill_mod.backfill(
+        symbols=["XLK", "SMH", "XLE", "XLF"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=_stub_fetch,
+        min_coverage=0.0,
+    )
+    good_df = pd.read_parquet(out)
+    good_rows = len(good_df)
+
+    today = date(2026, 5, 29)
+
+    # Outage: only 1 of 4 symbols returns rows -> 25% < 90% default coverage.
+    def _outage_fetch(symbols, start, end):
+        start_d = pd.to_datetime(start).date()
+        end_d = pd.to_datetime(end).date()
+        out_map: dict[str, pd.DataFrame] = {}
+        for i, sym in enumerate(symbols):
+            cols = ["date", "open", "high", "low", "close", "volume"]
+            if sym == "XLK":
+                rows = [
+                    {"date": d, "open": 1.0, "high": 1.0, "low": 1.0,
+                     "close": 1.0, "volume": 1}
+                    for d in (today - timedelta(days=1), today)
+                    if start_d <= d <= end_d
+                ]
+                out_map[sym] = pd.DataFrame(rows, columns=cols)
+            else:
+                out_map[sym] = pd.DataFrame(columns=cols)
+        return out_map
+
+    with pytest.raises(ValueError, match="outage"):
+        backfill_mod.backfill(
+            symbols=["XLK", "SMH", "XLE", "XLF"],
+            start="2024-10-01",
+            end="2024-10-08",
+            out_path=out,
+            incremental=True,
+            fetch_fn=_outage_fetch,
+            today=today,
+            # default min_coverage (0.90) -> 25% present trips the gate.
+        )
+
+    # Prior good cache untouched (no thin/empty overwrite).
+    after = pd.read_parquet(out)
+    assert len(after) == good_rows, "outage must not clobber the prior cache"
+    assert today not in set(pd.to_datetime(after["date"]).dt.date)

@@ -600,10 +600,19 @@ def backfill(
 
     fetched = fetch_fn(symbols, start, end)
 
-    # Coverage gate: the incremental window is only a few calendar days, so the
-    # per-symbol bday-ratio tiers (built for the full-history backfill) don't
-    # apply — skip them. The cron's stale/partial guard in ``run-daily``
-    # (_check_ohlcv_freshness) is the load-bearing freshness check downstream.
+    # Coverage gate.
+    #
+    # One-shot: the full per-symbol bday-ratio tiers (built for full history).
+    #
+    # Incremental: the few-day window can't meet the bday-ratio tiers, so those
+    # don't apply. But a provider OUTAGE (yfinance returns empty for most/all
+    # symbols) must still fail BEFORE the atomic write — otherwise we'd upsert a
+    # thin/empty window into the cache (or write an empty cache on a fresh host)
+    # and the cron would exit 0 with no usable ranks. Mirror the breadth twin
+    # (rainier.market_breadth.ohlcv_backfill): count symbols that returned rows;
+    # raise if below the coverage fraction. This aborts before _write_parquet_*
+    # so the prior good cache stays intact and cron-wrapper's discord_on_failure
+    # fires. (codex iter-4 [P1].)
     if not incremental:
         _validate_coverage(
             fetched=fetched,
@@ -614,6 +623,29 @@ def backfill(
             allow_gaps=allow_gaps_set,
             min_coverage=min_coverage,
         )
+    elif min_coverage > 0.0:
+        present = sum(
+            1
+            for sym in symbols
+            if sym not in allow_empty_set
+            and fetched.get(sym) is not None
+            and not fetched[sym].empty
+        )
+        gated = [s for s in symbols if s not in allow_empty_set]
+        if gated and present < min_coverage * len(gated):
+            missing = sorted(
+                s
+                for s in gated
+                if fetched.get(s) is None or fetched[s].empty
+            )
+            raise ValueError(
+                f"incremental refresh outage: only {present}/{len(gated)} "
+                f"symbols returned rows for window {start}..{end} "
+                f"(need >= {min_coverage:.0%}). Likely a yfinance outage / "
+                f"rate-limit. Aborting before the cache write so the prior "
+                f"good cache stays intact. Examples missing: {missing[:8]}. "
+                f"Re-run when the provider is healthy."
+            )
 
     df = _to_normalized_frame(fetched, yfinance_version, fetched_at)
 
