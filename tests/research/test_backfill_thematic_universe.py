@@ -321,3 +321,214 @@ def test_empty_symbol_allowed_via_allowlist(backfill_mod, tmp_path):
     assert out.exists()
     df = pd.read_parquet(out)
     assert set(df["symbol"].unique()) == {"XLK"}
+
+
+# ---------------------------------------------------------------------------
+# --incremental — recent-window refresh, in-place upsert (mirrors breadth
+# backfill-ohlcv --incremental). Refreshes the existing cache without --force
+# cohort so the stale-OHLCV guard in `run-daily` is satisfied.
+# ---------------------------------------------------------------------------
+
+
+def _windowed_fetch_factory(per_symbol_dates):
+    """Return a fetch_fn that records its (symbols, start, end) args and
+    returns rows ONLY for the dates inside [start, end] (inclusive), so a test
+    can assert the incremental path fetches the recent window, not full history.
+    """
+
+    captured: dict[str, object] = {}
+
+    def _fetch(symbols, start, end):
+        captured["symbols"] = list(symbols)
+        captured["start"] = start
+        captured["end"] = end
+        start_d = pd.to_datetime(start).date()
+        end_d = pd.to_datetime(end).date()
+        out: dict[str, pd.DataFrame] = {}
+        for i, sym in enumerate(symbols):
+            base = 100.0 + i * 10.0
+            rows = []
+            for j, d in enumerate(per_symbol_dates):
+                if d < start_d or d > end_d:
+                    continue
+                rows.append(
+                    {
+                        "date": d,
+                        "open": base + j,
+                        "high": base + j + 0.5,
+                        "low": base + j - 0.5,
+                        "close": base + j + 0.25,
+                        "volume": 1000 * (j + 1),
+                    }
+                )
+            out[sym] = pd.DataFrame(
+                rows,
+                columns=["date", "open", "high", "low", "close", "volume"],
+            )
+        return out
+
+    _fetch.captured = captured  # type: ignore[attr-defined]
+    return _fetch
+
+
+def test_incremental_fetches_recent_window_only(backfill_mod, tmp_path):
+    """`incremental=True` ignores start/end and fetches a fixed recent window
+    (today - INCREMENTAL_WINDOW_DAYS .. today), not the full history.
+    """
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic.parquet"
+    # Seed an existing cache with old history so we can prove the incremental
+    # fetch window is the recent gap, not a full re-fetch.
+    backfill_mod.backfill(
+        symbols=["XLK", "SMH"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=_stub_fetch,
+        min_coverage=0.0,
+    )
+
+    today = date(2026, 5, 29)
+    recent_dates = [today - timedelta(days=2), today - timedelta(days=1), today]
+    fetch = _windowed_fetch_factory(recent_dates)
+
+    backfill_mod.backfill(
+        symbols=["XLK", "SMH"],
+        start="2024-10-01",  # ignored under incremental
+        end="2024-10-08",  # ignored under incremental
+        out_path=out,
+        incremental=True,
+        fetch_fn=fetch,
+        today=today,
+        min_coverage=0.0,
+    )
+
+    cap = fetch.captured  # type: ignore[attr-defined]
+    expected_start = (today - timedelta(days=backfill_mod.INCREMENTAL_WINDOW_DAYS)).isoformat()
+    assert cap["start"] == expected_start
+    assert cap["end"] == today.isoformat()
+
+
+def test_incremental_upserts_in_place_no_cohort(backfill_mod, tmp_path):
+    """`incremental=True` merges the recent window INTO the existing parquet
+    on (symbol, date) — no FileExistsError, no sibling cohort file written.
+    """
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic.parquet"
+    backfill_mod.backfill(
+        symbols=["XLK", "SMH"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=_stub_fetch,
+        min_coverage=0.0,
+    )
+    old_rows = len(pd.read_parquet(out))
+    siblings_before = set(tmp_path.glob("thematic_*.parquet"))
+
+    today = date(2026, 5, 29)
+    recent_dates = [today - timedelta(days=1), today]
+    fetch = _windowed_fetch_factory(recent_dates)
+
+    result = backfill_mod.backfill(
+        symbols=["XLK", "SMH"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        incremental=True,
+        fetch_fn=fetch,
+        today=today,
+        min_coverage=0.0,
+    )
+
+    # Wrote IN PLACE, not a cohort sibling.
+    assert result == out
+    siblings_after = set(tmp_path.glob("thematic_*.parquet"))
+    assert siblings_after == siblings_before, "incremental must not write a cohort"
+
+    df = pd.read_parquet(out)
+    # Old rows preserved + new recent rows appended (2 symbols x 2 new dates).
+    assert len(df) == old_rows + 2 * len(recent_dates)
+    assert not df.duplicated(subset=["symbol", "date"]).any()
+    # The new dates are present.
+    present_dates = set(df["date"].unique())
+    for d in recent_dates:
+        assert d in present_dates
+
+
+def test_incremental_no_gap_is_noop(backfill_mod, tmp_path):
+    """Re-running incremental with the same window produces no new rows
+    (idempotent upsert on (symbol, date))."""
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic.parquet"
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=_stub_fetch,
+        min_coverage=0.0,
+    )
+
+    today = date(2026, 5, 29)
+    recent_dates = [today - timedelta(days=1), today]
+    fetch = _windowed_fetch_factory(recent_dates)
+
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        incremental=True,
+        fetch_fn=fetch,
+        today=today,
+        min_coverage=0.0,
+    )
+    rows_after_first = len(pd.read_parquet(out))
+
+    # Second incremental over the identical window: no new rows.
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        incremental=True,
+        fetch_fn=fetch,
+        today=today,
+        min_coverage=0.0,
+    )
+    df = pd.read_parquet(out)
+    assert len(df) == rows_after_first
+    assert not df.duplicated(subset=["symbol", "date"]).any()
+
+
+def test_incremental_on_missing_cache_writes_fresh(backfill_mod, tmp_path):
+    """`incremental=True` with no existing parquet just writes the recent
+    window (no FileExistsError, no cohort) — first-run safety net."""
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic.parquet"
+    today = date(2026, 5, 29)
+    recent_dates = [today - timedelta(days=1), today]
+    fetch = _windowed_fetch_factory(recent_dates)
+
+    result = backfill_mod.backfill(
+        symbols=["XLK"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        incremental=True,
+        fetch_fn=fetch,
+        today=today,
+        min_coverage=0.0,
+    )
+    assert result == out
+    assert out.exists()
+    df = pd.read_parquet(out)
+    assert set(df["date"].unique()) == set(recent_dates)

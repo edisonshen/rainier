@@ -282,6 +282,114 @@ def test_thematic_run_daily_is_idempotent(fake_cache):
     )
 
 
+def test_incremental_backfill_satisfies_stale_guard(fake_cache):
+    """A stale cache that trips the run-daily guard becomes fresh after a
+    `thematic backfill --incremental` refresh — the cron chain
+    (`backfill --incremental && run-daily`) no longer fails the stale-OHLCV
+    guard for `asof=today`.
+
+    Mirrors the breadth cron's `backfill-ohlcv --incremental && compute`
+    ordering: the incremental refresh brings max(date) up to today, so the
+    freshness guard in run-daily passes on the very next step.
+    """
+    import importlib.util
+
+    from rainier.cli import cli
+
+    # The fake_cache panel ends in late 2024 → stale relative to "today".
+    panel_path = fake_cache["panel"]
+    pre = pd.read_parquet(panel_path)
+    pre["date"] = pd.to_datetime(pre["date"]).dt.date
+    asof = date(2026, 5, 29)
+    assert pre["date"].max() < asof, "fixture must start stale for this test"
+
+    symbols = sorted(pre["symbol"].unique().tolist())
+
+    # Load the backfill script module + drive its incremental path with a
+    # stubbed fetch (offline) to refresh the EXISTING parquet in place.
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "backfill_thematic_universe.py"
+    )
+    spec = importlib.util.spec_from_file_location("backfill_thematic_universe", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    recent = [asof - timedelta(days=2), asof - timedelta(days=1), asof]
+
+    def _stub(syms, start, end):
+        start_d = pd.to_datetime(start).date()
+        end_d = pd.to_datetime(end).date()
+        out = {}
+        for s in syms:
+            rows = [
+                {
+                    "date": d,
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1_000_000,
+                }
+                for d in recent
+                if start_d <= d <= end_d
+            ]
+            out[s] = pd.DataFrame(
+                rows, columns=["date", "open", "high", "low", "close", "volume"]
+            )
+        return out
+
+    result_path = mod.backfill(
+        symbols=symbols,
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=panel_path,
+        incremental=True,
+        fetch_fn=_stub,
+        today=asof,
+        min_coverage=0.0,
+    )
+    assert result_path == panel_path, "incremental must refresh in place"
+
+    refreshed = pd.read_parquet(panel_path)
+    refreshed["date"] = pd.to_datetime(refreshed["date"]).dt.date
+    assert refreshed["date"].max() == asof, "incremental did not advance max(date)"
+
+    # Now run-daily for asof=today must NOT trip the stale-OHLCV guard.
+    runner = CliRunner()
+    r = runner.invoke(
+        cli,
+        [
+            "thematic",
+            "run-daily",
+            "--asof",
+            asof.isoformat(),
+            "--ohlcv",
+            str(panel_path),
+            "--yaml",
+            str(fake_cache["yaml"]),
+            "--features-out",
+            str(fake_cache["features_out"]),
+            "--labels-out",
+            str(fake_cache["labels_out"]),
+            "--ticker-registry",
+            str(fake_cache["ticker_registry"]),
+            "--sector-registry",
+            str(fake_cache["sector_registry"]),
+            "--html-out",
+            str(fake_cache["html_out"]),
+        ],
+    )
+    assert r.exit_code == 0, (
+        f"run-daily tripped after incremental refresh: "
+        f"exit={r.exit_code} output={r.output}"
+    )
+    assert "stale" not in r.output.lower(), (
+        f"stale guard should be satisfied; got: {r.output!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Stale-OHLCV diagnostic — surface-don't-silo (review iter-1 / codex iter-1)
 # ---------------------------------------------------------------------------
