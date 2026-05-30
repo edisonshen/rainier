@@ -378,19 +378,24 @@ def test_incremental_fetches_recent_window_only(backfill_mod, tmp_path):
     from datetime import date, timedelta
 
     out = tmp_path / "thematic.parquet"
-    # Seed an existing cache with old history so we can prove the incremental
-    # fetch window is the recent gap, not a full re-fetch.
+    today = date(2026, 5, 29)
+    # Seed an existing cache whose high-water mark is INSIDE the incremental
+    # window (so the gap guard is satisfied) but with dates DISTINCT from the
+    # recent fetch dates, so we can still prove the incremental fetch window is
+    # the recent gap, not a full re-fetch.
+    seed_dates = [today - timedelta(days=d) for d in (5, 4, 3)]
+    seed_fetch = _windowed_fetch_factory(seed_dates)
     backfill_mod.backfill(
         symbols=["XLK", "SMH"],
         start="2024-10-01",
         end="2024-10-08",
         out_path=out,
-        force=False,
-        fetch_fn=_stub_fetch,
+        incremental=True,
+        fetch_fn=seed_fetch,
+        today=today,
         min_coverage=0.0,
     )
 
-    today = date(2026, 5, 29)
     recent_dates = [today - timedelta(days=2), today - timedelta(days=1), today]
     fetch = _windowed_fetch_factory(recent_dates)
 
@@ -418,19 +423,23 @@ def test_incremental_upserts_in_place_no_cohort(backfill_mod, tmp_path):
     from datetime import date, timedelta
 
     out = tmp_path / "thematic.parquet"
+    today = date(2026, 5, 29)
+    # Seed with dates inside the incremental window (gap guard satisfied) but
+    # distinct from the recent refresh dates, so the upsert genuinely appends.
+    seed_dates = [today - timedelta(days=d) for d in (5, 4, 3)]
     backfill_mod.backfill(
         symbols=["XLK", "SMH"],
         start="2024-10-01",
         end="2024-10-08",
         out_path=out,
-        force=False,
-        fetch_fn=_stub_fetch,
+        incremental=True,
+        fetch_fn=_windowed_fetch_factory(seed_dates),
+        today=today,
         min_coverage=0.0,
     )
     old_rows = len(pd.read_parquet(out))
     siblings_before = set(tmp_path.glob("thematic_*.parquet"))
 
-    today = date(2026, 5, 29)
     recent_dates = [today - timedelta(days=1), today]
     fetch = _windowed_fetch_factory(recent_dates)
 
@@ -466,17 +475,20 @@ def test_incremental_no_gap_is_noop(backfill_mod, tmp_path):
     from datetime import date, timedelta
 
     out = tmp_path / "thematic.parquet"
+    today = date(2026, 5, 29)
+    # Seed within the incremental window so the gap guard is satisfied.
+    seed_dates = [today - timedelta(days=d) for d in (5, 4)]
     backfill_mod.backfill(
         symbols=["XLK"],
         start="2024-10-01",
         end="2024-10-08",
         out_path=out,
-        force=False,
-        fetch_fn=_stub_fetch,
+        incremental=True,
+        fetch_fn=_windowed_fetch_factory(seed_dates),
+        today=today,
         min_coverage=0.0,
     )
 
-    today = date(2026, 5, 29)
     recent_dates = [today - timedelta(days=1), today]
     fetch = _windowed_fetch_factory(recent_dates)
 
@@ -542,20 +554,23 @@ def test_incremental_outage_aborts_before_write(backfill_mod, tmp_path):
     from datetime import date, timedelta
 
     out = tmp_path / "thematic.parquet"
-    # Seed a prior good cache so we can prove the outage doesn't clobber it.
+    today = date(2026, 5, 29)
+    # Seed a prior good cache WITHIN the incremental window (so the gap guard
+    # passes and we actually reach the outage gate) to prove the outage doesn't
+    # clobber it.
+    seed_dates = [today - timedelta(days=d) for d in (5, 4, 3)]
     backfill_mod.backfill(
         symbols=["XLK", "SMH", "XLE", "XLF"],
         start="2024-10-01",
         end="2024-10-08",
         out_path=out,
-        force=False,
-        fetch_fn=_stub_fetch,
+        incremental=True,
+        fetch_fn=_windowed_fetch_factory(seed_dates),
+        today=today,
         min_coverage=0.0,
     )
     good_df = pd.read_parquet(out)
     good_rows = len(good_df)
-
-    today = date(2026, 5, 29)
 
     # Outage: only 1 of 4 symbols returns rows -> 25% < 90% default coverage.
     def _outage_fetch(symbols, start, end):
@@ -592,3 +607,48 @@ def test_incremental_outage_aborts_before_write(backfill_mod, tmp_path):
     after = pd.read_parquet(out)
     assert len(after) == good_rows, "outage must not clobber the prior cache"
     assert today not in set(pd.to_datetime(after["date"]).dt.date)
+
+
+def test_incremental_gap_too_large_aborts(backfill_mod, tmp_path):
+    """If the existing cache's high-water mark is older than the incremental
+    window can bridge, the refresh must fail loud rather than stitch a gapped
+    series (which would corrupt rel_20/vol_20). (codex P1.)
+    """
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic.parquet"
+    today = date(2026, 5, 29)
+    # Seed a cache whose max date is well outside the 5-day window (e.g. the
+    # cron was disabled for weeks). Use a windowed factory centered on an old
+    # anchor so the seed write itself isn't gap-guarded (no prior cache yet).
+    old_anchor = today - timedelta(days=40)
+    old_dates = [old_anchor - timedelta(days=d) for d in (2, 1, 0)]
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        incremental=True,
+        fetch_fn=_windowed_fetch_factory(old_dates),
+        today=old_anchor,  # seed write anchored at the old date (no gap then)
+        min_coverage=0.0,
+    )
+    seeded_rows = len(pd.read_parquet(out))
+
+    # Now refresh at the real `today`: the gap (40 days) exceeds the 5-day
+    # window -> must abort before touching the cache.
+    recent = [today - timedelta(days=1), today]
+    with pytest.raises(ValueError, match="gap too large"):
+        backfill_mod.backfill(
+            symbols=["XLK"],
+            start="2024-10-01",
+            end="2024-10-08",
+            out_path=out,
+            incremental=True,
+            fetch_fn=_windowed_fetch_factory(recent),
+            today=today,
+            min_coverage=0.0,
+        )
+
+    # Cache untouched — no gapped stitch.
+    assert len(pd.read_parquet(out)) == seeded_rows

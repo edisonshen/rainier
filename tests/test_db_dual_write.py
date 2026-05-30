@@ -617,14 +617,24 @@ def test_cli_thematic_backfill_incremental_advances_pg_ohlcv(
     # covers it. (codex iter-2: don't freeze a module the CLI never reuses.)
     today = date.today()
 
-    # An existing parquet cache with OLD history, plus the registries the
-    # mirror reads. Built so the incremental window (today-5..today) is a
-    # genuine gap relative to what is already in the cache + PG.
-    old_panel = _build_ohlcv_panel(symbols, n_days=10)  # dates in 2024-10
+    # An existing parquet cache whose high-water mark is INSIDE the incremental
+    # window (gap guard satisfied), with dates distinct from the recent fetch
+    # window. The dual-write mirrors only the freshly fetched frame, so the
+    # seed rows never reach PG — PG advances by exactly the recent window.
+    seed_dates = [today - timedelta(days=d) for d in (5, 4, 3)]
+    seed_rows = [
+        {
+            "symbol": s, "date": d, "open": 50.0, "high": 50.5, "low": 49.5,
+            "close": 50.0, "volume": 1_000_000,
+            "fetched_at": pd.Timestamp.now(tz="UTC"), "yfinance_version": "seed",
+        }
+        for s in symbols
+        for d in seed_dates
+    ]
     cache = tmp_path / "cache"
     cache.mkdir()
     panel_path = cache / "thematic_universe.parquet"
-    old_panel.to_parquet(panel_path)
+    pd.DataFrame(seed_rows).to_parquet(panel_path)
     tr = cache / "tr.parquet"
     sr = cache / "sr.parquet"
     yaml_path = tmp_path / "universe.yaml"

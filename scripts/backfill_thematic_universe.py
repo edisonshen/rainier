@@ -573,6 +573,35 @@ def backfill(
         start = (today_d - timedelta(days=INCREMENTAL_WINDOW_DAYS)).isoformat()
         end = today_d.isoformat()
 
+        # Gap guard: the fixed today-N..today window can only bridge a gap of
+        # <= INCREMENTAL_WINDOW_DAYS. If the existing cache's high-water mark is
+        # older than the window start (cron was disabled for a while, or several
+        # runs were missed), the refresh would leave a HOLE in the middle of the
+        # series; rel_20/vol_20 would then be computed across a discontinuity and
+        # publish wrong ranks. Fail loud and tell the operator to run the full
+        # seed instead of silently stitching a gapped series (codex iter-6 [P1]).
+        if not dry_run and out_path.exists():
+            try:
+                _existing = pd.read_parquet(out_path, columns=["date"])
+            except Exception:  # noqa: BLE001 — unreadable cache; let downstream handle
+                _existing = None
+            if _existing is not None and not _existing.empty:
+                hwm = pd.to_datetime(_existing["date"]).dt.date.max()
+                window_start = today_d - timedelta(days=INCREMENTAL_WINDOW_DAYS)
+                if hwm < window_start:
+                    gap_days = (today_d - hwm).days
+                    raise ValueError(
+                        f"incremental gap too large: cache max(date)={hwm} is "
+                        f"{gap_days} calendar days behind today={today_d}, but "
+                        f"the incremental window is only {INCREMENTAL_WINDOW_DAYS} "
+                        f"days. Refreshing would leave a hole in the series and "
+                        f"produce wrong rel_20/vol_20 ranks. Run the full-history "
+                        f"seed instead:\n"
+                        f"  python scripts/backfill_thematic_universe.py "
+                        f"--start 2024-10-01 --end {today_d} --force\n"
+                        f"then move the new cohort into place."
+                    )
+
     if dry_run:
         return {
             "symbols": symbols,

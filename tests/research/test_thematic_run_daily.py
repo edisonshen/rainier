@@ -296,14 +296,37 @@ def test_incremental_backfill_satisfies_stale_guard(fake_cache):
 
     from rainier.cli import cli
 
-    # The fake_cache panel ends in late 2024 → stale relative to "today".
+    # Rebuild the cache with DEEP history (>= 21 days) ending a few days before
+    # asof — a realistic "missed the last day or two" gap that the incremental
+    # window (today-5..today) is designed to bridge. The old fixture ended in
+    # 2024 (a ~580-day gap), which the gap guard now (correctly) rejects as
+    # un-bridgeable; that is the gap-too-large path, not the refresh path.
     panel_path = fake_cache["panel"]
     pre = pd.read_parquet(panel_path)
-    pre["date"] = pd.to_datetime(pre["date"]).dt.date
-    asof = date(2026, 5, 29)
-    assert pre["date"].max() < asof, "fixture must start stale for this test"
-
     symbols = sorted(pre["symbol"].unique().tolist())
+
+    asof = date(2026, 5, 29)
+    # 30 trading days ending at asof-3 (within the 5-day incremental window).
+    deep_dates: list[date] = []
+    d = asof - timedelta(days=3)
+    while len(deep_dates) < 30:
+        if d.weekday() < 5:
+            deep_dates.append(d)
+        d = d - timedelta(days=1)
+    deep_dates.sort()
+    deep_rows = [
+        {
+            "symbol": s, "date": dd, "open": 100.0, "high": 101.0, "low": 99.0,
+            "close": 100.0 + i * 0.1, "volume": 1_000_000,
+            "fetched_at": pd.Timestamp.now(tz="UTC"), "yfinance_version": "seed",
+        }
+        for s in symbols
+        for i, dd in enumerate(deep_dates)
+    ]
+    pd.DataFrame(deep_rows).to_parquet(panel_path)
+    pre = pd.read_parquet(panel_path)
+    pre["date"] = pd.to_datetime(pre["date"]).dt.date
+    assert pre["date"].max() < asof, "cache must start stale (but within window)"
 
     # Load the backfill script module + drive its incremental path with a
     # stubbed fetch (offline) to refresh the EXISTING parquet in place.
