@@ -63,22 +63,26 @@ jobs:
   # `run-daily` short-circuits if today's Layer A row is already present, so
   # cron retries are safe.
   #
-  # DISABLED until a daily OHLCV refresh job lands (codex iter-7 [P1]).
-  # `run-daily` needs `data/cache/thematic_universe.parquet` to be current
-  # for today's asof. The Phase A `backfill_thematic_universe.py` is a
-  # one-shot bulk fetch (no `--resume`/--update mode) and is revision-
-  # immutable (`--force` writes a sibling cohort, not in-place). Until the
-  # backfill script grows a daily-refresh mode (deferred follow-up), enabling
-  # this cron would hit the stale-OHLCV guard and fail every weekday.
-  # Operator flips `enabled: true` once daily OHLCV refresh is wired up;
-  # `run-daily` itself remains operator-runnable via the CLI for ad-hoc use.
+  # Full chain (mirrors the breadth twin `market-breadth-daily`):
+  #   1. `thematic backfill --incremental` — fetch the last few calendar days
+  #      of OHLCV and upsert on (symbol, date) into the existing
+  #      data/cache/thematic_universe.parquet IN PLACE (no --force cohort).
+  #      This advances max(date) to today so run-daily's stale-OHLCV guard
+  #      (cli._check_ohlcv_freshness) passes on the very next step.
+  #   2. `thematic run-daily` — compute Layer A+B + render the dashboard.
+  #
+  # `&&` enforces serial execution and propagates the first non-zero exit to
+  # cron-wrapper.sh, which fires the Discord alert (discord_on_failure below).
+  # Previously DISABLED because step 2 alone hit the stale-OHLCV guard every
+  # weekday (the cache was never refreshed); the --incremental refresh resolves
+  # that (thematic-daily-cron-wire), so this is now enabled.
   - name: thematic-ranks-daily
-    description: "Compute thematic ranks (Layer A+B) + render dashboard"
+    description: "Refresh thematic OHLCV + compute thematic ranks (Layer A+B) + render dashboard"
     schedule: "30 13 * * 1-5"   # 13:30 PST = 16:30 ET, Mon-Fri
-    command: "uv run rainier thematic run-daily"
+    command: "uv run rainier thematic backfill --incremental && uv run rainier thematic run-daily"
     log: "data/thematic-ranks.log"
     discord_on_failure: true
-    enabled: false
+    enabled: true
 
   # ETF names cache refresh — DESIGN-etf-dashboard-name-column.md §3.4.
   #
@@ -151,10 +155,14 @@ jobs:
   # the breadth side reads `sp500_universe.parquet`, schedule it on a later
   # minute (e.g., `45 12`) so this refresh has finished writing.
   #
-  # Disabled at file-commit time so a fresh checkout doesn't immediately
-  # hit yfinance from a host that hasn't yet run the one-shot backfill
-  # (which seeds data/cache/sp500_universe.parquet). Operator flips
-  # `enabled: true` once the one-shot is complete.
+  # PREREQUISITE: the one-shot full-history backfill that seeds
+  # data/cache/sp500_universe.parquet must have run on this host BEFORE this
+  # cron is active. The incremental first run fetches only the last 5 calendar
+  # days, but compute-indicators needs long history (50/100/200-day MAs,
+  # 52-week highs/lows) — without the seed the published dashboard would be
+  # mostly NaN. Enabled here because the operator's deployment host is already
+  # seeded (breadth dashboard is live). On a fresh host, run the one-shot seed
+  # first or flip this back to `enabled: false` until the seed completes.
   - name: market-breadth-daily
     description: "Refresh sp500 OHLCV + compute breadth indicators + render & publish market-breadth dashboard"
     schedule: "45 12 * * 1-5"   # 12:45 PST Mon-Fri (15 min pre-close)
@@ -183,7 +191,7 @@ jobs:
     command: "uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators && scripts/publish-market-breadth.sh"
     log: "data/market-breadth.log"
     discord_on_failure: true
-    enabled: false
+    enabled: true
 
   # Combined trading dashboard — DESIGN-trading-dashboard-combined-v1.md.
   # Publishes /trading/ (one URL, shared header + Breadth / ETF

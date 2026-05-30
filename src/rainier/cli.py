@@ -3331,6 +3331,17 @@ def thematic() -> None:
     help="When the cache exists, write a timestamped sibling cohort.",
 )
 @click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help=(
+        "Daily-cron refresh: ignore --start/--end, fetch only the last few "
+        "calendar days, and upsert on (symbol, date) into the existing cache "
+        "in place (no --force / cohort). Mirrors "
+        "`market-breadth backfill-ohlcv --incremental`."
+    ),
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     default=False,
@@ -3370,6 +3381,7 @@ def thematic_backfill(
     end: str | None,
     out_path: str,
     force: bool,
+    incremental: bool,
     dry_run: bool,
     allow_empty: str,
     allow_gaps: str,
@@ -3379,7 +3391,8 @@ def thematic_backfill(
 ) -> None:
     """Backfill the OHLCV cache + seed ticker/sector registries.
 
-    Operator-run, not CI-run. Hits the yfinance network.
+    Operator-run for the one-shot mode; cron-driven for ``--incremental``.
+    Hits the yfinance network.
     """
     import importlib.util
     from datetime import date as _date
@@ -3417,24 +3430,39 @@ def thematic_backfill(
         end=end_eff,
         out_path=Path(out_path),
         force=force,
+        incremental=incremental,
         dry_run=dry_run,
         allow_empty=[s.strip() for s in allow_empty.split(",") if s.strip()],
         allow_gaps=[s.strip() for s in allow_gaps.split(",") if s.strip()],
         min_coverage=coverage,
+        # Pass the universe YAML so backfill() mirrors the OHLCV frame +
+        # ticker/sector registries into market.* (Neon). Without this the
+        # daily cron's --incremental refresh advances the PARQUET only and
+        # leaves market.thematic_ohlcv STALE — exactly the gap a live
+        # catch-up found 2026-05-30 (features/labels reached today but
+        # thematic_ohlcv was stuck days behind). _dual_write_pg fires only
+        # when yaml_path is set and is a no-op when DATABASE_URL is unset, so
+        # this is safe on both the one-shot and incremental paths.
+        yaml_path=yaml_p,
+        ticker_registry_path=Path(ticker_registry),
+        sector_registry_path=Path(sector_registry),
     )
 
     if dry_run:
         plan = result
+        # backfill() resolves the incremental window internally, so the dry-run
+        # plan reflects the actual window that would be fetched.
         click.echo(
             f"DRY-RUN: would fetch {len(symbols)} symbols "
-            f"{start_eff}..{end_eff} -> {plan['planned_out']}"
+            f"{plan['start']}..{plan['end']} -> {plan['planned_out']}"
         )
         for sym in symbols:
             click.echo(f"  {sym}")
         return
 
     written_path = result
-    click.echo(f"wrote OHLCV cache -> {written_path}")
+    mode = "incremental" if incremental else "one-shot"
+    click.echo(f"wrote OHLCV cache ({mode}) -> {written_path}")
 
     # Seed registries with the just-fetched universe. Idempotent — re-running
     # backfill does not change existing IDs (per [D-015]).
@@ -3936,6 +3964,15 @@ def _check_ohlcv_freshness(
     both paths surface the same diagnostic (codex iter-6/8 [P1]/[P2]).
 
     Stale: panel.max(date) < asof_dt.
+    Shallow: fewer than MIN_HISTORY_TRADING_DAYS distinct dates <= asof_dt.
+             Layer A's longest rolling window is 20 trading days (rel_20 +
+             vol_20); with less history compute_thematic_features emits the
+             RANK_SENTINEL for every symbol and the job exits 0 with unusable
+             ranks. This catches the fresh-host / deleted-cache case where
+             `thematic backfill --incremental` writes only the 5-day window
+             (the incremental path is a refresh, not a substitute for the
+             full-history seed). Fail loud so the operator runs the one-shot
+             seed first.
     Partial: > 25% of YAML symbols missing on asof_dt (fail);
              > 10% missing (warning to stderr).
     """
@@ -3947,6 +3984,34 @@ def _check_ohlcv_freshness(
         raise click.ClickException(
             f"OHLCV cache stale: max(date)={panel_max} < asof={asof_dt}. "
             f"Refresh with:\n"
+            f"  1. uv run python scripts/backfill_thematic_universe.py "
+            f"--start 2024-10-01 --end {asof_dt} --force\n"
+            f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
+            f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
+            f"{ohlcv_path}\n"
+            f"  3. uv run rainier thematic run-daily  # retry"
+        )
+
+    # Shallow-history guard: Layer A's longest lookback is the 20-trading-day
+    # rel_20 window. compute_thematic_features indexes the asof row at
+    # asof_idx = (#dates <= asof) - 1 and reads prior_idx = asof_idx - 20; that
+    # is only valid (non-negative) when asof_idx >= 20, i.e. there are >= 21
+    # distinct dates at/before asof. With exactly 20, prior_idx = -1 and rel_20
+    # /vol_20 stay NaN -> sentinel ranks (codex iter-5 off-by-one). Require 21.
+    MIN_HISTORY_TRADING_DAYS = 21
+    distinct_dates = panel.loc[panel["date"] <= asof_dt, "date"].nunique()
+    if distinct_dates < MIN_HISTORY_TRADING_DAYS:
+        # The shallow cache already exists (--incremental created it), so the
+        # seed must replace it: the one-shot backfill refuses to overwrite
+        # without --force, and --force writes a sibling cohort that must be
+        # moved into place (revision-immutability) — same flow as the stale
+        # branch above (codex iter-5).
+        raise click.ClickException(
+            f"OHLCV cache too shallow: only {distinct_dates} trading day(s) "
+            f"<= asof={asof_dt}; Layer A needs >= {MIN_HISTORY_TRADING_DAYS} "
+            f"(rel_20/vol_20 windows) or every rank is the no-data sentinel. "
+            f"The --incremental refresh only fetches a few days and is NOT a "
+            f"substitute for the full-history seed. Replace the shallow cache:\n"
             f"  1. uv run python scripts/backfill_thematic_universe.py "
             f"--start 2024-10-01 --end {asof_dt} --force\n"
             f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
