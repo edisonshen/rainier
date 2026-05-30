@@ -747,9 +747,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     if ns.dry_run:
         plan = result  # type: ignore[assignment]
+        # Use the plan's resolved window (incremental rewrites start/end to the
+        # recent window inside backfill()), not the raw argparse values.
         print(
             f"DRY-RUN: would fetch {len(symbols)} symbols "
-            f"{ns.start}..{ns.end} -> {plan['planned_out']}"  # type: ignore[index]
+            f"{plan['start']}..{plan['end']} -> {plan['planned_out']}"  # type: ignore[index]
         )
         for sym in symbols:
             print(f"  {sym}")
