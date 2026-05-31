@@ -1048,6 +1048,50 @@ def test_scrub_credentials_url_and_keyvalue_forms():
         assert _scrub_credentials(clean) == clean
 
 
+def test_scrub_credentials_redacts_misparsed_host_fragment():
+    """codex iter-7 — an unescaped '@' in the password makes make_url parse the
+    host as a password suffix (e.g. `ss@db` from `u:pa@ss@db`). A driver that
+    echoes that mis-parsed host as bare text (`failed to resolve host 'ss@db'`)
+    is neither URL-shaped nor `password=` form, so forms 1-2 miss it. The
+    env-derived literal scrub (form 3) must redact it — without over-scrubbing
+    short fragments out of unrelated words."""
+    from rainier.db.dualwrite import _scrub_credentials
+
+    url = "postgresql://u:pa@ss@db/prod"
+    err = "could not translate host name: failed to resolve host 'ss@db'"
+    out = _scrub_credentials(err, url)
+    assert "ss@db" not in out, f"mis-parsed host fragment leaked: {out!r}"
+    assert "***" in out
+
+    # the full raw userinfo (secret-as-typed) is also redacted from error text
+    out2 = _scrub_credentials("connect args: u:pa@ss = bad", url)
+    assert "pa@ss" not in out2, f"raw userinfo leaked: {out2!r}"
+
+    # over-scrub guard: the short 'ss' piece must NOT be redacted out of unrelated
+    # words (we only redact the full env-derived literals, never short fragments).
+    out3 = _scrub_credentials("address lookup failed for the database", url)
+    assert out3 == "address lookup failed for the database"
+
+
+def test_diagnostic_scrubs_misparsed_host_end_to_end(monkeypatch, capsys):
+    """codex iter-7 end-to-end — the printed PG-MIRROR-FAILURE diagnostic must not
+    leak the mis-parsed-host password fragment when the error text echoes it."""
+    from sqlalchemy.exc import OperationalError
+
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:pa@ss@db/prod")
+    with mirror_guard("misparse-writer"):
+        raise OperationalError(
+            "could not translate host name: failed to resolve host 'ss@db'",
+            None,
+            Exception("dns"),
+        )
+    err = capsys.readouterr().err
+    assert _SENTINEL in err
+    assert "ss@db" not in err, "mis-parsed host password fragment must be scrubbed"
+
+
 def test_diagnostic_scrubs_credential_in_error_message(monkeypatch, capsys):
     """§4.7 end-to-end — when the raised SQLAlchemyError's MESSAGE itself carries
     a credentialed URL, the printed diagnostic must be scrubbed."""

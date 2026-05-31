@@ -81,15 +81,43 @@ _PASSWORD_KV_RE = re.compile(
 )
 
 
-def _scrub_credentials(text: str) -> str:
+def _raw_userinfo(database_url: str) -> str | None:
+    """Return the RAW userinfo substring of a DATABASE_URL — everything between
+    ``://`` and the LAST ``@`` before the host/path — without parsing.
+
+    Used as a defense-in-depth literal to scrub from arbitrary error text:
+    ``make_url`` mis-parses an unescaped ``@`` in the password (it splits at the
+    FIRST ``@``), so ``url.password`` alone misses the suffix. The raw substring
+    captures the WHOLE secret (``u:pa@ss``) regardless of how a driver later
+    echoes a fragment of it (e.g. ``failed to resolve host 'ss@db'``). Returns
+    None when there is no userinfo (no ``@`` before the path). Never raises.
+    """
+    try:
+        m = re.match(r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?P<userinfo>[^/\s]*)@", database_url)
+        if not m:
+            return None
+        ui = m.group("userinfo")
+        return ui or None
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _scrub_credentials(text: str, database_url: str | None = None) -> str:
     """Strip credentials from arbitrary error text. Bounded scope (design §3.2):
 
       1. URL-shaped creds: ``<scheme>://<userinfo>@`` -> ``<scheme>://@`` (with or
          without a ``:password`` — the username never survives either way).
       2. key/value forms: ``password=<v>`` / ``pwd=<v>`` (quoted or not,
          case-insensitive) -> ``password=***``.
+      3. (defense-in-depth) when ``database_url`` is supplied, any LITERAL
+         occurrence of its raw userinfo substring AND of the mis-parsed host (the
+         ``make_url`` host when it carries an embedded ``@``, e.g. ``'ss@db'`` from
+         ``u:pa@ss@db``) is redacted — covers a driver echoing a credential
+         fragment that forms 1-2 miss. Only these specific, env-derived literals
+         are touched (no short ``@``-split pieces), so unrelated text is never
+         over-scrubbed.
 
-    Anything outside these two forms is left untouched. Never raises.
+    Anything outside these forms is left untouched. Never raises.
     """
     def _kv_repl(m: re.Match[str]) -> str:
         # Re-wrap with the captured quote when the value was quoted, so the
@@ -100,6 +128,23 @@ def _scrub_credentials(text: str) -> str:
     try:
         out = _URL_USERINFO_RE.sub(r"\g<scheme>@", text)
         out = _PASSWORD_KV_RE.sub(_kv_repl, out)
+        # Defense-in-depth literal scrub of our own env's credentials. Redact the
+        # raw userinfo (full secret-as-typed) and the mis-parsed '@'-bearing host
+        # (the password suffix a driver may echo as the "host"). Both are long,
+        # env-specific literals — never short fragments — longest-first.
+        if database_url:
+            literals = set()
+            ui = _raw_userinfo(database_url)
+            if ui:
+                literals.add(ui)
+            try:
+                parsed_host = make_url(database_url).host or ""
+            except Exception:
+                parsed_host = ""
+            if "@" in parsed_host:
+                literals.add(parsed_host)
+            for literal in sorted(literals, key=len, reverse=True):
+                out = out.replace(literal, "***")
         return out
     except Exception:  # pragma: no cover - defensive; regex on str cannot raise
         return text
@@ -170,8 +215,9 @@ def _emit_mirror_failure(writer_name: str, exc: BaseException) -> None:
     ``_redact_host`` and the error message is credential-scrubbed via
     ``_scrub_credentials`` before printing.
     """
-    host = _redact_host(os.environ.get("DATABASE_URL", ""))
-    message = _scrub_credentials(str(exc))
+    database_url = os.environ.get("DATABASE_URL", "")
+    host = _redact_host(database_url)
+    message = _scrub_credentials(str(exc), database_url)
     print(
         f"PG-MIRROR-FAILURE: {writer_name} dual-write FAILED — NOT written to {host}\n"
         f"  error: {type(exc).__name__}: {message}\n"
