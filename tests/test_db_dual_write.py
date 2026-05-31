@@ -981,8 +981,9 @@ def test_diagnostic_scrubs_credential_in_error_message(monkeypatch, capsys):
 
 def test_mirror_guard_disposes_engine_on_caught_error(monkeypatch, capsys):
     """§4.8 — dispose() runs even when the body raises SQLAlchemyError."""
-    import rainier.db.dualwrite as dw
     from sqlalchemy.exc import OperationalError
+
+    import rainier.db.dualwrite as dw
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
 
