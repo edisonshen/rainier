@@ -220,6 +220,15 @@ def _write_parquet_atomic(df: pd.DataFrame, out_path: Path) -> None:
     table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
     try:
         pq.write_table(table, tmp, compression="snappy")
+        # fsync the tmp file before the atomic rename so a crash/power-loss
+        # between write and replace can't leave a torn canonical: the bytes are
+        # durable on disk before os.replace flips the name. (The dir entry rename
+        # itself is atomic on a POSIX same-filesystem replace.)
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(tmp, out_path)
     finally:
         if tmp.exists():
