@@ -1094,6 +1094,48 @@ def test_scrub_credentials_redacts_no_at_malformed_token():
     assert out2 == "the secret sauce"
 
 
+def test_scrub_credentials_redacts_standalone_username_and_password():
+    """codex iter-9 — auth errors echo the username/password STANDALONE, e.g.
+    `password authentication failed for user "bob"`, with no URL or `password=`
+    form. Form 3 must redact the parsed username and (URL-decoded) password from
+    the env, with a min-length guard so 1-char creds don't over-scrub."""
+    from rainier.db.dualwrite import _scrub_credentials
+
+    url = "postgresql://bob:hunter2@db.example.com/mirror"
+    assert "bob" not in _scrub_credentials(
+        'password authentication failed for user "bob"', url
+    )
+    assert "hunter2" not in _scrub_credentials('FATAL: password "hunter2" rejected', url)
+
+    # URL-decoded password (make_url decodes %40 -> @) is redacted too.
+    url_pct = "postgresql://bob:p%40ss@db/mirror"
+    assert "p@ss" not in _scrub_credentials("auth failed for p@ss", url_pct)
+
+    # over-scrub guard: a 1-char username must NOT be redacted out of unrelated
+    # text (min length 2).
+    url_short = "postgresql://u:p@host/db"
+    assert _scrub_credentials("user u connected to unit", url_short) == (
+        "user u connected to unit"
+    )
+
+
+def test_diagnostic_scrubs_standalone_username_end_to_end(monkeypatch, capsys):
+    """codex iter-9 end-to-end — the printed diagnostic must not leak the parsed
+    DATABASE_URL username on a typical auth-failure message."""
+    from sqlalchemy.exc import OperationalError
+
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://bob:hunter2@db.example.com/mirror")
+    with mirror_guard("auth-writer"):
+        raise OperationalError(
+            'FATAL: password authentication failed for user "bob"', None, Exception("auth")
+        )
+    err = capsys.readouterr().err
+    assert _SENTINEL in err
+    assert "bob" not in err, "standalone username must be scrubbed"
+
+
 def test_diagnostic_scrubs_no_at_malformed_end_to_end(monkeypatch, capsys):
     """codex iter-8 end-to-end — the printed diagnostic must not leak the
     credential token from a no-'@' malformed URL's ValueError."""

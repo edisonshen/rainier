@@ -161,7 +161,15 @@ def _scrub_credentials(text: str, database_url: str | None = None) -> str:
             if ui:
                 literals.add(ui)
             try:
-                parsed_host = make_url(database_url).host or ""
+                parsed = make_url(database_url)
+                parsed_host = parsed.host or ""
+                # Parsed username/password — auth errors echo these standalone,
+                # e.g. `password authentication failed for user "bob"`, with no URL
+                # or `password=` form for the other rules to catch. Min length 2
+                # avoids pathological 1-char redaction across unrelated text.
+                for cred in (parsed.username, parsed.password):
+                    if cred and len(cred) >= 2:
+                        literals.add(cred)
             except Exception:
                 parsed_host = ""
             if "@" in parsed_host:
