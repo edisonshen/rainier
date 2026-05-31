@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -753,21 +754,41 @@ def backfill(
 #     thematic_universe.parquet                     <- canonical (never deleted)
 #     thematic_universe_20260501_010101_000001.parquet  <- cohort (gc candidate)
 #     thematic_universe_refresh.parquet             <- refresh sibling (candidate)
+#     thematic_universe_log.parquet                 <- snapshot-universe log (SPARED)
+#     thematic_universe_names.parquet               <- any other sibling (SPARED)
 
 
 def _orphan_cohort_paths(out_path: Path) -> list[Path]:
     """Return sibling cohort parquets next to ``out_path``, EXCLUDING the
-    canonical itself. Matches ``<stem>_*<suffix>`` (dated cohorts +
-    ``<stem>_refresh<suffix>``)."""
+    canonical itself.
+
+    A blanket ``<stem>_*<suffix>`` glob is UNSAFE: the default cache dir also
+    holds ``thematic_universe_log.parquet`` (the universe-change log written by
+    ``thematic snapshot-universe``), which shares the ``thematic_universe_``
+    prefix but is a persistent, load-bearing file — never a cohort. (codex
+    review iter-1 [P1].) So we match ONLY:
+      * timestamped cohorts ``<stem>_YYYYMMDD_HHMMSS_ffffff[_N]<suffix>`` as
+        written by ``_cohort_path`` (``%Y%m%d_%H%M%S_%f`` + optional collision
+        ``_N`` suffix), and
+      * the exact ``<stem>_refresh<suffix>`` sibling the cron refresh path may
+        leave behind.
+    Any other ``<stem>_*`` sibling (e.g. ``_log``) is left untouched.
+    """
     out_path = Path(out_path)
     parent = out_path.parent
-    stem = out_path.stem
-    suffix = out_path.suffix
+    stem = re.escape(out_path.stem)
+    suffix = re.escape(out_path.suffix)
+    # YYYYMMDD_HHMMSS_ffffff with an optional _N collision-avoidance suffix.
+    cohort_re = re.compile(
+        rf"^{stem}_\d{{8}}_\d{{6}}_\d+(?:_\d+)?{suffix}$"
+    )
+    refresh_re = re.compile(rf"^{stem}_refresh{suffix}$")
     candidates: list[Path] = []
-    for p in parent.glob(f"{stem}_*{suffix}"):
+    for p in parent.glob(f"{out_path.stem}_*{out_path.suffix}"):
         if p == out_path:
             continue
-        candidates.append(p)
+        if cohort_re.match(p.name) or refresh_re.match(p.name):
+            candidates.append(p)
     return candidates
 
 

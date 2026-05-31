@@ -867,6 +867,53 @@ def test_gc_cohorts_no_cohorts_is_empty_plan(backfill_mod, tmp_path):
     assert canonical.exists()
 
 
+def test_gc_cohorts_spares_universe_log_and_other_prefix_siblings(
+    backfill_mod, tmp_path
+):
+    """The gc glob must match ONLY timestamped cohorts + the exact _refresh
+    sibling — NOT every `thematic_universe_*` sibling. In particular the
+    persistent `thematic_universe_log.parquet` (the snapshot-universe change
+    log) shares the prefix but is load-bearing and must NEVER be reaped, even
+    with keep=0 --apply. (codex review iter-1 [P1] — data loss.)"""
+    canonical = tmp_path / "thematic_universe.parquet"
+    canonical.write_bytes(b"canonical")
+    # Real timestamped cohort (gc candidate).
+    cohort = _touch_cohort(
+        tmp_path, "thematic_universe_20260501_010101_000001.parquet", 100
+    )
+    # Prefix-sharing non-cohorts that MUST be spared.
+    log = tmp_path / "thematic_universe_log.parquet"
+    log.write_bytes(b"universe change log")
+    names = tmp_path / "thematic_universe_names.parquet"
+    names.write_bytes(b"names")
+
+    # Plan must list only the real cohort.
+    plan = backfill_mod.gc_cohorts(out_path=canonical, keep=0, apply=False)
+    assert set(plan["delete"]) == {cohort}
+    assert log not in plan["delete"]
+    assert names not in plan["delete"]
+
+    # Apply with the most aggressive keep=0 — log + names survive, cohort gone.
+    deleted = backfill_mod.gc_cohorts(out_path=canonical, keep=0, apply=True)
+    assert log.exists()
+    assert names.exists()
+    assert canonical.exists()
+    assert not cohort.exists()
+    assert set(deleted["deleted"]) == {cohort}
+
+
+def test_gc_cohorts_matches_collision_suffixed_cohort(backfill_mod, tmp_path):
+    """`_cohort_path` appends a `_N` collision suffix when two cohorts share a
+    microsecond stamp; gc must still recognize those as cohorts."""
+    canonical = tmp_path / "thematic_universe.parquet"
+    canonical.write_bytes(b"canonical")
+    bumped = _touch_cohort(
+        tmp_path, "thematic_universe_20260501_010101_000001_3.parquet", 100
+    )
+    plan = backfill_mod.gc_cohorts(out_path=canonical, keep=0, apply=False)
+    assert bumped in plan["delete"]
+
+
 def test_incremental_gap_too_large_aborts(backfill_mod, tmp_path):
     """If the existing cache's high-water mark is older than the incremental
     window can bridge, the refresh must fail loud rather than stitch a gapped
