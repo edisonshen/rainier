@@ -914,6 +914,50 @@ def test_gc_cohorts_matches_collision_suffixed_cohort(backfill_mod, tmp_path):
     assert bumped in plan["delete"]
 
 
+def test_gc_cohorts_apply_surfaces_unlink_failure(backfill_mod, tmp_path, monkeypatch):
+    """An unlink failure in --apply must be surfaced in `failed`, not swallowed
+    — automation must not believe gc completed with an orphan still on disk.
+    (codex review iter-2 [P2].)"""
+    canonical = tmp_path / "thematic_universe.parquet"
+    canonical.write_bytes(b"canonical")
+    cohort = _touch_cohort(
+        tmp_path, "thematic_universe_20260501_010101_000001.parquet", 100
+    )
+
+    def _boom(self):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(Path, "unlink", _boom)
+    plan = backfill_mod.gc_cohorts(out_path=canonical, keep=0, apply=True)
+    assert plan["deleted"] == []
+    assert len(plan["failed"]) == 1
+    assert plan["failed"][0][0] == cohort
+    assert "locked" in plan["failed"][0][1]
+    # The cohort is still on disk (the failure was real, not swallowed).
+    assert cohort.exists()
+
+
+def test_adopt_rejects_adhoc_symbol_subset(backfill_mod, tmp_path):
+    """`--adopt` over an ad-hoc `--symbols` subset must be refused: replacing
+    the full-universe canonical with a subset would silently shrink it.
+    (codex review iter-2 [P2].)"""
+    out = tmp_path / "thematic_universe.parquet"
+    rc = backfill_mod.main(
+        [
+            "--symbols", "XLK,SMH",
+            "--start", "2024-10-01",
+            "--end", "2024-10-08",
+            "--out", str(out),
+            "--force",
+            "--adopt",
+        ]
+    )
+    assert rc == 2
+    # Refused before any write — no canonical, no sibling created.
+    assert not out.exists()
+    assert list(tmp_path.glob("thematic_universe*.parquet")) == []
+
+
 def test_incremental_gap_too_large_aborts(backfill_mod, tmp_path):
     """If the existing cache's high-water mark is older than the incremental
     window can bridge, the refresh must fail loud rather than stitch a gapped

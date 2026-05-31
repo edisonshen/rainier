@@ -3551,12 +3551,22 @@ def thematic_gc_cohorts(out_path: str, keep: int, apply: bool) -> None:
     kept = plan["keep"]
     if apply:
         deleted = plan["deleted"]
+        failed = plan.get("failed", [])
         click.echo(
             f"gc-cohorts: deleted {len(deleted)} orphan cohort(s); "
             f"kept canonical {canonical.name} + {len(kept)} latest."
         )
         for p in deleted:
             click.echo(f"  deleted {p}")
+        # Surface unlink failures as a hard error so automation/operators don't
+        # think gc completed when an orphan is still on disk (codex iter-2 [P2]).
+        if failed:
+            for p, err in failed:
+                click.echo(f"  FAILED to delete {p}: {err}", err=True)
+            raise click.ClickException(
+                f"gc-cohorts: {len(failed)} orphan cohort(s) could not be "
+                f"deleted (see above). Resolve the error and re-run --apply."
+            )
     else:
         click.echo(
             f"DRY-RUN gc-cohorts: would delete {len(candidates)} orphan "

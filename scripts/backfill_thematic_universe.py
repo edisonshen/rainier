@@ -796,7 +796,7 @@ def gc_cohorts(
     out_path: Path,
     keep: int = 2,
     apply: bool = False,
-) -> dict[str, list[Path]]:
+) -> dict[str, list]:
     """Reap orphan sibling cohort parquets next to the canonical ``out_path``.
 
     Keeps the canonical (``out_path``) plus the ``keep`` most-recent sibling
@@ -808,7 +808,10 @@ def gc_cohorts(
     Returns a dict with:
       * ``keep``: cohorts retained (newest ``keep``),
       * ``delete``: cohorts that would be / were reaped,
-      * ``deleted``: cohorts actually unlinked (empty unless ``apply=True``).
+      * ``deleted``: cohorts actually unlinked (empty unless ``apply=True``),
+      * ``failed``: ``(path, error)`` tuples for candidates that could NOT be
+        unlinked (permission/locked-file). Non-empty means gc did NOT fully
+        complete; the CLI surfaces this as a non-zero exit.
     """
     out_path = Path(out_path)
     cohorts = _orphan_cohort_paths(out_path)
@@ -821,6 +824,7 @@ def gc_cohorts(
     to_delete = cohorts[keep_n:]
 
     deleted: list[Path] = []
+    failed: list[tuple[Path, str]] = []
     if apply:
         for p in to_delete:
             # Defensive: never unlink the canonical even if it somehow matched.
@@ -829,10 +833,18 @@ def gc_cohorts(
             try:
                 p.unlink()
                 deleted.append(p)
-            except OSError:
-                pass
+            except OSError as exc:
+                # Don't swallow: a permission/locked-file failure must surface so
+                # automation + operators don't believe gc completed when an
+                # orphan is still on disk. (codex review iter-2 [P2].)
+                failed.append((p, str(exc)))
 
-    return {"keep": kept, "delete": to_delete, "deleted": deleted}
+    return {
+        "keep": kept,
+        "delete": to_delete,
+        "deleted": deleted,
+        "failed": failed,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -923,6 +935,21 @@ def main(argv: list[str] | None = None) -> int:
         symbols = [s.strip() for s in ns.symbols.split(",") if s.strip()]
     else:
         symbols = load_symbols_from_yaml(Path(ns.yaml))
+
+    # --adopt replaces the canonical IN PLACE; an ad-hoc --symbols subset would
+    # therefore clobber the full-universe canonical with only that subset.
+    # Refuse it — adopt must run over the full universe (YAML), the same set the
+    # canonical is supposed to hold. (codex review iter-2 [P2].)
+    if ns.adopt and ns.symbols:
+        print(
+            "error: --adopt replaces the canonical --out in place and must run "
+            "over the FULL universe (from --yaml), not an ad-hoc --symbols "
+            "subset (that would shrink the canonical to the subset). Drop "
+            "--symbols, or use --force without --adopt to write a sibling "
+            "cohort for the subset.",
+            file=sys.stderr,
+        )
+        return 2
     allow_empty = [s.strip() for s in ns.allow_empty.split(",") if s.strip()]
     allow_gaps = [s.strip() for s in ns.allow_gaps.split(",") if s.strip()]
     out_path = Path(ns.out)
