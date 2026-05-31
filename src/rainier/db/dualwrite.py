@@ -55,11 +55,12 @@ _DESIGN_DOC = "docs/DESIGN-rainier-postgres-canonical-store.md"
 
 # Drop a `<scheme>://<userinfo>@` segment, with OR without a `:password` part, so
 # neither the password NOR the username survives. Scheme allows `+driver` forms
-# (e.g. postgresql+psycopg). userinfo is everything up to the first '@' that is
-# not itself a scheme/host separator; we match conservatively (no '/' or '@' in
-# userinfo) to avoid eating the host.
+# (e.g. postgresql+psycopg). userinfo runs up to the LAST '@' before the host —
+# greedy `[^/\s]*@` so an unescaped '@' INSIDE the password (e.g.
+# `postgresql://u:pa@ss@db/prod`) is consumed too (the userinfo ends at the final
+# '@' before the path/host); `[^/\s]` keeps us from crossing into the path.
 _URL_USERINFO_RE = re.compile(
-    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)(?P<userinfo>[^/@\s]+)@"
+    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)(?P<userinfo>[^/\s]*@)"
 )
 # password=<v> / pwd=<v>, optionally quoted (key/value connect-arg + JSON-ish).
 # Two alternatives for the value so a QUOTED secret with embedded whitespace /

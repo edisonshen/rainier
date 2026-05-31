@@ -986,6 +986,15 @@ def test_scrub_credentials_url_and_keyvalue_forms():
     s2 = _scrub_credentials(t2)
     assert "postgresql://@host/db" in s2
 
+    # unescaped '@' INSIDE the password — the WHOLE userinfo (both @s) must go,
+    # not just up to the first '@' (codex iter-6 regression: an old class that
+    # stopped at the first '@' left the `ss@db` password fragment behind).
+    t3 = "could not connect: postgresql://u:pa@ss@db/prod (timeout)"
+    s3 = _scrub_credentials(t3)
+    assert "pa" not in s3, f"password fragment leaked: {s3!r}"
+    assert "ss" not in s3, f"password fragment leaked: {s3!r}"
+    assert "postgresql://@db/prod" in s3
+
     # key/value forms
     assert "secret" not in _scrub_credentials("password=secret extra")
     assert "secret" not in _scrub_credentials("'password': 'secret'")
