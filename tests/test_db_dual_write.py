@@ -1073,6 +1073,42 @@ def test_scrub_credentials_redacts_misparsed_host_fragment():
     assert out3 == "address lookup failed for the database"
 
 
+def test_scrub_credentials_redacts_no_at_malformed_token():
+    """codex iter-8 — a malformed DATABASE_URL with NO '@' (e.g.
+    `postgresql://user:secret host/db`) makes make_url raise a ValueError whose
+    text echoes the credential token (`invalid literal ... 'secret host'`).
+    _raw_userinfo requires an '@' so it misses this; form 3 must derive the
+    user:pass token (and its password half) and redact it — without over-scrubbing
+    when the credential word appears in unrelated text under a different URL."""
+    from rainier.db.dualwrite import _scrub_credentials
+
+    url = "postgresql://user:secret host/db"
+    err = "invalid literal for int() with base 10: 'secret host'"
+    out = _scrub_credentials(err, url)
+    assert "secret host" not in out, f"no-@ credential token leaked: {out!r}"
+    assert "secret" not in out, f"password fragment leaked: {out!r}"
+    assert "***" in out
+
+    # over-scrub guard: the same word under a DIFFERENT url is NOT redacted.
+    out2 = _scrub_credentials("the secret sauce", "postgresql://u:p@host/db")
+    assert out2 == "the secret sauce"
+
+
+def test_diagnostic_scrubs_no_at_malformed_end_to_end(monkeypatch, capsys):
+    """codex iter-8 end-to-end — the printed diagnostic must not leak the
+    credential token from a no-'@' malformed URL's ValueError."""
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret host/db")
+    # The malformed URL makes pg_engine_or_skip raise ValueError before yield;
+    # the guard must emit a scrubbed diagnostic and stay non-fatal.
+    with mirror_guard("no-at-writer") as eng:
+        assert eng is None
+    err = capsys.readouterr().err
+    assert _SENTINEL in err
+    assert "secret host" not in err, "no-@ credential token must be scrubbed"
+
+
 def test_diagnostic_scrubs_misparsed_host_end_to_end(monkeypatch, capsys):
     """codex iter-7 end-to-end — the printed PG-MIRROR-FAILURE diagnostic must not
     leak the mis-parsed-host password fragment when the error text echoes it."""

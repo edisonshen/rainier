@@ -102,6 +102,29 @@ def _raw_userinfo(database_url: str) -> str | None:
         return None
 
 
+def _raw_password_token(database_url: str) -> str | None:
+    """Return the RAW ``user:password`` token of a DATABASE_URL that has NO ``@``
+    separator (a malformed URL like ``postgresql://user:secret host/db``).
+
+    ``make_url`` then raises a ``ValueError`` whose text echoes a credential
+    fragment (``invalid literal ... 'secret host'``) — and ``_raw_userinfo``
+    (which requires an ``@``) misses it. We grab everything between ``://`` and
+    the first ``/`` and require a ``:`` (the user:pass separator) so we only
+    redact a genuine credential token, never a bare host. Returns None otherwise.
+    Never raises.
+    """
+    try:
+        if "@" in database_url:  # the @-form is handled by _raw_userinfo
+            return None
+        m = re.match(r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?P<token>[^/]*)", database_url)
+        if not m:
+            return None
+        token = m.group("token")
+        return token if token and ":" in token else None
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
 def _scrub_credentials(text: str, database_url: str | None = None) -> str:
     """Strip credentials from arbitrary error text. Bounded scope (design §3.2):
 
@@ -143,6 +166,14 @@ def _scrub_credentials(text: str, database_url: str | None = None) -> str:
                 parsed_host = ""
             if "@" in parsed_host:
                 literals.add(parsed_host)
+            # No-'@' malformed form: a ValueError echoes the user:pass token (or
+            # just its password half, e.g. 'secret host'); redact both literals.
+            token = _raw_password_token(database_url)
+            if token:
+                literals.add(token)
+                _, _, pwd = token.partition(":")
+                if pwd:
+                    literals.add(pwd)
             for literal in sorted(literals, key=len, reverse=True):
                 out = out.replace(literal, "***")
         return out
