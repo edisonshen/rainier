@@ -954,6 +954,21 @@ def test_scrub_credentials_url_and_keyvalue_forms():
     assert "secret" not in _scrub_credentials("pwd=secret;host=x")
     assert "secret" not in _scrub_credentials('"password": "secret"')
 
+    # quoted value with embedded whitespace / separators must be consumed WHOLE
+    # (codex iter-1 regression: the value class used to stop at the first space,
+    # leaving the secret tail behind as `password=***'foo bar'`).
+    for whitespace_form in [
+        "password='foo bar'",
+        'password="foo bar"',
+        "password='foo,bar;baz'",
+        "'password': 'foo bar baz'",
+    ]:
+        scrubbed = _scrub_credentials(whitespace_form)
+        assert "foo" not in scrubbed, f"quoted secret leaked: {scrubbed!r}"
+        assert "bar" not in scrubbed, f"quoted secret leaked: {scrubbed!r}"
+        assert "baz" not in scrubbed, f"quoted secret leaked: {scrubbed!r}"
+        assert "***" in scrubbed
+
     # credential-free / malformed unchanged + no raise
     for clean in ["just an error message", "", "host=db port=5432", "no creds here"]:
         assert _scrub_credentials(clean) == clean

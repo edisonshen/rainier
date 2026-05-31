@@ -62,12 +62,17 @@ _URL_USERINFO_RE = re.compile(
     r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)(?P<userinfo>[^/@\s]+)@"
 )
 # password=<v> / pwd=<v>, optionally quoted (key/value connect-arg + JSON-ish).
+# Two alternatives for the value so a QUOTED secret with embedded whitespace /
+# separators (e.g. password='foo bar') is consumed WHOLE — an unquoted class that
+# stops at whitespace would leave the tail of the secret in the scrubbed text.
 _PASSWORD_KV_RE = re.compile(
     r"""(?P<key>\b(?:password|pwd)\b)   # password / pwd, word-bounded
         (?P<sep>['"]?\s*[:=]\s*)        # optional key-closing quote + : or = sep
-        (?P<quote>['"]?)                # optional value-opening quote
-        [^'"\s,;]*                      # the secret value (no quote/ws/sep)
-        (?P=quote)                      # matching value-closing quote
+        (?:
+            (?P<quote>['"])[^'"]*(?P=quote)  # quoted value: everything up to the
+                                              #   matching closing quote (ws ok)
+          | [^'"\s,;]*                        # unquoted value: stop at ws/sep
+        )
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -83,9 +88,15 @@ def _scrub_credentials(text: str) -> str:
 
     Anything outside these two forms is left untouched. Never raises.
     """
+    def _kv_repl(m: re.Match[str]) -> str:
+        # Re-wrap with the captured quote when the value was quoted, so the
+        # output stays well-formed (password='***'); bare *** when unquoted.
+        quote = m.group("quote") or ""
+        return f"{m.group('key')}{m.group('sep')}{quote}***{quote}"
+
     try:
         out = _URL_USERINFO_RE.sub(r"\g<scheme>@", text)
-        out = _PASSWORD_KV_RE.sub(r"\g<key>\g<sep>\g<quote>***\g<quote>", out)
+        out = _PASSWORD_KV_RE.sub(_kv_repl, out)
         return out
     except Exception:  # pragma: no cover - defensive; regex on str cannot raise
         return text
