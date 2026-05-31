@@ -847,6 +847,27 @@ def test_mirror_guard_before_yield_failure_is_non_fatal(monkeypatch, capsys):
     assert "ArgumentError" in err
 
 
+def test_mirror_guard_malformed_port_valueerror_is_non_fatal(monkeypatch, capsys):
+    """codex iter-2 — a malformed DATABASE_URL with a non-numeric port makes
+    make_url/create_engine raise a bare ``ValueError`` (int('notaport')) BEFORE
+    the yield, not a SQLAlchemyError. That must still be non-fatal: emit the loud
+    diagnostic and yield None, not abort the caller (design §3.1 — any
+    engine-creation failure on a SET url is non-fatal)."""
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host:notaport/db")
+
+    body_ran_with_none = False
+    # Must NOT escape as ValueError nor RuntimeError: generator didn't yield.
+    with mirror_guard("malformed-port-writer") as eng:
+        body_ran_with_none = eng is None
+
+    assert body_ran_with_none, "malformed-port URL must yield None, not abort"
+    err = capsys.readouterr().err
+    assert _SENTINEL in err, "malformed-port failure must emit loud diagnostic"
+    assert "ValueError" in err, "the bare ValueError class must be named"
+
+
 def test_mirror_guard_unset_stays_quiet(monkeypatch, capsys):
     """§4.3 — DATABASE_URL unset -> the benign skip warning, NO sentinel."""
     from rainier.db.dualwrite import mirror_guard

@@ -221,7 +221,13 @@ def mirror_guard(writer_name: str) -> Iterator[Engine | None]:
     try:
         try:
             eng = pg_engine_or_skip(writer_name)  # may raise BEFORE the yield
-        except SQLAlchemyError as exc:
+        except (SQLAlchemyError, ValueError) as exc:
+            # SQLAlchemyError: unreachable/unmigrated PG. ValueError: a malformed
+            # DATABASE_URL whose make_url/create_engine parse fails (e.g. a
+            # non-numeric port → `int('notaport')`) raises a bare ValueError, not
+            # SQLAlchemyError. Both are mirror-config failures on a SET url, so
+            # both are non-fatal here (design §3.1). The BODY handler below stays
+            # SQLAlchemyError-only so a programmer-bug ValueError still propagates.
             _emit_mirror_failure(writer_name, exc)
             eng = None  # …and fall through so we still yield
         yield eng  # ALWAYS yields (None on engine-creation failure)
