@@ -609,6 +609,264 @@ def test_incremental_outage_aborts_before_write(backfill_mod, tmp_path):
     assert today not in set(pd.to_datetime(after["date"]).dt.date)
 
 
+# ---------------------------------------------------------------------------
+# --adopt — sanctioned cohort -> canonical bridge (this task)
+#
+# `backfill(force=True, adopt=True)` over an EXISTING canonical replaces the
+# stale canonical atomically (os.replace) with the freshly fetched cohort and
+# leaves NO orphan sibling. This is the one-command self-heal for a stale
+# canonical, replacing the unsanctioned manual `mv cohort -> canonical`.
+# ---------------------------------------------------------------------------
+
+
+def test_adopt_replaces_canonical_atomically(backfill_mod, tmp_path):
+    """force+adopt over an existing canonical advances max(date) and writes
+    IN PLACE onto the canonical path — no sibling cohort left behind."""
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic_universe.parquet"
+    # Seed a STALE canonical: full-history fetch anchored at an old window.
+    old = date(2026, 5, 1)
+    old_dates = [old - timedelta(days=d) for d in (4, 3, 2, 1, 0)]
+    backfill_mod.backfill(
+        symbols=["XLK", "SMH"],
+        start=min(old_dates).isoformat(),
+        end=max(old_dates).isoformat(),
+        out_path=out,
+        force=False,
+        fetch_fn=_windowed_fetch_factory(old_dates),
+        min_coverage=0.0,
+    )
+    stale_max = pd.to_datetime(pd.read_parquet(out)["date"]).dt.date.max()
+
+    # Fresh full fetch that reaches a newer high-water mark.
+    fresh = date(2026, 5, 29)
+    fresh_dates = [fresh - timedelta(days=d) for d in (4, 3, 2, 1, 0)]
+    result = backfill_mod.backfill(
+        symbols=["XLK", "SMH"],
+        start=min(fresh_dates).isoformat(),
+        end=max(fresh_dates).isoformat(),
+        out_path=out,
+        force=True,
+        adopt=True,
+        fetch_fn=_windowed_fetch_factory(fresh_dates),
+        min_coverage=0.0,
+    )
+
+    # Wrote onto the canonical path itself, not a sibling.
+    assert result == out
+    siblings = [
+        p
+        for p in tmp_path.glob("thematic_universe_*.parquet")
+        if p != out
+    ]
+    assert siblings == [], f"adopt must leave no orphan cohort, found {siblings}"
+    # Canonical advanced to the fresh cohort.
+    new_max = pd.to_datetime(pd.read_parquet(out)["date"]).dt.date.max()
+    assert new_max > stale_max
+    assert new_max == fresh
+    # No tmp leak.
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_adopt_then_incremental_is_clean_noop(backfill_mod, tmp_path):
+    """After adopt brings the canonical current, a subsequent --incremental over
+    the same recent window adds no new rows and never trips the gap guard —
+    proving the daily cron self-heals."""
+    from datetime import date, timedelta
+
+    out = tmp_path / "thematic_universe.parquet"
+    fresh = date(2026, 5, 29)
+    fresh_dates = [fresh - timedelta(days=d) for d in (2, 1, 0)]
+
+    # Seed a stale canonical then adopt a fresh cohort over it.
+    stale = date(2026, 5, 1)
+    stale_dates = [stale - timedelta(days=d) for d in (1, 0)]
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start=min(stale_dates).isoformat(),
+        end=max(stale_dates).isoformat(),
+        out_path=out,
+        force=False,
+        fetch_fn=_windowed_fetch_factory(stale_dates),
+        min_coverage=0.0,
+    )
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start=min(fresh_dates).isoformat(),
+        end=max(fresh_dates).isoformat(),
+        out_path=out,
+        force=True,
+        adopt=True,
+        fetch_fn=_windowed_fetch_factory(fresh_dates),
+        min_coverage=0.0,
+    )
+    rows_after_adopt = len(pd.read_parquet(out))
+
+    # Incremental over the same fresh window is a clean no-op (no gap, no dups).
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        incremental=True,
+        fetch_fn=_windowed_fetch_factory(fresh_dates),
+        today=fresh,
+        min_coverage=0.0,
+    )
+    df = pd.read_parquet(out)
+    assert len(df) == rows_after_adopt
+    assert not df.duplicated(subset=["symbol", "date"]).any()
+
+
+def test_adopt_on_missing_canonical_writes_in_place(backfill_mod, tmp_path):
+    """force+adopt with no pre-existing canonical just writes the canonical
+    path directly (no sibling) — fresh-host safety net."""
+    out = tmp_path / "thematic_universe.parquet"
+    result = backfill_mod.backfill(
+        symbols=["XLK", "SMH"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=True,
+        adopt=True,
+        fetch_fn=_stub_fetch,
+        min_coverage=0.0,
+    )
+    assert result == out
+    assert out.exists()
+    assert [p for p in tmp_path.glob("thematic_universe_*.parquet") if p != out] == []
+
+
+def test_adopt_requires_force(backfill_mod, tmp_path):
+    """adopt without force on an existing canonical still refuses the clobber —
+    adopt is a modifier of the --force fetch path, not a bypass of the guard."""
+    out = tmp_path / "thematic_universe.parquet"
+    backfill_mod.backfill(
+        symbols=["XLK"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=_stub_fetch,
+        min_coverage=0.0,
+    )
+    with pytest.raises(FileExistsError):
+        backfill_mod.backfill(
+            symbols=["XLK"],
+            start="2024-10-01",
+            end="2024-10-08",
+            out_path=out,
+            force=False,
+            adopt=True,
+            fetch_fn=_stub_fetch,
+            min_coverage=0.0,
+        )
+
+
+def test_adopt_outage_does_not_clobber_canonical(backfill_mod, tmp_path):
+    """A provider outage on a force+adopt run must abort BEFORE the os.replace,
+    leaving the prior good canonical intact (no partial/empty canonical)."""
+    out = tmp_path / "thematic_universe.parquet"
+    backfill_mod.backfill(
+        symbols=["XLK", "SMH", "XLE", "XLF"],
+        start="2024-10-01",
+        end="2024-10-08",
+        out_path=out,
+        force=False,
+        fetch_fn=_stub_fetch,
+        min_coverage=0.0,
+    )
+    good_rows = len(pd.read_parquet(out))
+
+    def _outage_fetch(symbols, start, end):
+        cols = ["date", "open", "high", "low", "close", "volume"]
+        return {s: pd.DataFrame(columns=cols) for s in symbols}
+
+    with pytest.raises(ValueError):
+        backfill_mod.backfill(
+            symbols=["XLK", "SMH", "XLE", "XLF"],
+            start="2024-10-01",
+            end="2024-10-08",
+            out_path=out,
+            force=True,
+            adopt=True,
+            fetch_fn=_outage_fetch,
+            # default min_coverage trips the Tier-1 empty gate.
+        )
+    assert len(pd.read_parquet(out)) == good_rows
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# gc_cohorts — reap orphan sibling cohorts, keep canonical + N latest
+# ---------------------------------------------------------------------------
+
+
+def _touch_cohort(tmp_path, name, mtime):
+    p = tmp_path / name
+    p.write_bytes(b"x")
+    os = __import__("os")
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def test_gc_cohorts_dry_run_lists_without_deleting(backfill_mod, tmp_path):
+    canonical = tmp_path / "thematic_universe.parquet"
+    canonical.write_bytes(b"canonical")
+    c1 = _touch_cohort(tmp_path, "thematic_universe_20260501_010101_000001.parquet", 100)
+    c2 = _touch_cohort(tmp_path, "thematic_universe_20260502_010101_000001.parquet", 200)
+    c3 = _touch_cohort(tmp_path, "thematic_universe_20260503_010101_000001.parquet", 300)
+
+    plan = backfill_mod.gc_cohorts(out_path=canonical, keep=1, apply=False)
+
+    # Nothing deleted in dry-run.
+    assert c1.exists() and c2.exists() and c3.exists()
+    assert canonical.exists()
+    # Plan reaps the 2 oldest, keeps the newest cohort.
+    assert set(plan["delete"]) == {c1, c2}
+    assert c3 in plan["keep"]
+    assert canonical not in plan["delete"]
+
+
+def test_gc_cohorts_apply_deletes_old_keeps_canonical_and_latest(backfill_mod, tmp_path):
+    canonical = tmp_path / "thematic_universe.parquet"
+    canonical.write_bytes(b"canonical")
+    c1 = _touch_cohort(tmp_path, "thematic_universe_20260501_010101_000001.parquet", 100)
+    c2 = _touch_cohort(tmp_path, "thematic_universe_20260502_010101_000001.parquet", 200)
+    c3 = _touch_cohort(tmp_path, "thematic_universe_20260503_010101_000001.parquet", 300)
+    refresh = _touch_cohort(tmp_path, "thematic_universe_refresh.parquet", 50)
+
+    deleted = backfill_mod.gc_cohorts(out_path=canonical, keep=2, apply=True)
+
+    # Canonical NEVER touched.
+    assert canonical.exists()
+    # Two most-recent cohorts kept; older cohort + refresh sibling reaped.
+    assert c2.exists() and c3.exists()
+    assert not c1.exists()
+    assert not refresh.exists()
+    assert set(deleted["deleted"]) == {c1, refresh}
+
+
+def test_gc_cohorts_never_deletes_canonical(backfill_mod, tmp_path):
+    canonical = tmp_path / "thematic_universe.parquet"
+    canonical.write_bytes(b"canonical")
+    # keep=0 is the most aggressive setting; canonical must still survive.
+    c1 = _touch_cohort(tmp_path, "thematic_universe_20260501_010101_000001.parquet", 100)
+    deleted = backfill_mod.gc_cohorts(out_path=canonical, keep=0, apply=True)
+    assert canonical.exists()
+    assert not c1.exists()
+    assert canonical not in deleted["deleted"]
+
+
+def test_gc_cohorts_no_cohorts_is_empty_plan(backfill_mod, tmp_path):
+    canonical = tmp_path / "thematic_universe.parquet"
+    canonical.write_bytes(b"canonical")
+    plan = backfill_mod.gc_cohorts(out_path=canonical, keep=2, apply=False)
+    assert plan["delete"] == []
+    assert canonical.exists()
+
+
 def test_incremental_gap_too_large_aborts(backfill_mod, tmp_path):
     """If the existing cache's high-water mark is older than the incremental
     window can bridge, the refresh must fail loud rather than stitch a gapped
