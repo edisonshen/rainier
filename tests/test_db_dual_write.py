@@ -951,6 +951,23 @@ def test_redact_host_malformed_returns_unparseable():
     )
 
 
+def test_redact_host_unescaped_at_in_password_does_not_leak():
+    """codex iter-5 — an unescaped '@' in the password (e.g.
+    postgresql://u:pa@ss@db/prod) makes make_url parse host as `ss@db`, leaking
+    the password fragment `ss`. _redact_host must treat an '@'-bearing host as
+    unparseable, never rendering it."""
+    from rainier.db.dualwrite import _redact_host
+
+    for url in [
+        "postgresql://u:pa@ss@db/prod",
+        "postgresql://user:p@ssw0rd@host:5432/db",
+        "postgresql+psycopg://u:a@b@c/d",
+    ]:
+        out = _redact_host(url)
+        assert out == "<unparseable>", f"@-in-password host must be unparseable, got {out!r}"
+        assert "ss" not in out and "ssw0rd" not in out
+
+
 def test_scrub_credentials_url_and_keyvalue_forms():
     """§4.7 — _scrub_credentials drops URL userinfo (with/without password) and
     password=/pwd= key-value forms; credential-free text unchanged; never

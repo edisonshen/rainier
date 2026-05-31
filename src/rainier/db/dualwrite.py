@@ -123,6 +123,12 @@ def _redact_host(database_url: str) -> str:
     try:
         db = url.database or ""
         host = url.host or ""
+        # An unescaped '@' in the password (e.g. postgresql://u:pa@ss@db/prod)
+        # makes make_url parse the host as `ss@db` — a password fragment bled into
+        # the host field. Any '@' in the host means the parse was ambiguous and
+        # creds may be embedded; refuse to render it (never leak to cron logs).
+        if "@" in host:
+            return "<unparseable>"
         # A "socket" host is a filesystem path (leading '/'), or it lives in the
         # `host` query param (libpq Unix-socket convention SQLAlchemy passes
         # through). Prefer the query-param socket dir when present.
