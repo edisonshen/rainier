@@ -69,11 +69,11 @@ _PASSWORD_KV_RE = re.compile(
     r"""(?P<key>\b(?:password|pwd)\b)   # password / pwd, word-bounded
         (?P<sep>['"]?\s*[:=]\s*)        # optional key-closing quote + : or = sep
         (?:
-            (?P<sq>')[^']*(?P=sq)       # single-quoted value: stop only at the
-                                         #   matching ' (a " inside is part of it)
-          | (?P<dq>")[^"]*(?P=dq)       # double-quoted value: stop only at the
-                                         #   matching " (a ' inside is part of it)
-          | [^'"\s,;]*                  # unquoted value: stop at ws/sep
+            (?P<sq>')(?:\\.|[^'\\])*(?P=sq)  # single-quoted: consume \-escapes so
+                                              #   an escaped \' inside stays part of
+                                              #   the secret; stop at the real close
+          | (?P<dq>")(?:\\.|[^"\\])*(?P=dq)  # double-quoted: same, for \" (JSON)
+          | [^'"\s,;]*                       # unquoted value: stop at ws/sep
         )
     """,
     re.IGNORECASE | re.VERBOSE,

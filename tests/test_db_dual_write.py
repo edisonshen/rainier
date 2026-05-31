@@ -1003,6 +1003,20 @@ def test_scrub_credentials_url_and_keyvalue_forms():
         assert "bar" not in scrubbed, f"embedded-quote secret leaked: {scrubbed!r}"
         assert "***" in scrubbed
 
+    # backslash-ESCAPED quote inside the value (JSON-serialized connect args) must
+    # be consumed as part of the secret (codex iter-4 regression: a quoted branch
+    # that stopped at the escaped quote leaked the tail `bar`).
+    for escaped_quote_form in [
+        '"password": "foo\\"bar"',
+        "'password': 'foo\\'bar'",
+        '"password": "foo\\"bar baz"',
+    ]:
+        scrubbed = _scrub_credentials(escaped_quote_form)
+        assert "foo" not in scrubbed, f"escaped-quote secret leaked: {scrubbed!r}"
+        assert "bar" not in scrubbed, f"escaped-quote secret leaked: {scrubbed!r}"
+        assert "baz" not in scrubbed, f"escaped-quote secret leaked: {scrubbed!r}"
+        assert "***" in scrubbed
+
     # credential-free / malformed unchanged + no raise
     for clean in ["just an error message", "", "host=db port=5432", "no creds here"]:
         assert _scrub_credentials(clean) == clean
