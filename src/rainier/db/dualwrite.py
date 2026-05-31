@@ -69,9 +69,11 @@ _PASSWORD_KV_RE = re.compile(
     r"""(?P<key>\b(?:password|pwd)\b)   # password / pwd, word-bounded
         (?P<sep>['"]?\s*[:=]\s*)        # optional key-closing quote + : or = sep
         (?:
-            (?P<quote>['"])[^'"]*(?P=quote)  # quoted value: everything up to the
-                                              #   matching closing quote (ws ok)
-          | [^'"\s,;]*                        # unquoted value: stop at ws/sep
+            (?P<sq>')[^']*(?P=sq)       # single-quoted value: stop only at the
+                                         #   matching ' (a " inside is part of it)
+          | (?P<dq>")[^"]*(?P=dq)       # double-quoted value: stop only at the
+                                         #   matching " (a ' inside is part of it)
+          | [^'"\s,;]*                  # unquoted value: stop at ws/sep
         )
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -91,7 +93,7 @@ def _scrub_credentials(text: str) -> str:
     def _kv_repl(m: re.Match[str]) -> str:
         # Re-wrap with the captured quote when the value was quoted, so the
         # output stays well-formed (password='***'); bare *** when unquoted.
-        quote = m.group("quote") or ""
+        quote = m.group("sq") or m.group("dq") or ""
         return f"{m.group('key')}{m.group('sep')}{quote}***{quote}"
 
     try:

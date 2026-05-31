@@ -990,6 +990,19 @@ def test_scrub_credentials_url_and_keyvalue_forms():
         assert "baz" not in scrubbed, f"quoted secret leaked: {scrubbed!r}"
         assert "***" in scrubbed
 
+    # quoted value containing the OPPOSITE quote char must stop only at the
+    # matching closing quote (codex iter-3 regression: an either-quote class let
+    # `password="foo'bar"` leak the tail after ***).
+    for embedded_quote_form in [
+        "password=\"foo'bar\"",
+        "password='foo\"bar'",
+        "password='foo\"bar baz'",
+    ]:
+        scrubbed = _scrub_credentials(embedded_quote_form)
+        assert "foo" not in scrubbed, f"embedded-quote secret leaked: {scrubbed!r}"
+        assert "bar" not in scrubbed, f"embedded-quote secret leaked: {scrubbed!r}"
+        assert "***" in scrubbed
+
     # credential-free / malformed unchanged + no raise
     for clean in ["just an error message", "", "host=db port=5432", "no creds here"]:
         assert _scrub_credentials(clean) == clean
