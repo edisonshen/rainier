@@ -344,7 +344,13 @@ class Settings(BaseSettings):
     )
 
     # Secrets from .env
+    # Canonical-store DSN (Neon in prod). Config-layer mirror of DATABASE_URL;
+    # NOT read by any engine after the legacy split — db/engine.py reads
+    # os.environ["DATABASE_URL"] directly. Kept for backward-compat / --config echo.
     database_url: str = "postgresql://rainier:rainier_dev@localhost:5432/rainier"
+    # Legacy public-schema ORM + TimescaleDB hypertables (local TimescaleDB).
+    # The core/database.py singleton engine binds to this (env LEGACY_DATABASE_URL).
+    legacy_database_url: str = "postgresql://rainier:rainier_dev@localhost:5432/rainier"
     qu_username: str = ""
     qu_password: str = ""
     openai_api_key: str = ""
