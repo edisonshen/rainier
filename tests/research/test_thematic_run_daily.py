@@ -459,18 +459,20 @@ def test_run_daily_stale_ohlcv_surfaces_diagnostic(fake_cache):
     assert "stale" in result.output.lower(), (
         f"diagnostic should mention 'stale'; got: {result.output!r}"
     )
-    assert "backfill_thematic_universe" in result.output, (
+    assert "thematic backfill" in result.output, (
         f"diagnostic should name the next-step backfill command; got: {result.output!r}"
     )
-    # codex iter-3 [P1]: the recovery flow must account for backfill's
-    # revision-immutability (--force writes a sibling cohort, not in-place).
-    # Diagnostic must include the cohort-swap step (--force then mv).
-    assert "--force" in result.output, (
-        f"diagnostic must mention --force (sibling cohort flow); "
+    # The recovery flow now points at the sanctioned `--force --adopt` bridge
+    # (atomic in-place canonical replace + Neon mirror) instead of the old
+    # manual `mv cohort -> canonical` swap (revision-immutability preserved by
+    # the atomic os.replace inside backfill()).
+    assert "--force --adopt" in result.output, (
+        f"diagnostic must mention the --force --adopt bridge; "
         f"got: {result.output!r}"
     )
-    assert " mv " in result.output, (
-        f"diagnostic must include cohort-swap mv step; got: {result.output!r}"
+    assert " mv " not in result.output, (
+        f"diagnostic must NOT tell the operator to manually mv (unsanctioned "
+        f"cache mutation); got: {result.output!r}"
     )
 
 
@@ -527,8 +529,12 @@ def test_check_freshness_rejects_shallow_history():
         _check_ohlcv_freshness(panel, asof, "data/cache/thematic_universe.parquet", spec)
     msg = str(exc.value)
     assert "shallow" in msg.lower(), f"diagnostic must say 'shallow'; got: {msg!r}"
-    assert "backfill_thematic_universe" in msg, (
-        f"diagnostic must name the full-history seed command; got: {msg!r}"
+    assert "thematic backfill --force --adopt" in msg, (
+        f"diagnostic must name the sanctioned full-history adopt bridge; "
+        f"got: {msg!r}"
+    )
+    assert " mv " not in msg, (
+        f"diagnostic must NOT tell the operator to manually mv; got: {msg!r}"
     )
 
 
