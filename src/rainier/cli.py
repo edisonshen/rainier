@@ -3331,6 +3331,19 @@ def thematic() -> None:
     help="When the cache exists, write a timestamped sibling cohort.",
 )
 @click.option(
+    "--adopt",
+    "--in-place",
+    "adopt",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --force: atomically replace the (stale) canonical --out with the "
+        "fresh cohort in place (no orphan sibling, no manual mv) AND mirror the "
+        "fresh OHLCV + registries to Neon. The sanctioned cohort -> canonical "
+        "bridge for a stale-canonical self-heal."
+    ),
+)
+@click.option(
     "--incremental",
     is_flag=True,
     default=False,
@@ -3381,6 +3394,7 @@ def thematic_backfill(
     end: str | None,
     out_path: str,
     force: bool,
+    adopt: bool,
     incremental: bool,
     dry_run: bool,
     allow_empty: str,
@@ -3430,6 +3444,7 @@ def thematic_backfill(
         end=end_eff,
         out_path=Path(out_path),
         force=force,
+        adopt=adopt,
         incremental=incremental,
         dry_run=dry_run,
         allow_empty=[s.strip() for s in allow_empty.split(",") if s.strip()],
@@ -3461,7 +3476,14 @@ def thematic_backfill(
         return
 
     written_path = result
-    mode = "incremental" if incremental else "one-shot"
+    if incremental:
+        mode = "incremental"
+    elif force and adopt:
+        mode = "adopt (canonical replaced in place)"
+    elif force:
+        mode = "force (sibling cohort)"
+    else:
+        mode = "one-shot"
     click.echo(f"wrote OHLCV cache ({mode}) -> {written_path}")
 
     # Seed registries with the just-fetched universe. Idempotent — re-running
@@ -3475,6 +3497,86 @@ def thematic_backfill(
     )
     click.echo(f"seeded ticker registry  -> {ticker_registry}")
     click.echo(f"seeded sector registry  -> {sector_registry}")
+
+
+@thematic.command("gc-cohorts")
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(),
+    default="data/cache/thematic_universe.parquet",
+    show_default=True,
+    help="Canonical parquet path; siblings next to it are gc candidates.",
+)
+@click.option(
+    "--keep",
+    type=int,
+    default=2,
+    show_default=True,
+    help="Number of most-recent sibling cohorts to retain (newest by mtime).",
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Delete the reap candidates. Without this, dry-run lists them only.",
+)
+def thematic_gc_cohorts(out_path: str, keep: int, apply: bool) -> None:
+    """Reap orphan sibling cohort parquets, keeping canonical + N latest.
+
+    ``--force`` (without ``--adopt``) writes dated sibling cohorts next to the
+    canonical ``thematic_universe.parquet``; these accumulate. This reaps them,
+    keeping the canonical (NEVER deleted) plus the ``--keep`` most-recent
+    cohorts. Dry-run by default — pass ``--apply`` to delete. Mirrors
+    ``fleet gc``'s surface-then-apply ethos.
+    """
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "backfill_thematic_universe",
+        root / "scripts" / "backfill_thematic_universe.py",
+    )
+    if spec is None or spec.loader is None:
+        raise click.ClickException(
+            "could not load scripts/backfill_thematic_universe.py"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    canonical = Path(out_path)
+    plan = module.gc_cohorts(out_path=canonical, keep=keep, apply=apply)
+
+    candidates = plan["delete"]
+    kept = plan["keep"]
+    if apply:
+        deleted = plan["deleted"]
+        failed = plan.get("failed", [])
+        click.echo(
+            f"gc-cohorts: deleted {len(deleted)} orphan cohort(s); "
+            f"kept canonical {canonical.name} + {len(kept)} latest."
+        )
+        for p in deleted:
+            click.echo(f"  deleted {p}")
+        # Surface unlink failures as a hard error so automation/operators don't
+        # think gc completed when an orphan is still on disk (codex iter-2 [P2]).
+        if failed:
+            for p, err in failed:
+                click.echo(f"  FAILED to delete {p}: {err}", err=True)
+            raise click.ClickException(
+                f"gc-cohorts: {len(failed)} orphan cohort(s) could not be "
+                f"deleted (see above). Resolve the error and re-run --apply."
+            )
+    else:
+        click.echo(
+            f"DRY-RUN gc-cohorts: would delete {len(candidates)} orphan "
+            f"cohort(s); would keep canonical {canonical.name} + {len(kept)} "
+            f"latest. Re-run with --apply to delete."
+        )
+        for p in candidates:
+            click.echo(f"  would delete {p}")
+    for p in kept:
+        click.echo(f"  keep {p}")
 
 
 @thematic.command("backfill-names")
@@ -3983,13 +4085,11 @@ def _check_ohlcv_freshness(
     if panel_max < asof_dt:
         raise click.ClickException(
             f"OHLCV cache stale: max(date)={panel_max} < asof={asof_dt}. "
-            f"Refresh with:\n"
-            f"  1. uv run python scripts/backfill_thematic_universe.py "
-            f"--start 2024-10-01 --end {asof_dt} --force\n"
-            f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
-            f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
-            f"{ohlcv_path}\n"
-            f"  3. uv run rainier thematic run-daily  # retry"
+            f"Self-heal the canonical with the sanctioned adopt bridge "
+            f"(atomic in-place replace + Neon mirror, no manual mv):\n"
+            f"  1. uv run rainier thematic backfill --force --adopt "
+            f"--start 2024-10-01 --end {asof_dt} --out {ohlcv_path}\n"
+            f"  2. uv run rainier thematic run-daily  # retry"
         )
 
     # Shallow-history guard: Layer A's longest lookback is the 20-trading-day
@@ -4003,21 +4103,20 @@ def _check_ohlcv_freshness(
     if distinct_dates < MIN_HISTORY_TRADING_DAYS:
         # The shallow cache already exists (--incremental created it), so the
         # seed must replace it: the one-shot backfill refuses to overwrite
-        # without --force, and --force writes a sibling cohort that must be
-        # moved into place (revision-immutability) — same flow as the stale
-        # branch above (codex iter-5).
+        # without --force. --force --adopt does the full re-fetch then atomically
+        # replaces the shallow canonical in place (+ mirrors Neon) — the
+        # sanctioned bridge, no manual mv (revision-immutability preserved by the
+        # atomic os.replace inside backfill()).
         raise click.ClickException(
             f"OHLCV cache too shallow: only {distinct_dates} trading day(s) "
             f"<= asof={asof_dt}; Layer A needs >= {MIN_HISTORY_TRADING_DAYS} "
             f"(rel_20/vol_20 windows) or every rank is the no-data sentinel. "
             f"The --incremental refresh only fetches a few days and is NOT a "
-            f"substitute for the full-history seed. Replace the shallow cache:\n"
-            f"  1. uv run python scripts/backfill_thematic_universe.py "
-            f"--start 2024-10-01 --end {asof_dt} --force\n"
-            f"  2. mv $(ls -t {Path(ohlcv_path).parent}/"
-            f"{Path(ohlcv_path).stem}_*{Path(ohlcv_path).suffix} | head -1) "
-            f"{ohlcv_path}\n"
-            f"  3. uv run rainier thematic run-daily  # retry"
+            f"substitute for the full-history seed. Replace the shallow cache "
+            f"with the sanctioned adopt bridge (no manual mv):\n"
+            f"  1. uv run rainier thematic backfill --force --adopt "
+            f"--start 2024-10-01 --end {asof_dt} --out {ohlcv_path}\n"
+            f"  2. uv run rainier thematic run-daily  # retry"
         )
 
     expected_syms = {sym for syms in spec.sectors.values() for sym in syms}

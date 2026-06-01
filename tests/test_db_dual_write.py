@@ -258,6 +258,66 @@ def test_backfill_dual_write_idempotent(migrated_engine, tmp_path, database_url)
 
 
 @pytest.mark.requires_postgres
+def test_adopt_mirrors_ohlcv_to_pg_and_replaces_canonical(
+    migrated_engine, tmp_path, database_url
+):
+    """`backfill(force=True, adopt=True)` over a stale canonical advances the
+    canonical parquet IN PLACE (no orphan sibling) AND mirrors the fresh OHLCV
+    into market.thematic_ohlcv — one command leaves BOTH current."""
+    backfill = _import_backfill()
+    symbols = ["AAA", "BBB"]
+    yaml_path = tmp_path / "universe.yaml"
+    _write_universe_yaml(yaml_path, symbols)
+    out_path = tmp_path / "thematic_universe.parquet"
+
+    def _fetch_for(panel):
+        def fake_fetch(syms, start, end):
+            return {
+                s: panel.loc[
+                    panel["symbol"] == s,
+                    ["date", "open", "high", "low", "close", "volume"],
+                ].reset_index(drop=True)
+                for s in syms
+            }
+
+        return fake_fetch
+
+    # Seed a stale canonical (older dates).
+    stale_panel = _build_ohlcv_panel(symbols, n_days=10)
+    backfill.backfill(
+        symbols=symbols, start="2024-10-01", end="2024-10-31",
+        out_path=out_path, fetch_fn=_fetch_for(stale_panel), yaml_path=yaml_path,
+        min_coverage=0.0,
+        ticker_registry_path=tmp_path / "tr.parquet",
+        sector_registry_path=tmp_path / "sr.parquet",
+    )
+    stale_max = pd.to_datetime(pd.read_parquet(out_path)["date"]).dt.date.max()
+
+    # Fresh full fetch with MORE days -> later high-water mark.
+    fresh_panel = _build_ohlcv_panel(symbols, n_days=30)
+    written = backfill.backfill(
+        symbols=symbols, start="2024-10-01", end="2024-10-31",
+        out_path=out_path, force=True, adopt=True,
+        fetch_fn=_fetch_for(fresh_panel), yaml_path=yaml_path,
+        min_coverage=0.0,
+        ticker_registry_path=tmp_path / "tr.parquet",
+        sector_registry_path=tmp_path / "sr.parquet",
+    )
+
+    # Canonical replaced in place, no orphan sibling.
+    assert Path(written) == out_path
+    siblings = [
+        p for p in tmp_path.glob("thematic_universe_*.parquet") if p != out_path
+    ]
+    assert siblings == [], f"adopt left orphan cohort: {siblings}"
+    canon = pd.read_parquet(out_path)
+    assert pd.to_datetime(canon["date"]).dt.date.max() > stale_max
+
+    # PG thematic_ohlcv mirrors the fresh canonical exactly.
+    assert _count(migrated_engine, "thematic_ohlcv") == len(canon)
+
+
+@pytest.mark.requires_postgres
 def test_backfill_and_compute_share_stable_ids_across_yaml_reorder(
     migrated_engine, tmp_path, database_url
 ):

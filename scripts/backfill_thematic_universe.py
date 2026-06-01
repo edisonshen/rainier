@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -220,6 +221,15 @@ def _write_parquet_atomic(df: pd.DataFrame, out_path: Path) -> None:
     table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
     try:
         pq.write_table(table, tmp, compression="snappy")
+        # fsync the tmp file before the atomic rename so a crash/power-loss
+        # between write and replace can't leave a torn canonical: the bytes are
+        # durable on disk before os.replace flips the name. (The dir entry rename
+        # itself is atomic on a POSIX same-filesystem replace.)
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(tmp, out_path)
     finally:
         if tmp.exists():
@@ -520,6 +530,7 @@ def backfill(
     end: str,
     out_path: Path,
     force: bool = False,
+    adopt: bool = False,
     dry_run: bool = False,
     incremental: bool = False,
     fetch_fn: Callable[[Iterable[str], str, str], dict[str, pd.DataFrame]]
@@ -539,6 +550,15 @@ def backfill(
       * **One-shot** (default): full ``start``..``end`` fetch. Refuses to
         overwrite an existing cache unless ``force=True`` (which writes a dated
         sibling cohort, never in place — revision-immutability).
+      * **Adopt** (``force=True, adopt=True``): the sanctioned cohort ->
+        canonical bridge. Runs the same clean full fetch + validation as
+        ``--force``, but instead of leaving the fresh data in a dated sibling
+        cohort, it ATOMICALLY replaces the (stale) canonical ``out_path`` with
+        it via ``os.replace`` — no orphan sibling, no manual ``mv``. This is the
+        one-command self-heal for a stale canonical: the canonical parquet AND
+        (when ``yaml_path`` is set) Neon ``market.thematic_ohlcv`` both end up
+        current. ``adopt`` requires ``force`` and is a modifier of the force
+        fetch path, not a bypass of the overwrite guard.
       * **Incremental** (``incremental=True``): the daily-cron refresh path
         that mirrors the breadth twin (``market-breadth backfill-ohlcv
         --incremental``). ``start``/``end`` are ignored; the window is the last
@@ -595,11 +615,11 @@ def backfill(
                         f"{gap_days} calendar days behind today={today_d}, but "
                         f"the incremental window is only {INCREMENTAL_WINDOW_DAYS} "
                         f"days. Refreshing would leave a hole in the series and "
-                        f"produce wrong rel_20/vol_20 ranks. Run the full-history "
-                        f"seed instead:\n"
-                        f"  python scripts/backfill_thematic_universe.py "
-                        f"--start 2024-10-01 --end {today_d} --force\n"
-                        f"then move the new cohort into place."
+                        f"produce wrong rel_20/vol_20 ranks. Self-heal the "
+                        f"canonical with the sanctioned adopt bridge (atomic "
+                        f"in-place replace + Neon mirror, no manual mv):\n"
+                        f"  uv run rainier thematic backfill --force --adopt "
+                        f"--start 2024-10-01 --end {today_d} --out {out_path}"
                     )
 
     if dry_run:
@@ -684,11 +704,23 @@ def backfill(
         merged = _upsert_in_place(df, out_path)
         _write_parquet_atomic(merged, target)
     else:
-        target = (
-            _cohort_path(out_path, fetched_at)
-            if (out_path.exists() and force)
-            else out_path
-        )
+        # --force on an existing canonical normally writes a dated SIBLING
+        # cohort (revision-immutability). --adopt instead replaces the canonical
+        # in place: _write_parquet_atomic writes to a .tmp sibling, fsyncs, then
+        # os.replace's onto out_path — so the canonical is never partial and no
+        # orphan cohort is left behind. The validation/coverage gate above has
+        # already run, so a provider outage aborts BEFORE this write and the
+        # prior good canonical stays intact.
+        #
+        #   force+adopt+exists -> out_path (atomic replace, no sibling)
+        #   force+exists       -> dated sibling cohort
+        #   else               -> out_path (fresh write)
+        if force and adopt:
+            target = out_path
+        elif out_path.exists() and force:
+            target = _cohort_path(out_path, fetched_at)
+        else:
+            target = out_path
         _write_parquet_atomic(df, target)
 
     # Phase 2 dual-write: mirror into market.* AFTER the parquet write (parquet
@@ -705,6 +737,114 @@ def backfill(
         )
 
     return target
+
+
+# ---------------------------------------------------------------------------
+# gc-cohorts — reap orphan sibling cohorts (cleanup; this task)
+# ---------------------------------------------------------------------------
+#
+# --force (without --adopt) writes dated sibling cohorts next to the canonical
+# parquet, and the cron's refresh path can leave a thematic_universe_refresh
+# sibling. These accumulate and never get reaped. gc_cohorts keeps the
+# canonical + the N most-recent cohorts and reaps the rest. Mirrors `fleet gc`'s
+# surface-then-apply ethos: dry-run lists by default, --apply deletes. The
+# canonical out_path is NEVER a deletion candidate.
+#
+#   data/cache/
+#     thematic_universe.parquet                     <- canonical (never deleted)
+#     thematic_universe_20260501_010101_000001.parquet  <- cohort (gc candidate)
+#     thematic_universe_refresh.parquet             <- refresh sibling (candidate)
+#     thematic_universe_log.parquet                 <- snapshot-universe log (SPARED)
+#     thematic_universe_names.parquet               <- any other sibling (SPARED)
+
+
+def _orphan_cohort_paths(out_path: Path) -> list[Path]:
+    """Return sibling cohort parquets next to ``out_path``, EXCLUDING the
+    canonical itself.
+
+    A blanket ``<stem>_*<suffix>`` glob is UNSAFE: the default cache dir also
+    holds ``thematic_universe_log.parquet`` (the universe-change log written by
+    ``thematic snapshot-universe``), which shares the ``thematic_universe_``
+    prefix but is a persistent, load-bearing file — never a cohort. (codex
+    review iter-1 [P1].) So we match ONLY:
+      * timestamped cohorts ``<stem>_YYYYMMDD_HHMMSS_ffffff[_N]<suffix>`` as
+        written by ``_cohort_path`` (``%Y%m%d_%H%M%S_%f`` + optional collision
+        ``_N`` suffix), and
+      * the exact ``<stem>_refresh<suffix>`` sibling the cron refresh path may
+        leave behind.
+    Any other ``<stem>_*`` sibling (e.g. ``_log``) is left untouched.
+    """
+    out_path = Path(out_path)
+    parent = out_path.parent
+    stem = re.escape(out_path.stem)
+    suffix = re.escape(out_path.suffix)
+    # YYYYMMDD_HHMMSS_ffffff with an optional _N collision-avoidance suffix.
+    cohort_re = re.compile(
+        rf"^{stem}_\d{{8}}_\d{{6}}_\d+(?:_\d+)?{suffix}$"
+    )
+    refresh_re = re.compile(rf"^{stem}_refresh{suffix}$")
+    candidates: list[Path] = []
+    for p in parent.glob(f"{out_path.stem}_*{out_path.suffix}"):
+        if p == out_path:
+            continue
+        if cohort_re.match(p.name) or refresh_re.match(p.name):
+            candidates.append(p)
+    return candidates
+
+
+def gc_cohorts(
+    out_path: Path,
+    keep: int = 2,
+    apply: bool = False,
+) -> dict[str, list]:
+    """Reap orphan sibling cohort parquets next to the canonical ``out_path``.
+
+    Keeps the canonical (``out_path``) plus the ``keep`` most-recent sibling
+    cohorts (ranked by mtime, newest first); everything older is a deletion
+    candidate. Dry-run by default (``apply=False``) — it only computes the plan.
+    ``apply=True`` deletes the candidates. The canonical is NEVER a candidate,
+    regardless of ``keep`` (``keep=0`` still preserves the canonical).
+
+    Returns a dict with:
+      * ``keep``: cohorts retained (newest ``keep``),
+      * ``delete``: cohorts that would be / were reaped,
+      * ``deleted``: cohorts actually unlinked (empty unless ``apply=True``),
+      * ``failed``: ``(path, error)`` tuples for candidates that could NOT be
+        unlinked (permission/locked-file). Non-empty means gc did NOT fully
+        complete; the CLI surfaces this as a non-zero exit.
+    """
+    out_path = Path(out_path)
+    cohorts = _orphan_cohort_paths(out_path)
+    # Newest first by mtime; stable tiebreak on name so the plan is deterministic
+    # when two cohorts share an mtime (e.g. test fixtures).
+    cohorts.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+
+    keep_n = max(0, int(keep))
+    kept = cohorts[:keep_n]
+    to_delete = cohorts[keep_n:]
+
+    deleted: list[Path] = []
+    failed: list[tuple[Path, str]] = []
+    if apply:
+        for p in to_delete:
+            # Defensive: never unlink the canonical even if it somehow matched.
+            if p == out_path:
+                continue
+            try:
+                p.unlink()
+                deleted.append(p)
+            except OSError as exc:
+                # Don't swallow: a permission/locked-file failure must surface so
+                # automation + operators don't believe gc completed when an
+                # orphan is still on disk. (codex review iter-2 [P2].)
+                failed.append((p, str(exc)))
+
+    return {
+        "keep": kept,
+        "delete": to_delete,
+        "deleted": deleted,
+        "failed": failed,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -739,6 +879,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force",
         action="store_true",
         help="When the cache exists, write a timestamped sibling cohort.",
+    )
+    p.add_argument(
+        "--adopt",
+        "--in-place",
+        dest="adopt",
+        action="store_true",
+        help=(
+            "With --force: atomically replace the (stale) canonical --out with "
+            "the fresh cohort in place (no orphan sibling, no manual mv). The "
+            "sanctioned cohort -> canonical bridge."
+        ),
     )
     p.add_argument(
         "--incremental",
@@ -784,6 +935,21 @@ def main(argv: list[str] | None = None) -> int:
         symbols = [s.strip() for s in ns.symbols.split(",") if s.strip()]
     else:
         symbols = load_symbols_from_yaml(Path(ns.yaml))
+
+    # --adopt replaces the canonical IN PLACE; an ad-hoc --symbols subset would
+    # therefore clobber the full-universe canonical with only that subset.
+    # Refuse it — adopt must run over the full universe (YAML), the same set the
+    # canonical is supposed to hold. (codex review iter-2 [P2].)
+    if ns.adopt and ns.symbols:
+        print(
+            "error: --adopt replaces the canonical --out in place and must run "
+            "over the FULL universe (from --yaml), not an ad-hoc --symbols "
+            "subset (that would shrink the canonical to the subset). Drop "
+            "--symbols, or use --force without --adopt to write a sibling "
+            "cohort for the subset.",
+            file=sys.stderr,
+        )
+        return 2
     allow_empty = [s.strip() for s in ns.allow_empty.split(",") if s.strip()]
     allow_gaps = [s.strip() for s in ns.allow_gaps.split(",") if s.strip()]
     out_path = Path(ns.out)
@@ -797,6 +963,7 @@ def main(argv: list[str] | None = None) -> int:
         end=ns.end,
         out_path=out_path,
         force=ns.force,
+        adopt=ns.adopt,
         incremental=ns.incremental,
         dry_run=ns.dry_run,
         allow_empty=allow_empty,
