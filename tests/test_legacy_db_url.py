@@ -96,8 +96,6 @@ def test_init_db_targets_legacy_engine(reset_db_singletons, monkeypatch):
 
     captured: dict[str, object] = {}
 
-    real_create_all = database.Base.metadata.create_all
-
     def _capture_create_all(engine, *args, **kwargs):
         captured["engine"] = engine
         # Don't actually create tables against a throwaway sqlite memory DB.
@@ -117,5 +115,3 @@ def test_init_db_targets_legacy_engine(reset_db_singletons, monkeypatch):
     assert "canonical" not in bound, (
         f"init_db wrongly targeted the canonical DATABASE_URL: {bound!r}"
     )
-    # sanity: real create_all still exists (we only patched the bound method)
-    assert real_create_all is not None
