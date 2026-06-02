@@ -94,6 +94,33 @@ def test_h1b_mtm_when_as_of_close_absent(pg_legacy_session):
     assert "OPN" in payload["stale_mtm_symbols"]
 
 
+def test_h1c_regenerate_is_point_in_time_no_lookahead(pg_legacy_session):
+    """codex iter-1/2/3 regression — a historical --regenerate must NOT leak
+    trades opened or closed AFTER as_of. A position closed on 1/12 (after
+    AS_OF=1/9) reads as OPEN at 1/9 (MTM, not realized); a position created on
+    1/12 doesn't exist at 1/9 at all."""
+    s = pg_legacy_session
+    # Closed-in-the-future: entered 1/6, exit booked 1/12 (after as_of 1/9).
+    _add(s, 1, "FUT", "closed", entry_date=date(2026, 1, 6), entry_price=100,
+         shares=100, exit_date=date(2026, 1, 12), exit_price=130,
+         exit_reason="target", return_pct=0.30, pnl=3000.0, residual_cash=0.0)
+    # Created-in-the-future: scanned 1/12, didn't exist at 1/9.
+    _add(s, 2, "NEW", "pending", scan_date=date(2026, 1, 12))
+    _price(s, "FUT", AS_OF, 108, 109, 107, 108)  # as-of close for MTM
+
+    payload = compute_daily_payload(AS_OF)
+    # FUT is OPEN at as_of (closed only on 1/12); NEW doesn't exist yet.
+    assert payload["counts_by_status"] == {
+        "pending": 0, "open": 1, "closed": 0, "expired": 0
+    }
+    # Its 3000 realized P&L must NOT leak — realized is 0, MTM reflects the open.
+    assert payload["realized_pnl"] == pytest.approx(0.0)
+    assert payload["open_mtm_pnl"] == pytest.approx(100 * (108 - 100))
+    assert payload["closed_trades"] == 0
+    assert payload["win_rate_closed"] is None
+    assert payload["todays_exits"] == []
+
+
 def test_h2_idempotent_upsert(pg_legacy_session):
     s = pg_legacy_session
     p = compute_daily_payload(AS_OF)
