@@ -5326,3 +5326,86 @@ def db_verify_coverage(
         f"{len(report.drift)} (asof_date, table) group(s) drifted — "
         f"parquet and Postgres disagree."
     )
+
+
+# ---------------------------------------------------------------------------
+# money-flow-neon-backup-b613: nightly off-machine backup of the irreplaceable
+# money_flow_snapshots into Neon (durability). Local TimescaleDB stays primary;
+# Neon holds a managed-backup copy. Design: DESIGN-money-flow-neon-backup.md §2.
+# ---------------------------------------------------------------------------
+
+
+@db.command("backup-money-flow")
+@click.option(
+    "--verify",
+    "do_verify",
+    is_flag=True,
+    help=(
+        "After the copy, run a strong integrity check (max-id, missing-row, "
+        "full-window canonicalized checksum, id-uniqueness). Non-zero on any drift."
+    ),
+)
+@click.option(
+    "--skip-if-unconfigured",
+    is_flag=True,
+    help=(
+        "DEV ONLY: if DATABASE_URL is unset, warn and exit 0 instead of failing. "
+        "The cron must NOT pass this — a missing Neon target is a real durability "
+        "failure prod must alert on."
+    ),
+)
+def db_backup_money_flow(do_verify: bool, skip_if_unconfigured: bool) -> None:
+    """Back up ``money_flow_snapshots`` (local) -> ``backup.money_flow_snapshots`` (Neon).
+
+    Incremental high-water-mark by ``id``, insert-only, idempotent. Reads the
+    local TimescaleDB via the legacy engine and writes Neon via ``DATABASE_URL``.
+    DATABASE_URL unset fails loud (non-zero) by default; ``--skip-if-unconfigured``
+    turns that into a warn + exit 0 for local dev (cron stays loud).
+    """
+    from rainier.core.database import get_engine as get_local_engine
+    from rainier.db.engine import get_engine as get_neon_engine
+    from rainier.db.money_flow_backup import backup_money_flow, verify_backup
+
+    # Resolve the Neon target FIRST. get_neon_engine() raises RuntimeError when
+    # DATABASE_URL is unset. By default that is a loud non-zero failure (a missing
+    # backup target is a durability failure, not a skip); --skip-if-unconfigured
+    # turns it into a warn + exit 0 for local dev. The cron must NOT pass it.
+    try:
+        dst = get_neon_engine()
+    except RuntimeError as exc:
+        if skip_if_unconfigured:
+            click.echo(
+                "backup-money-flow: DATABASE_URL unset — skipping (warn, "
+                "--skip-if-unconfigured). Backup did NOT run."
+            )
+            return
+        raise click.ClickException(
+            "backup-money-flow requires DATABASE_URL to point at the Neon backup "
+            "target (e.g. postgresql+psycopg://user:pass@host/db). A missing "
+            "target is a durability failure, not a skip — pass "
+            f"--skip-if-unconfigured only for local dev. {exc}"
+        ) from exc
+
+    # Local source via the legacy singleton engine (PR #115: bound to local).
+    # A local-unreachable failure surfaces as a loud non-zero exit (no catch).
+    src = get_local_engine()
+
+    try:
+        result = backup_money_flow(src, dst)
+        click.echo(
+            f"backed up {result.copied} new rows "
+            f"(hwm {result.hwm_before} -> {result.run_max})"
+        )
+        if do_verify:
+            report = verify_backup(src, dst, run_max=result.run_max)
+            if not report.ok:
+                click.echo("backup-money-flow — VERIFY FAILED:", err=True)
+                for f in report.failures:
+                    click.echo(f"  {f}", err=True)
+                raise click.ClickException(
+                    f"{len(report.failures)} integrity check(s) failed — the Neon "
+                    f"backup does not match local. See the diagnostics above."
+                )
+            click.echo("backup-money-flow — verify OK")
+    finally:
+        dst.dispose()
