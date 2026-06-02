@@ -538,7 +538,7 @@ def _open_session(settings: Settings | None = None) -> Iterator[Session]:
     from sqlalchemy.orm import sessionmaker
 
     engine = create_engine(
-        settings.database_url,
+        settings.legacy_database_url,
         echo=settings.database.echo,
         pool_size=settings.database.pool_size,
         pool_pre_ping=True,

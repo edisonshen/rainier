@@ -478,14 +478,24 @@ def test_open_session_bypasses_engine_singleton(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "_engine", sentinel)
     monkeypatch.setattr(database, "_session_factory", None)
 
-    staging_settings = Settings(database_url=f"sqlite:///{staging_db}")
+    # Coverage audits ``money_flow_snapshots`` (a legacy public-schema table),
+    # so the --config branch must bind to ``legacy_database_url``, NOT the
+    # canonical ``database_url`` (which now stays pointed at Neon). Set a
+    # distinct sentinel on ``database_url`` to prove we never bind to it.
+    staging_settings = Settings(
+        database_url="postgresql://u:p@example.invalid/canonical-must-not-bind",
+        legacy_database_url=f"sqlite:///{staging_db}",
+    )
 
     with coverage._open_session(staging_settings) as session:
         bound_url = str(session.get_bind().url)
 
     assert bound_url == f"sqlite:///{staging_db}", (
-        "config-scoped session bound to the wrong DB — singleton leaked through "
-        f"(got {bound_url!r})"
+        "config-scoped session bound to the wrong DB — should use "
+        f"legacy_database_url, not database_url (got {bound_url!r})"
+    )
+    assert "canonical-must-not-bind" not in bound_url, (
+        "coverage --config session wrongly bound to the canonical database_url"
     )
     # Sentinel singleton remains untouched (we never mutated it).
     assert database._engine is sentinel
