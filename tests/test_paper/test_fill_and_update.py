@@ -174,13 +174,29 @@ def test_e6_expired_never_resurrects(pg_legacy_session):
     assert _get(s, pid).status == "expired"
 
 
-def test_e5_time_stop_snapshot_stays_null(pg_legacy_session):
-    """E5b — a position filled while config time_stop is NULL keeps NULL even if
-    config later adopts a value (future-fills-only; never retroactive)."""
+def test_e5a_time_stop_snapshot_value_then_frozen(pg_legacy_session):
+    """E5a — config learned_time_stop_days=10 at fill → position stores 10;
+    a later config change does NOT mutate the already-open position."""
     s = pg_legacy_session
-    pid = _mk_pending(s, 1, "AAA", date(2026, 1, 5), time_stop_days=None)
+    pid = _mk_pending(s, 1, "AAA", date(2026, 1, 5))
     _price(s, "AAA", date(2026, 1, 6), 100, 105, 99, 102)
-    fill_pending_positions(as_of=date(2026, 1, 6))
+    fill_pending_positions(as_of=date(2026, 1, 6), learned_time_stop_days=10)
+    assert _get(s, pid).time_stop_days == 10
+    # A later fill pass with a different config value must not touch the open row.
+    fill_pending_positions(as_of=date(2026, 1, 8), learned_time_stop_days=20)
+    assert _get(s, pid).time_stop_days == 10
+
+
+def test_e5b_time_stop_snapshot_null_then_frozen(pg_legacy_session):
+    """E5b (the dangerous one) — filled while config is NULL stores NULL; config
+    later adopting 10 must NOT retroactively time-stop the already-open
+    position (future-fills-only invariant)."""
+    s = pg_legacy_session
+    pid = _mk_pending(s, 1, "AAA", date(2026, 1, 5))
+    _price(s, "AAA", date(2026, 1, 6), 100, 105, 99, 102)
+    fill_pending_positions(as_of=date(2026, 1, 6), learned_time_stop_days=None)
+    assert _get(s, pid).time_stop_days is None
+    fill_pending_positions(as_of=date(2026, 1, 8), learned_time_stop_days=10)
     assert _get(s, pid).time_stop_days is None
 
 

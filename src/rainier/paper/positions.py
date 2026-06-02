@@ -264,7 +264,10 @@ def _price_on(session, symbol: str, d: date) -> StockPrice | None:
 
 
 def fill_pending_positions(
-    *, as_of: date, calendar: TradingCalendar | None = None
+    *,
+    as_of: date,
+    calendar: TradingCalendar | None = None,
+    learned_time_stop_days: int | None = None,
 ) -> dict[str, int]:
     """Fill each pending position at its T+1 trading-session open.
 
@@ -275,8 +278,11 @@ def fill_pending_positions(
         (`open >= target` or `open <= stop`), the setup is gone → status=expired
         + paper_skip(gap_invalidated). NOT left pending (would hold the slot).
       * otherwise → status=open with sizing `shares = floor(10000/open)` +
-        residual cash; `time_stop_days` snapshotted from the position's stored
-        value at creation (NULL until Phase 2); `price_basis` recorded.
+        residual cash; `price_basis` recorded; **`time_stop_days` snapshotted
+        from `learned_time_stop_days` at FILL time** (NULL until Phase 2 learns
+        one — D6/E5). The snapshot is per-fill: an already-open position keeps
+        the value it was filled under even if the config later changes (future-
+        fills-only invariant, never retroactive).
     A pending with no open after PENDING_EXPIRY_SESSIONS trading sessions →
     status=expired (E3); an expired position never resurrects (E6).
     """
@@ -293,7 +299,7 @@ def fill_pending_positions(
             {
                 "id": p.id, "thesis_id": p.thesis_id, "symbol": p.symbol,
                 "scan_date": _as_date(p.scan_date), "stop_loss": p.stop_loss,
-                "target_price": p.target_price, "time_stop_days": p.time_stop_days,
+                "target_price": p.target_price,
             }
             for p in pending
         ]
@@ -338,8 +344,11 @@ def fill_pending_positions(
                     allocated_amount=allocated,
                     residual_cash=residual,
                     price_basis=PRICE_BASIS,
-                    # time_stop_days is already stored on the row from creation
-                    # (NULL); leave it as-is (future-fills snapshot it at create).
+                    # Snapshot the learned time-stop at FILL time (D6/E5). NULL
+                    # in Phase 0+1. Per-fill — never re-read after the position
+                    # is open, so a later config change can't retroactively
+                    # time-stop an already-open position.
+                    time_stop_days=learned_time_stop_days,
                 )
             )
             filled += 1

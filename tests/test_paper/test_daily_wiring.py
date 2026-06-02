@@ -88,8 +88,13 @@ class _FakeAlerts:
     discord = _FakeDiscord()
 
 
+class _FakeLLMThesis:
+    learned_time_stop_days = None
+
+
 class _FakeSettings:
     alerts = _FakeAlerts()
+    llm_thesis = _FakeLLMThesis()
 
 
 def test_g3_horizon_eval_still_runs(monkeypatch):

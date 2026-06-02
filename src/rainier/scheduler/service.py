@@ -224,10 +224,13 @@ def run_paper_daily_steps(eval_date) -> None:
     )
     from rainier.paper.positions import fill_pending_positions, update_open_positions
 
+    settings = load_settings_fresh()
+    learned_ts = settings.llm_thesis.learned_time_stop_days
+
     symbols = sorted(set(active_symbols()) | set(screened_symbols(eval_date)))
     if symbols:
         ingest_prices(symbols, as_of=eval_date, fetch_fn=_yfinance_fetch_fn)
-    fill_pending_positions(as_of=eval_date)
+    fill_pending_positions(as_of=eval_date, learned_time_stop_days=learned_ts)
     update_open_positions(as_of=eval_date)
 
 
