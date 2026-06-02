@@ -1954,17 +1954,19 @@ def paper_group() -> None:
 
 @paper_group.command(name="open")
 @click.option("--date", "as_of_iso", default=None, help="Fill as-of date (YYYY-MM-DD)")
-def paper_open(as_of_iso):
+@click.pass_context
+def paper_open(ctx, as_of_iso):
     """Fill pending positions at their T+1 trading-session open."""
     from datetime import date as _date
 
-    from rainier.core.config import get_settings
     from rainier.paper.positions import fill_pending_positions
 
     as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
     # Snapshot the learned time-stop at fill, same as the scheduled daily path
-    # (codex iter-2 P3) — otherwise manually-opened positions never get it.
-    learned_ts = get_settings().llm_thesis.learned_time_stop_days
+    # (codex iter-2 P3). Read from the Click-loaded settings (honors --config,
+    # codex iter-7) — NOT get_settings(), which would ignore a non-default root.
+    settings = ctx.obj["settings"]
+    learned_ts = settings.llm_thesis.learned_time_stop_days
     res = fill_pending_positions(as_of=as_of, learned_time_stop_days=learned_ts)
     click.echo(f"Filled {res['filled']}, expired {res['expired']}.")
 
