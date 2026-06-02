@@ -884,30 +884,45 @@ def test_0004_downgrade_preserves_preexisting_schema_object(database_url):
 
     cfg = _alembic_config()
 
-    # Pre-seed the backup schema with an unrelated object BEFORE migrating.
+    # Pre-seed the backup schema with an unrelated object BEFORE migrating. Drop
+    # any leftover first so this is repeatable against a REUSED test database
+    # (RAINIER_TEST_DATABASE_URL) — Codex P2: never leak the fixture object.
     eng = create_engine(database_url)
     with eng.begin() as conn:
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS backup"))
+        conn.execute(text("DROP TABLE IF EXISTS backup.unrelated_keepme"))
         conn.execute(text("CREATE TABLE backup.unrelated_keepme (x int)"))
         conn.execute(text("INSERT INTO backup.unrelated_keepme (x) VALUES (42)"))
     eng.dispose()
 
-    command.upgrade(cfg, "head")  # adopts the existing schema, adds our table
-    command.downgrade(cfg, "0003")  # must drop ONLY our table/index
+    try:
+        command.upgrade(cfg, "head")  # adopts the existing schema, adds our table
+        command.downgrade(cfg, "0003")  # must drop ONLY our table/index
 
-    eng = create_engine(database_url)
-    insp = inspect(eng)
-    schemas = set(insp.get_schema_names())
-    backup_tables = set(insp.get_table_names(schema="backup"))
-    # The foreign object + its data survive; our table is gone; schema preserved.
-    with eng.connect() as conn:
-        kept = conn.execute(text("SELECT x FROM backup.unrelated_keepme")).scalar_one()
-    eng.dispose()
+        eng = create_engine(database_url)
+        insp = inspect(eng)
+        schemas = set(insp.get_schema_names())
+        backup_tables = set(insp.get_table_names(schema="backup"))
+        # Foreign object + its data survive; our table is gone; schema preserved.
+        with eng.connect() as conn:
+            kept = conn.execute(
+                text("SELECT x FROM backup.unrelated_keepme")
+            ).scalar_one()
+        eng.dispose()
 
-    assert "backup" in schemas, "non-empty backup schema must be preserved"
-    assert "unrelated_keepme" in backup_tables, "foreign object must survive downgrade"
-    assert "money_flow_snapshots" not in backup_tables, "our table must be dropped"
-    assert kept == 42, "foreign object's data must be intact (no CASCADE wipe)"
+        assert "backup" in schemas, "non-empty backup schema must be preserved"
+        assert "unrelated_keepme" in backup_tables, (
+            "foreign object must survive downgrade"
+        )
+        assert "money_flow_snapshots" not in backup_tables, "our table must be dropped"
+        assert kept == 42, "foreign object's data must be intact (no CASCADE wipe)"
+    finally:
+        # Clean up the fixture object so a reused DB is left as we found it.
+        eng = create_engine(database_url)
+        with eng.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS backup.unrelated_keepme"))
+            conn.execute(text("DROP SCHEMA IF EXISTS backup RESTRICT"))
+        eng.dispose()
 
 
 def test_0004_no_stray_public_tables(database_url):

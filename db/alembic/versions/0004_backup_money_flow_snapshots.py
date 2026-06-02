@@ -107,19 +107,21 @@ def downgrade() -> None:
         schema=SCHEMA,
     )
     op.drop_table("money_flow_snapshots", schema=SCHEMA)
-    # Drop the schema only if nothing else lives in it. ``DROP SCHEMA ... RESTRICT``
-    # is a no-op-or-error if non-empty; the explicit emptiness check keeps the
-    # downgrade idempotent and avoids erroring on a shared schema.
+    # Drop the schema ONLY when it is truly empty. ``DROP SCHEMA ... RESTRICT``
+    # refuses (errors) if ANY object still lives in the schema — tables,
+    # sequences, functions, types, materialized views, etc. (Codex P2: an
+    # information_schema.tables-only check misses non-table objects and would let
+    # the RESTRICT drop error out). We catch ``dependent_objects_still_exist`` so a
+    # shared/non-empty ``backup`` schema is simply left intact and the downgrade
+    # still succeeds (idempotent). Our own table/index were already dropped above.
     op.execute(
         f"""
         DO $$
         BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = '{SCHEMA}'
-          ) THEN
-            EXECUTE 'DROP SCHEMA IF EXISTS {SCHEMA} RESTRICT';
-          END IF;
+          EXECUTE 'DROP SCHEMA {SCHEMA} RESTRICT';
+        EXCEPTION
+          WHEN dependent_objects_still_exist THEN NULL;  -- shared schema: keep it
+          WHEN invalid_schema_name THEN NULL;            -- already gone: no-op
         END $$;
         """
     )
