@@ -89,6 +89,15 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
 
     log.info("daily_eval_starting", eval_date=eval_date.isoformat())
 
+    # Paper-tracker (design §5 authoritative order): ingest (active ∪ screened)
+    # → fill → update. These run BEFORE the existing horizon eval; the paper
+    # daily report is sent AFTER the horizon eval (step v). Non-fatal: a failure
+    # here must not block the horizon eval / report.
+    try:
+        await asyncio.to_thread(run_paper_daily_steps, eval_date)
+    except Exception as exc:
+        log.error("daily_paper_steps_failed", error=str(exc))
+
     inserted_total = 0
     for horizon in HORIZONS:
         try:
@@ -190,6 +199,49 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
         )
     except Exception as exc:
         log.error("daily_eval_discord_failed", error=str(exc))
+
+    # Step (v): paper-book daily report — compute, persist the snapshot, push to
+    # Discord. Runs after the horizon eval per the authoritative order. Non-fatal.
+    try:
+        await asyncio.to_thread(
+            run_paper_daily_report, eval_date, settings.alerts.discord
+        )
+    except Exception as exc:
+        log.error("daily_paper_report_failed", error=str(exc))
+
+
+def run_paper_daily_steps(eval_date) -> None:
+    """Paper steps (i)-(iii): ingest (active ∪ screened) → fill → update.
+
+    Ingest MUST precede fill/update or a pending's T+1 open would be absent
+    (G2). Each step is its own DB-driven, idempotent operation.
+    """
+    from rainier.paper.ingest import (
+        _yfinance_fetch_fn,
+        active_symbols,
+        ingest_prices,
+        screened_symbols,
+    )
+    from rainier.paper.positions import fill_pending_positions, update_open_positions
+
+    symbols = sorted(set(active_symbols()) | set(screened_symbols(eval_date)))
+    if symbols:
+        ingest_prices(symbols, as_of=eval_date, fetch_fn=_yfinance_fetch_fn)
+    fill_pending_positions(as_of=eval_date)
+    update_open_positions(as_of=eval_date)
+
+
+def run_paper_daily_report(eval_date, discord_config) -> None:
+    """Paper step (v): compute → persist snapshot → push to Discord."""
+    from rainier.paper.report import (
+        compute_daily_payload,
+        persist_daily_snapshot,
+        send_daily_paper_report,
+    )
+
+    payload = compute_daily_payload(eval_date)
+    persist_daily_snapshot(eval_date, payload)
+    send_daily_paper_report(payload, discord_config)
 
 
 async def run_research_job(eval_date_iso: str | None = None) -> None:
