@@ -40,6 +40,7 @@ text interpolation).
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
 from collections.abc import Callable
@@ -278,6 +279,22 @@ def _canon_raw_data(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _canon_captured_at(value: object) -> str:
+    """Canonical string for a ``captured_at`` value, tz-normalized to UTC.
+
+    The same ``timestamptz`` instant can surface as different aware datetimes
+    depending on each engine's session ``TimeZone`` (e.g. ``22:00+00:00`` vs
+    ``15:00-07:00`` — Codex P2). Every comparison path (checksum, sort key, AND
+    the missing-row reconciliation key) MUST normalize identically, or
+    ``--verify`` can flag a copied row as missing and fail the nightly cron on a
+    pure timezone-rendering difference. Aware datetimes are converted to UTC;
+    naive datetimes and non-datetime values fall back to ``str()`` unchanged.
+    """
+    if isinstance(value, _dt.datetime) and value.tzinfo is not None:
+        return value.astimezone(_dt.timezone.utc).isoformat()
+    return str(value)
+
+
 def _canon_cell(name: str, value: object) -> object:
     """Canonicalize one cell for the checksum.
 
@@ -291,12 +308,8 @@ def _canon_cell(name: str, value: object) -> object:
     if name == "raw_data":
         return ("j", _canon_raw_data(value))
     if name == "captured_at":
-        import datetime as _dt
-
         if isinstance(value, _dt.datetime):
-            if value.tzinfo is not None:
-                value = value.astimezone(_dt.timezone.utc)
-            return ("t", value.isoformat())
+            return ("t", _canon_captured_at(value))
     return ("s", str(value))
 
 
@@ -311,7 +324,7 @@ def _checksum(rows: list[dict]) -> str:
     """
 
     def sort_key(row: dict):
-        return (row.get("id"), str(row.get("captured_at")))
+        return (row.get("id"), _canon_captured_at(row.get("captured_at")))
 
     h = hashlib.blake2b(digest_size=16)
     for row in sorted(rows, key=sort_key):
@@ -397,9 +410,12 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
     src_rows = _read_window(src, src_tbl, run_max)
     dst_rows = _read_window(dst, dst_tbl, run_max)
 
-    # (b) missing-row reconciliation on the full composite key.
+    # (b) missing-row reconciliation on the full composite key. captured_at is
+    # tz-normalized identically to the checksum path (Codex P2) so a pure session
+    # TimeZone-rendering difference between local and Neon cannot make a copied
+    # row look missing and falsely fail the nightly cron.
     def _key(r: dict) -> tuple:
-        return (r["id"], str(r["captured_at"]))
+        return (r["id"], _canon_captured_at(r["captured_at"]))
 
     src_keys = {_key(r) for r in src_rows}
     dst_keys = {_key(r) for r in dst_rows}

@@ -261,6 +261,44 @@ def test_verify_raw_data_key_reorder_still_matches(src_engine, dst_engine):
     assert report.ok, f"key-reorder must canonicalize equal: {report.failures}"
 
 
+def test_canon_captured_at_normalizes_offset_to_utc():
+    """Codex P2 — the same instant rendered with a DIFFERENT tz offset (different
+    session TimeZone) must canonicalize to the SAME string.
+
+    On real Postgres ``timestamptz`` the driver returns tz-aware datetimes whose
+    OFFSET depends on the session ``TimeZone`` (e.g. local TimescaleDB vs Neon).
+    The missing-row key, the checksum sort key, and the checksum cell all route
+    through ``_canon_captured_at``, so a pure offset-rendering difference between
+    the two engines is verify-clean instead of false-failing the nightly cron.
+
+    (SQLite's ``DateTime(timezone=True)`` strips tz on round-trip, so this is a
+    direct unit test of the normalization the engine harness can't reproduce.)
+    """
+    from datetime import datetime as _datetime
+    from datetime import timedelta
+    from datetime import timezone as _tz
+
+    mfb = _import()
+    utc = _datetime(2026, 6, 1, 22, 0, tzinfo=_tz.utc)
+    pst = utc.astimezone(_tz(timedelta(hours=-7)))  # same instant, -07:00 offset
+    assert utc == pst  # same instant ...
+    assert str(utc) != str(pst)  # ... but different raw rendering (pre-fix bug)
+
+    # Normalization collapses them to one canonical UTC string.
+    assert mfb._canon_captured_at(utc) == mfb._canon_captured_at(pst)
+    assert mfb._canon_captured_at(utc) == "2026-06-01T22:00:00+00:00"
+
+    # The missing-row key and the checksum both agree across the offset diff.
+    row_utc = _row(1, captured_at=utc)
+    row_pst = _row(1, captured_at=pst)
+    assert mfb._checksum([row_utc]) == mfb._checksum([row_pst])
+
+    # A genuinely different instant still diverges.
+    other = _datetime(2026, 6, 1, 23, 0, tzinfo=_tz.utc)
+    assert mfb._canon_captured_at(utc) != mfb._canon_captured_at(other)
+    assert mfb._checksum([row_utc]) != mfb._checksum([_row(1, captured_at=other)])
+
+
 def test_verify_missing_row_fails(src_engine, dst_engine):
     """7(a) — a missing backup (id, captured_at) in (0, run_max] -> fail."""
     mfb = _import()
