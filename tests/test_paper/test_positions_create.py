@@ -30,13 +30,23 @@ def _mk_thesis(session, thesis_id, symbol, verdict="setup_long", conf=7,
 
 def _mk_screened(session, symbol, session_name="close", entry=100, stop=90,
                  target=120, rr=2.0):
-    session.add(
-        ScreenedStockRecord(
+    # Conflict-safe: some cases (d2/d4) call this repeatedly for the same
+    # (scan_date, session_name, symbol) inside one test; the UNIQUE constraint
+    # would otherwise raise. DO NOTHING keeps the first row's levels.
+    from sqlalchemy.dialects.postgresql import insert as _pg_insert
+
+    stmt = (
+        _pg_insert(ScreenedStockRecord)
+        .values(
             scan_date=SCAN, session_name=session_name, symbol=symbol,
             rule_rank=1, composite_score=0.8, pattern_type="bull_flag",
             entry_price=entry, stop_loss=stop, target_price=target, rr_ratio=rr,
         )
+        .on_conflict_do_nothing(
+            index_elements=["scan_date", "session_name", "symbol"]
+        )
     )
+    session.execute(stmt)
     session.commit()
 
 
@@ -229,6 +239,81 @@ def test_d10_tie_earliest_session_wins(pg_legacy_session):
     pg_legacy_session.expire_all()
     rows = _trades(pg_legacy_session, "AAA")
     assert len(rows) == 1 and rows[0].thesis_id == 1  # afternoon wins tie
+
+
+def test_d10_cross_session_higher_conf_close_displaces_pending(pg_legacy_session):
+    """codex iter-1 regression — production calls create_positions_for_theses
+    once PER SESSION. An afternoon conf-6 pending must be DISPLACED by a later
+    SEPARATE close conf-8 call for the same symbol (D10 cross-session), not
+    permanently win via symbol_already_active."""
+    # Afternoon call: conf-6 AAA → pending.
+    ta = _mk_thesis(pg_legacy_session, 1, "AAA", conf=6, session_name="afternoon")
+    _mk_screened(pg_legacy_session, "AAA", session_name="afternoon")
+    create_positions_for_theses([ta], scan_date=SCAN)
+    pg_legacy_session.expire_all()
+    assert len(_trades(pg_legacy_session, "AAA")) == 1
+
+    # Close call (separate invocation): conf-8 AAA → displaces the afternoon row.
+    tc = _mk_thesis(pg_legacy_session, 2, "AAA", conf=8, session_name="close")
+    _mk_screened(pg_legacy_session, "AAA", session_name="close")
+    create_positions_for_theses([tc], scan_date=SCAN)
+    pg_legacy_session.expire_all()
+
+    rows = _trades(pg_legacy_session, "AAA")
+    active = [r for r in rows if r.status in ("pending", "open")]
+    assert len(active) == 1 and active[0].thesis_id == 2 and active[0].llm_confidence == 8
+    # The displaced afternoon row is expired (frees the partial-unique slot).
+    expired = [r for r in rows if r.status == "expired"]
+    assert len(expired) == 1 and expired[0].thesis_id == 1
+    # The displaced (lower-conviction) afternoon thesis is recorded.
+    skips = _skips(pg_legacy_session, "AAA")
+    assert len(skips) == 1 and skips[0].reason == "same_symbol_lower_conviction"
+    assert skips[0].thesis_id == 1
+
+
+def test_d10_cross_session_lower_conf_close_skipped(pg_legacy_session):
+    """Symmetric guard — a LATER lower-conf close call must NOT displace the
+    higher-conf afternoon pending; it's skipped same_symbol_lower_conviction."""
+    ta = _mk_thesis(pg_legacy_session, 1, "AAA", conf=8, session_name="afternoon")
+    _mk_screened(pg_legacy_session, "AAA", session_name="afternoon")
+    create_positions_for_theses([ta], scan_date=SCAN)
+    tc = _mk_thesis(pg_legacy_session, 2, "AAA", conf=6, session_name="close")
+    _mk_screened(pg_legacy_session, "AAA", session_name="close")
+    create_positions_for_theses([tc], scan_date=SCAN)
+    pg_legacy_session.expire_all()
+    active = [r for r in _trades(pg_legacy_session, "AAA")
+              if r.status in ("pending", "open")]
+    assert len(active) == 1 and active[0].thesis_id == 1  # afternoon conf-8 keeps slot
+    skips = _skips(pg_legacy_session, "AAA")
+    assert len(skips) == 1 and skips[0].thesis_id == 2
+    assert skips[0].reason == "same_symbol_lower_conviction"
+
+
+def test_d7_prior_day_pending_not_displaced(pg_legacy_session):
+    """A pending from a DIFFERENT (prior) scan_date is NOT displaced by a new
+    day's higher-conf pick — cross-day stays symbol_already_active (D7)."""
+    prior = date(2026, 1, 8)
+    ta = _mk_thesis(pg_legacy_session, 1, "AAA", conf=6)
+    pg_legacy_session.add(
+        ScreenedStockRecord(
+            scan_date=prior, session_name="close", symbol="AAA", rule_rank=1,
+            composite_score=0.8, pattern_type="bull_flag", entry_price=100,
+            stop_loss=90, target_price=120, rr_ratio=2.0,
+        )
+    )
+    pg_legacy_session.commit()
+    create_positions_for_theses([ta], scan_date=prior)
+    # New day, higher conf — must NOT displace the prior-day pending.
+    tc = _mk_thesis(pg_legacy_session, 2, "AAA", conf=9)
+    _mk_screened(pg_legacy_session, "AAA")  # SCAN = 2026-01-09
+    create_positions_for_theses([tc], scan_date=SCAN)
+    pg_legacy_session.expire_all()
+    active = [r for r in _trades(pg_legacy_session, "AAA")
+              if r.status in ("pending", "open")]
+    assert len(active) == 1 and active[0].thesis_id == 1  # prior-day pending kept
+    skips = _skips(pg_legacy_session, "AAA")
+    assert len(skips) == 1 and skips[0].thesis_id == 2
+    assert skips[0].reason == "symbol_already_active"
 
 
 def test_d11_gate_reject_is_not_a_skip(pg_legacy_session):

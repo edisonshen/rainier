@@ -41,10 +41,25 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     session_name    VARCHAR(20)
 );
 
+-- Mirror the Stock ORM (models.py): id PK + symbol UNIQUE (the FK target for
+-- stock_prices.symbol) + the descriptive columns. `session.add(Stock(symbol=…))`
+-- emits an INSERT over ALL ORM columns, so they must all exist here.
 CREATE TABLE IF NOT EXISTS stocks (
-    symbol VARCHAR(10) PRIMARY KEY
+    id          SERIAL PRIMARY KEY,
+    symbol      VARCHAR(10) NOT NULL UNIQUE,
+    name        VARCHAR(255),
+    sector      VARCHAR(100),
+    industry    VARCHAR(200),
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Mirror the full ScreenedStockRecord ORM (models.py) MINUS the four trade-level
+-- columns (entry_price/stop_loss/target_price/rr_ratio), which migration 0005
+-- adds via `ADD COLUMN IF NOT EXISTS` — so the migration's additive step stays
+-- under test. A `select(ScreenedStockRecord)` emits ALL ORM columns, so every
+-- non-level column must exist here or the ORM read fails (ProgrammingError).
 CREATE TABLE IF NOT EXISTS screened_stocks (
     id              SERIAL PRIMARY KEY,
     captured_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -58,7 +73,17 @@ CREATE TABLE IF NOT EXISTS screened_stocks (
     pattern_type    VARCHAR(50),
     pattern_confidence DOUBLE PRECISION,
     llm_confidence  INTEGER,
+    shadow_combined_score DOUBLE PRECISION,
+    would_be_combined_rank INTEGER,
     thesis_id       INTEGER,
+    patterns_in_chart_not_in_indicators_count INTEGER,
+    action_taken    VARCHAR(20),
+    outcome_pct     DOUBLE PRECISION,
+    outcome_recorded_at TIMESTAMP WITH TIME ZONE,
+    notes           TEXT,
+    forward_return_5d  DOUBLE PRECISION,
+    forward_return_10d DOUBLE PRECISION,
+    outcome_backfilled_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT uq_screened_stocks_scan_session_symbol
         UNIQUE (scan_date, session_name, symbol)
 );

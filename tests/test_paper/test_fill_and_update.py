@@ -142,6 +142,22 @@ def test_e3_pending_until_priced_then_expire(pg_legacy_session):
     assert p.status == "open" and p.entry_date == date(2026, 1, 7)
 
 
+def test_e3_fills_first_priced_session_when_t1_missing(pg_legacy_session):
+    """codex iter-1 regression — a missing T+1 open must NOT block a fill at a
+    later in-window session. Monday scan, NO Tuesday(T+1) bar, Wednesday(T+2)
+    open present, single fill pass at as_of=Wed → fills at Wed (was: queried only
+    T+1, found nothing, and would expire/stay pending)."""
+    s = pg_legacy_session
+    scan = date(2026, 1, 5)  # Mon; T+1 = Tue 1/6 (no bar), T+2 = Wed 1/7
+    pid = _mk_pending(s, 1, "AAA", scan)
+    _price(s, "AAA", date(2026, 1, 7), 100, 105, 99, 102)  # only T+2 priced
+    # ONE fill pass that first sees the window — must fill at T+2, not expire.
+    fill_pending_positions(as_of=date(2026, 1, 7))
+    p = _get(s, pid)
+    assert p.status == "open" and p.entry_date == date(2026, 1, 7)
+    assert p.entry_price == 100
+
+
 def test_e3_expire_after_two_sessions_no_price(pg_legacy_session):
     s = pg_legacy_session
     scan = date(2026, 1, 5)  # Mon; T+1 = Tue 1/6

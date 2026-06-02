@@ -89,9 +89,14 @@ def test_b2_per_symbol_date_gap_fill(pg_legacy_session):
 
 def test_b3_idempotent_rerun(pg_legacy_session):
     as_of = date(2026, 1, 9)
-    days = [date(2026, 1, 5 + i) for i in range(5)]
-    _ingest(["AAA"], as_of, {"AAA": [_bar(d) for d in days]})
-    res2 = _ingest(["AAA"], as_of, {"AAA": [_bar(d) for d in days]})
+    days = [date(2026, 1, 5 + i) for i in range(5)]  # the 5 sessions 1/5..1/9
+    # window_days MUST match the supplied data span: with a wider window, the
+    # un-fetched earlier window sessions stay permanently gapped and re-trigger a
+    # re-fetch every run (in production yfinance returns the whole window, so
+    # gaps close after run 1 — the mock only supplies these 5). 5-day window =>
+    # after run 1 there are NO gaps, so run 2 is a true no-op (idempotency).
+    _ingest(["AAA"], as_of, {"AAA": [_bar(d) for d in days]}, window_days=5)
+    res2 = _ingest(["AAA"], as_of, {"AAA": [_bar(d) for d in days]}, window_days=5)
     pg_legacy_session.expire_all()
     assert res2["upserted"] == 0  # no gaps → no re-fetch
     assert len(_count_rows(pg_legacy_session, "AAA")) == 5

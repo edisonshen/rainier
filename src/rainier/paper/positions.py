@@ -100,14 +100,15 @@ def _persisted_levels(
     ).scalars().first()
 
 
-def _symbol_already_active(session, symbol: str) -> bool:
-    row = session.execute(
-        select(PaperTrade.id).where(
+def _active_position(session, symbol: str) -> PaperTrade | None:
+    """The current pending/open position holding ``symbol``'s active slot, if
+    any (the partial-unique index guarantees at most one)."""
+    return session.execute(
+        select(PaperTrade).where(
             PaperTrade.symbol == symbol,
             PaperTrade.status.in_(("pending", "open")),
         )
-    ).first()
-    return row is not None
+    ).scalars().first()
 
 
 def create_positions_for_theses(
@@ -179,6 +180,7 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
     thesis_id = int(thesis["thesis_id"])
     symbol = thesis["symbol"]
     session_name = thesis["session_name"]
+    new_conf = int(thesis["llm_confidence"])
 
     # Read the durable screened row for levels (D4). missing row → skip.
     with get_session() as session:
@@ -194,7 +196,6 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
                 "target_price": screened.target_price,
                 "rr_ratio": screened.rr_ratio,
             }
-        already_active = _symbol_already_active(session, symbol)
 
     if levels is None:
         _record_skip(thesis_id, symbol, scan_date, "missing_screened_record")
@@ -206,9 +207,54 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
         _record_skip(thesis_id, symbol, scan_date, "missing_levels")
         return False
 
-    if already_active:
-        _record_skip(thesis_id, symbol, scan_date, "symbol_already_active")
-        return False
+    # Active-symbol resolution (D7 + D10 cross-session). `create_positions_for_
+    # theses` runs once PER SESSION in production (afternoon, then close), so the
+    # same-day tiebreak must also hold ACROSS sessions, not just within one call:
+    #   * existing active row is OPEN, or PENDING from a DIFFERENT scan_date →
+    #     never displace; skip the new pick `symbol_already_active` (D7).
+    #   * existing active row is PENDING from the SAME scan_date with HIGHER-OR-
+    #     EQUAL confidence → the existing pick wins (tie → earlier session it was
+    #     created in); skip the new pick `same_symbol_lower_conviction` (D10).
+    #   * existing PENDING same-day with LOWER confidence → the new higher-conf
+    #     close pick DISPLACES it (expire the old pending, record the old thesis
+    #     `same_symbol_lower_conviction`), then fall through to insert the new.
+    with get_session() as session:
+        active = _active_position(session, symbol)
+        if active is not None:
+            # Idempotent re-run: the active row IS this thesis's own position
+            # (D5). No skip, no displacement — just a no-op.
+            if int(active.thesis_id) == thesis_id:
+                return False
+            # D10 cross-session tiebreak applies ONLY between DIFFERENT sessions
+            # of the SAME scan day with a pending (not-yet-filled) incumbent. A
+            # same-session re-pick, an open incumbent, or a prior-day pending is
+            # a genuine already-active symbol → D7 skip.
+            cross_session_pending = (
+                active.status == "pending"
+                and _as_date(active.scan_date) == scan_date
+                and active.session_name != session_name
+            )
+            existing_conf = active.llm_confidence
+            if not cross_session_pending:
+                _record_skip(thesis_id, symbol, scan_date, "symbol_already_active")
+                return False
+            if existing_conf is not None and existing_conf >= new_conf:
+                # Incumbent out-convicts (or ties → earliest session, i.e. the
+                # already-pending one) → the new pick loses (D10).
+                _record_skip(
+                    thesis_id, symbol, scan_date, "same_symbol_lower_conviction"
+                )
+                return False
+            # New pick out-convicts the same-day pending → displace it.
+            displaced_thesis = int(active.thesis_id)
+            session.execute(_update_position(active.id, status="expired"))
+        else:
+            displaced_thesis = None
+
+    if displaced_thesis is not None:
+        _record_skip(
+            displaced_thesis, symbol, scan_date, "same_symbol_lower_conviction"
+        )
 
     values = {
         "thesis_id": thesis_id,
@@ -305,18 +351,35 @@ def fill_pending_positions(
         ]
 
     for it in items:
-        fill_day = cal.next_session(it["scan_date"])
-        if fill_day > as_of:
+        t1 = cal.next_session(it["scan_date"])
+        if t1 > as_of:
             continue  # T+1 not reached yet — stay pending (no look-ahead).
 
+        # Fill at the FIRST priced trading session in the window [T+1 ..
+        # expiry-deadline], capped at as_of (no look-ahead). A missing T+1 open
+        # must not skip a later priced session before the window closes (E3:
+        # "T+2 open appears → fills at T+2"). The window spans
+        # PENDING_EXPIRY_SESSIONS sessions starting at T+1; once the last
+        # in-window session has passed with no open, the pending expires.
+        deadline = cal.add_sessions(t1, PENDING_EXPIRY_SESSIONS - 1)
+        candidate_sessions = [
+            s for s in cal.sessions_between(t1, deadline) if s <= as_of
+        ]
+
         with get_session() as session:
-            bar = _price_on(session, it["symbol"], fill_day)
+            fill_day = None
+            bar = None
+            for cand in candidate_sessions:
+                cand_bar = _price_on(session, it["symbol"], cand)
+                if cand_bar is not None and cand_bar.open is not None:
+                    fill_day, bar = cand, cand_bar
+                    break
             open_px = bar.open if bar is not None else None
 
             if open_px is None:
-                # No T+1 open yet. Expire only after PENDING_EXPIRY_SESSIONS
-                # trading sessions have elapsed since the fill day (E3).
-                deadline = cal.add_sessions(fill_day, PENDING_EXPIRY_SESSIONS - 1)
+                # No open in any in-window session reached so far. Expire only
+                # once the whole window has elapsed (as_of past the deadline);
+                # otherwise stay pending — a later session may still price (E3).
                 if as_of >= cal.next_session(deadline):
                     _expire_locked(session, it["id"])
                     expired += 1
