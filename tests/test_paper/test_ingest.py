@@ -146,6 +146,34 @@ def test_b5_partial_nan_refetch_does_not_clobber(pg_legacy_session):
     assert r.close == 106.0  # the non-null field DID update
 
 
+def test_b5_null_row_treated_as_gap_and_healed(pg_legacy_session):
+    """codex iter-4 regression — a previously-persisted NULL-OHLC row (transient
+    yfinance partial) must register as a GAP so a later ingest re-fetches the
+    real bar. Otherwise the pending fill/exit/MTM starve on the empty row."""
+    as_of = date(2026, 1, 9)
+    d = date(2026, 1, 9)
+    # First ingest lands a NULL-OHLC row (provider returned a partial).
+    _ingest(
+        ["AAA"], as_of, window_days=5,
+        bars_by_symbol={"AAA": [{"date": d, "open": None, "high": None,
+                                 "low": None, "close": None, "volume": None}]},
+    )
+    pg_legacy_session.expire_all()
+    r0 = _count_rows(pg_legacy_session, "AAA")
+    assert len(r0) == 1 and r0[0].close is None
+    # Provider now returns the real bar — the NULL row must be seen as a gap and
+    # re-fetched/healed (NOT skipped as "already present").
+    res = _ingest(
+        ["AAA"], as_of, window_days=5,
+        bars_by_symbol={"AAA": [_bar(d, o=100, h=110, low=90, c=105, v=5000)]},
+    )
+    pg_legacy_session.expire_all()
+    assert res["upserted"] >= 1  # the gap re-triggered a fetch+upsert
+    r1 = _count_rows(pg_legacy_session, "AAA")
+    assert len(r1) == 1  # still one row per (symbol, date)
+    assert (r1[0].open, r1[0].close, r1[0].volume) == (100, 105, 5000)  # healed
+
+
 def test_b6_universe_active_and_screened(pg_legacy_session):
     # paper_trade fixtures: pending AAA, open BBB, closed CCC, expired DDD.
     pg_legacy_session.execute(

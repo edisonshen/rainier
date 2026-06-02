@@ -170,6 +170,23 @@ def test_e3_expire_after_two_sessions_no_price(pg_legacy_session):
     assert _get(s, pid).status == "expired"
 
 
+def test_concurrency_guard_fill_does_not_resurrect_closed(pg_legacy_session):
+    """codex iter-4 regression — the fill/expire UPDATEs guard expected_status,
+    so a stale pass can't flip a terminal (closed/expired) row back to open. A
+    fill pass over an already-closed position is a no-op (rowcount 0)."""
+    s = pg_legacy_session
+    pid = _mk_open(s, 1, "AAA", date(2026, 1, 6), entry=100, stop=80, target=120)
+    _price(s, "AAA", date(2026, 1, 6), 100, 121, 99, 120)  # target same day
+    update_open_positions(as_of=date(2026, 1, 6))
+    assert _get(s, pid).status == "closed"
+    booked = _get(s, pid)
+    booked_tuple = (booked.exit_price, booked.exit_reason, booked.pnl, booked.status)
+    # A fill pass (which only targets pending) must not touch the closed row.
+    fill_pending_positions(as_of=date(2026, 1, 8))
+    after = _get(s, pid)
+    assert (after.exit_price, after.exit_reason, after.pnl, after.status) == booked_tuple
+
+
 def test_e4_no_double_fill(pg_legacy_session):
     s = pg_legacy_session
     pid = _mk_open(s, 1, "AAA", date(2026, 1, 6), entry=100)

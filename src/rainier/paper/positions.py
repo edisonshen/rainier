@@ -245,9 +245,14 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
                     thesis_id, symbol, scan_date, "same_symbol_lower_conviction"
                 )
                 return False
-            # New pick out-convicts the same-day pending → displace it.
+            # New pick out-convicts the same-day pending → displace it (only if
+            # still pending — a concurrent fill may have opened it meanwhile).
             displaced_thesis = int(active.thesis_id)
-            session.execute(_update_position(active.id, status="expired"))
+            session.execute(
+                _update_position(
+                    active.id, expected_status="pending", status="expired"
+                )
+            )
         else:
             displaced_thesis = None
 
@@ -381,25 +386,27 @@ def fill_pending_positions(
                 # once the whole window has elapsed (as_of past the deadline);
                 # otherwise stay pending — a later session may still price (E3).
                 if as_of >= cal.next_session(deadline):
-                    _expire_locked(session, it["id"])
-                    expired += 1
+                    if _expire_locked(session, it["id"]):
+                        expired += 1
                 continue
 
             # Fill-validity guard (E1c): open gapped past a level → expired.
             if open_px >= it["target_price"] or open_px <= it["stop_loss"]:
-                _expire_locked(session, it["id"])
-                _record_skip(
-                    it["thesis_id"], it["symbol"], it["scan_date"], "gap_invalidated"
-                )
-                expired += 1
+                if _expire_locked(session, it["id"]):
+                    _record_skip(
+                        it["thesis_id"], it["symbol"], it["scan_date"],
+                        "gap_invalidated",
+                    )
+                    expired += 1
                 continue
 
             shares = int(math.floor(NOTIONAL_USD / open_px))
             allocated = shares * open_px
             residual = NOTIONAL_USD - allocated
-            session.execute(
+            res = session.execute(
                 _update_position(
                     it["id"],
+                    expected_status="pending",  # concurrency: only fill if still pending
                     status="open",
                     entry_date=fill_day,
                     entry_price=open_px,
@@ -414,25 +421,33 @@ def fill_pending_positions(
                     time_stop_days=learned_time_stop_days,
                 )
             )
-            filled += 1
+            if int(res.rowcount or 0) > 0:
+                filled += 1
 
     return {"filled": filled, "expired": expired}
 
 
-def _expire_locked(session, position_id: int) -> None:
-    session.execute(_update_position(position_id, status="expired"))
+def _expire_locked(session, position_id: int) -> bool:
+    # Only a still-pending row may expire (a concurrent run may have filled it).
+    # Returns True iff a row actually transitioned (rowcount), so counters don't
+    # over-count a no-op stale expire.
+    res = session.execute(
+        _update_position(position_id, expected_status="pending", status="expired")
+    )
+    return int(res.rowcount or 0) > 0
 
 
-def _update_position(position_id: int, **values: Any):
+def _update_position(position_id: int, *, expected_status: str | None = None, **values: Any):
     from sqlalchemy import update as sql_update
 
-    # Guard: never mutate a row that is no longer pending/open (immutability of
-    # booked fills/exits, E4/E6/F13). Fill only touches pending; exit only open.
-    return (
-        sql_update(PaperTrade)
-        .where(PaperTrade.id == position_id)
-        .values(**values)
-    )
+    # Guard: never mutate a row that is no longer in the expected lifecycle state
+    # (immutability of booked fills/exits, E4/E6/F13, + concurrency safety for
+    # overlapping daily/manual runs — codex). The caller checks rowcount: 0 means
+    # another run already transitioned the row, so the stale write is a no-op.
+    stmt = sql_update(PaperTrade).where(PaperTrade.id == position_id)
+    if expected_status is not None:
+        stmt = stmt.where(PaperTrade.status == expected_status)
+    return stmt.values(**values)
 
 
 # ---------------------------------------------------------------------------
@@ -502,13 +517,14 @@ def update_open_positions(*, as_of: date) -> dict[str, int]:
             res = session.execute(
                 _update_position(
                     it["id"],
+                    expected_status="open",
                     status="closed",
                     exit_date=result.exit_date,
                     exit_price=result.exit_price,
                     exit_reason=result.exit_reason,
                     return_pct=result.return_pct,
                     pnl=result.pnl,
-                ).where(PaperTrade.status == "open")
+                )
             )
             if int(res.rowcount or 0) > 0:
                 closed += 1

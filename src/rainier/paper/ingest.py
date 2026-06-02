@@ -88,11 +88,21 @@ def _recent_window(as_of: date, window_days: int, cal: TradingCalendar) -> list[
 
 
 def _existing_dates(session, symbols: list[str], start: date, end: date) -> set[tuple[str, date]]:
+    # A (symbol, date) counts as PRESENT only if it has usable OHLC. A transient
+    # NULL/NaN row (yfinance partial) must still register as a GAP so a later
+    # ingest re-fetches the real bar (codex) — otherwise pending fills/exits/MTM
+    # stay starved on stale empty rows. `close` is the canonical usability probe;
+    # a real daily bar always carries all of o/h/l/c, and the COALESCE upsert
+    # (B5) never nulls a previously-good value back out.
     rows = session.execute(
         select(StockPrice.symbol, StockPrice.date).where(
             StockPrice.symbol.in_(symbols),
             StockPrice.date >= canonical_instant(start),
             StockPrice.date <= canonical_instant(end),
+            StockPrice.open.isnot(None),
+            StockPrice.high.isnot(None),
+            StockPrice.low.isnot(None),
+            StockPrice.close.isnot(None),
         )
     ).all()
     return {(sym, normalize_to_trading_date(d)) for sym, d in rows}
