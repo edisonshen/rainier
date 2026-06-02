@@ -848,6 +848,456 @@ def test_mirror_guard_swallows_sqlalchemy_error(monkeypatch, capsys):
     assert issubclass(SQLAlchemyError, Exception)
 
 
+# ---------------------------------------------------------------------------
+# mirror_guard loud-on-failure diagnostic (design DESIGN-mirror-guard-loud-on-
+# failure.md §4, items 1-10). All assertions target STDERR specifically.
+# NO Postgres needed — these drive the guard + its helpers directly.
+# ---------------------------------------------------------------------------
+
+_SENTINEL = "PG-MIRROR-FAILURE"
+
+
+def test_mirror_guard_loud_on_body_failure(monkeypatch, capsys):
+    """§4.1 — DATABASE_URL set, body raises SQLAlchemyError -> loud diagnostic on
+    stderr with sentinel + redacted host + error class; no exception escapes;
+    password substring absent."""
+    from sqlalchemy.exc import OperationalError
+
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql+psycopg://bob:hunter2@db.example.com:5432/mirror"
+    )
+    with mirror_guard("unit-writer") as eng:
+        assert eng is not None, "engine object returned when URL is set"
+        raise OperationalError("boom", None, Exception("conn refused"))
+
+    err = capsys.readouterr().err
+    assert _SENTINEL in err, "loud sentinel must be on stderr"
+    assert "unit-writer" in err
+    assert "OperationalError" in err, "error class named"
+    assert "db.example.com" in err, "redacted host present"
+    assert "hunter2" not in err, "password must not leak"
+    assert "bob" not in err, "username must not leak"
+
+
+def test_mirror_guard_before_yield_failure_is_non_fatal(monkeypatch, capsys):
+    """§4.2 — engine creation raises SQLAlchemyError BEFORE the yield. Today this
+    escapes as `RuntimeError: generator didn't yield` and aborts the caller. The
+    fix must emit the loud diagnostic AND still yield None so the body runs."""
+    from sqlalchemy.exc import ArgumentError
+
+    import rainier.db.dualwrite as dw
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+
+    def boom(_writer):
+        raise ArgumentError("malformed URL")
+
+    monkeypatch.setattr(dw, "pg_engine_or_skip", boom)
+
+    body_ran_with_none = False
+    # Must NOT raise RuntimeError: generator didn't yield.
+    with dw.mirror_guard("before-yield-writer") as eng:
+        body_ran_with_none = eng is None
+
+    assert body_ran_with_none, "body must run with eng is None after engine-creation failure"
+    err = capsys.readouterr().err
+    assert _SENTINEL in err, "before-yield failure must still emit loud diagnostic"
+    assert "ArgumentError" in err
+
+
+def test_mirror_guard_malformed_port_valueerror_is_non_fatal(monkeypatch, capsys):
+    """codex iter-2 — a malformed DATABASE_URL with a non-numeric port makes
+    make_url/create_engine raise a bare ``ValueError`` (int('notaport')) BEFORE
+    the yield, not a SQLAlchemyError. That must still be non-fatal: emit the loud
+    diagnostic and yield None, not abort the caller (design §3.1 — any
+    engine-creation failure on a SET url is non-fatal)."""
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host:notaport/db")
+
+    body_ran_with_none = False
+    # Must NOT escape as ValueError nor RuntimeError: generator didn't yield.
+    with mirror_guard("malformed-port-writer") as eng:
+        body_ran_with_none = eng is None
+
+    assert body_ran_with_none, "malformed-port URL must yield None, not abort"
+    err = capsys.readouterr().err
+    assert _SENTINEL in err, "malformed-port failure must emit loud diagnostic"
+    assert "ValueError" in err, "the bare ValueError class must be named"
+
+
+def test_mirror_guard_unset_stays_quiet(monkeypatch, capsys):
+    """§4.3 — DATABASE_URL unset -> the benign skip warning, NO sentinel."""
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with mirror_guard("quiet-writer") as eng:
+        assert eng is None
+    err = capsys.readouterr().err
+    assert _SENTINEL not in err, "unset case must not emit the loud sentinel"
+    assert "database_url" in err.lower(), "benign skip warning preserved"
+
+
+def test_mirror_guard_success_is_silent(monkeypatch, capsys):
+    """§4.4 — set + body succeeds -> no sentinel."""
+    import rainier.db.dualwrite as dw
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+
+    class _FakeEngine:
+        def dispose(self):
+            pass
+
+    monkeypatch.setattr(dw, "pg_engine_or_skip", lambda _w: _FakeEngine())
+
+    with dw.mirror_guard("ok-writer") as eng:
+        assert eng is not None  # body succeeds, no raise
+
+    err = capsys.readouterr().err
+    assert _SENTINEL not in err, "successful mirror must be silent"
+
+
+def test_mirror_guard_non_sqlalchemy_error_propagates(monkeypatch):
+    """§4.5 — body raises ValueError (programmer bug) -> it escapes."""
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://nouser@127.0.0.1:1/nodb")
+    with pytest.raises(ValueError):
+        with mirror_guard("propagate-writer"):
+            raise ValueError("programmer bug must not be swallowed")
+
+
+@pytest.mark.parametrize(
+    ("url", "must_absent", "must_present"),
+    [
+        # credentialed (user:pass)
+        ("postgresql://bob:hunter2@db.example.com:5432/mirror", ["bob", "hunter2"], ["db.example.com"]),
+        # password-less userinfo — username must NOT survive
+        ("postgresql://bob@db.example.com/mirror", ["bob"], ["db.example.com"]),
+        # percent-encoded password
+        ("postgresql://bob:p%40ss%21@db.example.com/mirror", ["bob", "p@ss", "p%40ss"], ["db.example.com"]),
+        # IPv6 host
+        ("postgresql://bob:hunter2@[2001:db8::1]:5432/mirror", ["bob", "hunter2"], ["2001:db8::1"]),
+        # query-string options
+        ("postgresql://bob:hunter2@db.example.com/mirror?sslmode=require", ["bob", "hunter2"], ["db.example.com"]),
+        # driver-prefixed
+        ("postgresql+psycopg://bob:hunter2@db.example.com/mirror", ["bob", "hunter2"], ["db.example.com"]),
+    ],
+)
+def test_redact_host_never_leaks_creds(url, must_absent, must_present):
+    """§4.6 — _redact_host renders host/port/db only; neither username nor
+    password survives; never raises."""
+    from rainier.db.dualwrite import _redact_host
+
+    out = _redact_host(url)
+    for s in must_absent:
+        assert s not in out, f"{s!r} must not survive in {out!r}"
+    for s in must_present:
+        assert s in out, f"{s!r} should be in {out!r}"
+
+
+def test_redact_host_malformed_returns_unparseable():
+    """§4.6 — malformed URL -> '<unparseable>'; never raises."""
+    from rainier.db.dualwrite import _redact_host
+
+    for bad in ["not a url at all", "://://", "", "@@@", "postgres://:::"]:
+        out = _redact_host(bad)
+        assert out == "<unparseable>" or "<unparseable>" in out
+        # never echoes raw garbage credentials
+    assert _redact_host("postgresql://u:secret@") == "<unparseable>" or "secret" not in _redact_host(
+        "postgresql://u:secret@"
+    )
+
+
+def test_redact_host_unescaped_at_in_password_does_not_leak():
+    """codex iter-5 — an unescaped '@' in the password (e.g.
+    postgresql://u:pa@ss@db/prod) makes make_url parse host as `ss@db`, leaking
+    the password fragment `ss`. _redact_host must treat an '@'-bearing host as
+    unparseable, never rendering it."""
+    from rainier.db.dualwrite import _redact_host
+
+    for url in [
+        "postgresql://u:pa@ss@db/prod",
+        "postgresql://user:p@ssw0rd@host:5432/db",
+        "postgresql+psycopg://u:a@b@c/d",
+    ]:
+        out = _redact_host(url)
+        assert out == "<unparseable>", f"@-in-password host must be unparseable, got {out!r}"
+        assert "ss" not in out and "ssw0rd" not in out
+
+
+def test_scrub_credentials_url_and_keyvalue_forms():
+    """§4.7 — _scrub_credentials drops URL userinfo (with/without password) and
+    password=/pwd= key-value forms; credential-free text unchanged; never
+    raises."""
+    from rainier.db.dualwrite import _scrub_credentials
+
+    # URL with user:pass embedded in arbitrary error text
+    t1 = "could not connect: postgresql://user:secret@host/db (timeout)"
+    s1 = _scrub_credentials(t1)
+    assert "secret" not in s1
+    assert "user" not in s1.replace("could not", "")  # the username 'user' is scrubbed
+    assert "postgresql://@host/db" in s1
+
+    # password-less userinfo — username must not survive
+    t2 = "url=postgresql://user@host/db here"
+    s2 = _scrub_credentials(t2)
+    assert "postgresql://@host/db" in s2
+
+    # unescaped '@' INSIDE the password — the WHOLE userinfo (both @s) must go,
+    # not just up to the first '@' (codex iter-6 regression: an old class that
+    # stopped at the first '@' left the `ss@db` password fragment behind).
+    t3 = "could not connect: postgresql://u:pa@ss@db/prod (timeout)"
+    s3 = _scrub_credentials(t3)
+    assert "pa" not in s3, f"password fragment leaked: {s3!r}"
+    assert "ss" not in s3, f"password fragment leaked: {s3!r}"
+    assert "postgresql://@db/prod" in s3
+
+    # key/value forms
+    assert "secret" not in _scrub_credentials("password=secret extra")
+    assert "secret" not in _scrub_credentials("'password': 'secret'")
+    assert "secret" not in _scrub_credentials("pwd=secret;host=x")
+    assert "secret" not in _scrub_credentials('"password": "secret"')
+
+    # quoted value with embedded whitespace / separators must be consumed WHOLE
+    # (codex iter-1 regression: the value class used to stop at the first space,
+    # leaving the secret tail behind as `password=***'foo bar'`).
+    for whitespace_form in [
+        "password='foo bar'",
+        'password="foo bar"',
+        "password='foo,bar;baz'",
+        "'password': 'foo bar baz'",
+    ]:
+        scrubbed = _scrub_credentials(whitespace_form)
+        assert "foo" not in scrubbed, f"quoted secret leaked: {scrubbed!r}"
+        assert "bar" not in scrubbed, f"quoted secret leaked: {scrubbed!r}"
+        assert "baz" not in scrubbed, f"quoted secret leaked: {scrubbed!r}"
+        assert "***" in scrubbed
+
+    # quoted value containing the OPPOSITE quote char must stop only at the
+    # matching closing quote (codex iter-3 regression: an either-quote class let
+    # `password="foo'bar"` leak the tail after ***).
+    for embedded_quote_form in [
+        "password=\"foo'bar\"",
+        "password='foo\"bar'",
+        "password='foo\"bar baz'",
+    ]:
+        scrubbed = _scrub_credentials(embedded_quote_form)
+        assert "foo" not in scrubbed, f"embedded-quote secret leaked: {scrubbed!r}"
+        assert "bar" not in scrubbed, f"embedded-quote secret leaked: {scrubbed!r}"
+        assert "***" in scrubbed
+
+    # backslash-ESCAPED quote inside the value (JSON-serialized connect args) must
+    # be consumed as part of the secret (codex iter-4 regression: a quoted branch
+    # that stopped at the escaped quote leaked the tail `bar`).
+    for escaped_quote_form in [
+        '"password": "foo\\"bar"',
+        "'password': 'foo\\'bar'",
+        '"password": "foo\\"bar baz"',
+    ]:
+        scrubbed = _scrub_credentials(escaped_quote_form)
+        assert "foo" not in scrubbed, f"escaped-quote secret leaked: {scrubbed!r}"
+        assert "bar" not in scrubbed, f"escaped-quote secret leaked: {scrubbed!r}"
+        assert "baz" not in scrubbed, f"escaped-quote secret leaked: {scrubbed!r}"
+        assert "***" in scrubbed
+
+    # credential-free / malformed unchanged + no raise
+    for clean in ["just an error message", "", "host=db port=5432", "no creds here"]:
+        assert _scrub_credentials(clean) == clean
+
+
+def test_scrub_credentials_redacts_misparsed_host_fragment():
+    """codex iter-7 — an unescaped '@' in the password makes make_url parse the
+    host as a password suffix (e.g. `ss@db` from `u:pa@ss@db`). A driver that
+    echoes that mis-parsed host as bare text (`failed to resolve host 'ss@db'`)
+    is neither URL-shaped nor `password=` form, so forms 1-2 miss it. The
+    env-derived literal scrub (form 3) must redact it — without over-scrubbing
+    short fragments out of unrelated words."""
+    from rainier.db.dualwrite import _scrub_credentials
+
+    url = "postgresql://u:pa@ss@db/prod"
+    err = "could not translate host name: failed to resolve host 'ss@db'"
+    out = _scrub_credentials(err, url)
+    assert "ss@db" not in out, f"mis-parsed host fragment leaked: {out!r}"
+    assert "***" in out
+
+    # the full raw userinfo (secret-as-typed) is also redacted from error text
+    out2 = _scrub_credentials("connect args: u:pa@ss = bad", url)
+    assert "pa@ss" not in out2, f"raw userinfo leaked: {out2!r}"
+
+    # over-scrub guard: the short 'ss' piece must NOT be redacted out of unrelated
+    # words (we only redact the full env-derived literals, never short fragments).
+    out3 = _scrub_credentials("address lookup failed for the database", url)
+    assert out3 == "address lookup failed for the database"
+
+
+def test_scrub_credentials_redacts_no_at_malformed_token():
+    """codex iter-8 — a malformed DATABASE_URL with NO '@' (e.g.
+    `postgresql://user:secret host/db`) makes make_url raise a ValueError whose
+    text echoes the credential token (`invalid literal ... 'secret host'`).
+    _raw_userinfo requires an '@' so it misses this; form 3 must derive the
+    user:pass token (and its password half) and redact it — without over-scrubbing
+    when the credential word appears in unrelated text under a different URL."""
+    from rainier.db.dualwrite import _scrub_credentials
+
+    url = "postgresql://user:secret host/db"
+    err = "invalid literal for int() with base 10: 'secret host'"
+    out = _scrub_credentials(err, url)
+    assert "secret host" not in out, f"no-@ credential token leaked: {out!r}"
+    assert "secret" not in out, f"password fragment leaked: {out!r}"
+    assert "***" in out
+
+    # over-scrub guard: the same word under a DIFFERENT url is NOT redacted.
+    out2 = _scrub_credentials("the secret sauce", "postgresql://u:p@host/db")
+    assert out2 == "the secret sauce"
+
+
+def test_scrub_credentials_redacts_standalone_username_and_password():
+    """codex iter-9 — auth errors echo the username/password STANDALONE, e.g.
+    `password authentication failed for user "bob"`, with no URL or `password=`
+    form. Form 3 must redact the parsed username and (URL-decoded) password from
+    the env, with a min-length guard so 1-char creds don't over-scrub."""
+    from rainier.db.dualwrite import _scrub_credentials
+
+    url = "postgresql://bob:hunter2@db.example.com/mirror"
+    assert "bob" not in _scrub_credentials(
+        'password authentication failed for user "bob"', url
+    )
+    assert "hunter2" not in _scrub_credentials('FATAL: password "hunter2" rejected', url)
+
+    # URL-decoded password (make_url decodes %40 -> @) is redacted too.
+    url_pct = "postgresql://bob:p%40ss@db/mirror"
+    assert "p@ss" not in _scrub_credentials("auth failed for p@ss", url_pct)
+
+    # over-scrub guard: a 1-char username must NOT be redacted out of unrelated
+    # text (min length 2).
+    url_short = "postgresql://u:p@host/db"
+    assert _scrub_credentials("user u connected to unit", url_short) == (
+        "user u connected to unit"
+    )
+
+
+def test_diagnostic_scrubs_standalone_username_end_to_end(monkeypatch, capsys):
+    """codex iter-9 end-to-end — the printed diagnostic must not leak the parsed
+    DATABASE_URL username on a typical auth-failure message."""
+    from sqlalchemy.exc import OperationalError
+
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://bob:hunter2@db.example.com/mirror")
+    with mirror_guard("auth-writer"):
+        raise OperationalError(
+            'FATAL: password authentication failed for user "bob"', None, Exception("auth")
+        )
+    err = capsys.readouterr().err
+    assert _SENTINEL in err
+    assert "bob" not in err, "standalone username must be scrubbed"
+
+
+def test_diagnostic_scrubs_no_at_malformed_end_to_end(monkeypatch, capsys):
+    """codex iter-8 end-to-end — the printed diagnostic must not leak the
+    credential token from a no-'@' malformed URL's ValueError."""
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret host/db")
+    # The malformed URL makes pg_engine_or_skip raise ValueError before yield;
+    # the guard must emit a scrubbed diagnostic and stay non-fatal.
+    with mirror_guard("no-at-writer") as eng:
+        assert eng is None
+    err = capsys.readouterr().err
+    assert _SENTINEL in err
+    assert "secret host" not in err, "no-@ credential token must be scrubbed"
+
+
+def test_diagnostic_scrubs_misparsed_host_end_to_end(monkeypatch, capsys):
+    """codex iter-7 end-to-end — the printed PG-MIRROR-FAILURE diagnostic must not
+    leak the mis-parsed-host password fragment when the error text echoes it."""
+    from sqlalchemy.exc import OperationalError
+
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:pa@ss@db/prod")
+    with mirror_guard("misparse-writer"):
+        raise OperationalError(
+            "could not translate host name: failed to resolve host 'ss@db'",
+            None,
+            Exception("dns"),
+        )
+    err = capsys.readouterr().err
+    assert _SENTINEL in err
+    assert "ss@db" not in err, "mis-parsed host password fragment must be scrubbed"
+
+
+def test_diagnostic_scrubs_credential_in_error_message(monkeypatch, capsys):
+    """§4.7 end-to-end — when the raised SQLAlchemyError's MESSAGE itself carries
+    a credentialed URL, the printed diagnostic must be scrubbed."""
+    from sqlalchemy.exc import OperationalError
+
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://safe@host/db")
+    with mirror_guard("scrub-writer"):
+        raise OperationalError(
+            "FATAL: password authentication failed for postgresql://admin:topsecret@host/db",
+            None,
+            Exception("auth"),
+        )
+    err = capsys.readouterr().err
+    assert _SENTINEL in err
+    assert "topsecret" not in err, "credential in error message must be scrubbed"
+    assert "admin" not in err, "username in error message must be scrubbed"
+
+
+def test_mirror_guard_disposes_engine_on_caught_error(monkeypatch, capsys):
+    """§4.8 — dispose() runs even when the body raises SQLAlchemyError."""
+    from sqlalchemy.exc import OperationalError
+
+    import rainier.db.dualwrite as dw
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+
+    disposed = {"called": False}
+
+    class _FakeEngine:
+        def dispose(self):
+            disposed["called"] = True
+
+    monkeypatch.setattr(dw, "pg_engine_or_skip", lambda _w: _FakeEngine())
+
+    with dw.mirror_guard("dispose-writer"):
+        raise OperationalError("boom", None, Exception("x"))
+
+    assert disposed["called"], "engine must be disposed on the caught-error path"
+    assert _SENTINEL in capsys.readouterr().err
+
+
+def test_mirror_guard_empty_database_url_stays_quiet(monkeypatch, capsys):
+    """§4.9 — DATABASE_URL='' (empty) is treated as unset -> quiet skip, no
+    sentinel (pins the empty=unset decision)."""
+    from rainier.db.dualwrite import mirror_guard
+
+    monkeypatch.setenv("DATABASE_URL", "")
+    with mirror_guard("empty-writer") as eng:
+        assert eng is None
+    err = capsys.readouterr().err
+    assert _SENTINEL not in err, "empty DATABASE_URL must stay quiet"
+
+
+def test_redact_host_socket_renders_meaningfully():
+    """§4.10 — a host-less / socket URL must render the socket path (and db when
+    available), not a bare db name, and leak no creds."""
+    from rainier.db.dualwrite import _redact_host
+
+    url = "postgresql://bob:hunter2@/mirror?host=/var/run/postgresql"
+    out = _redact_host(url)
+    assert "/var/run/postgresql" in out, f"socket path must appear in {out!r}"
+    assert out != "mirror", "bare db name is not a meaningful host"
+    assert "hunter2" not in out
+    assert "bob" not in out
+
+
 def test_compute_skips_pg_when_database_url_unset(tmp_path, monkeypatch):
     """thematic compute with DATABASE_URL unset still writes parquet, exit 0."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
