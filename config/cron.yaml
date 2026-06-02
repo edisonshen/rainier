@@ -227,3 +227,26 @@ jobs:
     log: "data/trading-dashboard.log"
     discord_on_failure: true
     enabled: false
+
+  # Nightly money_flow_snapshots -> Neon backup (durability).
+  # DESIGN-money-flow-neon-backup.md §2.4.
+  #
+  # The QU100 ranking history (money_flow_snapshots) lives ONLY on the local
+  # TimescaleDB and is irreplaceable (QU's date-keyed endpoint has no intraday/
+  # session replay). This job copies it incrementally (high-water-mark by id,
+  # insert-only, idempotent) into a plain backup.money_flow_snapshots table on
+  # Neon, which has managed backups. Local stays primary; Neon is a backup copy.
+  #
+  # 15:30 PT runs AFTER qu-close (15:00 PT) lands the day's final ranking, so
+  # the backup includes today's data. --verify runs a strong integrity check
+  # (max-id, missing-row, full-window canonicalized checksum, id-uniqueness);
+  # any drift exits non-zero so cron-wrapper.sh fires the Discord alert
+  # (durability failures must be LOUD). The job does NOT pass
+  # --skip-if-unconfigured, so an unset DATABASE_URL fails loud in prod.
+  - name: money-flow-backup
+    description: "Nightly money_flow_snapshots → Neon backup (durability)"
+    schedule: "30 15 * * 1-5"   # 15:30 PST, after qu-close (15:00) lands final rows
+    command: "uv run rainier db backup-money-flow --verify"
+    log: "data/money-flow-backup.log"
+    discord_on_failure: true
+    enabled: true
