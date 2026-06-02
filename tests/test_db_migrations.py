@@ -742,3 +742,146 @@ def test_alembic_does_not_disable_existing_loggers(database_url):
         "alembic fileConfig disabled a pre-existing logger — env.py must pass "
         "disable_existing_loggers=False"
     )
+
+
+# ---------------------------------------------------------------------------
+# Migration 0004 — backup.money_flow_snapshots (money-flow-neon-backup-b613)
+# ---------------------------------------------------------------------------
+# Hand-written (env.py:_include_only_market does NOT manage the ``backup``
+# schema — intentional, same as it doesn't manage ``public``). 0004 creates a
+# plain-table off-machine backup of the irreplaceable QU100 money-flow history.
+
+
+def test_0004_creates_backup_schema_and_table(database_url):
+    """`upgrade head` (through 0004) creates the ``backup`` schema +
+    backup.money_flow_snapshots mirroring core/models.py columns with the
+    composite PK (id, captured_at) and no stocks FK."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    schemas = set(insp.get_schema_names())
+    assert "backup" in schemas, f"backup schema missing; found {schemas}"
+
+    cols = {
+        c["name"]: c
+        for c in insp.get_columns("money_flow_snapshots", schema="backup")
+    }
+    pk = insp.get_pk_constraint("money_flow_snapshots", schema="backup")
+    fks = insp.get_foreign_keys("money_flow_snapshots", schema="backup")
+    eng.dispose()
+
+    assert set(cols) == {
+        "id",
+        "captured_at",
+        "capture_session",
+        "data_date",
+        "view_type",
+        "ranking_type",
+        "symbol",
+        "rank",
+        "daily_change",
+        "sector",
+        "industry",
+        "long_short",
+        "raw_data",
+    }, f"got {set(cols)}"
+    # Composite PK mirrors the source exactly (id alone is NOT DB-unique).
+    assert set(pk["constrained_columns"]) == {"id", "captured_at"}, pk
+    # raw_data is JSONB (not text).
+    assert "JSON" in str(cols["raw_data"]["type"]).upper(), cols["raw_data"]["type"]
+    # No stocks FK on the standalone backup table.
+    assert fks == [], f"backup table must have no FK; got {fks}"
+
+
+def test_0004_backup_index_on_data_date_ranking_type(database_url):
+    """Index on (data_date, ranking_type) for ad-hoc restore queries."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    idx = insp.get_indexes("money_flow_snapshots", schema="backup")
+    eng.dispose()
+    assert any(
+        i["column_names"] == ["data_date", "ranking_type"] for i in idx
+    ), f"missing index on backup.money_flow_snapshots(data_date, ranking_type); got {idx}"
+
+
+def test_0004_does_not_touch_market_schema(database_url):
+    """0004 owns only the ``backup`` schema; the ``market`` tables are intact."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    market_tables = set(insp.get_table_names(schema="market"))
+    eng.dispose()
+    # All the market.* tables from 0001-0003 still present.
+    assert _expected_tables() <= market_tables, (
+        f"0004 disturbed market.*; got {market_tables}"
+    )
+
+
+def test_0004_downgrade_drops_backup_schema(database_url):
+    """`downgrade` (0004 -> 0003) drops backup.money_flow_snapshots + the
+    backup schema; the market schema + tables survive (0004 owns only backup)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0003")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    schemas = set(insp.get_schema_names())
+    market_tables = set(insp.get_table_names(schema="market"))
+    eng.dispose()
+
+    assert "backup" not in schemas, (
+        f"0004 downgrade must drop the backup schema; found {schemas}"
+    )
+    # market schema + tables untouched by the backup downgrade.
+    assert "market" in schemas
+    assert _expected_tables() <= market_tables
+
+
+def test_0004_downgrade_round_trips(database_url):
+    """0004 is reversible: head -> 0003 -> head re-creates the backup table."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0003")
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    assert "backup" in set(insp.get_schema_names())
+    assert "money_flow_snapshots" in set(
+        insp.get_table_names(schema="backup")
+    )
+    eng.dispose()
+
+
+def test_0004_no_stray_public_tables(database_url):
+    """0004 must NOT leak tables into public (only alembic_version belongs)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    public_tables = set(insp.get_table_names(schema="public"))
+    eng.dispose()
+    assert public_tables <= {"alembic_version"}, (
+        f"0004 leaked tables into public: {public_tables - {'alembic_version'}}"
+    )
