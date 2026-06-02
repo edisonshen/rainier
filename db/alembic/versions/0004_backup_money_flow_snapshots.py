@@ -29,11 +29,12 @@ Design choices (DESIGN-money-flow-neon-backup.md §2.1):
 
 ASCII (forward = upgrade, reverse = downgrade):
 
-    + CREATE SCHEMA backup            <->   DROP SCHEMA backup CASCADE
-    + backup.money_flow_snapshots     <->   drop table (with the schema)
+    + CREATE SCHEMA IF NOT EXISTS     <->   DROP SCHEMA backup RESTRICT (iff empty)
+    + backup.money_flow_snapshots     <->   drop index + drop table
 
-Downgrade owns ONLY the ``backup`` schema it created — it never touches
-``market`` (0001-0003) or ``public``.
+Downgrade drops ONLY the table + index 0004 created and removes the ``backup``
+schema only when it is left empty — a pre-existing/shared schema is preserved
+(Codex P2). It never touches ``market`` (0001-0003) or ``public``.
 """
 
 from __future__ import annotations
@@ -90,11 +91,35 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop backup.money_flow_snapshots + the ``backup`` schema.
+    """Drop ONLY the objects 0004 created — never CASCADE the whole schema.
 
-    0004 owns ONLY the ``backup`` schema, so dropping it (CASCADE removes the
-    table + index) is safe and does NOT touch ``market`` (0001-0003) or
-    ``public``. Unlike 0001's guarded market downgrade, ``backup`` is exclusively
-    this revision's, so the unconditional cascade is appropriate here.
+    Upgrade uses ``CREATE SCHEMA IF NOT EXISTS``, so ``backup`` may have
+    PRE-EXISTED (adopted, not created by us). ``DROP SCHEMA backup CASCADE`` would
+    then delete unrelated objects in a schema this migration does not own (Codex
+    P2 — a data-loss path). Instead drop precisely the table (cascading its own
+    index + PK) and remove the schema only when it is left EMPTY — i.e. only when
+    0004 was the thing that effectively populated it. A non-empty ``backup`` (some
+    other object lives there) is left intact.
     """
-    op.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
+    op.drop_index(
+        "ix_backup_money_flow_snapshots_data_date_ranking_type",
+        table_name="money_flow_snapshots",
+        schema=SCHEMA,
+    )
+    op.drop_table("money_flow_snapshots", schema=SCHEMA)
+    # Drop the schema only if nothing else lives in it. ``DROP SCHEMA ... RESTRICT``
+    # is a no-op-or-error if non-empty; the explicit emptiness check keeps the
+    # downgrade idempotent and avoids erroring on a shared schema.
+    op.execute(
+        f"""
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = '{SCHEMA}'
+          ) THEN
+            EXECUTE 'DROP SCHEMA IF EXISTS {SCHEMA} RESTRICT';
+          END IF;
+        END $$;
+        """
+    )

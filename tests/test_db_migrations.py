@@ -871,6 +871,45 @@ def test_0004_downgrade_round_trips(database_url):
     eng.dispose()
 
 
+def test_0004_downgrade_preserves_preexisting_schema_object(database_url):
+    """Codex P2 — downgrade must NOT CASCADE-drop a PRE-EXISTING ``backup`` schema.
+
+    Upgrade uses CREATE SCHEMA IF NOT EXISTS, so the schema can pre-exist with
+    unrelated objects. A naive ``DROP SCHEMA backup CASCADE`` on downgrade would
+    delete them (data loss). Downgrade must drop only its own table/index and
+    leave a non-empty ``backup`` schema (plus the foreign object) intact.
+    """
+    from alembic import command
+    from sqlalchemy import text
+
+    cfg = _alembic_config()
+
+    # Pre-seed the backup schema with an unrelated object BEFORE migrating.
+    eng = create_engine(database_url)
+    with eng.begin() as conn:
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS backup"))
+        conn.execute(text("CREATE TABLE backup.unrelated_keepme (x int)"))
+        conn.execute(text("INSERT INTO backup.unrelated_keepme (x) VALUES (42)"))
+    eng.dispose()
+
+    command.upgrade(cfg, "head")  # adopts the existing schema, adds our table
+    command.downgrade(cfg, "0003")  # must drop ONLY our table/index
+
+    eng = create_engine(database_url)
+    insp = inspect(eng)
+    schemas = set(insp.get_schema_names())
+    backup_tables = set(insp.get_table_names(schema="backup"))
+    # The foreign object + its data survive; our table is gone; schema preserved.
+    with eng.connect() as conn:
+        kept = conn.execute(text("SELECT x FROM backup.unrelated_keepme")).scalar_one()
+    eng.dispose()
+
+    assert "backup" in schemas, "non-empty backup schema must be preserved"
+    assert "unrelated_keepme" in backup_tables, "foreign object must survive downgrade"
+    assert "money_flow_snapshots" not in backup_tables, "our table must be dropped"
+    assert kept == 42, "foreign object's data must be intact (no CASCADE wipe)"
+
+
 def test_0004_no_stray_public_tables(database_url):
     """0004 must NOT leak tables into public (only alembic_version belongs)."""
     from alembic import command
