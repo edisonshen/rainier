@@ -102,24 +102,27 @@ def evaluate_exit(
         session_n += 1
 
         open_px = bar.open
-        # --- stop-loss has priority (conservative same-bar SL+TP → SL) ---
         hit_stop = bar.low <= stop_loss
         hit_target = bar.high >= target_price
         same_bar = hit_stop and hit_target
 
+        # --- gap-through AT THE OPEN takes priority (the open prints first, so a
+        # level the open already gapped through was hit before any intraday
+        # high/low). At most one can apply since stop_loss < target_price. This
+        # resolves the gap-up-through-target-then-falls-to-stop case as a target
+        # exit @ open (not a phantom stop), and the symmetric gap-down case as a
+        # stop @ open.
+        if open_px is not None and open_px <= stop_loss:
+            return _result(bd, open_px, "stop_loss", entry_price, shares, same_bar)
+        if open_px is not None and open_px >= target_price:
+            return _result(bd, open_px, "target", entry_price, shares, same_bar)
+
+        # --- no open-gap: intraday touches. Conservative same-bar SL+TP → SL
+        # (F3 downward-bias convention, disclosed via same_bar_ambiguous). ---
         if hit_stop:
-            # gap-through: open already at/below stop → exit at open.
-            exit_px = (
-                open_px if (open_px is not None and open_px <= stop_loss) else stop_loss
-            )
-            return _result(bd, exit_px, "stop_loss", entry_price, shares, same_bar)
+            return _result(bd, stop_loss, "stop_loss", entry_price, shares, same_bar)
         if hit_target:
-            exit_px = (
-                open_px
-                if (open_px is not None and open_px >= target_price)
-                else target_price
-            )
-            return _result(bd, exit_px, "target", entry_price, shares, same_bar)
+            return _result(bd, target_price, "target", entry_price, shares, same_bar)
 
         # --- time-stop at the Nth trading session (entry day = session 1) ---
         if time_stop_days is not None and session_n >= time_stop_days:

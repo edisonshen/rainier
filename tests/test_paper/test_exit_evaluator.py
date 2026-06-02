@@ -95,6 +95,17 @@ def test_f7b_gap_through_plus_straddle():
     assert r.exit_reason == "stop_loss" and r.exit_price == 90
 
 
+def test_f7c_gap_up_through_target_then_intraday_stop():
+    """codex iter-2 regression — a bar that OPENS above target (gap-up: target
+    hit at the open) but later trades below stop must book TARGET @ open, not a
+    phantom stop. The open prints first, so the target exit already happened
+    before any intraday low. (Symmetric to F7b's gap-down-to-stop.)"""
+    d = _days(2)
+    rows = [_bar(d[0], 100, 101, 99, 100), _bar(d[1], 125, 130, 85, 88)]
+    r = _eval(rows)  # stop=90, target=120
+    assert r.exit_reason == "target" and r.exit_price == 125
+
+
 def test_f8_unordered_input():
     d = _days(3)
     ordered = [_bar(d[0], 100, 101, 99, 100), _bar(d[1], 100, 105, 99, 102),

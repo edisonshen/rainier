@@ -1958,10 +1958,14 @@ def paper_open(as_of_iso):
     """Fill pending positions at their T+1 trading-session open."""
     from datetime import date as _date
 
+    from rainier.core.config import get_settings
     from rainier.paper.positions import fill_pending_positions
 
     as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
-    res = fill_pending_positions(as_of=as_of)
+    # Snapshot the learned time-stop at fill, same as the scheduled daily path
+    # (codex iter-2 P3) — otherwise manually-opened positions never get it.
+    learned_ts = get_settings().llm_thesis.learned_time_stop_days
+    res = fill_pending_positions(as_of=as_of, learned_time_stop_days=learned_ts)
     click.echo(f"Filled {res['filled']}, expired {res['expired']}.")
 
 
