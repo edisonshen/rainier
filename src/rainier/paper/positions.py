@@ -88,6 +88,19 @@ def _record_skip(thesis_id: int, symbol: str, scan_date: date, reason: str) -> N
         session.execute(stmt)
 
 
+def _clear_skip(thesis_id: int) -> None:
+    """Remove any stale skip for a thesis that has now successfully opened a
+    position (D8 retry: a thesis first skipped missing_levels/missing_screened_
+    record then re-run after backfill must NOT remain in the skip ledger, or it
+    double-counts as both opened AND skipped — codex)."""
+    from sqlalchemy import delete as sql_delete
+
+    with get_session() as session:
+        session.execute(
+            sql_delete(PaperSkip).where(PaperSkip.thesis_id == thesis_id)
+        )
+
+
 def _persisted_levels(
     session, symbol: str, scan_date: date, session_name: str
 ) -> ScreenedStockRecord | None:
@@ -286,10 +299,17 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
                 pg_insert(PaperTrade)
                 .values(**values)
                 .on_conflict_do_nothing(constraint="uq_paper_trade_thesis_id")
+                .returning(PaperTrade.id)
             )
-            result = session.execute(stmt)
-        # rowcount 0 → thesis already had a position (idempotent re-run, D5).
-        return int(result.rowcount or 0) > 0
+            # RETURNING yields a row ONLY when an insert actually happened; on a
+            # DO NOTHING conflict it's empty. rowcount is unreliable here (-1 for
+            # ON CONFLICT inserts under psycopg), so use the returned row instead.
+            inserted = session.execute(stmt).first() is not None
+        if inserted:
+            # D8 retry: a thesis previously skipped (missing_levels/missing_
+            # screened_record) that now opens must not linger in the skip ledger.
+            _clear_skip(thesis_id)
+        return inserted
     except IntegrityError:
         # Partial-unique conflict (symbol already active) raced past the
         # pre-check. The txn rolled back cleanly (its own scope); record the

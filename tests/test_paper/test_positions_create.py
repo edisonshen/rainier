@@ -201,6 +201,9 @@ def test_d8_null_levels_zero_rows_then_retry(pg_legacy_session, null_field):
     create_positions_for_theses([t], scan_date=SCAN)
     pg_legacy_session.expire_all()
     assert len(_trades(pg_legacy_session, "AAA")) == 1
+    # codex iter-6: the stale missing_levels skip must be CLEARED on the
+    # successful retry — else the thesis double-counts as opened AND skipped.
+    assert len(_skips(pg_legacy_session, "AAA")) == 0
 
 
 def test_d9_absent_screened_row_skip(pg_legacy_session):
