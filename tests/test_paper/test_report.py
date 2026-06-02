@@ -121,6 +121,23 @@ def test_h1c_regenerate_is_point_in_time_no_lookahead(pg_legacy_session):
     assert payload["todays_exits"] == []
 
 
+def test_h1d_expired_row_reads_pending_before_its_expiry_session(pg_legacy_session):
+    """codex iter-5 regression — a never-filled row that LATER expired must read
+    as PENDING on a replay date before its derived expiry session, not expired.
+    scan=Mon 1/5 → T+1=1/6, deadline=1/7, expires 1/8. A replay at 1/6 (Tue) =>
+    still pending; a replay at 1/8 => expired."""
+    s = pg_legacy_session
+    _add(s, 1, "EXP", "expired", scan_date=date(2026, 1, 5))  # never filled
+    tue = compute_daily_payload(date(2026, 1, 6))
+    assert tue["counts_by_status"] == {
+        "pending": 1, "open": 0, "closed": 0, "expired": 0
+    }
+    thu = compute_daily_payload(date(2026, 1, 8))
+    assert thu["counts_by_status"] == {
+        "pending": 0, "open": 0, "closed": 0, "expired": 1
+    }
+
+
 def test_h2_idempotent_upsert(pg_legacy_session):
     s = pg_legacy_session
     p = compute_daily_payload(AS_OF)

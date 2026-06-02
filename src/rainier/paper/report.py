@@ -64,24 +64,38 @@ def _latest_close_on_or_before(session, symbol: str, as_of: date) -> tuple[float
     return float(row[0]), _as_date(row[1])
 
 
+def _expiry_session(scan_date: date) -> date:
+    """The trading session a never-filled pending row expires on — derived
+    deterministically from the calendar (the fill logic expires once as_of >=
+    next_session(add_sessions(T+1, PENDING_EXPIRY_SESSIONS-1)); positions.py).
+    Lets a historical replay place expiry on the right date instead of treating
+    every post-scan date as expired."""
+    from rainier.paper.calendar import DEFAULT_CALENDAR
+    from rainier.paper.positions import PENDING_EXPIRY_SESSIONS
+
+    cal = DEFAULT_CALENDAR
+    t1 = cal.next_session(scan_date)
+    deadline = cal.add_sessions(t1, PENDING_EXPIRY_SESSIONS - 1)
+    return cal.next_session(deadline)
+
+
 def _status_as_of(p: PaperTrade, as_of: date) -> str | None:
     """Point-in-time status of a position as of ``as_of``, derived from the
     persisted lifecycle dates (NOT the stored current status, which reflects a
     later date and would leak future state into a historical --regenerate / replay
     snapshot — codex). Returns None if the position did not exist yet at as_of.
 
-    A row exits/expires terminally; closed/expired carry a date that pins WHEN.
-    `expired` rows have no exit_date, so a same-day-replay can't time-place them —
-    they are treated as terminal at scan time (conservative: an expired pick was
-    never a live position contributing P&L/MTM, so excluding it from open/closed
-    aggregates is correct regardless of the exact expiry date)."""
+    Closed rows carry an exit_date that pins WHEN. A never-filled `expired` row
+    has no exit_date, so its expiry date is DERIVED from the calendar: before
+    that session it was still pending (codex iter-5)."""
     if _as_date(p.scan_date) > as_of:
         return None  # created after as_of — didn't exist yet
     if p.exit_date is not None and _as_date(p.exit_date) <= as_of:
         return "closed"
     if p.status == "expired" and p.entry_date is None:
-        # Never filled → terminal; show as expired (it held no live exposure).
-        return "expired"
+        # Never filled. Expired only from its derived expiry session onward;
+        # before that, it was a live pending row at as_of.
+        return "expired" if as_of >= _expiry_session(_as_date(p.scan_date)) else "pending"
     if p.entry_date is not None and _as_date(p.entry_date) <= as_of:
         # Filled on/before as_of and not yet closed at as_of → open.
         return "open"
