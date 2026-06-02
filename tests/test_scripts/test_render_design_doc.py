@@ -174,6 +174,20 @@ def test_embedded_control_char_scheme_neutralized():
     assert "<a href=" not in out, "control-char javascript: must not become an <a>"
 
 
+def test_pre_section_content_wrapped_in_section():
+    """Body content before the first `##` (e.g. a doc opening with a list) must
+    be wrapped in a <section> so the grid CSS keeps it in the content column,
+    not spilled into the left TOC column (Codex P2). No body block may be a
+    bare `body >` child between </header> and the first <section>."""
+    out = rd.render_doc("# T\n\nIntro para.\n\n- pre bullet\n\n## Real\n\nbody\n")
+    after_header = out.split("</header>", 1)[1]
+    # Drop the nav.toc block; what's left before the first <section> must have
+    # no stray block-level body child (the pre-`##` list lives in a <section>).
+    assert "<section>\n<ul>" in out, "pre-section list must be inside a <section>"
+    # The real section still renders with its id.
+    assert 'section id="real"' in after_header
+
+
 def test_cli_smoke(tmp_path: Path):
     """The CLI renders a file to stdout deterministically."""
     src = tmp_path / "DESIGN-x.md"

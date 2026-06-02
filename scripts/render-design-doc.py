@@ -563,6 +563,17 @@ def parse_markdown(md: str) -> tuple[str, str, list[tuple[str, str]], str]:
             out.append("</section>")
             section_open = False
 
+    def ensure_section() -> None:
+        """Open an implicit intro <section> for body content that appears before
+        the first `##` (e.g. a doc opening with a list/table). Without this the
+        block lands as a direct `body >` child, which the grid CSS only assigns
+        to column 2 for header/section/footer — so pre-`##` content would spill
+        into the left TOC column (Codex P2)."""
+        nonlocal section_open
+        if not section_open:
+            out.append("<section>")
+            section_open = True
+
     def uniq_slug(text: str) -> str:
         base = slugify(text)
         if base in seen_slugs:
@@ -584,6 +595,7 @@ def parse_markdown(md: str) -> tuple[str, str, list[tuple[str, str]], str]:
                 i += 1
             i += 1  # consume closing fence
             code = html.escape("\n".join(code_lines))
+            ensure_section()
             out.append(f"<pre><code>{code}</code></pre>")
             continue
 
@@ -621,6 +633,7 @@ def parse_markdown(md: str) -> tuple[str, str, list[tuple[str, str]], str]:
                 continue
             # h3 / h4
             slug = uniq_slug(htext)
+            ensure_section()
             out.append(_heading_html(level, htext, slug))
             i += 1
             continue
@@ -633,6 +646,7 @@ def parse_markdown(md: str) -> tuple[str, str, list[tuple[str, str]], str]:
             while i < n and "|" in lines[i] and lines[i].strip() != "":
                 rows.append(_split_row(lines[i]))
                 i += 1
+            ensure_section()
             out.append(_table_html(header, rows))
             continue
 
@@ -643,16 +657,19 @@ def parse_markdown(md: str) -> tuple[str, str, list[tuple[str, str]], str]:
                 quote_lines.append(re.sub(r"^\s*>\s?", "", lines[i]))
                 i += 1
             inner = render_inline(" ".join(ql.strip() for ql in quote_lines))
+            ensure_section()
             out.append(f"<blockquote><p>{inner}</p></blockquote>")
             continue
 
         # Lists.
         if re.match(r"^\s*([-*])\s+", line):
             items, i = _collect_list(lines, i, ordered=False)
+            ensure_section()
             out.append(_list_html(items, ordered=False))
             continue
         if re.match(r"^\s*\d+\.\s+", line):
             items, i = _collect_list(lines, i, ordered=True)
+            ensure_section()
             out.append(_list_html(items, ordered=True))
             continue
 
@@ -676,6 +693,7 @@ def parse_markdown(md: str) -> tuple[str, str, list[tuple[str, str]], str]:
             # First paragraph before any `##` becomes the page subtitle/meta.
             subtitle = rendered
         else:
+            ensure_section()
             out.append(f"<p>{rendered}</p>")
 
     close_section()
