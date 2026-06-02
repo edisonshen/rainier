@@ -300,6 +300,33 @@ def test_all_or_nothing_on_render_failure(source_docs: Path, target_repo: Path):
     assert (_published(target_repo) / "DESIGN-alpha.html").read_text() == alpha_before
 
 
+def test_path_confinement_rejects_symlinked_destination(
+    source_docs: Path, target_repo: Path, tmp_path: Path
+):
+    """A tracked symlink at public/projdoc/rainier (pointing outside the repo)
+    must be rejected so `cp` can't follow it and write outside the checkout
+    (Codex P2). The target tree must stay pristine and the escape target empty."""
+    escape = tmp_path / "escape-dir"
+    escape.mkdir()
+    projdoc = target_repo / "public" / "projdoc"
+    projdoc.mkdir(parents=True)
+    # public/projdoc/rainier -> /tmp/.../escape-dir (outside the repo). Commit it
+    # so the dirty-tree guard passes and the destination-confinement check is
+    # what fires (codex's exact "tracked symlink" scenario).
+    (projdoc / "rainier").symlink_to(escape, target_is_directory=True)
+    _git("add", "public/projdoc/rainier", cwd=target_repo)
+    _git("commit", "-m", "tracked symlink", cwd=target_repo)
+    _git("push", "origin", "main", cwd=target_repo)
+    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+
+    r = _run(source_docs=source_docs, target_repo=target_repo)
+    assert r.returncode != 0, f"{r.stdout}\n{r.stderr}"
+    assert "symlink" in (r.stdout + r.stderr).lower()
+    # Nothing written through the symlink, nothing committed.
+    assert not any(escape.iterdir()), "must not write through the symlink"
+    assert _git("rev-parse", "HEAD", cwd=target_repo).strip() == head_before
+
+
 def test_path_confinement_rejects_symlink_source(source_docs: Path, target_repo: Path):
     """A symlinked source doc is refused (don't follow it out of docs/)."""
     outside = source_docs.parent / "secret.md"

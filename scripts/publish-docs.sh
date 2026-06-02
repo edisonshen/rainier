@@ -215,9 +215,29 @@ PYEOF
 # All docs rendered. Now (and only now) sync staged HTML into the target tree.
 # Upsert-only: copy our own outputs; NEVER delete pre-existing pages (protects
 # the manually-placed recursive-research-system.html).
+#
+# Destination path-confinement (Codex P2): the earlier per-doc check is purely
+# string-based, so a tracked symlink at public/projdoc or public/projdoc/rainier
+# would let `cp` follow it and write OUTSIDE the repo (git would then see no
+# published change). Reject any symlinked path component, then realpath-verify
+# the created dir still resolves under the resolved target tree before copying.
+for component in "public" "public/projdoc" "public/projdoc/rainier"; do
+    if [ -L "$TARGET_ABS/$component" ]; then
+        log "ERROR refusing symlinked published-tree component: $component"
+        exit 1
+    fi
+done
 mkdir -p "$CONFINE_ABS"
+CONFINE_REAL="$(cd "$CONFINE_ABS" && pwd -P)"
+case "$CONFINE_REAL/" in
+    "$TARGET_ABS"/public/projdoc/rainier/) : ;;
+    *)
+        log "ERROR published dir escapes target tree: $CONFINE_REAL"
+        exit 1
+        ;;
+esac
 for f in "$STAGING"/*.html; do
-    cp "$f" "$CONFINE_ABS/$(basename "$f")"
+    cp "$f" "$CONFINE_REAL/$(basename "$f")"
 done
 
 # Scope the stage to ONLY our published tree.
