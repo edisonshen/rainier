@@ -748,4 +748,33 @@ async def _compute_theses_async(
             except Exception:
                 log.exception("would_be_combined_rank_update_failed symbol=%s", symbol)
 
+    # Paper-tracker (design §5(1)): create a pending paper_trade for each
+    # `setup_long` passing the confidence + session gate. Levels are read from
+    # the persisted screened row inside create_positions_for_theses (D4), so
+    # this runs AFTER update_with_thesis + persist_screened_stocks have landed
+    # the row. Each insert is in its own get_session() scope; failures here are
+    # non-fatal to thesis rendering.
+    try:
+        paper_theses = [
+            {
+                "thesis_id": td["_thesis_id"],
+                "symbol": cand.symbol,
+                "verdict": td.get("verdict"),
+                "llm_confidence": td.get("llm_confidence"),
+                "session_name": session_name,
+            }
+            for cand, td in ranked
+            if td.get("_thesis_id") is not None
+        ]
+        if paper_theses:
+            from rainier.paper.positions import create_positions_for_theses
+
+            create_positions_for_theses(
+                paper_theses,
+                scan_date=scan_date,
+                learned_time_stop_days=thesis_cfg.learned_time_stop_days,
+            )
+    except Exception:
+        log.exception("paper_position_creation_failed scan_date=%s", scan_date)
+
     return out
