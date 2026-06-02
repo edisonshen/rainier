@@ -228,6 +228,28 @@ jobs:
     discord_on_failure: true
     enabled: false
 
+  # Docs publisher — DESIGN-docs-publisher.md §3.3.
+  #
+  # Renders the curated docs/*.md set (DESIGN-/TASK-PLAN-/TEST-SPEC-/SPIKE-/
+  # RESEARCH-/PLAN-/INVESTIGATION-*.md) to hub-styled HTML and syncs them into
+  # the fengshen-site `public/projdoc/rainier/` tree (served at
+  # fengshen.dev/projdoc/rainier/). All-or-nothing: a render failure leaves the
+  # shared checkout pristine + exits non-zero (Discord alert fires).
+  #
+  # Slot 13:10 PT — staggered OFF the dashboard publish slots (12:35-12:50) and
+  # the money-flow backup (15:30) to reduce contention against the SAME
+  # fengshen-site checkout. Correctness still rests on the shared publish lock
+  # (scripts/_publish_lock.py) that all fengshen publishers acquire; the stagger
+  # only minimizes blocking. Daily (not weekday-only) since docs change anytime;
+  # publish is a true no-op when nothing changed, so weekend runs are cheap.
+  - name: docs-publish
+    description: "Render curated docs/*.md → publish to fengshen.dev/projdoc/rainier/"
+    schedule: "10 13 * * *"   # 13:10 PT daily
+    command: "scripts/publish-docs.sh"
+    log: "data/docs-publish.log"
+    discord_on_failure: true
+    enabled: true
+
   # Nightly money_flow_snapshots -> Neon backup (durability).
   # DESIGN-money-flow-neon-backup.md §2.4.
   #

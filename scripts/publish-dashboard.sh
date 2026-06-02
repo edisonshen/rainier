@@ -48,6 +48,26 @@ set -euo pipefail
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '%s [publish-dashboard] %s\n' "$(ts)" "$*"; }
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Shared publish lock: all fengshen-site publishers (dashboards + docs) acquire
+# a single mutual-exclusion lock keyed by the RESOLVED target path so two crons
+# can't both pass the clean-tree check and then race the worktree/index/push
+# (docs/DESIGN-docs-publisher.md §3.2). Re-exec the script under the lock unless
+# we already hold it. This is the ONLY change to the dashboard publisher; the
+# render/copy/push logic below is untouched.
+if [ "${_PUBLISH_DASHBOARD_LOCKED:-0}" != "1" ]; then
+    _LOCK_TARGET_DIR="${DASHBOARD_PUBLISH_TARGET_DIR:-$HOME/projects/fengshen-site}"
+    if [ -d "$_LOCK_TARGET_DIR" ]; then
+        _RESOLVED_TARGET="$(cd "$_LOCK_TARGET_DIR" && pwd -P)"
+        export _PUBLISH_DASHBOARD_LOCKED=1
+        exec "${RAINIER_PYTHON:-python3}" "$SCRIPT_DIR/_publish_lock.py" \
+            "$_RESOLVED_TARGET" -- bash "$0" "$@"
+    fi
+    # Target dir missing → fall through; the existing not-a-git-checkout guard
+    # below produces the canonical error without needing the lock.
+fi
+
 if [ $# -lt 1 ]; then
     echo "usage: $(basename "$0") <name> [--root]" >&2
     exit 2
