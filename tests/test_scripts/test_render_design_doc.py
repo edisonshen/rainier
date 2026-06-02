@@ -148,6 +148,19 @@ def test_uppercase_javascript_scheme_neutralized():
     assert 'href="javascript' not in out
 
 
+def test_embedded_control_char_scheme_neutralized():
+    """`java<TAB>script:` / `java<LF>script:` must be neutralized — browsers
+    strip C0 control chars from a URL before resolving its scheme, so an
+    embedded-control-char href would otherwise execute as javascript:."""
+    for ctrl in ("\t", "\n", "\x00"):
+        href, safe = rd._rewrite_href(f"java{ctrl}script:alert(1)")
+        assert safe is False, f"embedded {ctrl!r} bypass must be caught"
+    # End-to-end through the renderer (TAB form; LF can't survive md line join).
+    md = "# T\n\n[x](java\tscript:alert(1)) link.\n"
+    out = rd.render_doc(md)
+    assert "<a href=" not in out, "control-char javascript: must not become an <a>"
+
+
 def test_cli_smoke(tmp_path: Path):
     """The CLI renders a file to stdout deterministically."""
     src = tmp_path / "DESIGN-x.md"

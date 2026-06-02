@@ -404,10 +404,21 @@ TEMPLATE_STYLE = """\
 """
 
 # Unsafe URL schemes — links using these are rendered as plain text, never an
-# <a href> (Codex P2). Matched after stripping leading whitespace + control
-# chars and lowercasing, so `JavaScript:` / ` javascript:` / `java\tscript:`
-# can't sneak through.
-_UNSAFE_SCHEME_RE = re.compile(r"^[\x00-\x20]*(javascript|data|vbscript)\s*:", re.I)
+# <a href> (Codex P2). Browsers strip ALL control chars (incl. embedded TAB/LF)
+# from a URL before resolving its scheme, so `java\tscript:` / `java\nscript:`
+# execute as `javascript:`. We mirror that: strip every C0 control char from the
+# scheme prefix before matching (see _strip_url_ctrl), so leading- AND embedded-
+# control-char bypasses (`JavaScript:` / ` javascript:` / `java\tscript:`) are
+# all caught.
+_UNSAFE_SCHEME_RE = re.compile(r"^(javascript|data|vbscript)\s*:", re.I)
+# C0 controls + space — what browsers drop from a URL before scheme resolution.
+_URL_CTRL_RE = re.compile(r"[\x00-\x20]")
+
+
+def _strip_url_ctrl(href: str) -> str:
+    """Remove C0 control chars + spaces, mirroring browser URL normalization.
+    Used only for the unsafe-scheme check so `java\\tscript:` can't slip past."""
+    return _URL_CTRL_RE.sub("", href)
 
 
 def slugify(text: str) -> str:
@@ -426,7 +437,7 @@ def _rewrite_href(href: str) -> tuple[str, bool]:
     - Intra-doc `*.md[#frag]` -> rewritten `*.html[#frag]`.
     - Everything else -> unchanged.
     """
-    if _UNSAFE_SCHEME_RE.match(href):
+    if _UNSAFE_SCHEME_RE.match(_strip_url_ctrl(href)):
         return href, False
 
     # Only rewrite relative .md links (not external URLs, not absolute paths
