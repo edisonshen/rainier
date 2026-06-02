@@ -99,6 +99,19 @@ def test_blockquote_and_lists():
     assert "<ul>" in out and "<li>bullet one</li>" in out
 
 
+def test_ordered_list_renders():
+    """An ordered (`1.`) list must render to <ol> without crashing — regression
+    for the IndexError that read group(2) of a single-group ordered regex,
+    which would crash the whole publish run (all-or-nothing) on any numbered
+    list (e.g. the allowlisted INVESTIGATION doc's 'Open questions')."""
+    md = "# T\n\n## S\n\n1. first item\n2. second item\n3. third item\n"
+    out = rd.render_doc(md)
+    assert "<ol>" in out and "</ol>" in out
+    assert "<li>first item</li>" in out
+    assert "<li>second item</li>" in out
+    assert "<li>third item</li>" in out
+
+
 def test_md_fragment_link_rewritten():
     """`*.md#frag` -> `*.html#frag` preserving the fragment."""
     out = rd.render_doc(SAMPLE)

@@ -713,13 +713,16 @@ def _collect_list(
     lines: list[str], i: int, *, ordered: bool
 ) -> tuple[list[str], int]:
     items: list[str] = []
-    pat = r"^\s*\d+\.\s+(.*)$" if ordered else r"^\s*([-*])\s+(.*)$"
+    # Both patterns capture the item TEXT in group 1 so the same access works.
+    # (The ordered pattern previously had only one group but read group(2),
+    # raising IndexError on every `1.` list — see test_ordered_list_renders.)
+    pat = r"^\s*\d+\.\s+(.*)$" if ordered else r"^\s*[-*]\s+(.*)$"
     n = len(lines)
     while i < n:
         m = re.match(pat, lines[i])
         if not m:
             break
-        items.append(m.group(2) if ordered else m.group(2))
+        items.append(m.group(1))
         i += 1
     return items, i
 

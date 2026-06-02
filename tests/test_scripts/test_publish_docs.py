@@ -89,7 +89,12 @@ def source_docs(tmp_path: Path) -> Path:
     """Fixture docs/ dir with two allowlisted + one non-allowlisted .md."""
     d = tmp_path / "docs"
     d.mkdir()
-    (d / "DESIGN-alpha.md").write_text("# Alpha\n\nIntro.\n\n## Section\n\nBody.\n")
+    # Alpha includes an ordered list so the end-to-end publish path exercises
+    # ordered-list rendering (regression: a numbered list used to crash the
+    # renderer, failing the whole all-or-nothing run).
+    (d / "DESIGN-alpha.md").write_text(
+        "# Alpha\n\nIntro.\n\n## Section\n\nBody.\n\n1. step one\n2. step two\n"
+    )
     (d / "TASK-PLAN-beta.md").write_text("# Beta\n\nIntro.\n\n## Plan\n\nSteps.\n")
     # Not allowlisted — must be ignored.
     (d / "notes.md").write_text("# Notes\n\nScratch.\n")
