@@ -134,8 +134,25 @@ BEGIN
 END
 $$;
 
--- 5c. Drop the symbol index.
-DROP INDEX IF EXISTS ix_stock_prices_symbol;
+-- 5c. Drop the symbol index. Qualify to the resolved `stock_prices` schema so an
+--     idempotent re-run (after the target index is gone) cannot resolve the
+--     unqualified name through the search_path and drop a same-named index in a
+--     later-path schema (e.g. public). Mirror of the up migration's 6c.
+DO $$
+DECLARE
+    target_schema text;
+BEGIN
+    SELECT n.nspname INTO target_schema
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.oid = to_regclass('stock_prices');
+    IF target_schema IS NOT NULL THEN
+        EXECUTE format(
+            'DROP INDEX IF EXISTS %I.ix_stock_prices_symbol', target_schema
+        );
+    END IF;
+END
+$$;
 
 -- 6a. Add stock_id FK -> stocks(id) (discover by referenced column so a
 --     pre-existing equivalent FK is treated as present).

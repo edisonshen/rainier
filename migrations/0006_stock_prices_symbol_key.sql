@@ -184,7 +184,25 @@ END
 $$;
 
 -- 6c. Drop the standalone stock_id index (auto-name ix_stock_prices_stock_id).
-DROP INDEX IF EXISTS ix_stock_prices_stock_id;
+--     Qualify to the resolved `stock_prices` schema: an unqualified DROP INDEX
+--     resolves through the search_path, so on a re-run (after the target index
+--     is gone) it could otherwise drop a same-named index in a later-path schema
+--     (e.g. public). DROP the one in the SAME schema as our target table only.
+DO $$
+DECLARE
+    target_schema text;
+BEGIN
+    SELECT n.nspname INTO target_schema
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.oid = to_regclass('stock_prices');
+    IF target_schema IS NOT NULL THEN
+        EXECUTE format(
+            'DROP INDEX IF EXISTS %I.ix_stock_prices_stock_id', target_schema
+        );
+    END IF;
+END
+$$;
 
 -- 6d. Drop the stock_id column (CASCADE on the column itself is unnecessary —
 --     its FK/unique/index are already gone above; any leftover dependent object
