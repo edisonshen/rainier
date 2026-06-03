@@ -9,7 +9,7 @@ Rainier — trading analysis platform combining futures price action (Xiaojiang 
 ```
 src/rainier/
 ├── core/           types.py (shared dataclasses), protocols.py (boundary contracts),
-│                   config.py (unified Pydantic), models.py (10 ORM tables), database.py (singleton + TimescaleDB)
+│                   config.py (unified Pydantic), models.py (19 ORM tables), database.py (singleton + TimescaleDB)
 ├── data/           provider.py (protocol), csv_provider.py, yfinance_provider.py
 ├── analysis/       analyzer.py (orchestrator), pivots.py, pinbar.py, sr_horizontal.py, sr_diagonal.py, bias.py, inside_bar.py
 ├── features/       extractor.py (AnalysisResult→ML features), labels.py (TradeRecord→training labels)
@@ -24,7 +24,7 @@ src/rainier/
 ├── scheduler/      jobs.py (cron.yaml → system crontab), service.py (APScheduler for scraping)
 ├── pipeline/       post_scrape.py (shared screen→persist→LLM thesis→Discord, used by cron CLI + scheduler)
 ├── trader/         (Phase 3 placeholder — IB TWS execution)
-└── dashboard/      (placeholder — Streamlit)
+└── dashboard/      app.py, render_etf.py, render_combined.py, data.py, actions.py (ETF + combined dashboards)
 ```
 
 ## Commands
