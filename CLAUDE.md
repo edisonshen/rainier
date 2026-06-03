@@ -147,6 +147,11 @@ LIVE TRADING (future, Phase 3):
 - Tests use synthetic fixtures from `tests/conftest.py`
 - Python 3.12+, ruff for linting, line length 100
 
+### Regenerable caches & log size (disk hygiene)
+
+- `data/cache/tqqq_sma/` — TQQQ/SQQQ SMA sweep cache (prices + `results.parquet`, ~570 MB at Phase 2). **Regenerable**, not source-of-truth: the next `rainier sma-sweep` re-derives it from yfinance. Clear it with `rainier cache clean`, or pass `--no-results-cache` to `sma-sweep` to drop `results.parquet` automatically once the report is rendered from it.
+- Cron job logs (`data/fetch.log`, `data/qu-scrape.log`) are size-capped by `scripts/cron-wrapper.sh` to the trailing 10 MiB (override with `CRON_LOG_MAX_BYTES`). Content is unchanged; only the oldest bytes past the cap are dropped.
+
 ## Design Decisions (from eng review 2026-03-22)
 
 - Pipeline-first: build full pipeline with book strategy scorer, then swap in ML models

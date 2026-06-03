@@ -36,6 +36,14 @@ charts/
 reports/qu100_verification_*
 reports/tqqq_*
 
+# Regenerable rendered reports — slim audit R1/R2 (HTML/XLSX are large + reproducible
+# from the generating scripts). Source-of-truth docs (e.g. docs/time_series_momentum.pdf,
+# pf_btest_*.md) are NOT ignored. Rendered backtest/demo HTML + XLSX are.
+docs/*-backtest-*.html
+docs/tqqq_*.html
+reports/*.html
+reports/*.xlsx
+
 # Demo HTML at project root (use reports/ instead)
 /index.html
 

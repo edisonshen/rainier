@@ -22,11 +22,13 @@ from rainier.backtest.tqqq_sma_sweep import (
     LONG_TQQQ,
     SHORT_SQQQ,
     SweepInputMismatchError,
+    clean_cache,
     compute_strategy_id,
     dedup_by_strategy_id,
     iter_phase1_combos,
     iter_phase2_combos,
     precompute_sma_signals,
+    results_cache_companions,
     run_backtest,
     run_sweep,
     walk_forward_top_n,
@@ -1155,3 +1157,83 @@ def test_sweep_phase2_extends_phase1_parquet(tmp_path: Path):
     # No duplicate combo keys
     keys = phase2[["buy_T", "sell_T", "buy_S", "sell_S"]]
     assert not keys.duplicated().any()
+
+
+# ---------------------------------------------------------------------------
+# Cache hygiene — clean_cache + results_cache_companions (slim audit R3)
+# ---------------------------------------------------------------------------
+
+
+def test_results_cache_companions_lists_existing_parquet_and_fingerprint(tmp_path: Path):
+    """A completed sweep leaves results.parquet + a .fingerprint.txt; the
+    companion helper must return exactly those two (and nothing absent)."""
+    n = 60
+    qqq = 100.0 + np.linspace(0, 50, n)
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    run_sweep(
+        df, results_path=results_path, max_window=3, n_workers=1,
+        slippage_bp=5.0, flush_every=10,
+    )
+
+    companions = results_cache_companions(results_path)
+    names = {p.name for p in companions}
+    assert names == {"results.parquet", "results.fingerprint.txt"}
+    for p in companions:
+        assert p.exists()
+
+
+def test_results_cache_companions_omits_missing(tmp_path: Path):
+    """When neither file exists the helper returns an empty list (no crash)."""
+    assert results_cache_companions(tmp_path / "nope.parquet") == []
+
+
+def test_clean_cache_removes_directory_and_is_idempotent(tmp_path: Path):
+    """clean_cache deletes the whole cache dir, returns the removed entries,
+    and is a no-op (empty list) when the dir is already gone."""
+    cache_dir = tmp_path / "tqqq_sma"
+    cache_dir.mkdir()
+    # Populate with a realistic-looking set of cached artifacts
+    (cache_dir / "results.parquet").write_bytes(b"x" * 1024)
+    (cache_dir / "results.fingerprint.txt").write_text("deadbeef")
+    (cache_dir / "prices.parquet").write_bytes(b"y" * 512)
+
+    removed = clean_cache(cache_dir)
+    assert {p.name for p in removed} == {
+        "results.parquet", "results.fingerprint.txt", "prices.parquet",
+    }
+    assert not cache_dir.exists()
+
+    # Idempotent: second call on the now-absent dir is a clean no-op
+    assert clean_cache(cache_dir) == []
+
+
+def test_no_results_cache_flow_drops_parquet_but_keeps_walkforward(tmp_path: Path):
+    """Simulate the --no-results-cache path: after the walk-forward parquet is
+    derived, deleting the results companions must leave the walk-forward output
+    intact (the run's deliverable) while reclaiming the giant cache."""
+    n = 80
+    qqq = 100.0 + 10.0 * np.sin(np.linspace(0, 6.28, n))
+    df = _frame_with_qqq(qqq)
+    results_path = tmp_path / "results.parquet"
+    run_sweep(
+        df, results_path=results_path, max_window=4, n_workers=1,
+        slippage_bp=5.0, flush_every=64,
+    )
+    # Derive the walk-forward set the way the CLI does, to a sibling parquet
+    top_wf = walk_forward_top_n(
+        df, results_path=results_path, top_n=5, slippage_bp=5.0, max_window=4,
+    )
+    wf_path = results_path.parent / "top_walkforward.parquet"
+    top_wf.to_parquet(wf_path, index=False)
+
+    # --no-results-cache: drop results.parquet + fingerprint
+    for path in results_cache_companions(results_path):
+        path.unlink()
+
+    assert not results_path.exists()
+    assert not results_path.with_suffix(".fingerprint.txt").exists()
+    # The walk-forward deliverable survives and is still readable
+    assert wf_path.exists()
+    reloaded = pd.read_parquet(wf_path)
+    assert len(reloaded) == 5

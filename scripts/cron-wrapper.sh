@@ -17,6 +17,27 @@ WEBHOOK="$1"; shift
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
+# Bound the log file size before appending. fetch-mes runs every 5 min, so its
+# log grows without limit (52 MB observed). Keep the most recent MAX_LOG_BYTES
+# of content (default 10 MiB) by truncating to the tail — log CONTENT is
+# unchanged, only the oldest bytes past the cap are dropped. Override the cap
+# with CRON_LOG_MAX_BYTES.
+MAX_LOG_BYTES="${CRON_LOG_MAX_BYTES:-10485760}"  # 10 MiB
+if [ -f "$LOG_FILE" ]; then
+    LOG_BYTES=$(wc -c < "$LOG_FILE" 2>/dev/null | tr -d ' ')
+    if [ -n "$LOG_BYTES" ] && [ "$LOG_BYTES" -gt "$MAX_LOG_BYTES" ]; then
+        # Keep the trailing MAX_LOG_BYTES bytes; tail -c is byte-accurate and
+        # avoids loading the whole file. Write to a temp sibling then rename so
+        # a crash mid-truncate can't leave a half-written log.
+        TAIL_TMP="${LOG_FILE}.trunc.$$"
+        if tail -c "$MAX_LOG_BYTES" "$LOG_FILE" > "$TAIL_TMP" 2>/dev/null; then
+            mv "$TAIL_TMP" "$LOG_FILE"
+        else
+            rm -f "$TAIL_TMP"
+        fi
+    fi
+fi
+
 echo "$(ts) [START] $JOB_NAME" >> "$LOG_FILE"
 
 # Always cd to project dir first — cron starts in / and `uv run` needs pyproject.toml
