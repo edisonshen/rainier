@@ -124,7 +124,8 @@ def test_paper_trade_not_a_hypertable_marker():
 @pytest.mark.requires_postgres
 def test_a1_paper_trade_pg_shape(pg_legacy_engine):
     insp = inspect(pg_legacy_engine)
-    cols = {c["name"] for c in insp.get_columns("paper_trade")}
+    schema = pg_legacy_engine.rainier_schema
+    cols = {c["name"] for c in insp.get_columns("paper_trade", schema=schema)}
     assert {"price_basis", "time_stop_days", "planned_entry_price"} <= cols
     # NOT a hypertable — the timescaledb catalog has no entry (or the ext is
     # absent, which also proves not-a-hypertable).
@@ -148,10 +149,13 @@ def test_a1_paper_trade_pg_shape(pg_legacy_engine):
 @pytest.mark.requires_postgres
 def test_a3_a4_pg_objects_exist(pg_legacy_engine):
     insp = inspect(pg_legacy_engine)
-    tables = set(insp.get_table_names())
+    schema = pg_legacy_engine.rainier_schema
+    tables = set(insp.get_table_names(schema=schema))
     assert {"paper_trade", "paper_skip", "paper_report_snapshot"} <= tables
     payload_col = next(
-        c for c in insp.get_columns("paper_report_snapshot") if c["name"] == "payload"
+        c
+        for c in insp.get_columns("paper_report_snapshot", schema=schema)
+        if c["name"] == "payload"
     )
     assert "JSON" in str(payload_col["type"]).upper()
 
@@ -221,13 +225,14 @@ def test_a5_downgrade_reverses(pg_legacy_engine):
         conn.execute(text(down.read_text()))
 
     insp = inspect(pg_legacy_engine)
-    tables = set(insp.get_table_names())
+    schema = pg_legacy_engine.rainier_schema
+    tables = set(insp.get_table_names(schema=schema))
     assert "paper_trade" not in tables
     assert "paper_skip" not in tables
     assert "paper_report_snapshot" not in tables
     # FK targets survive.
     assert {"analysis_results", "screened_stocks"} <= tables
     # The four additive columns are gone; pattern_type survives.
-    scr_cols = {c["name"] for c in insp.get_columns("screened_stocks")}
+    scr_cols = {c["name"] for c in insp.get_columns("screened_stocks", schema=schema)}
     assert not ({"entry_price", "stop_loss", "target_price", "rr_ratio"} & scr_cols)
     assert "pattern_type" in scr_cols

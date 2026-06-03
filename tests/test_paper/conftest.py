@@ -146,16 +146,43 @@ def _apply_sql(engine, path: Path) -> None:
         conn.execute(text(sql))
 
 
+# Disposable schema for the paper-tracker (0005) fixtures. Building the prereq
+# tables + 0005 migration inside a throwaway schema (instead of shared `public`)
+# gives each run a guaranteed-clean namespace (no residue collisions across tests
+# on a reused `RAINIER_TEST_DATABASE_URL`) AND lets teardown drop ONLY this schema
+# — never the real `public.*` ORM tables a reused DB may hold. `public` stays on
+# the search_path as a fallback so the timescaledb extension functions (installed
+# in `public`) stay resolvable. Mirrors the 0006 fixtures. The fixture exposes
+# `engine.rainier_schema` so schema-scoped inspector calls in the 0005 tests can
+# target the right namespace.
+_PAPER_SCHEMA = "rainier_paper_test"
+
+
 @pytest.fixture
 def pg_legacy_engine(request):
     """Ephemeral Postgres with prereq tables + the 0005 migration applied.
 
-    Also binds the legacy `core.database` singleton to it so production code
-    under test (ingest / fill / positions) hits this DB. Resets the singleton
-    before and after (PR #115 discipline).
+    Builds everything in a disposable schema (`_PAPER_SCHEMA`) so teardown drops
+    only that schema (never shared `public`) and each run starts clean. Also
+    binds the legacy `core.database` singleton to it so production code under
+    test (ingest / fill / positions) hits this DB. Resets the singleton before
+    and after (PR #115 discipline).
     """
     url = _resolve_pg_url(request)
-    engine = create_engine(url, future=True)
+    # search_path-free admin connection so DROP/CREATE SCHEMA targets the right
+    # namespace regardless of any pinned path.
+    admin = create_engine(url, future=True)
+    with admin.begin() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {_PAPER_SCHEMA} CASCADE"))
+        conn.execute(text(f"CREATE SCHEMA {_PAPER_SCHEMA}"))
+    admin.dispose()
+
+    engine = create_engine(
+        url,
+        future=True,
+        connect_args={"options": f"-csearch_path={_PAPER_SCHEMA},public"},
+    )
+    engine.rainier_schema = _PAPER_SCHEMA  # type: ignore[attr-defined]
     with engine.begin() as conn:
         conn.execute(text(_PREREQ_DDL))
     _apply_sql(engine, MIGRATION_UP)
@@ -172,6 +199,12 @@ def pg_legacy_engine(request):
         database._session_factory = None
         config._settings = None
         engine.dispose()
+        # Drop ONLY the throwaway schema — never shared `public`. A reused
+        # `RAINIER_TEST_DATABASE_URL` keeps its real ORM tables intact.
+        admin = create_engine(url, future=True)
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {_PAPER_SCHEMA} CASCADE"))
+        admin.dispose()
 
 
 @pytest.fixture
@@ -183,3 +216,169 @@ def pg_legacy_session(pg_legacy_engine):
     finally:
         sess.rollback()
         sess.close()
+
+
+# --------------------------------------------------------------------------
+# Migration 0006 (stock_prices stock_id -> symbol realign) fixtures.
+# --------------------------------------------------------------------------
+
+MIGRATION_0006_UP = REPO_ROOT / "migrations" / "0006_stock_prices_symbol_key.sql"
+MIGRATION_0006_DOWN = REPO_ROOT / "migrations" / "0006_stock_prices_symbol_key_downgrade.sql"
+
+# The OLD, stock_id-keyed `stock_prices` shape that migration 0006 realigns. The
+# baseline `_PREREQ_DDL` above already builds the NEW (symbol-keyed) shape, so the
+# 0006 migration tests need to start from the pre-migration drift instead.
+_OLD_STOCK_PRICES_DDL = """
+CREATE TABLE IF NOT EXISTS stock_prices (
+    id        BIGSERIAL,
+    stock_id  INTEGER NOT NULL REFERENCES stocks (id),
+    date      TIMESTAMP WITH TIME ZONE NOT NULL,
+    open      DOUBLE PRECISION,
+    high      DOUBLE PRECISION,
+    low       DOUBLE PRECISION,
+    close     DOUBLE PRECISION,
+    volume    BIGINT,
+    PRIMARY KEY (id, date),
+    CONSTRAINT uq_stock_price_date UNIQUE (stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS ix_stock_prices_stock_id ON stock_prices (stock_id);
+"""
+
+# Only the FK-target `stocks` is needed for the 0006 tests (not the whole paper
+# prereq set / 0005 migration).
+_STOCKS_ONLY_DDL = """
+CREATE TABLE IF NOT EXISTS stocks (
+    id          SERIAL PRIMARY KEY,
+    symbol      VARCHAR(10) NOT NULL UNIQUE,
+    name        VARCHAR(255),
+    sector      VARCHAR(100),
+    industry    VARCHAR(200),
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+"""
+
+
+# Dedicated, disposable schema for the 0006 migration fixtures. Isolating these
+# fixtures in their own schema means the `DROP SCHEMA ... CASCADE` setup/teardown
+# can NEVER reach the shared `public` ORM tables — so pointing
+# `RAINIER_TEST_DATABASE_URL` at a reusable Postgres with the full schema is safe
+# (a CASCADE drop of `public.stocks` would otherwise strip FK constraints from
+# every sibling table that references it). Codex review P2.
+_MIG0006_SCHEMA = "rainier_mig0006_test"
+
+
+def _isolated_engine(url: str):
+    """Engine whose connections resolve names in the disposable 0006 test schema.
+
+    `search_path` puts `_MIG0006_SCHEMA` FIRST, so `create_all` / `init_db()` /
+    the migration's unqualified `stock_prices`/`stocks` all create and resolve
+    there (shadowing any `public` namesakes in a reused DB). `public` stays on
+    the path only as a fallback so the timescaledb extension functions
+    (`create_hypertable`, installed in `public`) remain resolvable. The schema is
+    (re)created fresh and dropped CASCADE around the fixture body — CASCADE is
+    scoped to throwaway objects only, never the shared `public` ORM tables.
+    """
+    engine = create_engine(
+        url,
+        future=True,
+        connect_args={"options": f"-csearch_path={_MIG0006_SCHEMA},public"},
+    )
+    # Recreate the schema fresh using a search_path-free connection so the DROP
+    # CASCADE targets the right schema regardless of the pinned path.
+    admin = create_engine(url, future=True)
+    with admin.begin() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {_MIG0006_SCHEMA} CASCADE"))
+        conn.execute(text(f"CREATE SCHEMA {_MIG0006_SCHEMA}"))
+    admin.dispose()
+    return engine
+
+
+def _drop_isolated_schema(url: str) -> None:
+    admin = create_engine(url, future=True)
+    with admin.begin() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {_MIG0006_SCHEMA} CASCADE"))
+    admin.dispose()
+
+
+def _has_timescaledb(engine) -> bool:
+    """True if the connected Postgres has the timescaledb extension installed."""
+    with engine.connect() as conn:
+        return bool(
+            conn.execute(
+                text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
+            ).scalar()
+        )
+
+
+def _try_create_extension(engine) -> bool:
+    """Best-effort `CREATE EXTENSION timescaledb`; returns whether it's present."""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE"))
+    except Exception:
+        pass
+    return _has_timescaledb(engine)
+
+
+@pytest.fixture
+def pg_oldshape_engine(request):
+    """Ephemeral Postgres seeded with the OLD stock_id-keyed `stock_prices`.
+
+    Makes `stock_prices` a hypertable when the timescaledb extension is
+    available (so the in-place ALTER is exercised against a real hypertable);
+    falls back to a plain table otherwise (schema/idempotency/backfill checks
+    still run; the hypertable-catalog asserts are `requires_timescaledb`-gated).
+
+    Exposes `engine.rainier_has_timescaledb` (bool) for tests to gate on.
+    """
+    url = _resolve_pg_url(request)
+    # Isolated schema: setup/teardown CASCADE can't touch shared `public` tables.
+    engine = _isolated_engine(url)
+    has_ts = _try_create_extension(engine)
+    with engine.begin() as conn:
+        conn.execute(text(_STOCKS_ONLY_DDL))
+        conn.execute(text(_OLD_STOCK_PRICES_DDL))
+    if has_ts:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "SELECT create_hypertable('stock_prices', 'date', "
+                    "migrate_data => true, if_not_exists => true)"
+                )
+            )
+    engine.rainier_has_timescaledb = has_ts  # type: ignore[attr-defined]
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        _drop_isolated_schema(url)
+
+
+@pytest.fixture
+def pg_empty_engine(request):
+    """Ephemeral Postgres with NOTHING created — for the fresh `init_db()` path.
+
+    Binds the legacy `core.database` singleton so `init_db()` targets this DB,
+    and resets it before/after (PR #115 discipline).
+    """
+    url = _resolve_pg_url(request)
+    # Isolated, freshly-(re)created empty schema so init_db() exercises the create
+    # path; teardown CASCADE is scoped to this schema, never shared `public`.
+    engine = _isolated_engine(url)
+    engine.rainier_has_timescaledb = _try_create_extension(engine)  # type: ignore[attr-defined]
+
+    from rainier.core import config, database
+
+    config._settings = None
+    database._engine = engine
+    database._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        yield engine
+    finally:
+        database._engine = None
+        database._session_factory = None
+        config._settings = None
+        engine.dispose()
+        _drop_isolated_schema(url)
