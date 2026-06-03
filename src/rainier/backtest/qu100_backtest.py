@@ -906,24 +906,6 @@ def run_qu100_backtest_with_momentum(
     )
 
 
-def run_qu100_backtest_skip_entry(
-    top_n: int = 20,
-    holding_days: int = 5,
-    min_rank: int = 1,
-    max_rank: int = 50,
-    skip_days: int = 1,
-) -> QU100BacktestResult:
-    """Delayed entry: wait N extra days before buying (avoid mean-reversion)."""
-    return run_qu100_backtest(
-        top_n=top_n,
-        holding_days=holding_days,
-        long_only=True,
-        min_rank=min_rank,
-        max_rank=max_rank,
-        entry_delay=skip_days,
-    )
-
-
 def run_qu100_backtest_short(
     top_n: int = 20,
     holding_days: int = 5,
