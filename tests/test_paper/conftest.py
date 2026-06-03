@@ -146,16 +146,43 @@ def _apply_sql(engine, path: Path) -> None:
         conn.execute(text(sql))
 
 
+# Disposable schema for the paper-tracker (0005) fixtures. Building the prereq
+# tables + 0005 migration inside a throwaway schema (instead of shared `public`)
+# gives each run a guaranteed-clean namespace (no residue collisions across tests
+# on a reused `RAINIER_TEST_DATABASE_URL`) AND lets teardown drop ONLY this schema
+# — never the real `public.*` ORM tables a reused DB may hold. `public` stays on
+# the search_path as a fallback so the timescaledb extension functions (installed
+# in `public`) stay resolvable. Mirrors the 0006 fixtures. The fixture exposes
+# `engine.rainier_schema` so schema-scoped inspector calls in the 0005 tests can
+# target the right namespace.
+_PAPER_SCHEMA = "rainier_paper_test"
+
+
 @pytest.fixture
 def pg_legacy_engine(request):
     """Ephemeral Postgres with prereq tables + the 0005 migration applied.
 
-    Also binds the legacy `core.database` singleton to it so production code
-    under test (ingest / fill / positions) hits this DB. Resets the singleton
-    before and after (PR #115 discipline).
+    Builds everything in a disposable schema (`_PAPER_SCHEMA`) so teardown drops
+    only that schema (never shared `public`) and each run starts clean. Also
+    binds the legacy `core.database` singleton to it so production code under
+    test (ingest / fill / positions) hits this DB. Resets the singleton before
+    and after (PR #115 discipline).
     """
     url = _resolve_pg_url(request)
-    engine = create_engine(url, future=True)
+    # search_path-free admin connection so DROP/CREATE SCHEMA targets the right
+    # namespace regardless of any pinned path.
+    admin = create_engine(url, future=True)
+    with admin.begin() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {_PAPER_SCHEMA} CASCADE"))
+        conn.execute(text(f"CREATE SCHEMA {_PAPER_SCHEMA}"))
+    admin.dispose()
+
+    engine = create_engine(
+        url,
+        future=True,
+        connect_args={"options": f"-csearch_path={_PAPER_SCHEMA},public"},
+    )
+    engine.rainier_schema = _PAPER_SCHEMA  # type: ignore[attr-defined]
     with engine.begin() as conn:
         conn.execute(text(_PREREQ_DDL))
     _apply_sql(engine, MIGRATION_UP)
@@ -171,21 +198,13 @@ def pg_legacy_engine(request):
         database._engine = None
         database._session_factory = None
         config._settings = None
-        # Drop the tables this fixture created so a reused
-        # `RAINIER_TEST_DATABASE_URL` leaves no `public.stock_prices`/`stocks`
-        # residue. Without this, the schema-isolated 0006 fixtures (which keep
-        # `public` on their search_path for the timescaledb extension) would see
-        # a second `public.stock_prices` and the migration's unscoped catalog
-        # DO-blocks could match both. No-op on a fresh ephemeral PG.
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS stock_prices CASCADE"))
-            conn.execute(text("DROP TABLE IF EXISTS paper_report_snapshot CASCADE"))
-            conn.execute(text("DROP TABLE IF EXISTS paper_skip CASCADE"))
-            conn.execute(text("DROP TABLE IF EXISTS paper_trade CASCADE"))
-            conn.execute(text("DROP TABLE IF EXISTS screened_stocks CASCADE"))
-            conn.execute(text("DROP TABLE IF EXISTS analysis_results CASCADE"))
-            conn.execute(text("DROP TABLE IF EXISTS stocks CASCADE"))
         engine.dispose()
+        # Drop ONLY the throwaway schema — never shared `public`. A reused
+        # `RAINIER_TEST_DATABASE_URL` keeps its real ORM tables intact.
+        admin = create_engine(url, future=True)
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {_PAPER_SCHEMA} CASCADE"))
+        admin.dispose()
 
 
 @pytest.fixture

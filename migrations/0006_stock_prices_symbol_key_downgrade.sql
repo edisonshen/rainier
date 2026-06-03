@@ -91,7 +91,9 @@ BEGIN
             SELECT con.conname
               FROM pg_constraint con
               JOIN pg_class rel ON rel.oid = con.conrelid
+              JOIN pg_namespace ns ON ns.oid = rel.relnamespace
              WHERE rel.relname = 'stock_prices'
+               AND ns.nspname = current_schema()
                AND con.contype = 'f'
                AND con.conkey = (
                    SELECT array_agg(attnum)
@@ -112,7 +114,9 @@ BEGIN
         SELECT 1
           FROM pg_constraint con
           JOIN pg_class rel ON rel.oid = con.conrelid
+          JOIN pg_namespace ns ON ns.oid = rel.relnamespace
          WHERE rel.relname = 'stock_prices'
+           AND ns.nspname = current_schema()
            AND con.conname = 'uq_stock_price_symbol_date'
     ) THEN
         ALTER TABLE stock_prices DROP CONSTRAINT uq_stock_price_symbol_date;
@@ -131,7 +135,9 @@ BEGIN
         SELECT 1
           FROM pg_constraint con
           JOIN pg_class rel ON rel.oid = con.conrelid
+          JOIN pg_namespace ns ON ns.oid = rel.relnamespace
          WHERE rel.relname = 'stock_prices'
+           AND ns.nspname = current_schema()
            AND con.contype = 'f'
            AND con.conkey = (
                SELECT array_agg(attnum)
@@ -153,7 +159,9 @@ BEGIN
         SELECT 1
           FROM pg_constraint con
           JOIN pg_class rel ON rel.oid = con.conrelid
+          JOIN pg_namespace ns ON ns.oid = rel.relnamespace
          WHERE rel.relname = 'stock_prices'
+           AND ns.nspname = current_schema()
            AND con.conname = 'uq_stock_price_date'
     ) THEN
         ALTER TABLE stock_prices

@@ -102,6 +102,28 @@ def _pk_columns(engine) -> list[str]:
     ]
 
 
+def _public_stock_prices_exists(engine) -> bool:
+    """True if a `public.stock_prices` table exists.
+
+    The `pg_empty_engine` fixture runs `init_db()` inside a throwaway schema, but
+    `Base.metadata.create_all(checkfirst=True)` resolves table existence through
+    the connection search_path (`<schema>,public`). If a reused
+    `RAINIER_TEST_DATABASE_URL` already has the real `public.stock_prices`,
+    checkfirst sees it and SKIPS creating the isolated-schema copy — so the T5
+    fresh-init asserts cannot be exercised against that DB. Detect and skip
+    deterministically (CI runs against a clean Postgres where this is absent).
+    """
+    with engine.connect() as conn:
+        return bool(
+            conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'stock_prices'"
+                )
+            ).scalar()
+        )
+
+
 def _is_hypertable(engine) -> bool:
     with engine.connect() as conn:
         schema = conn.execute(text("SELECT current_schema()")).scalar()
@@ -312,6 +334,17 @@ def test_t4_downgrade_preserves_hypertable(pg_oldshape_engine):
 
 @pytest.mark.requires_postgres
 def test_t5_fresh_db_init_symbol_keyed(pg_empty_engine):
+    # `init_db()` -> `_create_hypertables()` runs an unconditional
+    # `CREATE EXTENSION IF NOT EXISTS timescaledb`, which RAISES (not skips) on a
+    # plain-PG install where the extension isn't available. The plain-Postgres
+    # lane therefore can't exercise `init_db()`; gate on the extension being
+    # present, same as the hypertable asserts. The schema-only shape is still
+    # covered by T3's `test_t3_noop_on_fresh_symbol_keyed` on plain PG.
+    if not getattr(pg_empty_engine, "rainier_has_timescaledb", False):
+        pytest.skip("init_db() requires the timescaledb extension")
+    if _public_stock_prices_exists(pg_empty_engine):
+        pytest.skip("public.stock_prices shadows create_all checkfirst (reused DB)")
+
     from rainier.core.database import init_db
 
     init_db()
@@ -329,6 +362,8 @@ def test_t5_fresh_db_init_symbol_keyed(pg_empty_engine):
 def test_t5_fresh_db_init_hypertable(pg_empty_engine):
     if not getattr(pg_empty_engine, "rainier_has_timescaledb", False):
         pytest.skip("no timescaledb extension")
+    if _public_stock_prices_exists(pg_empty_engine):
+        pytest.skip("public.stock_prices shadows create_all checkfirst (reused DB)")
     from rainier.core.database import init_db
 
     init_db()
