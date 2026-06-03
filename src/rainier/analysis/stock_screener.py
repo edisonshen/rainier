@@ -410,15 +410,6 @@ def _fetch_stock_data(
     return result
 
 
-def _best_pattern(
-    patterns: list[PatternSignal],
-) -> PatternSignal | None:
-    """Return the pattern with highest confidence, or None."""
-    if not patterns:
-        return None
-    return max(patterns, key=lambda p: p.confidence)
-
-
 def _filter_actionable(
     patterns: list[PatternSignal],
     df: pd.DataFrame,
