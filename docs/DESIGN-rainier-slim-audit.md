@@ -21,7 +21,7 @@ Headline: the **real disk pressure is local-only generated data, not git**, and 
 | R5 | Consolidate Playwright mock helpers (`fake_goto`, `fake_fetch`, `_make_scraper`, `_make_mock_page`) into `tests/test_scrapers/conftest.py` | ~150–250 test LOC | **low** | **safe-now** | 4 |
 | R6 | Move heavy ML/sci/scrape/viz deps to optional extras (`[ml]`, `[scrape]`, `[viz]`); make core install lean | ~600–800 MB install footprint | **medium** — changes install contract; cron/runtime paths must pull the right extras | **needs-approval** | 2 |
 | R7 | `git filter-repo` to purge the ~88 MB of historical HTML/PDF report blobs from `.git` | ~85–90 MB `.git` | **high** — rewrites history, invalidates clones/PRs, operator-gated | **needs-approval** | 1 |
-| R8 | Fix doc rot: CLAUDE.md says "10 ORM tables" (actually 18); module map lists `trader/`/`dashboard/` as placeholders (`trader/` is empty, `dashboard/` is live). Triage 57 untracked `docs/*.md`. | 0 MB, correctness | **low** | **safe-now** | 7 |
+| R8 | Fix doc rot: CLAUDE.md says "10 ORM tables" (actually 19); module map lists `trader/`/`dashboard/` as placeholders (`trader/` is empty, `dashboard/` is live). Triage 57 untracked `docs/*.md`. | 0 MB, correctness | **low** | **safe-now** | 7 |
 | — | `beautifulsoup4` is **not** in `src/` (only `scripts/seed_sp500_universe.py`). Keep declared (script is real) but note it's not a runtime dep. | — | — | **do-not (yet)** | 2 |
 
 **Do-not list (explicitly):** do not remove `ib_insync` (wired into `cli.py` + `config.py` + tested), `kaleido`/`psycopg`/`psycopg2` (runtime-only deps used via plotly export + DB driver URLs, no Python import is expected), the two `get_engine` factories (intentional two-engine split), or the parallel `migrations/`+`db/alembic/` systems (intentional public-vs-`market.*` split). None are bloat.
@@ -178,7 +178,7 @@ Defined across `test_db_dual_write.py`, `test_db_breadth_write.py`, and 5 files 
 
 ## 5. DB schema audit
 
-**18 ORM tables** in `core/models.py` (not 10 — CLAUDE.md doc rot, see R8): candles, signals, trades, stocks, money_flow_snapshots, stock_capital_flow, capital_flow_bars, stock_prices, chart_images, monitor_readings, monitor_alerts, backtest_trading_log, analysis_results, screened_stocks, thesis_evaluations, research_insights, paper_trade, paper_skip, paper_report_snapshot. **5 hypertables** (`HYPERTABLES` dict at `core/models.py:734`): money_flow_snapshots, stock_capital_flow, capital_flow_bars, stock_prices, monitor_readings — all use composite PKs including the partition column (e.g. `capital_flow_bars` PK `(id, bar_time)`), consistent with the TimescaleDB rule in memory.
+**19 ORM tables** in `core/models.py` (not 10 — CLAUDE.md doc rot, see R8): candles, signals, trades, stocks, money_flow_snapshots, stock_capital_flow, capital_flow_bars, stock_prices, chart_images, monitor_readings, monitor_alerts, backtest_trading_log, analysis_results, screened_stocks, thesis_evaluations, research_insights, paper_trade, paper_skip, paper_report_snapshot. **5 hypertables** (`HYPERTABLES` dict at `core/models.py:734`): money_flow_snapshots, stock_capital_flow, capital_flow_bars, stock_prices, monitor_readings — all use composite PKs including the partition column (e.g. `capital_flow_bars` PK `(id, bar_time)`), consistent with the TimescaleDB rule in memory.
 
 ### Two-engine split — intentional, not duplication
 
@@ -209,7 +209,7 @@ DB-session/engine boilerplate is **well-centralized**, not duplicated:
 
 ## 7. General improvement opportunities
 
-- **CLAUDE.md doc rot (R8, safe-now):** "10 ORM tables" → actually **18**; module map presents `trader/` and `dashboard/` as placeholders, but `trader/` is empty (0-byte `__init__.py`) and `dashboard/` is fully built (`app.py`, `render_etf.py`, `render_combined.py`). Update the module map + table count.
+- **CLAUDE.md doc rot (R8, safe-now):** "10 ORM tables" → actually **19**; module map presents `trader/` and `dashboard/` as placeholders, but `trader/` is empty (0-byte `__init__.py`) and `dashboard/` is fully built (`app.py`, `render_etf.py`, `render_combined.py`). Update the module map + table count.
 - **docs/ sprawl (R8):** **57 untracked `docs/*.md`** (DESIGN-*/TASK-PLAN-*/SPIKE-*/RESEARCH-*) vs 17 tracked. These are the design-doc-companion workflow output; many are completed task plans. Triage: commit the ones that are durable design records, delete superseded ones. The `.html` companions are correctly gitignored (`git check-ignore docs/DESIGN-rainier-slim-audit.html` → matched). Low effort, improves discoverability.
 - **`out/` not gitignored:** `out/dashboards` (640 KB) is untracked but **not** in `.gitignore` — one accidental `git add out/` would commit generated dashboards. Add `out/` to `.gitignore` (safe-now, prevents a future R1-style mistake).
 - **Config:** `config/` is lean (1,145 YAML LOC across 6 files); no sprawl. No redundant settings flagged.
@@ -231,7 +231,7 @@ fleet tasks add --project projects-rainier --priority P2 --slug slim-test-mock-c
   "Consolidate Playwright test mocks (R5): hoist fake_goto/fake_fetch/_make_scraper/_make_mock_page (dup x4-7) into tests/test_scrapers/conftest.py; shared _make_settings into tests/conftest.py. ~150-250 LOC."
 
 fleet tasks add --project projects-rainier --priority P2 --slug slim-doc-rot \
-  "Fix CLAUDE.md doc rot (R8): 10->18 ORM tables, correct trader/ (empty) vs dashboard/ (live) in module map; gitignore out/; triage 57 untracked docs/*.md."
+  "Fix CLAUDE.md doc rot (R8): 10->19 ORM tables, correct trader/ (empty) vs dashboard/ (live) in module map; gitignore out/; triage 57 untracked docs/*.md."
 
 fleet tasks add --project projects-rainier --priority P2 --slug slim-cache-hygiene \
   "Local-disk hygiene (R3): document data/cache/tqqq_sma/results.parquet (570MB) as regenerable; add clean-cache target / --no-results-cache flag; rotate data/*.log."
