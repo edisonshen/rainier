@@ -24,6 +24,18 @@ DOWN = REPO_ROOT / "migrations" / "0006_stock_prices_symbol_key_downgrade.sql"
 
 D = datetime(2026, 1, 5, tzinfo=timezone.utc)
 
+# Catalog/inspector lookups MUST scope to the engine's active schema. The 0006
+# fixtures (`pg_oldshape_engine` / `pg_empty_engine`) isolate every object in a
+# throwaway schema (conftest `_isolated_engine`), while `pg_legacy_engine` builds
+# in `public`. A reused `RAINIER_TEST_DATABASE_URL` may hold BOTH a
+# `public.stock_prices` and the isolated one, so an unscoped `relname =
+# 'stock_prices'` filter would match two rows. Resolving the schema from
+# `current_schema()` (which honors the engine's pinned search_path) targets the
+# right one for either fixture.
+def _schema(engine) -> str:
+    with engine.connect() as conn:
+        return conn.execute(text("SELECT current_schema()")).scalar()
+
 
 def _apply(engine, path: Path) -> None:
     with engine.begin() as conn:
@@ -45,21 +57,29 @@ def _seed_old_row(engine, *, stock_id: int, symbol: str, close: float) -> None:
         )
 
 
+def _fks(engine) -> list[dict]:
+    return inspect(engine).get_foreign_keys("stock_prices", schema=_schema(engine))
+
+
 def _columns(engine) -> dict:
     insp = inspect(engine)
-    return {c["name"]: c for c in insp.get_columns("stock_prices")}
+    return {
+        c["name"]: c
+        for c in insp.get_columns("stock_prices", schema=_schema(engine))
+    }
 
 
 def _constraint_names(engine, contype: str | None = None) -> set[str]:
     sql = (
         "SELECT con.conname FROM pg_constraint con "
         "JOIN pg_class rel ON rel.oid = con.conrelid "
-        "WHERE rel.relname = 'stock_prices'"
+        "JOIN pg_namespace ns ON ns.oid = rel.relnamespace "
+        "WHERE rel.relname = 'stock_prices' AND ns.nspname = :schema"
     )
     if contype:
         sql += f" AND con.contype = '{contype}'"
     with engine.connect() as conn:
-        return {r[0] for r in conn.execute(text(sql)).all()}
+        return {r[0] for r in conn.execute(text(sql), {"schema": _schema(engine)}).all()}
 
 
 def _index_names(engine) -> set[str]:
@@ -67,23 +87,32 @@ def _index_names(engine) -> set[str]:
         return {
             r[0]
             for r in conn.execute(
-                text("SELECT indexname FROM pg_indexes WHERE tablename = 'stock_prices'")
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE tablename = 'stock_prices' AND schemaname = :schema"
+                ),
+                {"schema": _schema(engine)},
             ).all()
         }
 
 
 def _pk_columns(engine) -> list[str]:
-    return inspect(engine).get_pk_constraint("stock_prices")["constrained_columns"]
+    return inspect(engine).get_pk_constraint("stock_prices", schema=_schema(engine))[
+        "constrained_columns"
+    ]
 
 
 def _is_hypertable(engine) -> bool:
     with engine.connect() as conn:
+        schema = conn.execute(text("SELECT current_schema()")).scalar()
         return bool(
             conn.execute(
                 text(
                     "SELECT count(*) FROM timescaledb_information.hypertables "
-                    "WHERE hypertable_name = 'stock_prices'"
-                )
+                    "WHERE hypertable_name = 'stock_prices' "
+                    "AND hypertable_schema = :schema"
+                ),
+                {"schema": schema},
             ).scalar()
         )
 
@@ -94,13 +123,18 @@ def _unique_index_columns(engine) -> list[list[str]]:
         SELECT array_agg(a.attname ORDER BY k.ord) AS cols
           FROM pg_index ix
           JOIN pg_class t ON t.oid = ix.indrelid
+          JOIN pg_namespace ns ON ns.oid = t.relnamespace
           JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
           JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-         WHERE t.relname = 'stock_prices' AND ix.indisunique
+         WHERE t.relname = 'stock_prices' AND ns.nspname = :schema
+           AND ix.indisunique
          GROUP BY ix.indexrelid
     """
     with engine.connect() as conn:
-        return [list(r[0]) for r in conn.execute(text(sql)).all()]
+        return [
+            list(r[0])
+            for r in conn.execute(text(sql), {"schema": _schema(engine)}).all()
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +161,7 @@ def test_t1_schema_after_up(pg_oldshape_engine):
     assert "nextval" in (cols["id"].get("default") or "")
 
     # FK symbol -> stocks.symbol
-    fks = inspect(engine).get_foreign_keys("stock_prices")
+    fks = _fks(engine)
     sym_fk = [f for f in fks if f["constrained_columns"] == ["symbol"]]
     assert sym_fk and sym_fk[0]["referred_table"] == "stocks"
     assert sym_fk[0]["referred_columns"] == ["symbol"]
@@ -246,7 +280,7 @@ def test_t4_downgrade_symmetric(pg_oldshape_engine):
     assert "ix_stock_prices_stock_id" in idxs
     assert "ix_stock_prices_symbol" not in idxs
     # stock_id FK restored.
-    fks = inspect(engine).get_foreign_keys("stock_prices")
+    fks = _fks(engine)
     assert any(
         f["constrained_columns"] == ["stock_id"] and f["referred_table"] == "stocks"
         for f in fks
@@ -283,7 +317,7 @@ def test_t5_fresh_db_init_symbol_keyed(pg_empty_engine):
     init_db()
     cols = _columns(pg_empty_engine)
     assert "symbol" in cols and "stock_id" not in cols
-    fks = inspect(pg_empty_engine).get_foreign_keys("stock_prices")
+    fks = _fks(pg_empty_engine)
     assert any(
         f["constrained_columns"] == ["symbol"] and f["referred_columns"] == ["symbol"]
         for f in fks
