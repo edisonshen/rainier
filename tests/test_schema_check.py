@@ -58,18 +58,37 @@ def legacy_db_url(request):
 
 @pytest.fixture
 def legacy_engine(legacy_db_url):
-    """A legacy-ORM-initialized engine. Drops + create_all for a clean slate
-    (RAINIER_TEST_DATABASE_URL may point at a reused DB), tears down after."""
+    """A legacy-ORM-initialized engine on an ISOLATED throwaway database.
+
+    NEVER runs ``drop_all`` against the provided URL — that is exactly the
+    shared-DB clobbering this hotfix exists to prevent (and how the original
+    incident happened: the prior tests' ``RAINIER_TEST_DATABASE_URL`` pointed
+    at the live ``rainier`` DB). Instead we ``CREATE DATABASE`` a per-process
+    throwaway alongside it, ``create_all`` there, and ``DROP DATABASE`` it on
+    teardown — so even if the URL points at the live DB, its tables are
+    untouched.
+    """
+    from sqlalchemy.engine import make_url
+
     from rainier.core.models import Base
 
-    engine = create_engine(legacy_db_url)
-    Base.metadata.drop_all(engine)
+    base = make_url(legacy_db_url)
+    throwaway = f"schemacheck_test_{os.getpid()}"
+    # AUTOCOMMIT: CREATE/DROP DATABASE cannot run inside a transaction block.
+    admin = create_engine(legacy_db_url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{throwaway}"')
+        conn.exec_driver_sql(f'CREATE DATABASE "{throwaway}"')
+
+    engine = create_engine(base.set(database=throwaway))
     Base.metadata.create_all(engine)
     try:
         yield engine
     finally:
-        Base.metadata.drop_all(engine)
-        engine.dispose()
+        engine.dispose()  # release connections so DROP DATABASE can proceed
+        with admin.connect() as conn:
+            conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{throwaway}"')
+        admin.dispose()
 
 
 def test_fresh_create_all_has_no_drift(legacy_engine):
