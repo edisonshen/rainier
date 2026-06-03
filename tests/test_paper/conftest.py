@@ -183,3 +183,134 @@ def pg_legacy_session(pg_legacy_engine):
     finally:
         sess.rollback()
         sess.close()
+
+
+# --------------------------------------------------------------------------
+# Migration 0006 (stock_prices stock_id -> symbol realign) fixtures.
+# --------------------------------------------------------------------------
+
+MIGRATION_0006_UP = REPO_ROOT / "migrations" / "0006_stock_prices_symbol_key.sql"
+MIGRATION_0006_DOWN = REPO_ROOT / "migrations" / "0006_stock_prices_symbol_key_downgrade.sql"
+
+# The OLD, stock_id-keyed `stock_prices` shape that migration 0006 realigns. The
+# baseline `_PREREQ_DDL` above already builds the NEW (symbol-keyed) shape, so the
+# 0006 migration tests need to start from the pre-migration drift instead.
+_OLD_STOCK_PRICES_DDL = """
+CREATE TABLE IF NOT EXISTS stock_prices (
+    id        BIGSERIAL,
+    stock_id  INTEGER NOT NULL REFERENCES stocks (id),
+    date      TIMESTAMP WITH TIME ZONE NOT NULL,
+    open      DOUBLE PRECISION,
+    high      DOUBLE PRECISION,
+    low       DOUBLE PRECISION,
+    close     DOUBLE PRECISION,
+    volume    BIGINT,
+    PRIMARY KEY (id, date),
+    CONSTRAINT uq_stock_price_date UNIQUE (stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS ix_stock_prices_stock_id ON stock_prices (stock_id);
+"""
+
+# Only the FK-target `stocks` is needed for the 0006 tests (not the whole paper
+# prereq set / 0005 migration).
+_STOCKS_ONLY_DDL = """
+CREATE TABLE IF NOT EXISTS stocks (
+    id          SERIAL PRIMARY KEY,
+    symbol      VARCHAR(10) NOT NULL UNIQUE,
+    name        VARCHAR(255),
+    sector      VARCHAR(100),
+    industry    VARCHAR(200),
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+"""
+
+
+def _has_timescaledb(engine) -> bool:
+    """True if the connected Postgres has the timescaledb extension installed."""
+    with engine.connect() as conn:
+        return bool(
+            conn.execute(
+                text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
+            ).scalar()
+        )
+
+
+def _try_create_extension(engine) -> bool:
+    """Best-effort `CREATE EXTENSION timescaledb`; returns whether it's present."""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE"))
+    except Exception:
+        pass
+    return _has_timescaledb(engine)
+
+
+@pytest.fixture
+def pg_oldshape_engine(request):
+    """Ephemeral Postgres seeded with the OLD stock_id-keyed `stock_prices`.
+
+    Makes `stock_prices` a hypertable when the timescaledb extension is
+    available (so the in-place ALTER is exercised against a real hypertable);
+    falls back to a plain table otherwise (schema/idempotency/backfill checks
+    still run; the hypertable-catalog asserts are `requires_timescaledb`-gated).
+
+    Exposes `engine.rainier_has_timescaledb` (bool) for tests to gate on.
+    """
+    url = _resolve_pg_url(request)
+    engine = create_engine(url, future=True)
+    has_ts = _try_create_extension(engine)
+    # Drop first so a shared/reused DB (RAINIER_TEST_DATABASE_URL pointed at a
+    # persistent PG) starts clean each test; harmless on a fresh ephemeral PG.
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS stock_prices CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS stocks CASCADE"))
+        conn.execute(text(_STOCKS_ONLY_DDL))
+        conn.execute(text(_OLD_STOCK_PRICES_DDL))
+    if has_ts:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "SELECT create_hypertable('stock_prices', 'date', "
+                    "migrate_data => true, if_not_exists => true)"
+                )
+            )
+    engine.rainier_has_timescaledb = has_ts  # type: ignore[attr-defined]
+    try:
+        yield engine
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS stock_prices CASCADE"))
+            conn.execute(text("DROP TABLE IF EXISTS stocks CASCADE"))
+        engine.dispose()
+
+
+@pytest.fixture
+def pg_empty_engine(request):
+    """Ephemeral Postgres with NOTHING created — for the fresh `init_db()` path.
+
+    Binds the legacy `core.database` singleton so `init_db()` targets this DB,
+    and resets it before/after (PR #115 discipline).
+    """
+    url = _resolve_pg_url(request)
+    engine = create_engine(url, future=True)
+    engine.rainier_has_timescaledb = _try_create_extension(engine)  # type: ignore[attr-defined]
+    # Start from a truly empty schema so init_db() exercises the create path
+    # (defensive against a reused persistent test DB; no-op on ephemeral PG).
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS stock_prices CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS stocks CASCADE"))
+
+    from rainier.core import config, database
+
+    config._settings = None
+    database._engine = engine
+    database._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        yield engine
+    finally:
+        database._engine = None
+        database._session_factory = None
+        config._settings = None
+        engine.dispose()
