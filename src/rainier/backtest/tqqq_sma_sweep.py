@@ -21,6 +21,14 @@ Wall-clock budget: < 20 min for ~3.35M combos on a single laptop, single-pass.
 Inner backtest is ``@njit`` and is fed precomputed SMA boolean matrices so the
 per-combo cost is a single sequential scan + four boolean column slices.
 
+Disk note: everything under ``data/cache/tqqq_sma/`` (``prices.parquet``,
+``results.parquet`` and companion ``.sha256`` / ``.fingerprint.txt`` files) is
+**regenerable** — it is the cached output of this sweep, not a source of truth.
+A full Phase-2 ``results.parquet`` is ~570 MB. It is safe to delete at any time;
+the next ``rainier sma-sweep`` re-derives it from yfinance prices. Clear it with
+``rainier cache clean`` (or pass ``--no-results-cache`` to ``sma-sweep`` to drop
+``results.parquet`` automatically once the report has been rendered from it).
+
 ASCII flow of the inner backtest loop::
 
     for d in 1..n_days:
@@ -401,7 +409,45 @@ def run_backtest(
 
 PRICES_CACHE_PATH = Path("data/cache/tqqq_sma/prices.parquet")
 RESULTS_CACHE_PATH = Path("data/cache/tqqq_sma/results.parquet")
+# Directory holding every cached artifact of the sweep (prices + results +
+# walk-forward parquets + companion .sha256 / .fingerprint.txt files). All of
+# it is regenerable — see the module docstring — so the whole directory is the
+# unit of `rainier cache clean`.
+CACHE_DIR = RESULTS_CACHE_PATH.parent
 TQQQ_INCEPTION = "2010-02-11"
+
+
+def results_cache_companions(results_path: Path) -> list[Path]:
+    """The companion files written alongside a ``results.parquet``.
+
+    ``run_sweep`` stamps a ``<name>.fingerprint.txt`` next to the parquet;
+    callers that delete the parquet must drop the fingerprint too or the next
+    sweep treats the orphaned fingerprint as a legacy/mismatch case. Returns
+    only the paths that exist (caller may ``unlink`` them blindly otherwise).
+    """
+    results_path = Path(results_path)
+    fingerprint = results_path.with_suffix(".fingerprint.txt")
+    return [p for p in (results_path, fingerprint) if p.exists()]
+
+
+def clean_cache(cache_dir: Path = CACHE_DIR) -> list[Path]:
+    """Delete the regenerable sweep cache directory.
+
+    Removes ``cache_dir`` and everything under it (prices/results parquets and
+    their companion hash/fingerprint files). The cache is pure sweep output —
+    the next ``rainier sma-sweep`` re-derives it — so this is always safe.
+
+    Returns the list of removed top-level paths (empty if the dir was absent).
+    Idempotent: a no-op when ``cache_dir`` does not exist.
+    """
+    import shutil
+
+    cache_dir = Path(cache_dir)
+    if not cache_dir.exists():
+        return []
+    removed = sorted(cache_dir.iterdir())
+    shutil.rmtree(cache_dir)
+    return removed
 
 
 def _hash_frame(df: pd.DataFrame) -> str:
