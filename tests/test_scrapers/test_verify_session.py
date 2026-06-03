@@ -16,43 +16,12 @@ These tests pin the new behavior:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from rainier.scrapers.qu.scraper import QUScraper
-
-
-def _make_mock_page(url: str = "https://www.quantunicorn.com/products#qu100"):
-    """Mock Playwright Page that lets tests mutate `.url` mid-flow."""
-    page = AsyncMock()
-    page_url = {"value": url}
-    type(page).url = PropertyMock(side_effect=lambda: page_url["value"])
-    page.title = AsyncMock(return_value="QU100")
-    page.context = AsyncMock()
-    page.context.add_cookies = AsyncMock()
-    page.query_selector = AsyncMock(return_value=AsyncMock())
-    page.wait_for_selector = AsyncMock(return_value=AsyncMock())
-    page.wait_for_load_state = AsyncMock()
-    page.goto = AsyncMock(side_effect=lambda u, **kw: page_url.update(value=u))
-    return page, page_url
-
-
-def _make_scraper():
-    """QUScraper with mocked browser + settings; launch mode (not CDP)."""
-    mock_browser = MagicMock()
-    mock_browser._is_cdp = False
-    with patch("rainier.scrapers.qu.scraper.get_settings") as mock_settings:
-        qu_config = MagicMock()
-        qu_config.url = "https://www.quantunicorn.com/products#qu100"
-        qu_config.login_url = "https://www.quantunicorn.com/signin"
-        qu_config.session_file = "./data/auth/qu_session.json"
-        qu_config.session_ttl_hours = 12
-        qu_config.timeout_ms = 30000
-        qu_config.backfill_delay_seconds = 2.0
-        mock_settings.return_value.scraping.quantunicorn = qu_config
-        return QUScraper(mock_browser)
-
+from .conftest import make_mock_page as _make_mock_page
+from .conftest import make_scraper as _make_scraper
 
 # ---------------------------------------------------------------------------
 
