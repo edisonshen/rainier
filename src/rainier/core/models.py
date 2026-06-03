@@ -7,6 +7,7 @@ from datetime import date, datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -418,6 +419,17 @@ class ScreenedStockRecord(Base):
     pattern_type: Mapped[str | None] = mapped_column(String(50))
     pattern_confidence: Mapped[float | None] = mapped_column(Float)
 
+    # Paper-tracker (PR qu100-paper-tracker-p01): the pattern-derived trade
+    # levels drawn on the chart shown to the LLM. Previously dropped before
+    # persistence; now stored so `paper_trade` can read them from the durable
+    # screened row (Tier-1 cache-replay safety, design D4). All nullable
+    # (additive migration `ADD COLUMN IF NOT EXISTS`). `pattern_type` already
+    # exists above — NOT re-added.
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    stop_loss: Mapped[float | None] = mapped_column(Float)
+    target_price: Mapped[float | None] = mapped_column(Float)
+    rr_ratio: Mapped[float | None] = mapped_column(Float)
+
     # From LLM (nullable — only afternoon/close top-5 get this)
     llm_confidence: Mapped[int | None] = mapped_column(Integer)
     shadow_combined_score: Mapped[float | None] = mapped_column(Float)
@@ -560,6 +572,160 @@ class ResearchInsight(Base):
             "subject",
             unique=True,
             postgresql_where="status = 'pending'",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Paper-trade tracker tables (design DESIGN-qu100-llm-feedback-loop §4)
+# ---------------------------------------------------------------------------
+
+
+class PaperTrade(Base):
+    """One row per opened paper position; pending → open → closed/expired.
+
+    PLAIN Postgres table (NOT a TimescaleDB hypertable, design D10) so we can
+    freely add `UNIQUE(thesis_id)` and a partial-unique index on
+    `symbol WHERE status IN ('pending','open')` (one open position per symbol)
+    without the hypertable rule that every unique index include the partition
+    column. Volume is tiny (~5 picks/day), like `thesis_evaluations`.
+
+    Booked fill/exit fields are immutable once set (design D5 split-freeze):
+    `price_basis` records the adjustment basis the fill was booked under so
+    `evaluate_exit` walks a consistent OHLC series for an open position.
+    """
+
+    __tablename__ = "paper_trade"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    # Provenance / linkage
+    thesis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_results.id"), nullable=False
+    )
+    screened_record_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("screened_stocks.id")
+    )
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    scan_date: Mapped[date] = mapped_column(Date, nullable=False)
+    session_name: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="pending", server_default="pending"
+    )
+
+    # Plan (set at creation, from the persisted screened row). `planned_entry_price`
+    # is the pattern entry level — NOT overloaded onto `entry_price` (design D4).
+    planned_entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    stop_loss: Mapped[float] = mapped_column(Float, nullable=False)
+    target_price: Mapped[float] = mapped_column(Float, nullable=False)
+    rr_ratio: Mapped[float | None] = mapped_column(Float)
+    pattern_type: Mapped[str | None] = mapped_column(String(50))
+    llm_confidence: Mapped[int | None] = mapped_column(Integer)
+    verdict: Mapped[str | None] = mapped_column(String(20))
+
+    # Fill (all NULL while status='pending'; set at fill time)
+    entry_date: Mapped[date | None] = mapped_column(Date)
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    shares: Mapped[int | None] = mapped_column(Integer)
+    allocated_amount: Mapped[float | None] = mapped_column(Float)
+    residual_cash: Mapped[float | None] = mapped_column(Float)
+    # Snapshot of `learned_time_stop_days` config at fill (NULL = no time-exit,
+    # design D6). Applied per-position by evaluate_exit, never the live config.
+    time_stop_days: Mapped[int | None] = mapped_column(Integer)
+    # Adjustment basis the fill was booked under (design D5 split-freeze).
+    price_basis: Mapped[str | None] = mapped_column(String(20))
+
+    # Exit
+    exit_date: Mapped[date | None] = mapped_column(Date)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    exit_reason: Mapped[str | None] = mapped_column(String(20))
+    return_pct: Mapped[float | None] = mapped_column(Float)
+    pnl: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (
+        UniqueConstraint("thesis_id", name="uq_paper_trade_thesis_id"),
+        CheckConstraint(
+            "status IN ('pending','open','closed','expired')",
+            name="ck_paper_trade_status",
+        ),
+        CheckConstraint(
+            "exit_reason IS NULL OR exit_reason IN "
+            "('stop_loss','target','time_stop','manual')",
+            name="ck_paper_trade_exit_reason",
+        ),
+        # Partial unique index — one pending/open position per symbol (design
+        # D1). Closed/expired rows fall out, so a symbol can be re-traded later.
+        Index(
+            "idx_paper_trade_active_symbol",
+            "symbol",
+            unique=True,
+            postgresql_where="status IN ('pending', 'open')",
+        ),
+    )
+
+
+class PaperSkip(Base):
+    """Skip ledger — keeps the feedback denominator honest (design §4).
+
+    Written when a `setup_long` passing the confidence gate is NOT opened.
+    Session/confidence-gated rejects are NOT skips (they're "not a buy signal").
+    Idempotent per skipped thesis via `UNIQUE(thesis_id)`.
+    """
+
+    __tablename__ = "paper_skip"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    thesis_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    scan_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("thesis_id", name="uq_paper_skip_thesis_id"),
+        CheckConstraint(
+            "reason IN ('symbol_already_active','missing_levels',"
+            "'missing_screened_record','gap_invalidated',"
+            "'same_symbol_lower_conviction')",
+            name="ck_paper_skip_reason",
+        ),
+    )
+
+
+class PaperReportSnapshot(Base):
+    """Persisted, regenerable report payload keyed by (report_type, as_of_date).
+
+    The immutable record of what a daily/weekly report said. `rainier paper
+    report` re-renders from this snapshot only; `--regenerate` recomputes from
+    raw inputs and upserts (design D11). Plain Postgres, small row count.
+    """
+
+    __tablename__ = "paper_report_snapshot"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    report_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "report_type", "as_of_date", name="uq_paper_report_snapshot_type_date"
+        ),
+        CheckConstraint(
+            "report_type IN ('daily','weekly')",
+            name="ck_paper_report_snapshot_type",
         ),
     )
 

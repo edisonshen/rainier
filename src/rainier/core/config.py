@@ -312,6 +312,11 @@ class LLMThesisConfig(BaseModel):
         default_factory=_default_thesis_signals
     )
     dashboard_base_url: str | None = None
+    # Paper-tracker (design D6): the learned force-exit horizon, snapshotted onto
+    # each NEW position at fill time. NULL = no time-exit (the data-gathering
+    # baseline until Phase 2's discover_time_stop sets a value). The mechanism
+    # ships in Phase 0+1; the value stays None here.
+    learned_time_stop_days: int | None = None
 
 
 class NotifyConfig(BaseModel):

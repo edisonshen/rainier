@@ -1887,6 +1887,163 @@ def db_backfill_prices(years, batch_size, dry_run):
     click.echo(f"\nDone. Fetched: {fetched}, Failed: {failed}")
 
 
+@db.command(name="ingest-prices")
+@click.option(
+    "--universe",
+    type=click.Choice(["qu100", "active", "screened"]),
+    default="active",
+    help="qu100=full universe (weekly); active=pending/open paper symbols; "
+    "screened=today's top-50",
+)
+@click.option("--date", "as_of_iso", default=None, help="As-of date (YYYY-MM-DD)")
+@click.option("--window-days", default=10, type=int, help="Recent gap window (sessions)")
+def db_ingest_prices(universe, as_of_iso, window_days):
+    """Gap-aware daily price ingest (Phase 0, design D9).
+
+    Per-(symbol,date) gap detection over the recent window + (symbol,date)
+    upsert (DO UPDATE) so split-adjusted values self-heal. Idempotent.
+    """
+    from datetime import date as _date
+
+    from rainier.paper.ingest import (
+        _yfinance_fetch_fn,
+        active_symbols,
+        ingest_prices,
+        screened_symbols,
+    )
+
+    as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
+
+    if universe == "active":
+        symbols = active_symbols()
+    elif universe == "screened":
+        symbols = screened_symbols(as_of)
+    else:
+        from sqlalchemy import func as _func
+        from sqlalchemy import select as _select
+
+        from rainier.core.database import get_session
+        from rainier.core.models import MoneyFlowSnapshot
+
+        with get_session() as session:
+            symbols = sorted(
+                session.execute(
+                    _select(_func.distinct(MoneyFlowSnapshot.symbol))
+                ).scalars().all()
+            )
+
+    click.echo(f"Ingesting {len(symbols)} {universe} symbols (as_of={as_of})...")
+    if not symbols:
+        click.echo("No symbols to ingest.")
+        return
+    res = ingest_prices(
+        symbols, as_of=as_of, fetch_fn=_yfinance_fetch_fn, window_days=window_days
+    )
+    click.echo(f"Done. Upserted {res['upserted']} bars.")
+
+
+# ---------------------------------------------------------------------------
+# Paper-trade tracker commands (design DESIGN-qu100-llm-feedback-loop)
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="paper")
+def paper_group() -> None:
+    """QU100 paper-trade tracker — open positions, update exits, report."""
+
+
+@paper_group.command(name="open")
+@click.option("--date", "as_of_iso", default=None, help="Fill as-of date (YYYY-MM-DD)")
+@click.pass_context
+def paper_open(ctx, as_of_iso):
+    """Fill pending positions at their T+1 trading-session open."""
+    from datetime import date as _date
+
+    from rainier.paper.positions import fill_pending_positions
+
+    as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
+    # Snapshot the learned time-stop at fill, same as the scheduled daily path
+    # (codex iter-2 P3). Read from the Click-loaded settings (honors --config,
+    # codex iter-7) — NOT get_settings(), which would ignore a non-default root.
+    settings = ctx.obj["settings"]
+    learned_ts = settings.llm_thesis.learned_time_stop_days
+    res = fill_pending_positions(as_of=as_of, learned_time_stop_days=learned_ts)
+    click.echo(f"Filled {res['filled']}, expired {res['expired']}.")
+
+
+@paper_group.command(name="update")
+@click.option("--date", "as_of_iso", default=None, help="As-of date (YYYY-MM-DD)")
+def paper_update(as_of_iso):
+    """Walk open positions' OHLC and close any that triggered an exit."""
+    from datetime import date as _date
+
+    from rainier.paper.positions import update_open_positions
+
+    as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
+    res = update_open_positions(as_of=as_of)
+    click.echo(
+        f"Closed {res['closed']} "
+        f"(same-bar ambiguous: {res['same_bar_ambiguous_exits']})."
+    )
+
+
+@paper_group.command(name="report")
+@click.option("--date", "as_of_iso", default=None, help="Report as-of date (YYYY-MM-DD)")
+@click.option("--week", is_flag=True, help="Render the weekly snapshot (Phase 3)")
+@click.option(
+    "--regenerate",
+    is_flag=True,
+    help="Recompute from raw inputs + upsert (else plain re-render from snapshot)",
+)
+def paper_report(as_of_iso, week, regenerate):
+    """Render a paper-book report.
+
+    Plain (default) re-renders from the persisted ``paper_report_snapshot`` only.
+    ``--regenerate`` recomputes the DAILY report from raw inputs and upserts.
+    """
+    from datetime import date as _date
+
+    from rainier.paper.report import (
+        REPORT_TYPE_DAILY,
+        REPORT_TYPE_WEEKLY,
+        compute_daily_payload,
+        load_snapshot,
+        persist_daily_snapshot,
+        render_payload,
+    )
+
+    as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
+
+    if week:
+        if regenerate:
+            # Weekly regeneration is Phase 3 (miss-sweep). Fail clearly, not
+            # silently wrong (H5).
+            raise click.ClickException(
+                "weekly --regenerate is not implemented yet (Phase 3 miss-sweep)."
+            )
+        payload = load_snapshot(REPORT_TYPE_WEEKLY, as_of)
+        if payload is None:
+            raise click.ClickException(
+                f"No weekly snapshot for {as_of}."
+            )
+        click.echo(render_payload(payload))
+        return
+
+    if regenerate:
+        payload = compute_daily_payload(as_of)
+        persist_daily_snapshot(as_of, payload)
+        click.echo(render_payload(payload))
+        return
+
+    # Plain: snapshot-only.
+    payload = load_snapshot(REPORT_TYPE_DAILY, as_of)
+    if payload is None:
+        raise click.ClickException(
+            f"No daily snapshot for {as_of}. Run with --regenerate to compute one."
+        )
+    click.echo(render_payload(payload))
+
+
 # ---------------------------------------------------------------------------
 # Feature store commands
 # ---------------------------------------------------------------------------

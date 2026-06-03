@@ -39,6 +39,16 @@ reports/tqqq_*
 # Demo HTML at project root (use reports/ instead)
 /index.html
 
+# Design-doc HTML companions are local renders only — the .md is source-of-truth
+# and committed; the same-basename .html stays out of git (memory:
+# feedback_design_doc_html_companion).
+docs/DESIGN-*.html
+docs/TASK-PLAN-*.html
+docs/TEST-SPEC-*.html
+docs/PLAN-*.html
+docs/RESEARCH-*.html
+docs/SPIKE-*.html
+
 # Coverage
 htmlcov/
 .coverage
