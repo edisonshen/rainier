@@ -48,9 +48,19 @@ ALTER TABLE stock_prices ADD COLUMN IF NOT EXISTS symbol VARCHAR(10);
 DO $$
 BEGIN
     IF EXISTS (
+        -- Resolve the schema of the table that the UNQUALIFIED `stock_prices`
+        -- actually binds to (the first schema on the search_path that contains
+        -- it). Comparing to `current_schema()` would be WRONG when the path's
+        -- first schema lacks `stock_prices` (e.g. `"$user", public`): the ALTER
+        -- below hits `public.stock_prices` but `current_schema()` is `$user`, so
+        -- the guard would skip the backfill while DROP COLUMN still runs.
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'stock_prices'
+        WHERE (table_schema, table_name) = (
+                  SELECT n.nspname, c.relname
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE c.oid = to_regclass('stock_prices')
+              )
           AND column_name = 'stock_id'
     ) THEN
         UPDATE stock_prices sp
@@ -71,8 +81,12 @@ DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'stock_prices'
+        WHERE (table_schema, table_name) = (
+                  SELECT n.nspname, c.relname
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE c.oid = to_regclass('stock_prices')
+              )
           AND column_name = 'symbol'
           AND is_nullable = 'YES'
     ) THEN
@@ -89,9 +103,7 @@ BEGIN
         SELECT 1
           FROM pg_constraint con
           JOIN pg_class rel ON rel.oid = con.conrelid
-          JOIN pg_namespace ns ON ns.oid = rel.relnamespace
-         WHERE rel.relname = 'stock_prices'
-           AND ns.nspname = current_schema()
+         WHERE rel.oid = to_regclass('stock_prices')
            AND con.contype = 'f'
            AND con.conkey = (
                SELECT array_agg(attnum)
@@ -112,10 +124,7 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1
           FROM pg_constraint con
-          JOIN pg_class rel ON rel.oid = con.conrelid
-          JOIN pg_namespace ns ON ns.oid = rel.relnamespace
-         WHERE rel.relname = 'stock_prices'
-           AND ns.nspname = current_schema()
+         WHERE con.conrelid = to_regclass('stock_prices')
            AND con.conname = 'uq_stock_price_symbol_date'
     ) THEN
         ALTER TABLE stock_prices
@@ -134,17 +143,19 @@ DECLARE
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'stock_prices'
+        WHERE (table_schema, table_name) = (
+                  SELECT n.nspname, c.relname
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE c.oid = to_regclass('stock_prices')
+              )
           AND column_name = 'stock_id'
     ) THEN
         FOR fk_name IN
             SELECT con.conname
               FROM pg_constraint con
               JOIN pg_class rel ON rel.oid = con.conrelid
-              JOIN pg_namespace ns ON ns.oid = rel.relnamespace
-             WHERE rel.relname = 'stock_prices'
-               AND ns.nspname = current_schema()
+             WHERE rel.oid = to_regclass('stock_prices')
                AND con.contype = 'f'
                AND con.conkey = (
                    SELECT array_agg(attnum)
@@ -164,10 +175,7 @@ BEGIN
     IF EXISTS (
         SELECT 1
           FROM pg_constraint con
-          JOIN pg_class rel ON rel.oid = con.conrelid
-          JOIN pg_namespace ns ON ns.oid = rel.relnamespace
-         WHERE rel.relname = 'stock_prices'
-           AND ns.nspname = current_schema()
+         WHERE con.conrelid = to_regclass('stock_prices')
            AND con.conname = 'uq_stock_price_date'
     ) THEN
         ALTER TABLE stock_prices DROP CONSTRAINT uq_stock_price_date;
