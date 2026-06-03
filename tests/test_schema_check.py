@@ -77,6 +77,14 @@ def legacy_engine(legacy_db_url):
     # AUTOCOMMIT: CREATE/DROP DATABASE cannot run inside a transaction block.
     admin = create_engine(legacy_db_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
+        # Managed/CI roles often lack CREATEDB. Skip gracefully rather than
+        # hard-failing setup when we can't isolate a throwaway database.
+        can_create = conn.exec_driver_sql(
+            "SELECT rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user"
+        ).scalar()
+        if not can_create:
+            admin.dispose()
+            pytest.skip("test role lacks CREATEDB; cannot isolate a throwaway database")
         conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{throwaway}"')
         conn.exec_driver_sql(f'CREATE DATABASE "{throwaway}"')
 
