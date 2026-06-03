@@ -56,6 +56,25 @@ ALTER TABLE stocks ALTER COLUMN updated_at SET NOT NULL;
 -- 4. symbol: ORM is NOT NULL (stub left it nullable); 0 rows so safe to enforce
 ALTER TABLE stocks ALTER COLUMN symbol SET NOT NULL;
 
+-- 4b. id autoincrement default. The ORM declares id SERIAL (autoincrement) and
+--     all insert paths (scraper, Stock(...)) OMIT id, relying on a server
+--     default. The observed stub RETAINED nextval('stocks_id_seq'), but a
+--     variant stub created as a plain `id INTEGER PRIMARY KEY` would have no
+--     default and every insert would then fail on a NULL id. Guard
+--     idempotently: only act if the default is missing; harmless otherwise.
+DO $$
+BEGIN
+    IF (SELECT column_default
+          FROM information_schema.columns
+         WHERE table_name = 'stocks' AND column_name = 'id') IS NULL THEN
+        CREATE SEQUENCE IF NOT EXISTS stocks_id_seq OWNED BY stocks.id;
+        ALTER TABLE stocks ALTER COLUMN id SET DEFAULT nextval('stocks_id_seq');
+        -- advance past any existing ids (table is empty here -> next id = 1)
+        PERFORM setval('stocks_id_seq', COALESCE((SELECT MAX(id) FROM stocks), 0) + 1, false);
+    END IF;
+END
+$$;
+
 -- 5. ORM declares index=True on symbol (separate from the unique constraint
 --    stocks_symbol_key, which already exists). Add the plain lookup index for
 --    parity; harmless if a unique index already covers it.

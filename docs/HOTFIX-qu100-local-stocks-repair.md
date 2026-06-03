@@ -37,8 +37,13 @@ notification: 400`) — secondary alerting bug (see Follow-ups).
 Idempotent, non-destructive (`stocks` is empty): `ADD COLUMN IF NOT EXISTS` the
 6 missing columns matching `core/models.py` Stock, set defaults/`NOT NULL` with
 guarded backfills, `symbol SET NOT NULL`, add the ORM's `ix_stocks_symbol`
-lookup index (the unique `stocks_symbol_key` already exists). Run inside one
-transaction. **Run only against `$LEGACY_DATABASE_URL`, never Neon.**
+lookup index (the unique `stocks_symbol_key` already exists). The observed stub
+**retained** `id`'s `nextval('stocks_id_seq')` default and `stocks_symbol_key`,
+and **no table FK-references `stocks`** — but the script also guards the `id`
+autoincrement default idempotently (restores a sequence only if missing) so a
+variant stub created as a plain `id INTEGER PRIMARY KEY` is also fully repaired
+(otherwise inserts would fail next on a NULL `id`). Run inside one transaction.
+**Run only against `$LEGACY_DATABASE_URL`, never Neon.**
 
 ### 2. Recreate the dropped `stock_prices`
 `uv run rainier db init` — `create_all` recreates the missing table (additive;
