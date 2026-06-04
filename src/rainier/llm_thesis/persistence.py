@@ -85,9 +85,18 @@ def persist_screened_stocks(
     """
     if not candidates:
         return 0
+    # Defensive dedup by (scan_date, session_name, symbol). scan_date and
+    # session_name are constant for the batch, so dedup on symbol. An in-batch
+    # duplicate makes ON CONFLICT DO UPDATE touch the same row twice ->
+    # psycopg2 CardinalityViolation (the 2026-06-04 P0). Candidates arrive
+    # sorted by composite score descending, so the first occurrence is the
+    # best-ranked — keep it, drop the rest. This is the hard DB invariant; do
+    # it here even though `_screen_money_flow` also dedups upstream.
+    seen: set[str] = set()
+    deduped = [c for c in candidates if not (c.symbol in seen or seen.add(c.symbol))]
     rows = [
         _candidate_row(c, rank, scan_date, session_name)
-        for rank, c in enumerate(candidates, start=1)
+        for rank, c in enumerate(deduped, start=1)
     ]
     with get_session() as session:
         stmt = pg_insert(ScreenedStockRecord).values(rows)

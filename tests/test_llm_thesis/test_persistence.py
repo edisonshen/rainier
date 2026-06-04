@@ -67,6 +67,61 @@ def test_candidate_row_money_flow_none_when_missing():
     assert row["money_flow_score"] is None
 
 
+def test_persist_screened_stocks_dedups_duplicate_symbol():
+    """P0 regression: an in-batch duplicate (scan_date, session_name, symbol)
+    must be deduped BEFORE the bulk upsert, or psycopg2 raises
+    CardinalityViolation ("ON CONFLICT DO UPDATE cannot affect row a second
+    time"). Capture the rows handed to pg_insert().values() and assert keys are
+    unique."""
+    captured: dict[str, list[dict]] = {}
+
+    def _capture(rows):
+        captured["rows"] = rows
+        return MagicMock()
+
+    cm, _ = _patched_session(rowcount=1)
+    cands = [_candidate("NVDA"), _candidate("TSLA"), _candidate("NVDA")]
+    with patch.object(persist_mod, "get_session", return_value=cm), patch.object(
+        persist_mod, "pg_insert"
+    ) as pg:
+        pg.return_value.values.side_effect = _capture
+        n = persist_mod.persist_screened_stocks(
+            cands, scan_date=date(2026, 6, 4), session_name="afternoon",
+        )
+
+    rows = captured["rows"]
+    keys = [(r["scan_date"], r["session_name"], r["symbol"]) for r in rows]
+    assert len(keys) == len(set(keys)), "duplicate (scan_date,session,symbol) reached upsert"
+    assert sorted(r["symbol"] for r in rows) == ["NVDA", "TSLA"]
+    assert n == len(rows) == 2
+
+
+def test_persist_screened_stocks_dedup_keeps_best_ranked():
+    """When a symbol appears twice, keep the first (best-ranked) occurrence —
+    candidates arrive sorted by composite score descending."""
+    captured: dict[str, list[dict]] = {}
+
+    def _capture(rows):
+        captured["rows"] = rows
+        return MagicMock()
+
+    cm, _ = _patched_session(rowcount=1)
+    # Two NVDA candidates: first has the stronger composite score.
+    strong = _candidate("NVDA", strength=0.9)
+    weak = _candidate("NVDA", strength=0.1)
+    with patch.object(persist_mod, "get_session", return_value=cm), patch.object(
+        persist_mod, "pg_insert"
+    ) as pg:
+        pg.return_value.values.side_effect = _capture
+        persist_mod.persist_screened_stocks(
+            [strong, weak], scan_date=date(2026, 6, 4), session_name="afternoon",
+        )
+
+    rows = captured["rows"]
+    assert len(rows) == 1
+    assert rows[0]["composite_score"] == 0.9
+
+
 def test_persist_screened_stocks_empty_returns_zero():
     n = persist_mod.persist_screened_stocks(
         [], scan_date=date(2026, 5, 7), session_name="afternoon"

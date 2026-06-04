@@ -11,8 +11,12 @@ from rainier.analysis.stock_screener import screen_stocks
 
 def _patched_session_with_no_signals():
     fake = MagicMock()
-    # Layer 1 _screen_money_flow signature returns []
+    # Layer 1 _screen_money_flow returns [] when there is no data. It probes
+    # the latest top100 trading day via `query(...).filter(...).scalar()` and
+    # also via the unfiltered `query(...).scalar()` chain, so BOTH must resolve
+    # to None to exercise the no-data early return.
     fake.query.return_value.scalar.return_value = None
+    fake.query.return_value.filter.return_value.scalar.return_value = None
     cm = MagicMock()
     cm.__enter__.return_value = fake
     cm.__exit__.return_value = False
