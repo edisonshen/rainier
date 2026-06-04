@@ -88,12 +88,18 @@ def legacy_engine(legacy_db_url):
         conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{throwaway}"')
         conn.exec_driver_sql(f'CREATE DATABASE "{throwaway}"')
 
-    engine = create_engine(base.set(database=throwaway))
-    Base.metadata.create_all(engine)
+    # create_engine + create_all are INSIDE the try so a failure there still
+    # drops the throwaway DB + disposes admin in finally (no leaked database /
+    # connection pool). pid-based naming + DROP IF EXISTS self-heals a prior
+    # same-pid crash leak on the next run.
+    engine = None
     try:
+        engine = create_engine(base.set(database=throwaway))
+        Base.metadata.create_all(engine)
         yield engine
     finally:
-        engine.dispose()  # release connections so DROP DATABASE can proceed
+        if engine is not None:
+            engine.dispose()  # release connections so DROP DATABASE can proceed
         with admin.connect() as conn:
             conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{throwaway}"')
         admin.dispose()
