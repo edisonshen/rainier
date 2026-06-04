@@ -185,22 +185,38 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
 
     Returns list of MoneyFlowSignal sorted by signal_strength descending.
     """
-    # Step 1: Latest QU100 snapshot — "Long in" stocks only
-    latest_ts = session.query(
-        func.max(MoneyFlowSnapshot.captured_at)
+    # Step 1: Latest QU100 snapshot — "Long in" stocks only.
+    #
+    # Scope "latest" by trading DAY, not insert time. The 2026-06-04 backfill
+    # stamped all 1,373 historical days with one shared `captured_at`, so the
+    # old `captured_at == max(captured_at)` selected every backfilled day at
+    # once (duplicate symbols across days -> CardinalityViolation downstream).
+    # Pick the most recent `data_date`, then the latest `captured_at` WITHIN
+    # that date — one clean trading-day snapshot regardless of insert collisions.
+    latest_date = session.query(
+        func.max(MoneyFlowSnapshot.data_date)
     ).scalar()
-    if latest_ts is None:
+    if latest_date is None:
         log.warning("No money flow snapshots in database")
         return []
 
-    # Staleness check: reject data older than 24 hours
+    latest_ts = (
+        session.query(func.max(MoneyFlowSnapshot.captured_at))
+        .filter(MoneyFlowSnapshot.data_date == latest_date)
+        .scalar()
+    )
+
+    # Staleness check: reject data older than 24 hours. Age is judged on the
+    # latest trading day's captured_at (when that day's snapshot was scraped).
     now = datetime.now(timezone.utc)
     ts = latest_ts if latest_ts.tzinfo else latest_ts.replace(tzinfo=timezone.utc)
     age_hours = (now - ts).total_seconds() / 3600
     if age_hours > 24:
         log.warning(
-            "Stale QU100 data (%.1f hours old, captured_at=%s) — skipping report",
+            "Stale QU100 data (%.1f hours old, data_date=%s captured_at=%s) — "
+            "skipping report",
             age_hours,
+            latest_date,
             latest_ts,
         )
         return []
@@ -217,6 +233,7 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
         .filter(
             MoneyFlowSnapshot.ranking_type == "top100",
             MoneyFlowSnapshot.long_short == "Long in",
+            MoneyFlowSnapshot.data_date == latest_date,
             MoneyFlowSnapshot.captured_at == latest_ts,
         )
         .order_by(MoneyFlowSnapshot.rank.asc())
@@ -224,8 +241,18 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
     )
 
     if not rows:
-        log.warning("No 'Long in' stocks found at %s", latest_ts)
+        log.warning(
+            "No 'Long in' stocks found at data_date=%s captured_at=%s",
+            latest_date,
+            latest_ts,
+        )
         return []
+
+    # Defensive dedup by symbol: even within one (data_date, captured_at) a
+    # symbol must appear once. Rows are rank-ascending, so the first occurrence
+    # is the best-ranked — keep it.
+    seen: set[str] = set()
+    rows = [r for r in rows if not (r.symbol in seen or seen.add(r.symbol))]
 
     # Step 2: Enrich each stock with capital flow data
     signals: list[MoneyFlowSignal] = []

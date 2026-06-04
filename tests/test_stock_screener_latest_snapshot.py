@@ -109,8 +109,15 @@ def _insert_snapshot(
 
 
 def _recent_ts() -> datetime:
-    """A captured_at well within the 24h staleness window."""
-    return datetime.now(timezone.utc) - timedelta(hours=1)
+    """A captured_at well within the 24h staleness window.
+
+    Stored tz-naive UTC: SQLite's TIMESTAMP affinity drops tz offsets on the
+    equality-bind path, so a tz-aware value would round-trip to a string that
+    never equality-matches the stored row (a SQLite harness artifact — real
+    Postgres `timestamptz` matches fine). The screener's staleness check
+    re-stamps naive values as UTC, so this faithfully mirrors production.
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
 
 
 def test_backfill_shape_returns_only_latest_date(db_session):
@@ -161,7 +168,7 @@ def test_latest_date_picks_latest_captured_at(db_session):
 
 def test_stale_latest_date_skipped(db_session):
     """Latest data_date's captured_at older than 24h -> skip (empty)."""
-    stale_ts = datetime.now(timezone.utc) - timedelta(hours=30)
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=30)).replace(tzinfo=None)
     _insert_snapshot(db_session, symbol="NVDA", rank=1, data_date="2026-06-04", captured_at=stale_ts)
 
     signals = _screen_money_flow(db_session)
