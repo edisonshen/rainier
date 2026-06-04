@@ -878,6 +878,64 @@ def _sl_tp_exit_day(
     return None
 
 
+def _day_k_exit_return(
+    price_rows: list[tuple[Any, float | None, float | None, float | None, float | None]],
+    entry_date: date,
+    entry_price: float,
+    stop_loss: float,
+    target_price: float,
+    k: int,
+    *,
+    as_of: date,
+) -> float | None:
+    """Return realized under a ``time_stop_days=k`` policy, MATCHING evaluate_exit's
+    same-session priority (codex iter-4 [P2]).
+
+    evaluate_exit checks SL/TP BEFORE the time-stop on the same session, so a
+    trade whose day-k bar touches stop/target exits at that LEVEL, not the day-k
+    close. We therefore:
+      * if SL/TP fires on a session < k → return None (caller already excludes
+        these from candidate k's survivor cohort);
+      * if SL/TP fires exactly on session k → score the LEVEL return (stop_loss
+        or target_price), conservatively resolving a same-bar SL+TP hit to the
+        stop (the F3 downward-bias convention evaluate_exit uses);
+      * otherwise (survives past k) → score the day-k close return.
+
+    None when the curve hasn't matured to day k (as-of guard).
+    """
+    exit_day = _sl_tp_exit_day(
+        price_rows, entry_date, stop_loss, target_price, as_of=as_of
+    )
+    if exit_day is not None and exit_day < k:
+        return None  # exited before k — not in candidate k's cohort
+    bars = sorted(
+        (
+            (_as_date_local(d), o, h, lo, c)
+            for (d, o, h, lo, c) in price_rows
+            if entry_date <= _as_date_local(d) <= as_of
+        ),
+        key=lambda r: r[0],
+    )
+    if exit_day == k:
+        # Locate the k-th priced (non-NULL-OHLC) session and resolve the level.
+        session_n = 0
+        for _d, _o, high, low, _c in bars:
+            if high is None or low is None:
+                continue
+            session_n += 1
+            if session_n == k:
+                # Conservative: stop takes priority on a same-bar SL+TP hit.
+                if low <= stop_loss:
+                    return (stop_loss - entry_price) / entry_price
+                if high >= target_price:
+                    return (target_price - entry_price) / entry_price
+                break
+    curve = _return_by_holding_day(price_rows, entry_date, entry_price, as_of=as_of)
+    if len(curve) < k:
+        return None
+    return curve[k - 1]
+
+
 def _sharpe_like(returns: list[float]) -> float | None:
     """Risk-adjusted objective (design ★): mean / population-std of the by-day
     returns at candidate `k`. NOT mean return — the gate is return PER UNIT of
@@ -997,20 +1055,19 @@ def discover_time_stop(
         cohort_returns: list[float] = []
         survivors = 0
         for t in trades:
-            exit_day = _sl_tp_exit_day(
-                t["price_rows"], t["entry_date"], t["stop_loss"],
-                t["target_price"], as_of=anchor,
+            # Score with evaluate_exit's same-session SL/TP-before-time-stop
+            # priority (codex iter-4 [P2]): a day-k bar that touches stop/target
+            # exits at that LEVEL, not the day-k close. Returns None when the
+            # trade exited strictly before k (excluded from candidate k's
+            # survivor cohort) or hasn't matured to day k (as-of guard).
+            ret_k = _day_k_exit_return(
+                t["price_rows"], t["entry_date"], t["entry_price"],
+                t["stop_loss"], t["target_price"], k, as_of=anchor,
             )
-            # Excluded from candidate k if it SL/TP-exited strictly BEFORE day k.
-            if exit_day is not None and exit_day < k:
+            if ret_k is None:
                 continue
-            curve = _return_by_holding_day(
-                t["price_rows"], t["entry_date"], t["entry_price"], as_of=anchor
-            )
-            if len(curve) < k:
-                continue  # not matured to day k yet (as-of guard)
             survivors += 1
-            cohort_returns.append(curve[k - 1])
+            cohort_returns.append(ret_k)
         if survivors < min_survivors:
             continue
         obj = _sharpe_like(cohort_returns)

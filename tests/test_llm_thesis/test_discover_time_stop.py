@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from rainier.llm_thesis.research import (
     TIME_STOP_STABLE_RUNS,
+    _day_k_exit_return,
     _return_by_holding_day,
     _sharpe_like,
     _sl_tp_exit_day,
@@ -87,6 +88,68 @@ def test_sl_tp_exit_day_excludes_pre_k_exit():
     # Never hits → None.
     rows2 = _bars(entry, closes=[100, 101, 102])
     assert _sl_tp_exit_day(rows2, entry, 80.0, 130.0, as_of=date(2026, 1, 3)) is None
+
+
+def test_day_k_exit_return_uses_level_on_day_k_touch():
+    # codex iter-4 [P2]: evaluate_exit checks SL/TP BEFORE the time-stop on the
+    # same session, so a day-k bar that touches the target exits at the target
+    # LEVEL — not the (flat) day-k close. The scorer must match that priority.
+    entry = date(2026, 1, 1)
+    # Day 3 (k=3): high reaches the 120 target intraday but closes flat at 100.
+    rows = _bars(
+        entry,
+        closes=[100, 100, 100],
+        highs=[100, 100, 120],   # day-3 high touches target
+        lows=[100, 100, 100],
+    )
+    r = _day_k_exit_return(
+        rows, entry, 100.0, stop_loss=80.0, target_price=120.0, k=3,
+        as_of=date(2026, 1, 3),
+    )
+    # +20% target return, NOT the 0% flat close.
+    assert abs(r - 0.20) < 1e-9
+
+
+def test_day_k_exit_return_same_bar_resolves_to_stop():
+    # Same-bar SL+TP on day k resolves conservatively to the stop (F3 downward
+    # bias, matching evaluate_exit).
+    entry = date(2026, 1, 1)
+    rows = _bars(
+        entry,
+        closes=[100, 100, 100],
+        highs=[100, 100, 120],   # touches target
+        lows=[100, 100, 80],     # AND touches stop on the same day-3 bar
+    )
+    r = _day_k_exit_return(
+        rows, entry, 100.0, stop_loss=80.0, target_price=120.0, k=3,
+        as_of=date(2026, 1, 3),
+    )
+    assert abs(r - (-0.20)) < 1e-9  # -20% stop, not +20% target
+
+
+def test_day_k_exit_return_survives_past_k_uses_close():
+    # No SL/TP touch through day k → score the day-k close return.
+    entry = date(2026, 1, 1)
+    rows = _bars(entry, closes=[100, 102, 105])
+    r = _day_k_exit_return(
+        rows, entry, 100.0, stop_loss=80.0, target_price=200.0, k=3,
+        as_of=date(2026, 1, 3),
+    )
+    assert abs(r - 0.05) < 1e-9
+
+
+def test_day_k_exit_return_excludes_pre_k_exit():
+    # Exits before k → None (caller drops from candidate k's cohort).
+    entry = date(2026, 1, 1)
+    rows = _bars(
+        entry, closes=[100, 92, 95],
+        highs=[101, 95, 96], lows=[99, 90, 94],  # day-2 low pierces 90 stop
+    )
+    r = _day_k_exit_return(
+        rows, entry, 100.0, stop_loss=90.0, target_price=120.0, k=3,
+        as_of=date(2026, 1, 3),
+    )
+    assert r is None
 
 
 def test_sharpe_like_prefers_low_variance():
