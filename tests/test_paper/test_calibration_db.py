@@ -153,3 +153,24 @@ def test_load_latest_picks_most_recent_on_or_before(pg_legacy_session):
     assert got["tag"] == "old"
     got2 = load_latest_calibration(date(2026, 2, 9))
     assert got2["tag"] == "new"
+
+
+def test_load_latest_strict_before_excludes_same_day(pg_legacy_session):
+    # codex iter-3 [P2]: the prompt-injection path (generate_thesis) loads with
+    # strict_before=True so a scan on day D never sees day D's own calibration
+    # row (written end-of-day D, after that day's eval/paper outcomes). That row
+    # must not leak same-day hindsight into a same-day rerun / historical replay.
+    s = pg_legacy_session  # noqa: F841
+    persist_calibration(date(2026, 2, 5), {"as_of_date": "2026-02-05", "tag": "prior"})
+    persist_calibration(date(2026, 2, 9), {"as_of_date": "2026-02-09", "tag": "today"})
+
+    # Default (generic loader) includes the same-day row.
+    incl = load_latest_calibration(date(2026, 2, 9))
+    assert incl["tag"] == "today"
+
+    # strict_before: same-day row is excluded; falls back to the prior day.
+    strict = load_latest_calibration(date(2026, 2, 9), strict_before=True)
+    assert strict["tag"] == "prior"
+
+    # No prior row at all under strict → None (Phase-0 behaviour).
+    assert load_latest_calibration(date(2026, 2, 5), strict_before=True) is None

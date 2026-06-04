@@ -276,11 +276,24 @@ def persist_calibration(as_of: date, payload: dict[str, Any]) -> None:
         session.execute(stmt)
 
 
-def load_latest_calibration(as_of: date | None = None) -> dict[str, Any] | None:
-    """Return the most recent calibration payload at-or-before ``as_of``.
+def load_latest_calibration(
+    as_of: date | None = None, *, strict_before: bool = False
+) -> dict[str, Any] | None:
+    """Return the most recent calibration payload relative to ``as_of``.
 
-    Used by ``build_user_message`` to inject the calibration section. Returns
-    None when no calibration row exists yet (Phase-0 days / fresh DB) — the
+    With ``strict_before=False`` (default, generic loader) the bound is
+    at-or-before ``as_of``. With ``strict_before=True`` it is STRICTLY before
+    ``as_of`` — the no-hindsight contract for the prompt-injection path
+    (codex iter-3 [P2]).
+
+    The thesis prompt for a scan on day D must only ever see calibration
+    computed on a PRIOR day: day D's own ``paper_calibration`` row is written
+    by ``run_daily_eval`` at end-of-day D (after that day's eval + paper-book
+    outcomes), so injecting it into a same-day scan rerun / historical replay
+    would leak same-day hindsight into the prompt. ``generate_thesis`` therefore
+    passes ``strict_before=True``.
+
+    Returns None when no eligible row exists yet (Phase-0 days / fresh DB) — the
     prompt then renders no section.
     """
     with get_session() as session:
@@ -288,7 +301,10 @@ def load_latest_calibration(as_of: date | None = None) -> dict[str, Any] | None:
             PaperCalibration.as_of_date.desc()
         )
         if as_of is not None:
-            q = q.where(PaperCalibration.as_of_date <= as_of)
+            if strict_before:
+                q = q.where(PaperCalibration.as_of_date < as_of)
+            else:
+                q = q.where(PaperCalibration.as_of_date <= as_of)
         row = session.execute(q.limit(1)).first()
     return dict(row[0]) if row is not None else None
 

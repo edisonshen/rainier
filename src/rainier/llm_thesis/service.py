@@ -364,8 +364,12 @@ async def generate_thesis(
             render_calibration_section,
         )
 
+        # strict_before: a scan on day D must only see calibration from a PRIOR
+        # day. Day D's own paper_calibration row is written end-of-day D (after
+        # that day's eval/paper outcomes), so a same-day rerun / replay must not
+        # inject it — that would leak same-day hindsight (codex iter-3 [P2]).
         calibration_section = render_calibration_section(
-            load_latest_calibration(scan_date)
+            load_latest_calibration(scan_date, strict_before=True)
         )
     except Exception:
         log.warning("thesis_calibration_load_failed symbol=%s", symbol, exc_info=True)
