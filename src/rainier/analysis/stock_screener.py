@@ -193,16 +193,27 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
     # once (duplicate symbols across days -> CardinalityViolation downstream).
     # Pick the most recent `data_date`, then the latest `captured_at` WITHIN
     # that date — one clean trading-day snapshot regardless of insert collisions.
-    latest_date = session.query(
-        func.max(MoneyFlowSnapshot.data_date)
-    ).scalar()
+    #
+    # Both the date and the timestamp are scoped to ranking_type == "top100"
+    # (the same scope as the row query below). A day whose newest scrape held
+    # only bottom100 (or another non-top100 partial) must NOT become the
+    # "latest" date — otherwise the top100 row filter returns nothing and the
+    # report blanks even though a fresh top100 snapshot exists on a prior day.
+    latest_date = (
+        session.query(func.max(MoneyFlowSnapshot.data_date))
+        .filter(MoneyFlowSnapshot.ranking_type == "top100")
+        .scalar()
+    )
     if latest_date is None:
         log.warning("No money flow snapshots in database")
         return []
 
     latest_ts = (
         session.query(func.max(MoneyFlowSnapshot.captured_at))
-        .filter(MoneyFlowSnapshot.data_date == latest_date)
+        .filter(
+            MoneyFlowSnapshot.ranking_type == "top100",
+            MoneyFlowSnapshot.data_date == latest_date,
+        )
         .scalar()
     )
 

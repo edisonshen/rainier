@@ -190,5 +190,24 @@ def test_normal_single_day_unchanged(db_session):
     assert sorted(s.symbol for s in signals) == ["AMD", "NVDA", "TSLA"]
 
 
+def test_newest_day_non_top100_does_not_blank_report(db_session):
+    """Codex P2 regression: the newest data_date holding only a non-top100
+    partial scrape must NOT be selected as "latest". The date/timestamp scope
+    must match the top100 row query, so the screener falls back to the most
+    recent day that actually has top100 rows instead of returning empty."""
+    ts = _recent_ts()
+    # 2026-06-03: real top100 snapshot (the answer we want).
+    _insert_snapshot(db_session, symbol="NVDA", rank=1, data_date="2026-06-03", captured_at=ts)
+    _insert_snapshot(db_session, symbol="TSLA", rank=2, data_date="2026-06-03", captured_at=ts)
+    # 2026-06-04: NEWER data_date, but only a bottom100 partial — no top100.
+    _insert_snapshot(
+        db_session, symbol="META", rank=1, data_date="2026-06-04",
+        captured_at=ts, ranking_type="bottom100",
+    )
+
+    signals = _screen_money_flow(db_session)
+    assert sorted(s.symbol for s in signals) == ["NVDA", "TSLA"]
+
+
 def test_empty_db_returns_empty(db_session):
     assert _screen_money_flow(db_session) == []
