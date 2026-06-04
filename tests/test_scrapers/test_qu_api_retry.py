@@ -13,29 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from rainier.scrapers.qu.scraper import QUScraper
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_scraper(is_cdp: bool = False) -> QUScraper:
-    mock_browser = MagicMock()
-    mock_browser._is_cdp = is_cdp
-
-    with patch("rainier.scrapers.qu.scraper.get_settings") as mock_settings:
-        qu_config = MagicMock()
-        qu_config.url = "https://www.quantunicorn.com/products#qu100"
-        qu_config.login_url = "https://www.quantunicorn.com/signin"
-        qu_config.session_file = "./data/auth/qu_session.json"
-        qu_config.session_ttl_hours = 12
-        qu_config.timeout_ms = 30000
-        qu_config.backfill_delay_seconds = 2.0
-        mock_settings.return_value.scraping.quantunicorn = qu_config
-        scraper = QUScraper(mock_browser)
-    return scraper
-
+from .conftest import make_scraper as _make_scraper
 
 # ---------------------------------------------------------------------------
 # Unit tests on QUScraper._fetch_qu_api
