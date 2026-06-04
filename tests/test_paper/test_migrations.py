@@ -7,6 +7,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from rainier.core.models import (
+    PaperCalibration,
     PaperReportSnapshot,
     PaperSkip,
     PaperTrade,
@@ -116,6 +117,22 @@ def test_paper_trade_not_a_hypertable_marker():
     assert "paper_trade" not in HYPERTABLES
 
 
+def test_paper_calibration_orm_shape():
+    """D7a — PaperCalibration ORM: id/as_of_date/payload/created_at, JSONB
+    payload, UNIQUE(as_of_date), NOT a hypertable."""
+    cols = {c.name for c in inspect(PaperCalibration).columns}
+    assert {"id", "as_of_date", "payload", "created_at"} <= cols
+    uniques = [
+        c for c in PaperCalibration.__table__.constraints
+        if c.__class__.__name__ == "UniqueConstraint"
+    ]
+    assert any({col.name for col in c.columns} == {"as_of_date"} for c in uniques)
+    assert "JSON" in str(PaperCalibration.__table__.c.payload.type).upper()
+    from rainier.core.models import HYPERTABLES
+
+    assert "paper_calibration" not in HYPERTABLES
+
+
 # --------------------------------------------------------------------------
 # Postgres-only schema assertions (sqlite can't model these)
 # --------------------------------------------------------------------------
@@ -213,6 +230,37 @@ def test_a6_partial_unique_pending_open(pg_legacy_engine, first, second, should_
     else:
         with pg_legacy_engine.begin() as conn:
             _insert(conn, 102, second)
+
+
+@pytest.mark.requires_postgres
+def test_0007_paper_calibration_up_creates_table(pg_legacy_engine):
+    """D7a — the 0007 migration (applied by the fixture) creates
+    paper_calibration with UNIQUE(as_of_date)."""
+    insp = inspect(pg_legacy_engine)
+    schema = pg_legacy_engine.rainier_schema
+    assert "paper_calibration" in set(insp.get_table_names(schema=schema))
+    uqs = insp.get_unique_constraints("paper_calibration", schema=schema)
+    assert any(set(u["column_names"]) == {"as_of_date"} for u in uqs)
+
+
+@pytest.mark.requires_postgres
+def test_0007_paper_calibration_downgrade_drops_only_its_table(pg_legacy_engine):
+    """D7a downgrade drops paper_calibration; 0005 tables + FK targets remain."""
+    from pathlib import Path
+
+    down = (
+        Path(__file__).resolve().parents[2]
+        / "migrations" / "0007_paper_calibration_downgrade.sql"
+    )
+    with pg_legacy_engine.begin() as conn:
+        conn.execute(text(down.read_text()))
+    insp = inspect(pg_legacy_engine)
+    schema = pg_legacy_engine.rainier_schema
+    tables = set(insp.get_table_names(schema=schema))
+    assert "paper_calibration" not in tables
+    # 0005 tables + FK targets untouched.
+    assert {"paper_trade", "paper_skip", "paper_report_snapshot",
+            "analysis_results", "screened_stocks"} <= tables
 
 
 @pytest.mark.requires_postgres

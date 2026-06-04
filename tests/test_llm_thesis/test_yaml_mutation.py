@@ -19,6 +19,7 @@ from rainier.llm_thesis.research import (
     _increment_prompt_version,
     _lower_signal_weight,
     _raise_signal_weight,
+    _set_learned_time_stop_days,
     apply_action,
 )
 
@@ -205,6 +206,52 @@ def test_signal_weight_clamps_at_five(settings_path: Path):
         "rank_trajectory", {"factor": 100.0}, settings_path
     )
     assert diff["new_value"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# set_learned_time_stop_days (D6) — mutates the EXISTING config field
+# ---------------------------------------------------------------------------
+
+
+def test_set_learned_time_stop_days_from_params_k(settings_path: Path):
+    diff = _set_learned_time_stop_days("5", {"k": 5}, settings_path)
+    assert diff == {
+        "field": "learned_time_stop_days",
+        "old_value": None,  # SAMPLE_YAML has no key yet
+        "new_value": 5,
+    }
+    text = settings_path.read_text()
+    assert "learned_time_stop_days: 5" in text
+    # Mutates llm_thesis (the existing field's section), not a new top-level key.
+    thesis_section = text.split("llm_thesis:")[1]
+    assert "learned_time_stop_days: 5" in thesis_section
+
+
+def test_set_learned_time_stop_days_falls_back_to_target(settings_path: Path):
+    diff = _set_learned_time_stop_days("8", {}, settings_path)
+    assert diff["new_value"] == 8
+
+
+def test_set_learned_time_stop_days_clears_on_none(settings_path: Path):
+    # First set it, then clear with an empty/invalid value.
+    _set_learned_time_stop_days("5", {"k": 5}, settings_path)
+    diff = _set_learned_time_stop_days("", {"k": None}, settings_path)
+    assert diff["old_value"] == 5
+    assert diff["new_value"] is None
+
+
+def test_set_learned_time_stop_days_rejects_below_one(settings_path: Path):
+    diff = _set_learned_time_stop_days("0", {"k": 0}, settings_path)
+    assert diff["new_value"] is None  # k<1 is meaningless → cleared
+
+
+def test_apply_action_set_learned_time_stop_dispatches(settings_path: Path):
+    diff = apply_action(
+        {"kind": "set_learned_time_stop_days", "target": "7", "params": {"k": 7}},
+        settings_path,
+    )
+    assert diff["field"] == "learned_time_stop_days"
+    assert diff["new_value"] == 7
 
 
 # ---------------------------------------------------------------------------

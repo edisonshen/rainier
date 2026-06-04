@@ -280,6 +280,9 @@ def test_insight_kinds_and_severities_are_complete():
         "calibration_off",
         "prompt_regression",
         "new_pattern_discovered",
+        # Phase 2 (D6 / D7c).
+        "time_stop_discovered",
+        "paper_lessons",
     }
     assert set(SEVERITIES) == {"info", "warn", "critical"}
 
@@ -708,7 +711,7 @@ def test_check_prompt_regression_no_emit_when_single_prompt():
 
 def test_run_research_runs_all_checks_and_collects_emissions():
     """Each individual check is patched to emit a single insight; the
-    orchestrator should collect 6 total."""
+    orchestrator should collect 8 total (6 PR3 + 2 Phase-2)."""
     sentinel_rows: list[Any] = []
 
     def _fake(name):
@@ -755,10 +758,18 @@ def test_run_research_runs_all_checks_and_collects_emissions():
             "rainier.llm_thesis.research.check_prompt_regression",
             side_effect=_fake("prompt_regression"),
         ),
+        patch(
+            "rainier.llm_thesis.research.discover_time_stop",
+            side_effect=_fake("time_stop_discovered"),
+        ),
+        patch(
+            "rainier.llm_thesis.research.check_paper_lessons",
+            side_effect=_fake("paper_lessons"),
+        ),
     ):
         out = run_research(eval_date=date(2026, 5, 7))
 
-    assert len(out) == 6
+    assert len(out) == 8
     assert {r.kind for r in out} == set(INSIGHT_KINDS)
 
 
@@ -791,6 +802,12 @@ def test_run_research_isolates_failures():
         ),
         patch(
             "rainier.llm_thesis.research.check_prompt_regression", side_effect=_ok
+        ),
+        patch(
+            "rainier.llm_thesis.research.discover_time_stop", side_effect=_ok
+        ),
+        patch(
+            "rainier.llm_thesis.research.check_paper_lessons", side_effect=_ok
         ),
     ):
         out = run_research(eval_date=date(2026, 5, 7))
