@@ -809,6 +809,17 @@ TIME_STOP_SUBJECT = "paper_time_stop"
 TIME_STOP_STABLE_RUNS = 2
 
 
+def _is_priced_session(high: Any, low: Any, close: Any) -> bool:
+    """A bar counts as ONE holding session iff its high, low AND close are all
+    present (codex iter-6 [P2]). Unifying the rule across _return_by_holding_day
+    and _sl_tp_exit_day keeps session numbering identical between the exit-day
+    detector and the return curve — otherwise a partial OHLC bar (e.g. high/low
+    present but close NULL) would advance one helper's counter but not the
+    other's, shifting the k-th session and mis-scoring the candidate horizon.
+    (open may be NULL — evaluate_exit simply skips the open-gap check then.)"""
+    return high is not None and low is not None and close is not None
+
+
 def _return_by_holding_day(
     price_rows: list[tuple[Any, float | None, float | None, float | None, float | None]],
     entry_date: date,
@@ -818,7 +829,8 @@ def _return_by_holding_day(
 ) -> list[float]:
     """Reconstruct the close-to-entry return at each holding day (entry day =
     day 1), from entry_date forward, using only bars in [entry_date, as_of]
-    (as-of guard — no hindsight). NULL-close days are skipped (no phantom day).
+    (as-of guard — no hindsight). Partial-OHLC days are skipped (no phantom day)
+    using the SAME predicate as _sl_tp_exit_day so session numbers stay aligned.
 
     Returns a list where index i = return_pct after holding through the (i+1)th
     priced session.
@@ -832,8 +844,8 @@ def _return_by_holding_day(
         key=lambda r: r[0],
     )
     out: list[float] = []
-    for _d, _o, _h, _lo, close in bars:
-        if close is None:
+    for _d, _o, high, low, close in bars:
+        if not _is_priced_session(high, low, close):
             continue
         out.append((float(close) - entry_price) / entry_price)
     return out
@@ -858,7 +870,8 @@ def _sl_tp_exit_day(
     candidate `k`: a trade exiting before day `k` is excluded from candidate `k`.
 
     Mirrors evaluate_exit's level rules (low<=stop, high>=target) walking
-    priced sessions; NULL-OHLC days are skipped and do not advance the counter.
+    priced sessions; partial-OHLC days are skipped (same _is_priced_session
+    predicate as the return curve) and do not advance the counter.
     """
     bars = sorted(
         (
@@ -869,8 +882,8 @@ def _sl_tp_exit_day(
         key=lambda r: r[0],
     )
     session_n = 0
-    for _d, _o, high, low, _c in bars:
-        if high is None or low is None:
+    for _d, _o, high, low, close in bars:
+        if not _is_priced_session(high, low, close):
             continue
         session_n += 1
         if low <= stop_loss or high >= target_price:
@@ -923,8 +936,8 @@ def _day_k_exit_return(
         # is consulted; only then do intraday touches apply (same-bar SL+TP ->
         # stop, F3 downward bias).
         session_n = 0
-        for _d, open_px, high, low, _c in bars:
-            if high is None or low is None:
+        for _d, open_px, high, low, close in bars:
+            if not _is_priced_session(high, low, close):
                 continue
             session_n += 1
             if session_n == k:
