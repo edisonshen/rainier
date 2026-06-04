@@ -67,6 +67,12 @@ INSIGHT_KINDS: tuple[str, ...] = (
     "calibration_off",
     "prompt_regression",
     "new_pattern_discovered",
+    # Phase 2 (D6): the learned force-exit horizon discovered by
+    # discover_time_stop. Recommend-only — action set_learned_time_stop_days.
+    "time_stop_discovered",
+    # Phase 2 (D7c): weekly human-readable lessons from the paper-trade record.
+    # info/noop — feedable into the prompt later.
+    "paper_lessons",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "warn", "critical")
@@ -792,6 +798,377 @@ def check_prompt_regression(
 
 
 # ---------------------------------------------------------------------------
+# D6 — discover_time_stop (learn the force-exit horizon; recommend-only)
+# ---------------------------------------------------------------------------
+
+# Subject is fixed so re-emission UPSERTs onto one pending row (stability is
+# tracked in evidence across weekly runs, not via duplicate rows).
+TIME_STOP_SUBJECT = "paper_time_stop"
+# A chosen `k` must repeat across this many consecutive weekly runs before the
+# action flips from recommend-only (noop) to executable (set_learned_time_stop_days).
+TIME_STOP_STABLE_RUNS = 2
+
+
+def _return_by_holding_day(
+    price_rows: list[tuple[Any, float | None, float | None, float | None, float | None]],
+    entry_date: date,
+    entry_price: float,
+    *,
+    as_of: date,
+) -> list[float]:
+    """Reconstruct the close-to-entry return at each holding day (entry day =
+    day 1), from entry_date forward, using only bars in [entry_date, as_of]
+    (as-of guard — no hindsight). NULL-close days are skipped (no phantom day).
+
+    Returns a list where index i = return_pct after holding through the (i+1)th
+    priced session.
+    """
+    bars = sorted(
+        (
+            (_as_date_local(d), o, h, lo, c)
+            for (d, o, h, lo, c) in price_rows
+            if entry_date <= _as_date_local(d) <= as_of
+        ),
+        key=lambda r: r[0],
+    )
+    out: list[float] = []
+    for _d, _o, _h, _lo, close in bars:
+        if close is None:
+            continue
+        out.append((float(close) - entry_price) / entry_price)
+    return out
+
+
+def _as_date_local(d: Any) -> date:
+    if isinstance(d, datetime):
+        return d.date()
+    return d
+
+
+def _sl_tp_exit_day(
+    price_rows: list[tuple[Any, float | None, float | None, float | None, float | None]],
+    entry_date: date,
+    stop_loss: float,
+    target_price: float,
+    *,
+    as_of: date,
+) -> int | None:
+    """The 1-based holding day a trade SL/TP-exits, or None if it never does
+    within [entry_date, as_of]. Used to build the SURVIVOR cohort for each
+    candidate `k`: a trade exiting before day `k` is excluded from candidate `k`.
+
+    Mirrors evaluate_exit's level rules (low<=stop, high>=target) walking
+    priced sessions; NULL-OHLC days are skipped and do not advance the counter.
+    """
+    bars = sorted(
+        (
+            (_as_date_local(d), o, h, lo, c)
+            for (d, o, h, lo, c) in price_rows
+            if entry_date <= _as_date_local(d) <= as_of
+        ),
+        key=lambda r: r[0],
+    )
+    session_n = 0
+    for _d, _o, high, low, _c in bars:
+        if high is None or low is None:
+            continue
+        session_n += 1
+        if low <= stop_loss or high >= target_price:
+            return session_n
+    return None
+
+
+def _sharpe_like(returns: list[float]) -> float | None:
+    """Risk-adjusted objective (design ★): mean / population-std of the by-day
+    returns at candidate `k`. NOT mean return — the gate is return PER UNIT of
+    dispersion, so a high-mean/high-variance `k` can lose to a lower-mean/tight
+    one. None when undefined (n<2 or zero dispersion)."""
+    n = len(returns)
+    if n < 2:
+        return None
+    mean = sum(returns) / n
+    var = sum((r - mean) ** 2 for r in returns) / n
+    std = var ** 0.5
+    if std == 0:
+        return None
+    return mean / std
+
+
+def _load_time_stop_trades(
+    as_of: date,
+) -> list[dict[str, Any]]:
+    """Pull each paper position's (entry, levels, entry-forward price rows) for
+    the curve reconstruction. Only filled positions (entry_date set) qualify."""
+    from rainier.core.models import PaperTrade, StockPrice
+    from rainier.paper.ingest import canonical_instant
+
+    trades: list[dict[str, Any]] = []
+    with get_session() as session:
+        positions = session.execute(
+            select(PaperTrade).where(PaperTrade.entry_date.isnot(None))
+        ).scalars().all()
+        meta = [
+            {
+                "id": p.id,
+                "symbol": p.symbol,
+                "entry_date": _as_date_local(p.entry_date),
+                "entry_price": p.entry_price,
+                "stop_loss": p.stop_loss,
+                "target_price": p.target_price,
+            }
+            for p in positions
+            if p.entry_price is not None
+        ]
+        for m in meta:
+            rows = session.execute(
+                select(
+                    StockPrice.date,
+                    StockPrice.open,
+                    StockPrice.high,
+                    StockPrice.low,
+                    StockPrice.close,
+                ).where(
+                    StockPrice.symbol == m["symbol"],
+                    StockPrice.date >= canonical_instant(m["entry_date"]),
+                    StockPrice.date <= canonical_instant(as_of),
+                )
+            ).all()
+            m["price_rows"] = [tuple(r) for r in rows]
+            trades.append(m)
+    return trades
+
+
+def _prior_time_stop_evidence(db_session=None) -> dict[str, Any] | None:
+    """The evidence dict of the current pending time_stop_discovered insight (if
+    any), so we can read the prior chosen_k + stable_run_count to enforce the
+    ≥2-run stability gate."""
+
+    def _do(session):
+        row = (
+            session.query(ResearchInsight)
+            .filter(
+                ResearchInsight.kind == "time_stop_discovered",
+                ResearchInsight.subject == TIME_STOP_SUBJECT,
+                ResearchInsight.status == "pending",
+            )
+            .first()
+        )
+        return dict(row.evidence) if row is not None and row.evidence else None
+
+    if db_session is not None:
+        return _do(db_session)
+    with get_session() as session:
+        return _do(session)
+
+
+def discover_time_stop(
+    *,
+    eval_date: date | None = None,
+    candidate_ks: tuple[int, ...] = (3, 5, 8, 10, 15),
+    min_survivors: int = 5,
+    db_session=None,
+) -> list[ResearchInsight]:
+    """Learn the force-exit horizon `k` from realized paper positions (D6).
+
+    For each candidate `k`:
+      * reconstruct each trade's return-by-holding-day curve from stock_prices
+        (entry-day forward, as-of capped — no hindsight);
+      * include a trade in candidate `k`'s cohort ONLY if it SURVIVED to day `k`
+        (did not SL/TP-exit before day `k` — survivor cohort);
+      * require >= `min_survivors` matured survivors at day `k` (min-sample gate
+        is PER candidate `k`, not total trades);
+      * score the cohort's day-`k` returns by the RISK-ADJUSTED objective
+        (Sharpe-like mean/std — NOT mean return).
+    Pick the `k` maximizing the risk-adjusted objective.
+
+    RECOMMEND-ONLY until the chosen `k` is stable across >= TIME_STOP_STABLE_RUNS
+    consecutive weekly runs: while unstable the emitted action is `noop`; once
+    stable it flips to `set_learned_time_stop_days` (still operator-approvable —
+    never auto-applied here). Emits one `time_stop_discovered` insight or [].
+    """
+    anchor = eval_date if eval_date is not None else date.today()
+    trades = _load_time_stop_trades(anchor)
+    if not trades:
+        return []
+
+    # Score each candidate k over its survivor cohort.
+    scored: dict[int, dict[str, Any]] = {}
+    for k in candidate_ks:
+        cohort_returns: list[float] = []
+        survivors = 0
+        for t in trades:
+            exit_day = _sl_tp_exit_day(
+                t["price_rows"], t["entry_date"], t["stop_loss"],
+                t["target_price"], as_of=anchor,
+            )
+            # Excluded from candidate k if it SL/TP-exited strictly BEFORE day k.
+            if exit_day is not None and exit_day < k:
+                continue
+            curve = _return_by_holding_day(
+                t["price_rows"], t["entry_date"], t["entry_price"], as_of=anchor
+            )
+            if len(curve) < k:
+                continue  # not matured to day k yet (as-of guard)
+            survivors += 1
+            cohort_returns.append(curve[k - 1])
+        if survivors < min_survivors:
+            continue
+        obj = _sharpe_like(cohort_returns)
+        if obj is None:
+            continue
+        mean_ret = sum(cohort_returns) / len(cohort_returns)
+        scored[k] = {
+            "survivors": survivors,
+            "objective": obj,
+            "mean_return": mean_ret,
+        }
+
+    if not scored:
+        return []
+
+    chosen_k = max(scored, key=lambda k: scored[k]["objective"])
+
+    # Stability gate: compare to the prior pending insight's chosen_k.
+    prior = _prior_time_stop_evidence(db_session=db_session)
+    prior_k = prior.get("chosen_k") if prior else None
+    prior_runs = int(prior.get("stable_run_count", 0)) if prior else 0
+    stable_run_count = (prior_runs + 1) if prior_k == chosen_k else 1
+    is_stable = stable_run_count >= TIME_STOP_STABLE_RUNS
+
+    if is_stable:
+        action = {
+            "kind": "set_learned_time_stop_days",
+            "target": str(chosen_k),
+            "params": {"k": chosen_k},
+        }
+        severity = "warn"
+    else:
+        # Recommend-only — observed but not yet stable enough to apply.
+        action = {"kind": "noop", "target": str(chosen_k), "params": {}}
+        severity = "info"
+
+    evidence = {
+        "chosen_k": chosen_k,
+        "stable_run_count": stable_run_count,
+        "stable": is_stable,
+        "min_survivors": min_survivors,
+        "candidate_ks": list(candidate_ks),
+        "per_k": {str(k): v for k, v in sorted(scored.items())},
+    }
+    rationale = (
+        f"Risk-adjusted force-exit horizon k={chosen_k} "
+        f"(objective {scored[chosen_k]['objective']:.3f}, "
+        f"{scored[chosen_k]['survivors']} survivors, mean "
+        f"{scored[chosen_k]['mean_return']:+.2%}). "
+        + (
+            "Stable across "
+            f"{stable_run_count} consecutive runs — recommend adopting "
+            "learned_time_stop_days (future fills only)."
+            if is_stable
+            else f"Observed run {stable_run_count}/{TIME_STOP_STABLE_RUNS} — "
+            "recommend-only until stable across consecutive runs."
+        )
+    )
+    return [
+        emit_insight(
+            kind="time_stop_discovered",
+            subject=TIME_STOP_SUBJECT,
+            severity=severity,
+            evidence=evidence,
+            action=action,
+            rationale=rationale,
+            db_session=db_session,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# D7c — weekly paper-trade lessons (human-readable; info/noop)
+# ---------------------------------------------------------------------------
+
+PAPER_LESSONS_SUBJECT = "paper_pnl"
+
+
+def check_paper_lessons(
+    *,
+    eval_date: date | None = None,
+    days: int = 30,
+    db_session=None,
+) -> list[ResearchInsight]:
+    """Read the closed paper-trade record over the rolling window and emit a
+    human-readable `paper_lessons` insight (info, action=noop) — D7c.
+
+    Summarizes realized win-rate, exit-reason mix, and the best/worst closed
+    trade so the operator (and later the prompt) can see what the paper book
+    actually did. No weight-tuning here (that is D7b, deferred)."""
+    from rainier.core.models import PaperTrade
+
+    anchor = eval_date if eval_date is not None else date.today()
+    cutoff = anchor - timedelta(days=days)
+
+    with get_session() as session:
+        closed = session.execute(
+            select(PaperTrade).where(
+                PaperTrade.status == "closed",
+                PaperTrade.exit_date.isnot(None),
+                PaperTrade.exit_date >= cutoff,
+                PaperTrade.exit_date <= anchor,
+            )
+        ).scalars().all()
+        rows = [
+            {
+                "symbol": p.symbol,
+                "exit_reason": p.exit_reason,
+                "return_pct": float(p.return_pct) if p.return_pct is not None else 0.0,
+                "pnl": float(p.pnl) if p.pnl is not None else 0.0,
+            }
+            for p in closed
+        ]
+
+    if not rows:
+        return []
+
+    n = len(rows)
+    wins = sum(1 for r in rows if r["return_pct"] > 0)
+    reason_mix: dict[str, int] = {}
+    for r in rows:
+        reason_mix[r["exit_reason"] or "unknown"] = (
+            reason_mix.get(r["exit_reason"] or "unknown", 0) + 1
+        )
+    total_pnl = sum(r["pnl"] for r in rows)
+    best = max(rows, key=lambda r: r["return_pct"])
+    worst = min(rows, key=lambda r: r["return_pct"])
+
+    evidence = {
+        "days": days,
+        "n_closed": n,
+        "win_rate": wins / n,
+        "exit_reason_mix": reason_mix,
+        "total_realized_pnl": round(total_pnl, 2),
+        "best": {"symbol": best["symbol"], "return_pct": round(best["return_pct"], 4)},
+        "worst": {"symbol": worst["symbol"], "return_pct": round(worst["return_pct"], 4)},
+    }
+    mix_str = ", ".join(f"{kk}:{vv}" for kk, vv in sorted(reason_mix.items()))
+    rationale = (
+        f"Paper book closed {n} trades over {days}d: win-rate {wins / n:.0%}, "
+        f"realized ${total_pnl:,.2f}. Exit mix [{mix_str}]. "
+        f"Best {best['symbol']} {best['return_pct']:+.2%}; "
+        f"worst {worst['symbol']} {worst['return_pct']:+.2%}."
+    )
+    return [
+        emit_insight(
+            kind="paper_lessons",
+            subject=PAPER_LESSONS_SUBJECT,
+            severity="info",
+            evidence=evidence,
+            action={"kind": "noop", "target": PAPER_LESSONS_SUBJECT, "params": {}},
+            rationale=rationale,
+            db_session=db_session,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Top-level orchestrator
 # ---------------------------------------------------------------------------
 
@@ -815,6 +1192,9 @@ def run_research(
         ("calibration_off", check_calibration_off),
         ("new_pattern_discovered", check_new_pattern_discovered),
         ("prompt_regression", check_prompt_regression),
+        # Phase 2 (D6 / D7c): learn the force-exit horizon + weekly paper lessons.
+        ("time_stop_discovered", discover_time_stop),
+        ("paper_lessons", check_paper_lessons),
     ]
     for name, fn in checks:
         try:
@@ -830,6 +1210,9 @@ def run_research(
                 kwargs["horizon"] = horizon
             elif name == "verdict_drift":
                 kwargs["horizon"] = horizon
+            elif name == "paper_lessons":
+                kwargs["days"] = days
+            # discover_time_stop takes only eval_date (+ its own defaults).
             insights = fn(**kwargs)
             out.extend(insights)
             log.info(
@@ -968,6 +1351,39 @@ def _scale_signal_weight(
     }
 
 
+def _set_learned_time_stop_days(
+    target: str, params: dict, settings_path: Path
+) -> dict[str, Any]:
+    """Set llm_thesis.learned_time_stop_days to the discovered horizon `k` (D6).
+
+    The chosen `k` comes from `params['k']` (preferred) or, failing that, the
+    `target` string. Mutates the EXISTING `LLMThesisConfig.learned_time_stop_days`
+    field (core/config.py) — never re-creates it. Only FUTURE fills snapshot the
+    new value at fill time (positions.py); already-open positions keep their
+    prior NULL/value (future-fills-only invariant). `None`/unparseable clears it
+    (back to no time-exit).
+    """
+    raw = (params or {}).get("k", target)
+    new_value: int | None
+    try:
+        new_value = int(raw) if raw is not None and str(raw) != "" else None
+        if new_value is not None and new_value < 1:
+            new_value = None
+    except (TypeError, ValueError):
+        new_value = None
+
+    yaml, data = _load_yaml_round_trip(settings_path)
+    section = data.setdefault("llm_thesis", {})
+    old = section.get("learned_time_stop_days")
+    section["learned_time_stop_days"] = new_value
+    _atomic_write_yaml(yaml, data, settings_path)
+    return {
+        "field": "learned_time_stop_days",
+        "old_value": old,
+        "new_value": new_value,
+    }
+
+
 def _noop(target: str, params: dict, settings_path: Path) -> dict[str, Any]:
     """Info-only insight — no config change."""
     return {"noop": True, "target": target}
@@ -978,6 +1394,7 @@ ACTION_EXECUTORS: dict[str, Callable[[str, dict, Path], dict[str, Any]]] = {
     "bump_prompt_version": _bump_prompt_version,
     "raise_signal_weight": _raise_signal_weight,
     "lower_signal_weight": _lower_signal_weight,
+    "set_learned_time_stop_days": _set_learned_time_stop_days,
     "noop": _noop,
 }
 
