@@ -124,19 +124,19 @@ jobs:
   # pre-close compute pass — or this job would need to render the latest
   # available asof — for today's data to be ready at 12:40 PT.
   #
-  # Until that's reconciled, this job will hit the empty-render guard on
-  # weekdays and fire a Discord alert (loud-fail, not silent corruption).
-  # Operator decision: keep `enabled: true` so the empty-render alert
-  # surfaces the data-readiness gap; flip to `false` to suppress alerts
-  # during the transition. Fixing the timing belongs to a follow-up PR that
-  # owns the pre-close compute path; this PR only ships the publish chain.
+  # RETIRED 2026-06-03 (retire-fengshen-dashboar-aec0): fengshen's PG-backed
+  # /trading is now the canonical source, so this pure git-push-HTML publisher
+  # is dead weight (and caused daily "target working tree dirty" failures). The
+  # ETF PG write it depended on lives in `thematic-ranks-daily`, which STAYS
+  # enabled — so disabling this loses no market.* data. scripts/publish-etf-
+  # dashboard.sh is left on disk (unreferenced) for a later cleanup.
   - name: etf-dashboard-publish
-    description: "Render ETF ranks HTML + publish to fengshen.dev/trading/etf-ranks/"
+    description: "RETIRED — legacy ETF ranks publish to fengshen-site (PG write lives in thematic-ranks-daily)"
     schedule: "40 12 * * 1-5"   # 12:40 PST, Mon-Fri (20 min pre-close)
     command: "scripts/publish-etf-dashboard.sh"
     log: "data/etf-dashboard.log"
     discord_on_failure: true
-    enabled: true
+    enabled: false
 
   # S&P 500 breadth-webpage child series — daily OHLCV refresh.
   # docs/DESIGN-market-breadth-webpage.md §3.2.
@@ -164,31 +164,22 @@ jobs:
   # seeded (breadth dashboard is live). On a fresh host, run the one-shot seed
   # first or flip this back to `enabled: false` until the seed completes.
   - name: market-breadth-daily
-    description: "Refresh sp500 OHLCV + compute breadth indicators + render & publish market-breadth dashboard"
+    description: "Refresh sp500 OHLCV + compute breadth indicators (writes market.breadth_indicator_daily)"
     schedule: "45 12 * * 1-5"   # 12:45 PST Mon-Fri (15 min pre-close)
-    # Schedule rationale: `etf-dashboard-publish` runs at 12:40 PT and also
-    # invokes `scripts/publish-dashboard.sh` against the SAME fengshen-site
-    # checkout. If the two publishers raced, the second would see a dirty
-    # tree (publish-dashboard.sh:75 bails with "target working tree dirty
-    # — refusing to publish") and fire a spurious Discord alert. Staggering
-    # by 5 minutes gives the ETF publish chain time to commit + push before
-    # this job's `cd "$TARGET_DIR"` step runs.
+    # This job is COMPUTE-ONLY since 2026-06-03 (retire-fengshen-dashboar-aec0):
+    # the `&& scripts/publish-market-breadth.sh` tail was dropped because
+    # fengshen's PG-backed /trading is now the canonical source and no longer
+    # reads git-pushed HTML. The two compute steps are KEPT — they write
+    # market.breadth_indicator_daily, which fengshen reads.
     #
-    # Full chain (DESIGN-market-breadth-webpage.md §6):
+    # Compute chain (DESIGN-market-breadth-webpage.md §6, publish step retired):
     #   1. yfinance incremental refresh -> data/cache/sp500_universe.parquet
-    #   2. indicator recompute          -> data/cache/sp500_breadth_daily.parquet
-    #   3. render + publish             -> fengshen.dev/trading/market-breadth/
+    #   2. indicator recompute          -> market.breadth_indicator_daily
     #
     # `&&` enforces serial execution and propagates the first non-zero exit
     # to cron-wrapper.sh, which fires the Discord alert (discord_on_failure
-    # below). Render is gated behind compute so today's bar is always
-    # reflected in the published HTML; publish step is byte-stable (no-op
-    # commit when the rendered HTML matches what's already deployed).
-    #
-    # The publish-market-breadth.sh chain-wrapper exists to keep `%` chars
-    # off the crontab (cron treats `%` as a stdin marker); compute the
-    # rendered-at HH:MM inside the script.
-    command: "uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators && scripts/publish-market-breadth.sh"
+    # below).
+    command: "uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators"
     log: "data/market-breadth.log"
     discord_on_failure: true
     enabled: true
