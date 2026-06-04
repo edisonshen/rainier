@@ -917,14 +917,25 @@ def _day_k_exit_return(
         key=lambda r: r[0],
     )
     if exit_day == k:
-        # Locate the k-th priced (non-NULL-OHLC) session and resolve the level.
+        # Locate the k-th priced (non-NULL-OHLC) session and resolve the level
+        # with evaluate_exit's exact precedence (exit.py): an OPEN that already
+        # gapped through a level fills AT THE OPEN before any intraday high/low
+        # is consulted; only then do intraday touches apply (same-bar SL+TP ->
+        # stop, F3 downward bias).
         session_n = 0
-        for _d, _o, high, low, _c in bars:
+        for _d, open_px, high, low, _c in bars:
             if high is None or low is None:
                 continue
             session_n += 1
             if session_n == k:
-                # Conservative: stop takes priority on a same-bar SL+TP hit.
+                # Open-gap fills first (at the open). stop_loss < target_price,
+                # so at most one applies.
+                if open_px is not None and open_px <= stop_loss:
+                    return (open_px - entry_price) / entry_price
+                if open_px is not None and open_px >= target_price:
+                    return (open_px - entry_price) / entry_price
+                # No open-gap: intraday touches. Stop takes priority on a
+                # same-bar SL+TP hit.
                 if low <= stop_loss:
                     return (stop_loss - entry_price) / entry_price
                 if high >= target_price:

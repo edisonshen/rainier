@@ -127,6 +127,42 @@ def test_day_k_exit_return_same_bar_resolves_to_stop():
     assert abs(r - (-0.20)) < 1e-9  # -20% stop, not +20% target
 
 
+def test_day_k_exit_return_gap_up_open_through_target_fills_at_open():
+    # codex iter-5 [P2]: a day-k OPEN that gaps above the target fills AT THE
+    # OPEN (evaluate_exit precedence), even if the bar later trades down through
+    # the stop. So the return is the open's +25%, not the 120 target level.
+    entry = date(2026, 1, 1)
+    rows = _bars(
+        entry,
+        closes=[100, 100, 100],
+        opens=[100, 100, 125],   # day-3 gaps up through the 120 target
+        highs=[100, 100, 125],
+        lows=[100, 100, 79],     # ...and later trades down through the 80 stop
+    )
+    r = _day_k_exit_return(
+        rows, entry, 100.0, stop_loss=80.0, target_price=120.0, k=3,
+        as_of=date(2026, 1, 3),
+    )
+    assert abs(r - 0.25) < 1e-9  # target exit @ open, not the stop or 120 level
+
+
+def test_day_k_exit_return_gap_down_open_through_stop_fills_at_open():
+    # Symmetric: a day-k open gapping below the stop fills at the open.
+    entry = date(2026, 1, 1)
+    rows = _bars(
+        entry,
+        closes=[100, 100, 100],
+        opens=[100, 100, 75],    # day-3 gaps down through the 80 stop
+        highs=[100, 100, 100],
+        lows=[100, 100, 75],
+    )
+    r = _day_k_exit_return(
+        rows, entry, 100.0, stop_loss=80.0, target_price=120.0, k=3,
+        as_of=date(2026, 1, 3),
+    )
+    assert abs(r - (-0.25)) < 1e-9  # stop exit @ open (-25%), not the 80 level
+
+
 def test_day_k_exit_return_survives_past_k_uses_close():
     # No SL/TP touch through day k → score the day-k close return.
     entry = date(2026, 1, 1)
