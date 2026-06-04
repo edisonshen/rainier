@@ -16,12 +16,15 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from rainier.scrapers.qu import selectors as sel
 from rainier.scrapers.qu.scraper import QUScraper
+
+from .conftest import make_mock_page
+from .conftest import make_scraper as _make_scraper
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -36,35 +39,10 @@ def _load_fixture(name: str) -> dict:
 
 
 def _make_mock_page(url: str = "https://www.quantunicorn.com/products#qu100") -> MagicMock:
-    page = AsyncMock()
-    page_url = {"value": url}
-    type(page).url = PropertyMock(side_effect=lambda: page_url["value"])
-    page.title = AsyncMock(return_value="QU100")
-    page.context = AsyncMock()
-    page.context.add_cookies = AsyncMock()
-    page.query_selector = AsyncMock(return_value=AsyncMock())
-    page.wait_for_selector = AsyncMock(return_value=AsyncMock())
-    page.wait_for_load_state = AsyncMock()
-    page.goto = AsyncMock(side_effect=lambda u, **kw: page_url.update(value=u))
+    # This file's call sites want only the page; the shared helper returns
+    # ``(page, page_url)`` — drop the page_url here to keep call sites unchanged.
+    page, _ = make_mock_page(url=url)
     return page
-
-
-def _make_scraper(mock_browser: MagicMock | None = None) -> QUScraper:
-    if mock_browser is None:
-        mock_browser = MagicMock()
-        mock_browser._is_cdp = False
-
-    with patch("rainier.scrapers.qu.scraper.get_settings") as mock_settings:
-        qu_config = MagicMock()
-        qu_config.url = "https://www.quantunicorn.com/products#qu100"
-        qu_config.login_url = "https://www.quantunicorn.com/signin"
-        qu_config.session_file = "./data/auth/qu_session.json"
-        qu_config.session_ttl_hours = 12
-        qu_config.timeout_ms = 30000
-        qu_config.backfill_delay_seconds = 2.0
-        mock_settings.return_value.scraping.quantunicorn = qu_config
-        scraper = QUScraper(mock_browser)
-    return scraper
 
 
 # ---------------------------------------------------------------------------

@@ -15,61 +15,16 @@ Test matrix:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from rainier.scrapers.qu.scraper import QUScraper
-
-
-def _make_mock_page(
-    url: str = "https://www.quantunicorn.com/products#qu100",
-    titles: list[str] | None = None,
-):
-    """Mock Page where successive .title() calls return entries from `titles`.
-
-    On the (n+1)th call, the last value is repeated — so a list of
-    ["Just a moment...", "QuantUnicorn"] gives the CF page first and
-    every subsequent title check resolves cleanly.
-    """
-    page = AsyncMock()
-    page_url = {"value": url}
-    type(page).url = PropertyMock(side_effect=lambda: page_url["value"])
-
-    titles = titles or ["QU100"]
-    title_idx = {"n": 0}
-
-    async def fake_title():
-        idx = min(title_idx["n"], len(titles) - 1)
-        title_idx["n"] += 1
-        return titles[idx]
-
-    page.title = AsyncMock(side_effect=fake_title)
-    page.context = AsyncMock()
-    page.context.add_cookies = AsyncMock()
-    # Table query: return a truthy element so the post-CF path early-returns
-    # at "table already loaded".
-    page.query_selector = AsyncMock(return_value=AsyncMock())
-    page.wait_for_selector = AsyncMock(return_value=AsyncMock())
-    page.wait_for_load_state = AsyncMock()
-    page.wait_for_function = AsyncMock()
-    page.goto = AsyncMock(side_effect=lambda u, **kw: page_url.update(value=u))
-    return page, page_url
+from .conftest import make_mock_page as _make_mock_page
+from .conftest import make_scraper
 
 
 def _make_scraper():
-    mock_browser = MagicMock()
-    mock_browser._is_cdp = True
-    with patch("rainier.scrapers.qu.scraper.get_settings") as mock_settings:
-        qu_config = MagicMock()
-        qu_config.url = "https://www.quantunicorn.com/products#qu100"
-        qu_config.login_url = "https://www.quantunicorn.com/signin"
-        qu_config.session_file = "./data/auth/qu_session.json"
-        qu_config.session_ttl_hours = 12
-        qu_config.timeout_ms = 30000
-        qu_config.backfill_delay_seconds = 2.0
-        mock_settings.return_value.scraping.quantunicorn = qu_config
-        return QUScraper(mock_browser)
+    return make_scraper(is_cdp=True)
 
 
 # ---------------------------------------------------------------------------

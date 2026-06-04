@@ -8,12 +8,13 @@ are mocked — no real browser needed.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from rainier.scrapers.qu import selectors as sel
-from rainier.scrapers.qu.scraper import QUScraper
+
+from .conftest import make_mock_page, make_scraper
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -21,52 +22,13 @@ from rainier.scrapers.qu.scraper import QUScraper
 
 
 def _make_mock_page(url="https://www.quantunicorn.com/products#qu100", title="QU100"):
-    """Create a mock Playwright Page with sensible defaults."""
-    page = AsyncMock()
-    # page.url is a property (not a coroutine), use a mutable container
-    # so tests can change it mid-flow via side_effect on goto/click
-    page_url = {"value": url}
-    type(page).url = PropertyMock(side_effect=lambda: page_url["value"])
-
-    page.title = AsyncMock(return_value=title)
-    page.context = AsyncMock()
-    page.context.add_cookies = AsyncMock()
-
-    # query_selector returns None by default (no element found)
-    page.query_selector = AsyncMock(return_value=None)
-    # wait_for_selector returns a mock element by default
-    page.wait_for_selector = AsyncMock(return_value=AsyncMock())
-    page.wait_for_load_state = AsyncMock()
-    # wait_for_function (CF challenge wait) — defaults to clean return so
-    # title==challenge tests don't accidentally hit the timeout branch.
-    page.wait_for_function = AsyncMock()
-
-    def set_url(new_url, **kwargs):
-        page_url["value"] = new_url
-
-    page.goto = AsyncMock(side_effect=lambda url, **kw: set_url(url))
-
-    return page, page_url
+    # This flow needs query_selector to default to None ("no element found").
+    return make_mock_page(url=url, title=title, query_selector_returns_element=False)
 
 
 def _make_scraper(mock_browser=None):
-    """Create a QUScraper with mocked browser and settings."""
-    if mock_browser is None:
-        mock_browser = MagicMock()
-        mock_browser._is_cdp = True
-
-    with patch("rainier.scrapers.qu.scraper.get_settings") as mock_settings:
-        qu_config = MagicMock()
-        qu_config.url = "https://www.quantunicorn.com/products#qu100"
-        qu_config.login_url = "https://www.quantunicorn.com/signin"
-        qu_config.session_file = "./data/auth/qu_session.json"
-        qu_config.session_ttl_hours = 12
-        qu_config.timeout_ms = 30000
-        qu_config.backfill_delay_seconds = 2.0
-        mock_settings.return_value.scraping.quantunicorn = qu_config
-        scraper = QUScraper(mock_browser)
-
-    return scraper
+    # CDP mode by default for this file's auth-flow tests.
+    return make_scraper(mock_browser=mock_browser, is_cdp=True)
 
 
 # ---------------------------------------------------------------------------
