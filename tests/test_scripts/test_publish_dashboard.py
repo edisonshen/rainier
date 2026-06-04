@@ -264,6 +264,122 @@ def test_publish_bails_on_dirty_target(source_dir: Path, target_repo: Path):
 
 
 # ---------------------------------------------------------------------------
+# Test 4b — a target whose ONLY working-tree change is a git-IGNORED untracked
+# path must still publish. Regression for the 2026-06-04 P0: the gstack browse
+# tooling left `fengshen-site/.gstack/browse-audit.jsonl` (untracked, but
+# `.gitignore`d), tripping the dirty-tree guard and blocking the daily breadth
+# publish. The guard must base "dirty" on tracked/relevant changes only.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_proceeds_with_only_ignored_untracked(
+    source_dir: Path, target_repo: Path
+):
+    """An ignored untracked path (e.g. `.gstack/`) must NOT block a publish."""
+    name = "market-breadth"
+    html = "<html><body>breadth</body></html>"
+    (source_dir / f"{name}.html").write_text(html)
+
+    # Ignore `.gstack/` in the target repo (committed `.gitignore`), then drop
+    # an untracked file under it — exactly the P0 droppings.
+    (target_repo / ".gitignore").write_text(".gstack/\n")
+    _git("add", ".gitignore", cwd=target_repo)
+    _git("commit", "-m", "ignore .gstack/", cwd=target_repo)
+    gstack_dir = target_repo / ".gstack"
+    gstack_dir.mkdir()
+    (gstack_dir / "browse-audit.jsonl").write_text('{"audit": 1}\n')
+
+    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+
+    assert result.returncode == 0, (
+        "publish must proceed when the only target change is an ignored path\n"
+        f"rc={result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    # A new commit must have landed (the rendered HTML).
+    assert head_before != head_after, "publish must commit the rendered HTML"
+    dst = target_repo / "public" / "trading" / name / "index.html"
+    assert dst.exists() and dst.read_text() == html
+    # The ignored droppings are untouched (never committed, never deleted).
+    assert (gstack_dir / "browse-audit.jsonl").exists()
+    porcelain = _git("status", "--porcelain", cwd=target_repo)
+    assert ".gstack" not in porcelain, "ignored path must not become tracked"
+    # The guard explicitly announces it disregarded an ignored path, so cron
+    # logs make it obvious the dirty-tree check was applied (not skipped).
+    assert "ignored" in result.stdout.lower(), (
+        "guard should log that it disregarded git-ignored path(s); "
+        f"stdout: {result.stdout}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 4c — a dirty TRACKED file still blocks the publish, even when an ignored
+# untracked path is also present. The hardened guard must not become so lax it
+# sweeps real edits.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_bails_on_dirty_tracked_even_with_ignored(
+    source_dir: Path, target_repo: Path
+):
+    """A modified tracked file must still refuse, regardless of ignored droppings."""
+    name = "market-breadth"
+    (source_dir / f"{name}.html").write_text("<html>clean source</html>")
+
+    # Ignore `.gstack/` and add an untracked ignored file (the benign case)...
+    (target_repo / ".gitignore").write_text(".gstack/\n")
+    _git("add", ".gitignore", cwd=target_repo)
+    _git("commit", "-m", "ignore .gstack/", cwd=target_repo)
+    (target_repo / ".gstack").mkdir()
+    (target_repo / ".gstack" / "browse-audit.jsonl").write_text("{}\n")
+    # ...AND a genuinely dirty TRACKED file (the case we must still catch).
+    (target_repo / "public" / ".gitkeep").write_text("hand-edited\n")
+
+    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+
+    assert result.returncode != 0, (
+        "dirty TRACKED file must still block the publish\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert head_before == head_after, "must not commit when a tracked file is dirty"
+    assert (target_repo / "public" / ".gitkeep").read_text() == "hand-edited\n"
+    combined = (result.stdout + result.stderr).lower()
+    assert "dirty" in combined or "uncommitted" in combined
+
+
+# ---------------------------------------------------------------------------
+# Test 4d — an untracked, NON-ignored file still blocks the publish. The
+# hardened guard ignores only git-IGNORED paths; a genuinely stray untracked
+# file (not in `.gitignore`) is still "dirt" we refuse to sweep up.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_bails_on_untracked_non_ignored(
+    source_dir: Path, target_repo: Path
+):
+    """A stray untracked file that is NOT ignored must still refuse."""
+    name = "market-breadth"
+    (source_dir / f"{name}.html").write_text("<html>clean source</html>")
+
+    # Untracked, and NOT covered by any .gitignore entry.
+    (target_repo / "stray-note.txt").write_text("forgot to commit this\n")
+
+    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+
+    assert result.returncode != 0, (
+        "stray untracked (non-ignored) file must still block the publish\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert head_before == head_after, "must not commit when an untracked file is present"
+    assert (target_repo / "stray-note.txt").exists(), "must not stash untracked files"
+
+
+# ---------------------------------------------------------------------------
 # Test 5 — missing source HTML produces a clean non-zero exit (no copy, no
 # commit). `set -euo pipefail` + the early `[ ! -f "$SRC" ]` guard must turn
 # this into a meaningful error, NOT a silent success.
