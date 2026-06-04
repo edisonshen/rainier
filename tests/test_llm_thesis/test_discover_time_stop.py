@@ -291,6 +291,61 @@ def test_stability_resets_when_chosen_k_changes():
     assert out[0].action["kind"] == "noop"
 
 
+def test_same_eval_date_retry_does_not_advance_stability():
+    # codex iter-1 [P2]: a retry/replay of the weekly job on the SAME eval_date
+    # must not increment the stability counter — only a genuinely new weekly
+    # observation (a later eval_date) does. Otherwise re-running once flips the
+    # action to executable without a new week of data.
+    trades, as_of = _stable_trades()  # picks k=5
+    chosen = 5
+    # Prior pending row was already recorded for THIS same eval_date at count 1.
+    prior = {
+        "chosen_k": chosen,
+        "stable_run_count": 1,
+        "last_run_date": as_of.isoformat(),
+    }
+    with patch(
+        "rainier.llm_thesis.research._load_time_stop_trades", return_value=trades
+    ), patch(
+        "rainier.llm_thesis.research._prior_time_stop_evidence", return_value=prior
+    ):
+        sess = MemSession()
+        out = discover_time_stop(
+            eval_date=as_of, candidate_ks=(5,), min_survivors=5, db_session=sess
+        )
+    ins = out[0]
+    # Held steady at 1 (not advanced to 2), so it stays recommend-only.
+    assert ins.evidence["stable_run_count"] == 1
+    assert ins.evidence["stable"] is False
+    assert ins.action["kind"] == "noop"
+
+
+def test_distinct_later_eval_date_advances_stability():
+    # The complement: same chosen_k but a LATER eval_date is a real new
+    # observation — the counter advances and (at the threshold) flips executable.
+    trades, as_of = _stable_trades()  # picks k=5
+    chosen = 5
+    earlier = (as_of - timedelta(days=7)).isoformat()
+    prior = {
+        "chosen_k": chosen,
+        "stable_run_count": TIME_STOP_STABLE_RUNS - 1,
+        "last_run_date": earlier,
+    }
+    with patch(
+        "rainier.llm_thesis.research._load_time_stop_trades", return_value=trades
+    ), patch(
+        "rainier.llm_thesis.research._prior_time_stop_evidence", return_value=prior
+    ):
+        sess = MemSession()
+        out = discover_time_stop(
+            eval_date=as_of, candidate_ks=(5,), min_survivors=5, db_session=sess
+        )
+    ins = out[0]
+    assert ins.evidence["stable_run_count"] == TIME_STOP_STABLE_RUNS
+    assert ins.evidence["stable"] is True
+    assert ins.action["kind"] == "set_learned_time_stop_days"
+
+
 def test_no_trades_emits_nothing():
     with patch(
         "rainier.llm_thesis.research._load_time_stop_trades", return_value=[]

@@ -94,6 +94,13 @@ def test_supplementary_last_k_closed_and_mtm(pg_legacy_session):
     assert supp["n_closed_sample"] == 10
     # MTM-including-open figure is carried (no open positions → equals realized).
     assert "mtm_including_open_pnl_usd" in supp
+    # codex iter-1 [P2]: the headline-paired realized P&L is the BOOK TOTAL over
+    # all 12 closed (sum 10*(1..12) = 780), NOT the last-K=10 sample sum. The
+    # sample sum is surfaced separately and is strictly smaller here.
+    assert supp["realized_pnl_usd"] == 780.0
+    assert supp["sample_realized_pnl_usd"] < supp["realized_pnl_usd"]
+    # With no open positions, MTM-incl-open equals the book-total realized.
+    assert supp["mtm_including_open_pnl_usd"] == supp["realized_pnl_usd"]
     # Headline empty (no thesis_evaluations) but supplementary still computed.
     assert payload["headline_fixed_horizon"] == {}
 

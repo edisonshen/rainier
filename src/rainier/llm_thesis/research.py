@@ -1028,11 +1028,26 @@ def discover_time_stop(
 
     chosen_k = max(scored, key=lambda k: scored[k]["objective"])
 
-    # Stability gate: compare to the prior pending insight's chosen_k.
+    # Stability gate: compare to the prior pending insight's chosen_k. Count
+    # only DISTINCT weekly observations — a retry/replay on the same eval_date
+    # must not advance the counter (codex iter-1 [P2]): otherwise re-running the
+    # job twice for one date would flip noop -> set_learned_time_stop_days
+    # without a genuinely new week of data. We key idempotency on the prior
+    # run's recorded eval_date.
     prior = _prior_time_stop_evidence(db_session=db_session)
     prior_k = prior.get("chosen_k") if prior else None
     prior_runs = int(prior.get("stable_run_count", 0)) if prior else 0
-    stable_run_count = (prior_runs + 1) if prior_k == chosen_k else 1
+    prior_run_date = prior.get("last_run_date") if prior else None
+    anchor_iso = anchor.isoformat()
+    if prior_k != chosen_k:
+        # Different pick — stability resets.
+        stable_run_count = 1
+    elif prior_run_date == anchor_iso:
+        # Same pick, SAME eval_date (retry/replay) — hold the count steady.
+        stable_run_count = max(prior_runs, 1)
+    else:
+        # Same pick, a new distinct observation date — advance.
+        stable_run_count = prior_runs + 1
     is_stable = stable_run_count >= TIME_STOP_STABLE_RUNS
 
     if is_stable:
@@ -1051,6 +1066,9 @@ def discover_time_stop(
         "chosen_k": chosen_k,
         "stable_run_count": stable_run_count,
         "stable": is_stable,
+        # Record the run's logical date so a same-date retry is idempotent
+        # against the stability counter (codex iter-1 [P2]).
+        "last_run_date": anchor_iso,
         "min_survivors": min_survivors,
         "candidate_ks": list(candidate_ks),
         "per_k": {str(k): v for k, v in sorted(scored.items())},

@@ -177,12 +177,16 @@ def compute_calibration_payload(
         if h in by_horizon
     }
 
-    realized_pnl = 0.0
+    # NOTE: this sum is over the last-K SAMPLE only (the query is .limit(k)).
+    # It is NOT the book's total realized P&L — that comes from the daily
+    # payload below. Surfaced as a clearly sample-scoped field so the renderer
+    # never pairs it with all-book MTM (codex iter-1 [P2]).
+    sample_realized_pnl = 0.0
     closed_sample: list[dict[str, Any]] = []
     closed_wins = 0
     for symbol, exit_reason, return_pct, pnl in closed:
         if pnl is not None:
-            realized_pnl += float(pnl)
+            sample_realized_pnl += float(pnl)
         if return_pct is not None and return_pct > 0:
             closed_wins += 1
         closed_sample.append(
@@ -217,7 +221,11 @@ def compute_calibration_payload(
                 (closed_wins / len(closed_sample)) if closed_sample else None
             ),
             "recent_closed": closed_sample,
-            "realized_pnl_usd": round(realized_pnl, 2),
+            # P&L summed over the last-K SAMPLE shown above — NOT the book total.
+            "sample_realized_pnl_usd": round(sample_realized_pnl, 2),
+            # The BOOK-TOTAL realized P&L (all closed, as-of capped) from the
+            # daily payload — the figure that correctly pairs with MTM-incl-open.
+            "realized_pnl_usd": daily.get("realized_pnl"),
             "mtm_including_open_pnl_usd": daily.get("mtm_including_open_pnl"),
         },
     }
@@ -320,8 +328,8 @@ def render_calibration_section(payload: dict[str, Any] | None) -> str:
             )
             lines.append(f"    last {len(recent)} closed: {rendered}")
         lines.append(
-            f"    realized $P&L (closed): "
-            f"${supp.get('realized_pnl_usd', 0):,.2f} · MTM incl. open: "
+            f"    realized $P&L (all closed): "
+            f"${supp.get('realized_pnl_usd') or 0:,.2f} · MTM incl. open: "
             f"${supp.get('mtm_including_open_pnl_usd') or 0:,.2f}"
         )
     return "\n".join(lines)

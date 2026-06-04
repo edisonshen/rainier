@@ -146,6 +146,18 @@ def test_prompt_version_bumped_for_calibration():
     assert PROMPT_VERSION != "v1"
 
 
+def test_prompt_version_config_tracks_module():
+    # codex iter-1 [P2->P1]: the RUNTIME Tier-1 key is built from
+    # settings.llm_thesis.prompt_version (service.generate_thesis), NOT the
+    # prompt.PROMPT_VERSION module constant. If the config default lags the
+    # module constant, the "bump busts Tier-1" mechanism silently no-ops —
+    # calibrated prompts get served from / recorded as the stale version. Guard
+    # the two in lockstep so the cache-bust actually fires in production.
+    from rainier.core.config import LLMThesisConfig
+
+    assert LLMThesisConfig().prompt_version == PROMPT_VERSION
+
+
 def test_input_hash_unaffected_by_calibration_text():
     # compute_input_hash hashes only EvidencePack + image bytes; the calibration
     # section lives in the prompt text, NOT the pack — so it can never enter the
