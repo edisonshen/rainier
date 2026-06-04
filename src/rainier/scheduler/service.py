@@ -209,6 +209,15 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
     except Exception as exc:
         log.error("daily_paper_report_failed", error=str(exc))
 
+    # Step (vi): D7a calibration block — compute the unbiased fixed-horizon
+    # headline + labeled realized supplementary and persist it for tomorrow's
+    # thesis prompt. Runs AFTER the daily report (it reuses the report's
+    # MTM-including-open figure). Non-fatal.
+    try:
+        await asyncio.to_thread(run_paper_calibration, eval_date)
+    except Exception as exc:
+        log.error("daily_paper_calibration_failed", error=str(exc))
+
 
 def run_paper_daily_steps(eval_date) -> None:
     """Paper steps (i)-(iii): ingest (active ∪ screened) → fill → update.
@@ -245,6 +254,22 @@ def run_paper_daily_report(eval_date, discord_config) -> None:
     payload = compute_daily_payload(eval_date)
     persist_daily_snapshot(eval_date, payload)
     send_daily_paper_report(payload, discord_config)
+
+
+def run_paper_calibration(eval_date) -> None:
+    """Paper step (vi): compute the D7a calibration payload → persist it.
+
+    The persisted row feeds ``build_user_message`` on the next scan. Headline =
+    unbiased fixed-horizon thesis stats; realized paper record is labeled
+    supplementary. Idempotent per as-of date.
+    """
+    from rainier.paper.calibration import (
+        compute_calibration_payload,
+        persist_calibration,
+    )
+
+    payload = compute_calibration_payload(eval_date)
+    persist_calibration(eval_date, payload)
 
 
 async def run_research_job(eval_date_iso: str | None = None) -> None:

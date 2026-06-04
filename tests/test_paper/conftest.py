@@ -22,6 +22,10 @@ from sqlalchemy.orm import sessionmaker
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_UP = REPO_ROOT / "migrations" / "0005_paper_tracker.sql"
 MIGRATION_DOWN = REPO_ROOT / "migrations" / "0005_paper_tracker_downgrade.sql"
+# Phase 2 (D7a): paper_calibration. Applied on top of 0005 in the same throwaway
+# schema so calibration compute/persist tests have the table.
+MIGRATION_0007_UP = REPO_ROOT / "migrations" / "0007_paper_calibration.sql"
+MIGRATION_0007_DOWN = REPO_ROOT / "migrations" / "0007_paper_calibration_downgrade.sql"
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -99,6 +103,26 @@ CREATE TABLE IF NOT EXISTS stock_prices (
     volume  BIGINT,
     PRIMARY KEY (id, date),
     CONSTRAINT uq_stock_price_symbol_date UNIQUE (symbol, date)
+);
+
+-- Mirror the ThesisEvaluation ORM (models.py) enough for the D7a calibration
+-- headline compute (reads horizon/verdict/llm_confidence/return_pct/scan_date).
+CREATE TABLE IF NOT EXISTS thesis_evaluations (
+    id                 SERIAL PRIMARY KEY,
+    thesis_id          INTEGER NOT NULL REFERENCES analysis_results (id),
+    screened_record_id INTEGER REFERENCES screened_stocks (id),
+    evaluated_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    horizon            VARCHAR(8) NOT NULL,
+    scan_date          DATE NOT NULL,
+    symbol             VARCHAR(10) NOT NULL,
+    verdict            VARCHAR(20) NOT NULL,
+    llm_confidence     INTEGER,
+    entry_price        DOUBLE PRECISION NOT NULL,
+    exit_price         DOUBLE PRECISION NOT NULL,
+    return_pct         DOUBLE PRECISION NOT NULL,
+    hit                BOOLEAN NOT NULL,
+    signals_used       VARCHAR(50)[],
+    notes              TEXT
 );
 """
 
@@ -186,6 +210,7 @@ def pg_legacy_engine(request):
     with engine.begin() as conn:
         conn.execute(text(_PREREQ_DDL))
     _apply_sql(engine, MIGRATION_UP)
+    _apply_sql(engine, MIGRATION_0007_UP)  # D7a paper_calibration
 
     from rainier.core import config, database
 

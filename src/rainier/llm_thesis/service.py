@@ -352,12 +352,31 @@ async def generate_thesis(
     input_hash = compute_input_hash(pack, image_bytes)
 
     candidate_summary = json.dumps(pack.candidate, sort_keys=True, default=str)
+    # D7a: inject the calibration section (how prior theses graded out). Loaded
+    # best-effort from the latest persisted PaperCalibration row; a failure or a
+    # missing row (Phase-0 / fresh DB) yields no section. This text is invisible
+    # to compute_input_hash, so PROMPT_VERSION ("v2") is what busts the Tier-1
+    # cache — see prompt.py.
+    calibration_section = ""
+    try:
+        from rainier.paper.calibration import (
+            load_latest_calibration,
+            render_calibration_section,
+        )
+
+        calibration_section = render_calibration_section(
+            load_latest_calibration(scan_date)
+        )
+    except Exception:
+        log.warning("thesis_calibration_load_failed symbol=%s", symbol, exc_info=True)
+
     user_prompt = build_user_message(
         symbol=symbol,
         scan_date=pack.scan_date,
         session_name=session_name,
         candidate_summary=candidate_summary,
         signal_renders=renders,
+        calibration_section=calibration_section,
     )
 
     last_error: str | None = None

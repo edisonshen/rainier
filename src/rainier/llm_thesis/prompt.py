@@ -7,7 +7,11 @@ historical replay / A/B comparison.
 
 from __future__ import annotations
 
-PROMPT_VERSION = "v1"
+# v2 (Phase 2, D7a): adds the calibration section to the user message. The
+# calibration text is INVISIBLE to compute_input_hash (it hashes only the
+# EvidencePack + image), so the Tier-1 cache — keyed on prompt_version — would
+# otherwise serve a pre-calibration thesis. Bumping the version busts Tier-1.
+PROMPT_VERSION = "v2"
 
 OUTPUT_SCHEMA = """{
   "verdict": "setup_long" | "watch" | "no_setup",
@@ -86,11 +90,18 @@ def build_user_message(
     session_name: str,
     candidate_summary: str,
     signal_renders: list[str],
+    calibration_section: str = "",
 ) -> str:
     """Stitch the per-call evidence into the user-side prompt.
 
     `signal_renders` is the list of `signal.render_for_prompt(value)` strings for
     every enabled signal that produced a non-None value. Order is REGISTRY order.
+
+    `calibration_section` (D7a) is a bounded, pre-rendered block describing how
+    prior theses graded out (unbiased fixed-horizon headline + labeled realized
+    supplementary). Empty string = nothing to inject (Phase-0 / fresh DB). NOTE:
+    this text does NOT enter `compute_input_hash` (Tier-2), so PROMPT_VERSION is
+    bumped to bust the Tier-1 cache whenever this block's shape changes.
     """
     body = (
         f"Symbol: {symbol}\n"
@@ -103,5 +114,7 @@ def build_user_message(
         body += "\n".join(f"- {s}" for s in signal_renders)
     else:
         body += "(no signals produced non-None values)"
+    if calibration_section:
+        body += f"\n\n{calibration_section}"
     body += "\n\nProduce the JSON object now."
     return body

@@ -730,6 +730,34 @@ class PaperReportSnapshot(Base):
     )
 
 
+class PaperCalibration(Base):
+    """Bounded calibration block injected into the LLM thesis prompt (D7a).
+
+    One row per as-of date, written by the daily eval job AFTER the paper
+    daily report. `payload` is a bounded JSONB blob whose HEADLINE stats are
+    the UNBIASED `ThesisEvaluation` fixed-horizon (1d/5d/10d) close-to-close
+    numbers (survivorship-free), with the realized paper-trade record (last
+    K=10 closed + MTM-including-open) carried as labeled supplementary
+    context. `build_user_message()` reads the latest row and renders it into
+    the prompt so the LLM sees how its prior calls actually graded out.
+
+    Plain Postgres, tiny row count (one per trading day). NOT a hypertable.
+    """
+
+    __tablename__ = "paper_calibration"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("as_of_date", name="uq_paper_calibration_as_of_date"),
+    )
+
+
 # Tables to convert to TimescaleDB hypertables
 HYPERTABLES = {
     "money_flow_snapshots": "captured_at",
