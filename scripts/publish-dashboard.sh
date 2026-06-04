@@ -102,11 +102,33 @@ fi
 
 cd "$TARGET_DIR"
 
-# Bail if working tree has unrelated dirt — don't auto-stash.
-if [ -n "$(git status --porcelain)" ]; then
+# Bail if the working tree has unrelated dirt — don't auto-stash.
+#
+# The dirty decision is based on RELEVANT changes only: modified/staged/deleted
+# TRACKED files and stray untracked files. git-IGNORED paths are explicitly
+# disregarded — tool droppings such as `.gstack/browse-audit.jsonl` (left by the
+# gstack browse tooling) must never block a publish. This was the 2026-06-04 P0:
+# an untracked-but-ignored `.gstack/` tripped the guard and the breadth
+# dashboard never went live.
+#
+# `git status --porcelain` already omits ignored files by default, but we make
+# the contract explicit (and log it) so a future git/config change to that
+# default can't silently re-break the publish. We additionally enumerate the
+# ignored paths that WERE present, purely for an operator-visible log line.
+RELEVANT_STATUS="$(git status --porcelain --untracked-files=normal)"
+if [ -n "$RELEVANT_STATUS" ]; then
     log "ERROR target working tree dirty (uncommitted changes); refusing to publish"
     git status --short >&2
     exit 1
+fi
+
+# At this point the tree is clean except (possibly) for git-ignored paths.
+# Surface them so cron logs show the guard ran and chose to disregard them.
+# `--ignored` lists ignored entries as `!! <path>`; we keep only those lines.
+IGNORED_COUNT="$(git status --porcelain --ignored \
+    | grep -c '^!! ' || true)"
+if [ "${IGNORED_COUNT:-0}" -gt 0 ]; then
+    log "disregarding $IGNORED_COUNT git-ignored path(s) in target tree (not dirt)"
 fi
 
 mkdir -p "$(dirname "$DST")"
