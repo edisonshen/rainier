@@ -74,27 +74,43 @@ def test_return_by_holding_day_skips_null_close():
     assert abs(curve[1] - 0.05) < 1e-9
 
 
-def test_partial_ohlc_bar_skipped_consistently_in_both_helpers():
-    # codex iter-6 [P2]: a partial-OHLC bar (high/low present, close NULL) must
-    # NOT advance the session counter in EITHER helper — otherwise _sl_tp_exit_day
-    # and _return_by_holding_day would number sessions differently and shift the
-    # k-th session. With the shared _is_priced_session predicate both skip it.
+def test_partial_ohlc_bar_counts_matching_evaluate_exit():
+    # codex iter-7 [P2]: evaluate_exit (exit.py) skips a bar ONLY when high/low
+    # is None and advances the session counter on everything else regardless of
+    # close; a NULL-close counted session uses entry_price (0% return) for the
+    # time-stop. The discovery helpers must match: a high/low-present-but-close-
+    # NULL bar COUNTS as a session, and its return-curve entry is 0%.
     entry = date(2026, 1, 1)
     rows = [
         (entry, 100, 100, 100, 100.0),                       # session 1
-        (entry + timedelta(days=1), 80, 130, 70, None),      # partial: close NULL
-        (entry + timedelta(days=2), 105, 105, 105, 105.0),   # session 2
+        (entry + timedelta(days=1), 100, 130, 70, None),     # session 2: close NULL
+        (entry + timedelta(days=2), 105, 105, 105, 105.0),   # session 3
     ]
     as_of = entry + timedelta(days=2)
-    # Return curve: the partial bar is skipped → two priced sessions.
+    # Return curve: the close-NULL bar COUNTS (0% via entry_price fallback).
     curve = _return_by_holding_day(rows, entry, 100.0, as_of=as_of)
+    assert len(curve) == 3
+    assert curve[0] == 0.0
+    assert curve[1] == 0.0          # entry_price fallback for the NULL close
+    assert abs(curve[2] - 0.05) < 1e-9
+    # Exit-day detector: the counted session-2 low (70) pierces a 75 stop → the
+    # exit registers on session 2 (the bar is NOT skipped), matching production.
+    assert _sl_tp_exit_day(rows, entry, stop_loss=75.0, target_price=200.0,
+                           as_of=as_of) == 2
+
+
+def test_all_none_ohlc_bar_is_skipped():
+    # A truly empty bar (all OHLC None — a no-data day) is skipped in both
+    # helpers, since high/low are absent (matches evaluate_exit exit.py:100).
+    entry = date(2026, 1, 1)
+    rows = [
+        (entry, 100, 100, 100, 100.0),
+        (entry + timedelta(days=1), None, None, None, None),  # no-data day
+        (entry + timedelta(days=2), 105, 105, 105, 105.0),
+    ]
+    curve = _return_by_holding_day(rows, entry, 100.0, as_of=entry + timedelta(days=2))
     assert len(curve) == 2
     assert abs(curve[1] - 0.05) < 1e-9
-    # Exit-day detector: the partial bar's 70 low / 130 high must NOT register an
-    # exit (it's skipped), so with a stop=75/target=125 the only real touch would
-    # be on a counted session — here none, so None.
-    assert _sl_tp_exit_day(rows, entry, stop_loss=75.0, target_price=125.0,
-                           as_of=as_of) is None
 
 
 def test_sl_tp_exit_day_excludes_pre_k_exit():

@@ -809,15 +809,17 @@ TIME_STOP_SUBJECT = "paper_time_stop"
 TIME_STOP_STABLE_RUNS = 2
 
 
-def _is_priced_session(high: Any, low: Any, close: Any) -> bool:
-    """A bar counts as ONE holding session iff its high, low AND close are all
-    present (codex iter-6 [P2]). Unifying the rule across _return_by_holding_day
-    and _sl_tp_exit_day keeps session numbering identical between the exit-day
-    detector and the return curve — otherwise a partial OHLC bar (e.g. high/low
-    present but close NULL) would advance one helper's counter but not the
-    other's, shifting the k-th session and mis-scoring the candidate horizon.
-    (open may be NULL — evaluate_exit simply skips the open-gap check then.)"""
-    return high is not None and low is not None and close is not None
+def _is_priced_session(high: Any, low: Any) -> bool:
+    """A bar counts as ONE holding session iff its high AND low are present —
+    EXACTLY evaluate_exit's rule (exit.py: it skips only when high/low is None
+    and advances the session counter on everything else, regardless of close).
+    Unifying on this single predicate across _return_by_holding_day,
+    _sl_tp_exit_day and _day_k_exit_return keeps session numbering identical to
+    the production exit engine even on partial-OHLC bars (codex iter-6/iter-7
+    [P2]). close is NOT required to count — a NULL-close session still counts;
+    the return curve falls back to entry_price (0%) for it, matching the
+    evaluate_exit time-stop close fallback (exit.py:129)."""
+    return high is not None and low is not None
 
 
 def _return_by_holding_day(
@@ -829,8 +831,11 @@ def _return_by_holding_day(
 ) -> list[float]:
     """Reconstruct the close-to-entry return at each holding day (entry day =
     day 1), from entry_date forward, using only bars in [entry_date, as_of]
-    (as-of guard — no hindsight). Partial-OHLC days are skipped (no phantom day)
-    using the SAME predicate as _sl_tp_exit_day so session numbers stay aligned.
+    (as-of guard — no hindsight). Sessions are counted on high/low presence
+    (same _is_priced_session predicate as _sl_tp_exit_day, mirroring
+    evaluate_exit). A counted session whose close is NULL contributes a 0%
+    (entry_price fallback) return — exactly evaluate_exit's missing-close
+    time-stop behaviour (exit.py:129) — so session numbers stay aligned.
 
     Returns a list where index i = return_pct after holding through the (i+1)th
     priced session.
@@ -845,9 +850,12 @@ def _return_by_holding_day(
     )
     out: list[float] = []
     for _d, _o, high, low, close in bars:
-        if not _is_priced_session(high, low, close):
+        if not _is_priced_session(high, low):
             continue
-        out.append((float(close) - entry_price) / entry_price)
+        # Missing close on a counted session → entry_price fallback (0% return),
+        # matching evaluate_exit's time-stop close handling.
+        px = float(close) if close is not None else entry_price
+        out.append((px - entry_price) / entry_price)
     return out
 
 
@@ -882,8 +890,8 @@ def _sl_tp_exit_day(
         key=lambda r: r[0],
     )
     session_n = 0
-    for _d, _o, high, low, close in bars:
-        if not _is_priced_session(high, low, close):
+    for _d, _o, high, low, _close in bars:
+        if not _is_priced_session(high, low):
             continue
         session_n += 1
         if low <= stop_loss or high >= target_price:
@@ -936,8 +944,8 @@ def _day_k_exit_return(
         # is consulted; only then do intraday touches apply (same-bar SL+TP ->
         # stop, F3 downward bias).
         session_n = 0
-        for _d, open_px, high, low, close in bars:
-            if not _is_priced_session(high, low, close):
+        for _d, open_px, high, low, _close in bars:
+            if not _is_priced_session(high, low):
                 continue
             session_n += 1
             if session_n == k:
