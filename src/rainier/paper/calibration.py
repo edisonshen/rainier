@@ -146,9 +146,17 @@ def compute_calibration_payload(
             )
         ).all()
 
-        # --- SUPPLEMENTARY: last K closed paper trades + MTM-including-open. ---
+        # --- SUPPLEMENTARY: last K closed paper trades + MTM-including-open.
+        # Select scalar columns (not full ORM rows) so nothing is read after the
+        # session closes — matches the codebase's materialize-inside-the-block
+        # convention (report.py / positions.py).
         closed = session.execute(
-            select(PaperTrade)
+            select(
+                PaperTrade.symbol,
+                PaperTrade.exit_reason,
+                PaperTrade.return_pct,
+                PaperTrade.pnl,
+            )
             .where(
                 PaperTrade.status == "closed",
                 PaperTrade.exit_date.isnot(None),
@@ -156,7 +164,7 @@ def compute_calibration_payload(
             )
             .order_by(PaperTrade.exit_date.desc(), PaperTrade.id.desc())
             .limit(k)
-        ).scalars().all()
+        ).all()
 
     by_horizon: dict[str, list[tuple[str, int | None, float]]] = {}
     for horizon, verdict, conf, ret in eval_rows:
@@ -172,18 +180,18 @@ def compute_calibration_payload(
     realized_pnl = 0.0
     closed_sample: list[dict[str, Any]] = []
     closed_wins = 0
-    for p in closed:
-        if p.pnl is not None:
-            realized_pnl += float(p.pnl)
-        if p.return_pct is not None and p.return_pct > 0:
+    for symbol, exit_reason, return_pct, pnl in closed:
+        if pnl is not None:
+            realized_pnl += float(pnl)
+        if return_pct is not None and return_pct > 0:
             closed_wins += 1
         closed_sample.append(
             {
-                "symbol": p.symbol,
-                "outcome": "win" if (p.return_pct or 0) > 0 else "loss",
-                "exit_reason": p.exit_reason,
+                "symbol": symbol,
+                "outcome": "win" if (return_pct or 0) > 0 else "loss",
+                "exit_reason": exit_reason,
                 "return_pct": (
-                    round(float(p.return_pct), 4) if p.return_pct is not None else None
+                    round(float(return_pct), 4) if return_pct is not None else None
                 ),
             }
         )
