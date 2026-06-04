@@ -63,13 +63,15 @@ def _add_closed_trade(session, tid, symbol, *, exit_date, return_pct, pnl,
 
 def test_headline_is_unbiased_fixed_horizon(pg_legacy_session):
     s = pg_legacy_session
-    # Three 5d theses: 2 setup_long wins + 1 loss.
+    # Three 5d theses: 2 setup_long wins + 1 loss. scan_date is the 5d maturity
+    # ceiling for AS_OF (2026-02-03 = 5 trading days before 2026-02-10) so the
+    # rows are validly matured-by-as_of and pass the hindsight guard.
     _add_eval(s, 1, horizon="5d", verdict="setup_long", conf=9, ret=0.05,
-              scan_date=date(2026, 2, 5))
+              scan_date=date(2026, 2, 3))
     _add_eval(s, 2, horizon="5d", verdict="setup_long", conf=8, ret=0.03,
-              scan_date=date(2026, 2, 5))
+              scan_date=date(2026, 2, 3))
     _add_eval(s, 3, horizon="5d", verdict="setup_long", conf=4, ret=-0.02,
-              scan_date=date(2026, 2, 5))
+              scan_date=date(2026, 2, 3))
 
     payload = compute_calibration_payload(AS_OF)
     h5 = payload["headline_fixed_horizon"]["5d"]
@@ -78,6 +80,26 @@ def test_headline_is_unbiased_fixed_horizon(pg_legacy_session):
     assert abs(h5["overall"]["win_rate"] - 2 / 3) < 1e-9
     # The supplementary realized record exists and is labeled survivorship-prone.
     assert "survivorship-prone" in payload["supplementary_realized"]["label"]
+
+
+def test_headline_excludes_immature_horizon_rows_on_replay(pg_legacy_session):
+    # codex iter-2 [P2]: when run_daily_eval is replayed for a PAST as_of after
+    # later-dated rows exist, a 10d eval row for a thesis scanned just before
+    # as_of has NOT actually matured by as_of — including it leaks future
+    # outcomes. The headline must drop rows whose horizon hadn't elapsed by as_of.
+    s = pg_legacy_session
+    # 10d ceiling for AS_OF (2026-02-10) is 2026-01-27 (10 trading days back).
+    # Mature: scanned on/before the ceiling. Immature: scanned after it.
+    _add_eval(s, 1, horizon="10d", verdict="setup_long", conf=8, ret=0.05,
+              scan_date=date(2026, 1, 26))   # mature → counted
+    _add_eval(s, 2, horizon="10d", verdict="setup_long", conf=8, ret=0.99,
+              scan_date=date(2026, 2, 9))    # immature (future outcome) → dropped
+
+    payload = compute_calibration_payload(AS_OF)
+    h10 = payload["headline_fixed_horizon"]["10d"]
+    # Only the matured row is counted; the hindsight-laden 0.99 row is excluded.
+    assert h10["overall"]["n"] == 1
+    assert abs(h10["overall"]["avg_return_pct"] - 0.05) < 1e-9
 
 
 def test_supplementary_last_k_closed_and_mtm(pg_legacy_session):

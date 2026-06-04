@@ -346,6 +346,37 @@ def test_distinct_later_eval_date_advances_stability():
     assert ins.action["kind"] == "set_learned_time_stop_days"
 
 
+def test_older_eval_date_replay_does_not_advance_stability():
+    # codex iter-2 [P2]: a manual replay with an OLDER eval_date than the prior
+    # recorded run must not be treated as a new forward observation — otherwise
+    # an out-of-order backfill could flip noop -> executable without two forward
+    # consecutive runs. The counter holds steady and the recorded date is kept.
+    trades, as_of = _stable_trades()  # picks k=5
+    chosen = 5
+    newer = (as_of + timedelta(days=7)).isoformat()  # prior run was LATER
+    prior = {
+        "chosen_k": chosen,
+        "stable_run_count": TIME_STOP_STABLE_RUNS - 1,
+        "last_run_date": newer,
+    }
+    with patch(
+        "rainier.llm_thesis.research._load_time_stop_trades", return_value=trades
+    ), patch(
+        "rainier.llm_thesis.research._prior_time_stop_evidence", return_value=prior
+    ):
+        sess = MemSession()
+        out = discover_time_stop(
+            eval_date=as_of, candidate_ks=(5,), min_survivors=5, db_session=sess
+        )
+    ins = out[0]
+    # Held steady — not advanced to the threshold — so stays recommend-only.
+    assert ins.evidence["stable_run_count"] == TIME_STOP_STABLE_RUNS - 1
+    assert ins.evidence["stable"] is False
+    assert ins.action["kind"] == "noop"
+    # The later prior date is preserved (not clobbered by the older replay).
+    assert ins.evidence["last_run_date"] == newer
+
+
 def test_no_trades_emits_nothing():
     with patch(
         "rainier.llm_thesis.research._load_time_stop_trades", return_value=[]

@@ -1042,11 +1042,17 @@ def discover_time_stop(
     if prior_k != chosen_k:
         # Different pick — stability resets.
         stable_run_count = 1
-    elif prior_run_date == anchor_iso:
-        # Same pick, SAME eval_date (retry/replay) — hold the count steady.
+    elif prior_run_date is not None and anchor_iso <= prior_run_date:
+        # Same pick, but this run is NOT strictly forward of the prior recorded
+        # observation — a same-date retry OR an out-of-order older replay (codex
+        # iter-2 [P2]). Hold the count steady so neither can flip the action to
+        # executable without two genuinely forward consecutive runs. Preserve the
+        # prior recorded date so a later legitimate run still advances from it.
         stable_run_count = max(prior_runs, 1)
+        anchor_iso = str(prior_run_date)
     else:
-        # Same pick, a new distinct observation date — advance.
+        # Same pick, a new distinct observation date strictly after the prior —
+        # advance.
         stable_run_count = prior_runs + 1
     is_stable = stable_run_count >= TIME_STOP_STABLE_RUNS
 

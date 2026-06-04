@@ -37,7 +37,7 @@ The compute reads from the LEGACY local-TimescaleDB engine only
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -59,6 +59,13 @@ _CONF_BUCKETS: tuple[tuple[str, int, int], ...] = (
     ("mid (5-7)", 5, 7),
     ("high (8-10)", 8, 10),
 )
+
+
+def _as_date_local(d: Any) -> date:
+    """Coerce a datetime/date column value to a plain date for comparison."""
+    if isinstance(d, datetime):
+        return d.date()
+    return d
 
 
 def _hit(verdict: str, return_pct: float) -> bool:
@@ -132,6 +139,22 @@ def compute_calibration_payload(
     """
     cutoff = as_of - timedelta(days=window_days)
 
+    # Per-horizon maturity ceiling (codex iter-2 [P2]): a thesis only counts in
+    # the headline once its fixed horizon has actually elapsed by `as_of`. In
+    # forward operation that's automatic, but a historical replay/backfill
+    # (run_daily_eval --eval-date <past>) runs after later-dated rows already
+    # exist, so a `scan_date <= as_of` filter alone would pull in e.g. a 10d row
+    # for a thesis scanned the day before `as_of` — leaking future outcomes into
+    # the calibration row. A row at `horizon` is mature iff its scan_date is on
+    # or before the date `_HORIZON_DAYS[horizon]` trading days before `as_of`.
+    from rainier.llm_thesis.eval import _HORIZON_DAYS, _trading_days_back
+
+    horizon_ceiling: dict[str, date] = {
+        h: _trading_days_back(as_of, _HORIZON_DAYS[h])
+        for h in HORIZONS
+        if h in _HORIZON_DAYS
+    }
+
     with get_session() as session:
         # --- HEADLINE: unbiased fixed-horizon thesis evaluations. ---
         eval_rows = session.execute(
@@ -140,6 +163,7 @@ def compute_calibration_payload(
                 ThesisEvaluation.verdict,
                 ThesisEvaluation.llm_confidence,
                 ThesisEvaluation.return_pct,
+                ThesisEvaluation.scan_date,
             ).where(
                 ThesisEvaluation.scan_date >= cutoff,
                 ThesisEvaluation.scan_date <= as_of,
@@ -167,8 +191,13 @@ def compute_calibration_payload(
         ).all()
 
     by_horizon: dict[str, list[tuple[str, int | None, float]]] = {}
-    for horizon, verdict, conf, ret in eval_rows:
-        by_horizon.setdefault(str(horizon), []).append(
+    for horizon, verdict, conf, ret, row_scan in eval_rows:
+        h = str(horizon)
+        ceiling = horizon_ceiling.get(h)
+        # Drop rows whose horizon hadn't matured by as_of (replay hindsight guard).
+        if ceiling is not None and _as_date_local(row_scan) > ceiling:
+            continue
+        by_horizon.setdefault(h, []).append(
             (str(verdict or ""), conf, float(ret))
         )
     headline = {
