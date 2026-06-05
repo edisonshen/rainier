@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 from datetime import date as date_type
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -36,8 +37,27 @@ from rainier.scrapers.qu.parsers import (
 # distinguish 401/403 (recoverable via reauth) from other errors instead of
 # throwing inside the page context. ``body`` is the parsed JSON or ``None``
 # when the response isn't valid JSON; ``text_excerpt`` is the first 500
-# chars of the raw text for diagnostics.
-QU100_FETCH_JS = """
+# chars of the RAW (un-sanitized) text for diagnostics so genuine non-JSON
+# error bodies stay legible in logs.
+#
+# QU's backend serializes with ``json.dumps(allow_nan=True)``, which emits
+# the bare tokens ``NaN`` / ``Infinity`` / ``-Infinity`` (not legal JSON) in
+# value position when a field like ``industry`` is missing. A naive
+# ``JSON.parse`` throws on those, ``body`` becomes ``None``, and the whole
+# date's ranking is dropped. ``QU100_NAN_LITERAL_RE`` rewrites only literals
+# in JSON *value* position (immediately after a ``:`` and immediately before a
+# ``,`` / ``}`` / ``]``) to ``null`` before parsing. A string value that
+# legitimately contains ``NaN`` (e.g. ``"NaN Holdings"``) is untouched because
+# it is bracketed by quotes, not by a structural delimiter.
+#
+# The regex is held as a single source-of-truth Python ``re.Pattern`` so a
+# unit test can exercise the exact same pattern without a JS engine; the JS
+# below interpolates ``.pattern`` verbatim (JS and Python share identical
+# syntax for it). The ``g`` flag is JS-only and lives in the literal below.
+QU100_NAN_LITERAL_RE = re.compile(r":\s*(NaN|-?Infinity)(?=\s*[,}\]])")
+
+QU100_FETCH_JS = (
+    """
 async ({url}) => {
     const resp = await fetch(url, {
         method: 'GET',
@@ -45,8 +65,14 @@ async ({url}) => {
         headers: {'accept': 'application/json, text/plain, */*'},
     });
     const text = await resp.text();
+    // QU emits bare NaN/Infinity in value position (json.dumps allow_nan=True);
+    // coerce only those structural literals to null so JSON.parse succeeds. The
+    // raw text is still returned as text_excerpt for diagnostics.
+    const sanitized = text.replace(/"""
+    + QU100_NAN_LITERAL_RE.pattern
+    + """/g, ':null');
     let body = null;
-    try { body = JSON.parse(text); } catch (_) { /* non-JSON 4xx/5xx */ }
+    try { body = JSON.parse(sanitized); } catch (_) { /* genuine non-JSON 4xx/5xx */ }
     return {
         status: resp.status,
         body: body,
@@ -54,6 +80,7 @@ async ({url}) => {
     };
 }
 """
+)
 
 log = structlog.get_logger()
 

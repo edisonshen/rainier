@@ -119,8 +119,13 @@ def _api_rows_to_qu100_rows(api_rows: list[dict]) -> list[QU100Row]:
                 rank=int(row.get("rank", 0) or 0),
                 symbol=symbol,
                 daily_change=parse_daily_change(str(row.get("change", "0"))),
-                sector=str(row.get("sector", "")).strip(),
-                industry=str(row.get("industry", "")).strip(),
+                # ``or ""`` (not ``get(key, "")``): the in-page sanitizer turns
+                # QU's bare ``NaN`` industry/sector into JSON ``null`` -> Python
+                # ``None``. ``get("sector", "")`` only defaults a *missing* key,
+                # so a present-but-null value would otherwise stringify to the
+                # literal ``"None"``. ``or ""`` collapses both to empty string.
+                sector=str(row.get("sector") or "").strip(),
+                industry=str(row.get("industry") or "").strip(),
                 long_short=str(row.get("long_short", "")).strip(),
                 raw=row,
             )
