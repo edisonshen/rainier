@@ -26,18 +26,17 @@ from unittest.mock import AsyncMock
 import pytest
 
 from rainier.scrapers.qu.parsers import _api_rows_to_qu100_rows
-from rainier.scrapers.qu.scraper import QU100_FETCH_JS, QU100_NAN_LITERAL_RE
+from rainier.scrapers.qu.scraper import (
+    QU100_FETCH_JS,
+    QU100_NAN_LITERAL_RE,
+    _sanitize_qu_nan,
+)
 
 from .conftest import make_mock_page, make_scraper
 
-
-def _sanitize(text: str) -> str:
-    """Apply the same value-position literal sanitizer the in-page JS uses.
-
-    Mirrors ``text.replace(QU100_NAN_LITERAL_RE, ':null')`` in JS via the
-    shared Python ``re.Pattern`` constant.
-    """
-    return QU100_NAN_LITERAL_RE.sub(":null", text)
+# The production sanitizer (quote-aware, branch-selecting replacer). Tests
+# exercise the exact function the in-page JS mirrors, not a re-implementation.
+_sanitize = _sanitize_qu_nan
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +102,30 @@ class TestNanLiteralSanitizer:
         payload = json.loads(_sanitize(text))
         assert payload["name"] == "Infinity Corp"
         assert payload["val"] is None
+
+    def test_colon_prefixed_nan_inside_quoted_string_is_preserved(self):
+        # The dangerous case: a quoted string value whose CONTENT looks like a
+        # value-position literal (``:NaN,`` / ``:-Infinity}``). A colon-only
+        # regex would rewrite inside the string and silently corrupt the value;
+        # the quote-aware branch must consume the whole string first.
+        text = '{"note":"ratio:NaN, see filing","industry":NaN}'
+        payload = json.loads(_sanitize(text))
+        assert payload["note"] == "ratio:NaN, see filing"
+        assert payload["industry"] is None
+
+        text2 = '{"note":"bound:-Infinity}end","val":Infinity}'
+        payload2 = json.loads(_sanitize(text2))
+        assert payload2["note"] == "bound:-Infinity}end"
+        assert payload2["val"] is None
+
+    def test_escaped_quote_in_string_does_not_break_branch(self):
+        # An escaped quote inside the string must not prematurely terminate the
+        # string token, or the regex could fall out and mis-handle a trailing
+        # NaN. ``\\"`` is a literal backslash-quote in the JSON source.
+        text = r'{"name":"A\"B:NaN, C","industry":NaN}'
+        payload = json.loads(_sanitize(text))
+        assert payload["name"] == 'A"B:NaN, C'
+        assert payload["industry"] is None
 
     def test_value_terminated_by_brace_and_bracket(self):
         # The lookahead accepts ``,`` / ``}`` / ``]`` as the value terminator.
