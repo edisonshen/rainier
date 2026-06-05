@@ -159,9 +159,9 @@ class TestAdapterNullToleranceForSectorIndustry:
         assert rows[0].sector != "None"
         assert rows[0].industry != "None"
 
-    def test_null_long_short_unaffected_field_still_works(self):
-        # Only sector/industry are in scope for null-coercion, but a null
-        # long_short must not produce "None" either if present.
+    def test_null_long_short_coerced_to_empty_string(self):
+        # A present-but-null long_short (bare NaN sanitized to JSON null) must
+        # coerce to "" — never the literal "None" dominance category.
         api = [
             {"rank": 1, "ticker": "AAA", "change": "0",
              "industry": None, "long_short": None, "sector": None},
@@ -169,6 +169,8 @@ class TestAdapterNullToleranceForSectorIndustry:
         rows = _api_rows_to_qu100_rows(api)
         assert rows[0].sector == ""
         assert rows[0].industry == ""
+        assert rows[0].long_short == ""
+        assert rows[0].long_short != "None"
 
     def test_present_non_null_values_preserved(self):
         api = [
