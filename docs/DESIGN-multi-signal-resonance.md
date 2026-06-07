@@ -114,12 +114,12 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 |---|---|---|
 | `SignalPanel` | registry of ≤66-lookback signals; each `(df) → risk-on series ∈ {0,1}` | new `src/rainier/signals/panel.py` |
 | `ResonanceScorer` | panel → daily conviction score ∈ [0,1] (weighted consensus) | new `src/rainier/signals/resonance.py` |
-| `ResonanceStrategy` | Layer-1 gate × Layer-2 size → daily **target-weight series** ∈ [0,1] | new `src/rainier/signals/resonance_strategy.py` |
-| Daily-MTM sim | weight series → equity, no lookahead, financing + costs | `src/rainier/backtest/` (productionize the prototype in `scripts/leveraged_common.py`) |
+| `ResonanceStrategy` | Layer-1 gate × Layer-2 size → daily **per-asset target weights** {TQQQ, QQQ}, remainder cash | new `src/rainier/signals/resonance_strategy.py` |
+| Daily-MTM sim | per-asset weights → equity, no lookahead, financing + costs | `src/rainier/backtest/` (productionize the prototype in `scripts/leveraged_common.py`) |
 
-**New boundary — NOT `SignalEmitter`.** The existing `SignalEmitter` returns `list[Signal]` (discrete entry/SL/TP trades) and the current engine consumes discrete trades — it *cannot* represent a continuously-sized daily weight. v1 introduces a distinct **`WeightStrategy`** protocol — `(df, symbol, timeframe) → daily target-weight series ∈ [0,1]` — plus a weight-consuming backtest path (the daily-MTM sim). This is **additive**: it does not change `SignalEmitter` or the discrete-trade engine, which keep serving the pin-bar/fractal strategies.
+**New boundary — NOT `SignalEmitter`.** The existing `SignalEmitter` returns `list[Signal]` (discrete entry/SL/TP trades) and the current engine consumes discrete trades — it *cannot* represent a continuously-sized daily weight. v1 introduces a distinct **`WeightStrategy`** protocol — `(df, symbol, timeframe) → daily **per-asset** target-weight series` (a dict like `{TQQQ: w1, QQQ: w2}`, weights ≥0 summing ≤1, remainder cash) — plus a weight-consuming backtest path. **Per-asset, not a scalar TQQQ-fraction**, precisely so the Q1 "1× QQQ risk-off floor" option is representable without a redesign; this also matches the existing `run_portfolio` sim, which already takes a per-asset weights dict. Additive: it does not change `SignalEmitter` or the discrete-trade engine, which keep serving the pin-bar/fractal strategies.
 
-*Note: the panel signals and the daily-MTM sim currently live only as untracked exploratory scripts (`scripts/regime_signal_search.py`, `scripts/leveraged_common.py`). v1 promotes them into `src/rainier/` per the module map in `CLAUDE.md`; the scripts are the reference implementation, not the shipping location.*
+*Reference artifacts (local, NOT committed in this design PR): the panel signals and daily-MTM sim live only as untracked exploratory scripts (`scripts/regime_signal_search.py`, `scripts/leveraged_common.py`, `scripts/full_combo_search.py`, `scripts/resonance_study.py`). They are the working reference, not a landed dependency — so until v1 lands, the numbers in this doc are **exploratory and reproduced via those local scripts**. v1's **first implementation step** is to promote them into `src/rainier/` (committed) per the `CLAUDE.md` module map, making the panel + studies reproducible from the tree.*
 
 ### 5.2 The panel (≤66 lookback)
 
