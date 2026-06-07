@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 from datetime import date as date_type
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -36,8 +37,54 @@ from rainier.scrapers.qu.parsers import (
 # distinguish 401/403 (recoverable via reauth) from other errors instead of
 # throwing inside the page context. ``body`` is the parsed JSON or ``None``
 # when the response isn't valid JSON; ``text_excerpt`` is the first 500
-# chars of the raw text for diagnostics.
-QU100_FETCH_JS = """
+# chars of the RAW (un-sanitized) text for diagnostics so genuine non-JSON
+# error bodies stay legible in logs.
+#
+# QU's backend serializes with ``json.dumps(allow_nan=True)``, which emits
+# the bare tokens ``NaN`` / ``Infinity`` / ``-Infinity`` (not legal JSON) in
+# value position when a field like ``industry`` is missing. A naive
+# ``JSON.parse`` throws on those, ``body`` becomes ``None``, and the whole
+# date's ranking is dropped.
+#
+# ``QU100_NAN_LITERAL_RE`` rewrites those bare literals to ``null`` before
+# parsing — but it must NOT touch the same byte sequence when it appears
+# *inside* a quoted string (e.g. a field whose value is the text
+# ``"ratio:NaN, see note"``). A colon-anchored pattern alone can't tell the
+# two apart, so the regex alternates two branches:
+#
+#   1. a complete JSON string token ``"(?:[^"\\]|\\.)*"`` (handles escaped
+#      quotes), matched but left UNCHANGED by the replacer, and
+#   2. the value-position literal ``:\s*(NaN|-?Infinity)`` followed by a
+#      structural terminator (``,`` / ``}`` / ``]``), rewritten to ``:null``.
+#
+# Because alternation is greedy left-to-right and strings are listed first,
+# any NaN/Infinity that lives inside quotes is consumed as part of branch 1
+# and never reaches branch 2 — so legitimate string content is preserved.
+#
+# The pattern is a single source-of-truth Python ``re.Pattern`` so a unit
+# test can exercise the exact same regex without a JS engine; the JS below
+# interpolates ``.pattern`` verbatim (JS and Python share identical syntax
+# for it) and applies the same branch-aware replacer. The ``g`` flag is
+# JS-only and lives in the literal below.
+QU100_NAN_LITERAL_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"|:\s*(?:NaN|-?Infinity)(?=\s*[,}\]])'
+)
+
+
+def _sanitize_qu_nan(text: str) -> str:
+    """Coerce bare value-position NaN/Infinity literals to ``null``.
+
+    Quote-aware: a NaN/Infinity sequence inside a JSON string value is left
+    untouched. Mirrors the in-page JS replacer so both sides transform
+    identically (see ``QU100_NAN_LITERAL_RE``).
+    """
+    return QU100_NAN_LITERAL_RE.sub(
+        lambda m: m.group(0) if m.group(0).startswith('"') else ":null", text
+    )
+
+
+QU100_FETCH_JS = (
+    """
 async ({url}) => {
     const resp = await fetch(url, {
         method: 'GET',
@@ -45,8 +92,16 @@ async ({url}) => {
         headers: {'accept': 'application/json, text/plain, */*'},
     });
     const text = await resp.text();
+    // QU emits bare NaN/Infinity in value position (json.dumps allow_nan=True);
+    // coerce only those structural literals to null so JSON.parse succeeds.
+    // The string branch of the regex is matched first and returned verbatim so
+    // NaN-like text inside a quoted value is never rewritten. The raw text is
+    // still returned as text_excerpt for diagnostics.
+    const sanitized = text.replace(/"""
+    + QU100_NAN_LITERAL_RE.pattern
+    + """/g, (m) => m[0] === '"' ? m : ':null');
     let body = null;
-    try { body = JSON.parse(text); } catch (_) { /* non-JSON 4xx/5xx */ }
+    try { body = JSON.parse(sanitized); } catch (_) { /* genuine non-JSON 4xx/5xx */ }
     return {
         status: resp.status,
         body: body,
@@ -54,6 +109,7 @@ async ({url}) => {
     };
 }
 """
+)
 
 log = structlog.get_logger()
 
