@@ -14,7 +14,7 @@ We call the agreement of many signals **resonance**: when lots of independent in
 
 ### What the data *suggests* (a lead, not yet proof)
 
-Across 2020-10 → now we bucketed every day by how many of a 26-signal panel agreed, then looked at TQQQ's *next 20 days*:
+Across 2020-10 → now we bucketed every day by how many of a 26-signal *exploratory* panel agreed (the ≤66 subset of `build_signals` + SPY, as in `scripts/resonance_study.py`), then looked at TQQQ's *next 20 days*. (v1 freezes a slightly different ~22-member panel — §5.2 — so the resonance **denominator is the frozen count**, never a hardcoded 26.)
 
 ```
  signals agreeing →  win-rate of the next 20 days
@@ -73,7 +73,7 @@ Separate **timing** from **conviction**:
 
 ```
 LAYER 1 — TIMING (fast):        LAYER 2 — CONVICTION (resonance):
-  asymmetric SMA22/44 gate         consensus of the 26-signal panel
+  asymmetric SMA22/44 gate         consensus of the ≤66-lookback panel (§5.2)
   decides IN vs OUT of TQQQ        decides HOW BIG when in
         │                                  │
         └──────────────┬───────────────────┘
@@ -132,7 +132,7 @@ The names below are the *intended* set, not a claim about the current prototype.
 
 - **Trend** (from ≤66 subset): price > SMA{20,50,66}, price > EMA{20,50}, SMA22>SMA44, SMA50-rising.
 - **Momentum** (from ≤66 subset): RSI14>50, MACD-hist>0, ROC{20,60}>0, price>Donchian50-mid.
-- **Volatility** (rewritten): realizedVol(20) < its **rolling-40 median** (20+40 = 60 *total* span), ATR%(14) < its rolling-46 median, VIX<25, VIX<SMA20, VIX-falling. *(Replaces the prototype's `expanding(60).median()` — an expanding window has unbounded lookback.)*
+- **Volatility** (rewritten): realizedVol(20, rolling std) < its **rolling-40 median** (20+40 = 60, both finite), ATR%(14, **simple rolling mean** of true range — *not* Wilder/EWMA) < its rolling-46 median (14+46 = 60, both finite), VIX<25, VIX<SMA20, VIX-falling. *(Replaces the prototype's `expanding(60).median()` AND its Wilder-EWMA `atr_pct` — both have unbounded lookback; the finite-window invariant §5.5(b) requires simple rolling forms here.)*
 - **Structure** (from ≤66 subset): within 5% of 60-day high, ADX>20 & +DI>−DI, higher-high+higher-low.
 - **Cross-asset** (NEW code): SPY>SMA22, SPY>SMA44 — `build_signals(qqq, vix)` takes no SPY today; v1 adds an SPY input.
 - **(NEW, optional)** fractal:simple_turn — not in `build_signals`; added if Q7 says so.
