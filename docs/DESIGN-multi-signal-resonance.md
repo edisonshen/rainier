@@ -131,6 +131,8 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 - **(Optional)** fractal:simple_turn as a momentum/structure member.
 - **(Gap)** market breadth (% NDX above its MA) — not in yfinance; needs a proxy (compute "% of top-N QQQ holdings above their SMA"). Tracked as a follow-up, not v1-blocking.
 
+*Every member's controlling parameter (window / EMA-span / period) is ≤ 66. Finite-window members (SMA, rolling-median, Donchian, ROC) have exact support ≤66; EMA-family members (EMA, RSI, MACD, ADX) are recursively smoothed with span/period ≤66 — theoretically infinite tail but bounded **effective** memory (see the invariant in §5.5).*
+
 ### 5.3 Scoring
 
 `resonance[t] = Σ wᵢ · signalᵢ[t] / Σ wᵢ` — weighted fraction risk-on.
@@ -148,7 +150,11 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 
 Signals computed on close[t]; target weight applied to t+1 return (shift +1). Warmup buffer: load from 2019-06 so every ≤66 signal is valid by 2020-10; **measure only over 2020-10 → now** (real TQQQ). Charge turnover cost on size changes; cash earns the 13-week T-bill.
 
-**Lookback invariant:** every panel signal must use a *bounded* window ≤ 66 bars — no expanding/all-history windows (medians, z-scores, percentiles included). A unit test asserts each signal's first valid index ≤ 66 and that its value at bar *t* is unchanged when history before *t−66* is truncated.
+**Lookback invariant:** no indicator parameter (window / EMA-span / period) exceeds 66 bars, and no expanding/all-history windows (medians, z-scores, percentiles). Two flavors:
+- *Finite-window* members (SMA, rolling-median, Donchian, ROC) — exact support ≤66.
+- *EMA-family* members (EMA, RSI, MACD, ADX) — recursively smoothed, span/period ≤66; infinite tail in theory but bounded *effective* memory once warmed up.
+
+Tests: (a) assert every signal's max parameter ≤66; (b) finite-window signals are bit-identical when history before *t−66* is truncated; (c) EMA-family signals converge to <1e-6 relative given ≥150 warmup bars (the 2019-06 buffer supplies ~330). This is why the constraint says ≤66 *parameter*, not ≤66 *exact support*.
 
 ### 5.6 Config (sweepable)
 
