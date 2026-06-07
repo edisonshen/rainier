@@ -81,10 +81,10 @@ LAYER 1 — TIMING (fast):        LAYER 2 — CONVICTION (resonance):
             position size = gate_on × size(resonance)
 ```
 
-- **Layer 1 (gate)** answers *"should I be in TQQQ at all right now?"* — fast, responsive, the proven timing engine. When the gate is OFF → cash (T-bills). No lag penalty on timing.
+- **Layer 1 (gate)** answers *"should I be in TQQQ at all right now?"* — fast, responsive, the best-tested timing engine so far. When the gate is OFF → cash (T-bills). No lag penalty on timing.
 - **Layer 2 (resonance)** answers *"how convinced am I?"* — when the gate is ON, scale the position by the conviction score. High resonance (many signals agree) → full 3× exposure. Weak resonance (signals split) → reduced exposure (e.g. partial TQQQ + cash, or 1× QQQ).
 
-This directly uses the confirmed 48%→62% win-rate edge as a **sizing** signal, where lag doesn't hurt, instead of a **timing** signal, where it does.
+This uses the **candidate** 48%→62% win-rate edge (pending §6.1 significance) as a **sizing** signal, where lag doesn't hurt, instead of a **timing** signal, where it does.
 
 ### Your "confirmed buy" is a *second* axis — pullback resonance
 
@@ -123,17 +123,22 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 
 ### 5.2 The panel (≤66 lookback)
 
-*The exact membership and per-category counts are **pinned from `regime_signal_search.build_signals`** at build time (the prototype's real list), not the prose below — the "~26" figure is provisional and the breadth "(Gap)" / "(Optional)" members are excluded until added. Category-balanced weighting (§5.3) depends on the final per-category counts, so v1 records the frozen list explicitly.*
+**Provenance — important:** v1 does **NOT** pin the full `regime_signal_search.build_signals` list. That list is mostly **>66** lookback (SMA100/150/200, EMA100/200, ROC120, 12-1 momentum, 90/120-day highs, slow 50/150 & 50/200 crosses) and uses **expanding** medians — both forbidden here. v1 instead:
+1. takes the **≤66 subset** of `build_signals` (the complement of the existing `BLOCK` exclusion set in `scripts/full_combo_search.py` / `leveraged_common.py`),
+2. **rewrites** its two expanding-median members to bounded windows (below),
+3. **adds** new members (SPY cross-asset, optional fractal, breadth proxy) as fresh code.
 
-- **Trend:** price > SMA{20,50,66}, price > EMA{20,50}, SMA22>SMA44, SMA50-rising.
-- **Momentum:** RSI14>50, MACD-hist>0, ROC{20,60}>0, price>Donchian50-mid.
-- **Volatility:** realizedVol<rolling-66 median, ATR%<rolling-66 median, VIX<25, VIX<SMA20, VIX-falling. *(Use a bounded 66-bar rolling median, NOT an expanding median — an expanding window grows past the 66-bar cap and would violate the constraint.)*
-- **Structure:** within 5% of 60-day high, ADX>20 & +DI>−DI, higher-high+higher-low.
-- **Cross-asset:** SPY>SMA22, SPY>SMA44 (broad-market confirm).
-- **(Optional)** fractal:simple_turn as a momentum/structure member.
-- **(Gap)** market breadth (% NDX above its MA) — not in yfinance; needs a proxy (compute "% of top-N QQQ holdings above their SMA"). Tracked as a follow-up, not v1-blocking.
+The names below are the *intended* set, not a claim about the current prototype. The frozen final list + per-category counts are recorded at build time; new members (3) each count against the §6.4 parameter budget.
 
-*Every member's controlling parameter (window / EMA-span / period) is ≤ 66. Finite-window members (SMA, rolling-median, Donchian, ROC) have exact support ≤66; EMA-family members (EMA, RSI, MACD, ADX) are recursively smoothed with span/period ≤66 — theoretically infinite tail but bounded **effective** memory (see the invariant in §5.5).*
+- **Trend** (from ≤66 subset): price > SMA{20,50,66}, price > EMA{20,50}, SMA22>SMA44, SMA50-rising.
+- **Momentum** (from ≤66 subset): RSI14>50, MACD-hist>0, ROC{20,60}>0, price>Donchian50-mid.
+- **Volatility** (rewritten): realizedVol(20) < its **rolling-40 median** (20+40 = 60 *total* span), ATR%(14) < its rolling-46 median, VIX<25, VIX<SMA20, VIX-falling. *(Replaces the prototype's `expanding(60).median()` — an expanding window has unbounded lookback.)*
+- **Structure** (from ≤66 subset): within 5% of 60-day high, ADX>20 & +DI>−DI, higher-high+higher-low.
+- **Cross-asset** (NEW code): SPY>SMA22, SPY>SMA44 — `build_signals(qqq, vix)` takes no SPY today; v1 adds an SPY input.
+- **(NEW, optional)** fractal:simple_turn — not in `build_signals`; added if Q7 says so.
+- **(Gap)** market breadth (% NDX above its MA) — not in yfinance; proxy = "% of top-N QQQ holdings above their SMA". Follow-up, not v1-blocking.
+
+*Every member's **composed/total** lookback is ≤ 66 — a 20-day measure compared to a 40-day median counts as 60, not "66 because the outer window is 66." Finite-window members have exact composed support ≤66; EMA-family members (EMA, RSI, MACD, ADX) are recursively smoothed with span/period ≤66 — infinite tail in theory, bounded **effective** memory (invariant in §5.5).*
 
 ### 5.3 Scoring
 
@@ -148,14 +153,15 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 
 ```
 raw resonance r[t]  ──►  (1) curve: size = clamp((r−r_lo)/(r_hi−r_lo), 0, 1)
-                    ──►  (2) round to coarse step ∈ {0, ½, 1}
-                    ──►  (3) hysteresis ON THE STEPPED VALUE: only change the
-                              held step if the new step differs by ≥1 level AND
-                              persists ≥ `dwell` bars  (one place, applied last)
-                    ──►  (4) rebalance only when the held step changes
+                    ──►  (2) round to coarse step ∈ {0, ½, 1}  → target_step[t]
+                    ──►  (3) hysteresis: the HELD step moves to target_step[t]
+                              only after target_step has held the SAME new value
+                              for ≥ `dwell` consecutive bars; otherwise the held
+                              step is carried forward unchanged
+                    ──►  (4) rebalance only when the held step actually changes
 ```
 
-Hysteresis lives **only** at step (3), on the rounded step — not on the raw score (that was the §5.3 over-spec; remove it there). This makes the path deterministic and unit-testable.
+Boot: at the first valid bar `t0`, held_step = target_step[t0] (no dwell required — there is no prior to confirm against). Moves are **direct** to the confirmed target (e.g. 0→1 in one transition once the new step holds `dwell` bars), not forced stepwise through ½. Hysteresis lives **only** here — not on the raw score (the §5.3 over-spec is removed). Deterministic and unit-testable; a test asserts a fixed input sequence yields a fixed held-step sequence.
 
 ### 5.5 No-lookahead + costs
 
@@ -165,7 +171,7 @@ Every input (TQQQ, QQQ, SPY, VIX) uses its **close[t]** value; the Layer-1 gate 
 
 **Leakage test:** inject a known future spike into bar *t+1*; assert weight[t] is unchanged (zero leakage), across all four inputs and both layers.
 
-**Lookback invariant:** no indicator parameter (window / EMA-span / period) exceeds 66 bars, and no expanding/all-history windows. *Finite-window* members (SMA, rolling-median, Donchian, ROC) have exact support ≤66. *EMA-family* members (EMA, RSI, MACD, ADX) are recursively smoothed with span/period ≤66 — infinite tail in theory, bounded *effective* memory. Tests: (a) every signal's max parameter ≤66; (b) finite-window signals bit-identical when history before *t−66* is dropped; (c) **per-member** warmup — empirically measure each EMA-family signal's convergence (ADX is double-smoothed, MACD-hist is EMAs-of-EMAs, so they need more warmup than a raw EMA) and set the buffer from the *slowest* member, not a global asserted constant.
+**Lookback invariant:** the **composed/total** lookback of every member ≤ 66 bars, and no expanding/all-history windows. "Composed" matters for *nested* indicators: `realizedVol(20)` fed into a `rolling-k median` has total span `20+k`, so the median window must be ≤46, not 66. *Finite-window* members (SMA, rolling-median, Donchian, ROC, and the rewritten nested-vol members) have exact composed support ≤66. *EMA-family* members (EMA, RSI, MACD, ADX) are recursively smoothed with span/period ≤66 — infinite tail in theory, bounded *effective* memory. Tests: (a) every signal's composed span ≤66 (inner+outer for nested); (b) finite-window signals bit-identical when history before *t−66* is dropped; (c) **per-member** warmup — empirically measure each EMA-family signal's convergence (ADX is double-smoothed, MACD-hist is EMAs-of-EMAs, so they need more warmup than a raw EMA) and set the buffer from the *slowest* member, not a global asserted constant. The two prototype `expanding(60).median()` members fail test (b) and **must** be rewritten to the bounded form in §5.2 — this is a required panel change, not optional.
 
 ### 5.6 Config (and what is NOT swept)
 
@@ -186,20 +192,22 @@ The window has **one** bear (2022). A sizing overlay that simply de-levers *mech
 
 ### 6.2 No data-snooping — frozen train/test + genuine OOS
 
-The gate (SMA22/44), the panel, and the sizing thresholds were all discovered on 2020-10→now. So an in-window 60/40 split is **not** out-of-sample — the "OOS" slice already shaped the choices.
+The gate (SMA22/44), the panel, and the sizing thresholds were all discovered on 2020-10→now. So merely *freezing* that config and reporting 2023→now still leaks — the held-out slice already shaped the choices.
 
 | Test | Protocol | Pass criteria |
 |---|---|---|
-| Frozen split | **freeze** gate + panel + r_lo/r_hi + weights on a train slice (≤2022-12), report untouched on 2023→now | edge persists on the held-out slice |
-| **True OOS** | run the *frozen* config on a **different leveraged underlying** (SPXL/UPRO/SOXL) and on **synthetic 3× QQQ pre-2010** | edge survives on data that did not inform any choice — this is the real test |
+| Re-derived split | Re-run the **entire** selection pipeline (gate sweep, bucket thresholds, panel, weights) using **only ≤2022-12** data — discard the prior full-window picks — then report **once** on 2023→now, untouched | edge persists. If re-deriving is impractical, 2023→now is **descriptive only** and the load-bearing test is the row below. |
+| **True OOS** (load-bearing) | run the frozen config on **synthetic 3× QQQ pre-2010** (dot-com + GFC — the regimes leverage decay punishes most) and on a **different leveraged underlying** | edge survives on data that informed no choice |
 
-In-window per-regime numbers (2021/2022/2023-24/2025) are **descriptive only**, never validation — one path each, and 2025 is a partial year.
+**Genuine-independence caveats:** for a different underlying, the signal source **switches** to that underlying's own inputs (SPX/QQQ-correlated), with gate/panel *structure* held fixed. **SPXL/UPRO are near-clones of the QQQ trade** → weak independent evidence; **SOXL (semis)** is a genuinely different regime → stronger. For pre-2010 synthetic, **pre-register** the cost params before running: `rate` = the historical 3-month T-bill *series* (not a constant — it swings 0–5%), `fee` = a fixed expense; report drawdown **sensitivity** to ±50 bps fee, since the dot-com/GFC verdict hinges on them.
+
+In-window per-regime numbers (2021/2022/2023-24/2025) are **descriptive only**, never validation — one path each, 2025 partial.
 
 ### 6.3 Is it the *signal*, or just less leverage?
 
-| Test | Control | Pass criteria |
+| Test | Control (precisely pinned) | Pass criteria |
 |---|---|---|
-| Matched-exposure | a **constant** scaler and a **volatility-targeted** scaler, each tuned to the *same average exposure* as the resonance sizer | resonance must beat *both* matched-exposure controls on Calmar — otherwise the "edge" is just de-levering and we ship the simpler vol-target instead |
+| Matched-exposure | (a) **constant** scaler = the resonance sizer's *exact* mean weight; (b) **vol-target** scaler matched on *both* mean exposure AND realized-vol budget. Both computed on the **frozen §6.2 test slice**, not re-fit. | resonance must beat the **better** of (a)/(b) on Calmar — else the "edge" is just de-levering, and we ship the simpler vol-target instead |
 
 ### 6.4 Overfit guard (hard, not vibes)
 
@@ -228,8 +236,8 @@ Must beat buy-hold TQQQ **and** QQQ risk-adjusted, **and** the bare SMA22/44 gat
 
 ## 8. Why this is the right shape
 
-- Uses the **proven** edge (resonance → win-rate) where it works (sizing), not where it doesn't (timing).
-- Keeps the **proven** timing engine (SMA gate) untouched and responsive.
+- Uses the **candidate** edge (resonance → win-rate, pending §6.1) where it would work (sizing), not where it doesn't (timing).
+- Keeps the **best-tested** timing engine (SMA gate) untouched and responsive.
 - Generalizes your multi-signal "confirmed buy" into a tunable conviction dial.
 - Respects the constraints we established (≤66 MAs, 2020-10 window, real TQQQ, costs, no-lookahead).
 - Falsifiable: if resonance sizing doesn't beat the bare gate on Calmar **and** drawdown (§6), we don't ship it — simpler wins.
