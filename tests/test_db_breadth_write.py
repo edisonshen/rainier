@@ -433,6 +433,68 @@ def test_backfill_spy_cli_dual_writes(migrated_engine, tmp_path, database_url):
     assert _count(migrated_engine, "benchmark_ohlcv") == len(spy)
 
 
+@pytest.mark.requires_postgres
+def test_backfill_spy_incremental_cli_idempotent(migrated_engine, tmp_path, database_url):
+    """REGRESSION (benchmark-ohlcv-spy-stale): the daily cron runs
+    `market-breadth backfill-spy --incremental`, which is the ONLY writer of
+    market.benchmark_ohlcv. Re-running it (a missed-cron catch-up, or two runs in
+    a day) must UPSERT on (symbol, date) — no duplicate rows. This guards the
+    table fengshen's /trading SPY price pane reads against silent dupes when the
+    scheduled job re-fires.
+    """
+    from rainier.cli import cli
+
+    days = _trading_days(date(2024, 1, 2), 6)
+
+    def fake_fetch(syms, start, end):
+        return {
+            s: pd.DataFrame(
+                {
+                    "date": days,
+                    "open": [400.0 + i for i in range(len(days))],
+                    "high": [401.0 + i for i in range(len(days))],
+                    "low": [399.0 + i for i in range(len(days))],
+                    "close": [400.5 + i for i in range(len(days))],
+                    "volume": [70_000_000 + i for i in range(len(days))],
+                }
+            )
+            for s in syms
+        }
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    out_path = cache / "spy_history.parquet"
+
+    import rainier.market_breadth.ohlcv_backfill as obf
+
+    orig = obf._yfinance_fetch
+    obf._yfinance_fetch = fake_fetch
+    try:
+        for _ in range(2):  # run the incremental cron command twice
+            res = CliRunner().invoke(
+                cli,
+                [
+                    "market-breadth", "backfill-spy",
+                    "--incremental", "--output", str(out_path),
+                ],
+            )
+            assert res.exit_code == 0, res.output
+    finally:
+        obf._yfinance_fetch = orig
+
+    spy = pd.read_parquet(out_path)
+    # No duplicate (symbol, date) in PG, and PG matches the (deduped) parquet.
+    assert _count(migrated_engine, "benchmark_ohlcv") == len(spy)
+    with migrated_engine.connect() as conn:
+        dupes = conn.execute(
+            text(
+                "SELECT count(*) FROM (SELECT symbol, date FROM market.benchmark_ohlcv "
+                "GROUP BY symbol, date HAVING count(*) > 1) d"
+            )
+        ).scalar_one()
+    assert dupes == 0, "re-running incremental backfill-spy created duplicate rows"
+
+
 # ---------------------------------------------------------------------------
 # One-shot backfill parity + verify-coverage (both new tables)
 # ---------------------------------------------------------------------------
