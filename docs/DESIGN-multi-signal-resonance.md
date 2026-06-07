@@ -12,7 +12,7 @@ We want to buy TQQQ (3× Nasdaq-100) **only when we're confident**, and size the
 
 We call the agreement of many signals **resonance**: when lots of independent indicators all say "risk-on" at once, that's a stronger, more trustworthy signal than any one of them alone.
 
-### What we already proved (so this isn't a guess)
+### What the data *suggests* (a lead, not yet proof)
 
 Across 2020-10 → now we bucketed every day by how many of a 26-signal panel agreed, then looked at TQQQ's *next 20 days*:
 
@@ -25,7 +25,7 @@ Across 2020-10 → now we bucketed every day by how many of a 26-signal panel ag
   80–100%              62%   ← most agreement = highest win-rate
 ```
 
-**Resonance is real: more agreement genuinely raises the win-rate (48% → 62%).** That is the empirical foundation of this design. One nuance we also found: the *biggest forward returns* come at **60–80%** agreement (a building consensus, early in a move), not at 100% (which tends to be mid-trend, after the easy money). So conviction should reward *strong* consensus but not blindly chase *unanimous* consensus.
+The win-rate rises with agreement — a promising, monotone signal. **But treat it as a lead, not proof, until it clears the bar in §6.** Two reasons to be skeptical: (1) the forward-20-day windows **overlap** (adjacent days share ~19/20 of their data), so the *effective* sample is ~N/20 ≈ a few dozen independent points spread over 5 buckets — too few to call significant without confidence intervals; (2) it's one window dominated by a single 2022 bear and the 2020–21 recovery. The "biggest returns at 60–80% agreement" remark is likewise an unverified in-sample observation (and win-rate ≠ mean return — different statistics). **§6 gates this:** report block-bootstrap CIs and the effective non-overlapping N per bucket; only call it real once a CI excludes the null. The rest of this plan is conditional on that.
 
 ---
 
@@ -47,7 +47,7 @@ There is **no concept of conviction or position size** — every trade is all-or
 
 ## 3. What goes wrong (why we don't just "vote")
 
-The obvious idea — *be in TQQQ when ≥70% of signals agree, else cash* — we tested. **It underperforms the simple gate** (Calmar 0.20 vs 0.34 full-cycle; worse in-window too). Why:
+The obvious idea — *be in TQQQ when ≥70% of signals agree, else cash* — we tested. It underperformed the simple gate (Calmar 0.20 vs 0.34 on the synthetic full-cycle; worse in-window too). *This negative result is **motivating, not load-bearing** — same one-window caveats apply; it's enough to steer away from voting-as-a-gate, not a proven fact.* The mechanism is clear regardless:
 
 ```
 THE LAG TRAP:
@@ -121,7 +121,9 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 
 *Note: the panel signals and the daily-MTM sim currently live only as untracked exploratory scripts (`scripts/regime_signal_search.py`, `scripts/leveraged_common.py`). v1 promotes them into `src/rainier/` per the module map in `CLAUDE.md`; the scripts are the reference implementation, not the shipping location.*
 
-### 5.2 The panel (≤66 lookback, ~26 signals)
+### 5.2 The panel (≤66 lookback)
+
+*The exact membership and per-category counts are **pinned from `regime_signal_search.build_signals`** at build time (the prototype's real list), not the prose below — the "~26" figure is provisional and the breadth "(Gap)" / "(Optional)" members are excluded until added. Category-balanced weighting (§5.3) depends on the final per-category counts, so v1 records the frozen list explicitly.*
 
 - **Trend:** price > SMA{20,50,66}, price > EMA{20,50}, SMA22>SMA44, SMA50-rising.
 - **Momentum:** RSI14>50, MACD-hist>0, ROC{20,60}>0, price>Donchian50-mid.
@@ -138,43 +140,77 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 `resonance[t] = Σ wᵢ · signalᵢ[t] / Σ wᵢ` — weighted fraction risk-on.
 
 - **Category-balanced weights** so one over-represented family (we have many trend signals) doesn't dominate: weight each of the 5 categories equally, split within. Avoids "resonance" really being "trend, four times."
-- **Hysteresis** on the score feeding any threshold, to avoid size chatter at the boundary.
+- Anti-chatter hysteresis is applied **once**, at the stepped-value stage of the §5.4 state machine — *not* here on the raw score (avoids the double-hysteresis ambiguity).
 
-### 5.4 Sizing curve (gate-ON only)
+### 5.4 Sizing curve + state machine (gate-ON only)
 
-`size(r)` maps resonance → target TQQQ fraction, clamped [0, 1]:
-- piecewise: `0` below `r_lo` (≈0.5), ramp to `1` by `r_hi` (≈0.7), flat `1` above (cap — don't over-size unanimity).
-- turnover-aware: round size to coarse steps (e.g. 0/0.5/1.0) so it doesn't rebalance daily and bleed cost.
+`size(r)` maps resonance → target TQQQ fraction, clamped [0, 1]: `0` below `r_lo`, ramp to `1` by `r_hi`, flat `1` above. To avoid ambiguity, the weight is computed by **one** ordered state machine — no second hysteresis layer:
+
+```
+raw resonance r[t]  ──►  (1) curve: size = clamp((r−r_lo)/(r_hi−r_lo), 0, 1)
+                    ──►  (2) round to coarse step ∈ {0, ½, 1}
+                    ──►  (3) hysteresis ON THE STEPPED VALUE: only change the
+                              held step if the new step differs by ≥1 level AND
+                              persists ≥ `dwell` bars  (one place, applied last)
+                    ──►  (4) rebalance only when the held step changes
+```
+
+Hysteresis lives **only** at step (3), on the rounded step — not on the raw score (that was the §5.3 over-spec; remove it there). This makes the path deterministic and unit-testable.
 
 ### 5.5 No-lookahead + costs
 
-Signals computed on close[t]; target weight applied to t+1 return (shift +1). Warmup buffer: load from 2019-06 so every ≤66 signal is valid by 2020-10; **measure only over 2020-10 → now** (real TQQQ). Charge turnover cost on size changes; cash earns the 13-week T-bill.
+Every input (TQQQ, QQQ, SPY, VIX) uses its **close[t]** value; the Layer-1 gate and the Layer-2 size both use the *same* timestamp alignment and the *same* +1 shift — weight decided on close[t] is applied to the t→t+1 return. Warmup buffer: load from 2019-06 so every ≤66 signal is valid by 2020-10; **measure only over 2020-10 → now** (real TQQQ).
 
-**Lookback invariant:** no indicator parameter (window / EMA-span / period) exceeds 66 bars, and no expanding/all-history windows (medians, z-scores, percentiles). Two flavors:
-- *Finite-window* members (SMA, rolling-median, Donchian, ROC) — exact support ≤66.
-- *EMA-family* members (EMA, RSI, MACD, ADX) — recursively smoothed, span/period ≤66; infinite tail in theory but bounded *effective* memory once warmed up.
+**Costs — no double-counting:** real adjusted TQQQ prices *already embed* the 3× daily-reset financing and decay. So on real TQQQ we charge **only** (a) turnover/slippage on rebalances and (b) the T-bill rate the cash sleeve earns/forgoes — **NOT** a synthetic 3× financing charge (that would double-count). The synthetic-3× financing formula (`3·r − 2·rate − fee`) is reserved for the §6.2 pre-2010 OOS test, where no real ETF exists.
 
-Tests: (a) assert every signal's max parameter ≤66; (b) finite-window signals are bit-identical when history before *t−66* is truncated; (c) EMA-family signals converge to <1e-6 relative given ≥150 warmup bars (the 2019-06 buffer supplies ~330). This is why the constraint says ≤66 *parameter*, not ≤66 *exact support*.
+**Leakage test:** inject a known future spike into bar *t+1*; assert weight[t] is unchanged (zero leakage), across all four inputs and both layers.
 
-### 5.6 Config (sweepable)
+**Lookback invariant:** no indicator parameter (window / EMA-span / period) exceeds 66 bars, and no expanding/all-history windows. *Finite-window* members (SMA, rolling-median, Donchian, ROC) have exact support ≤66. *EMA-family* members (EMA, RSI, MACD, ADX) are recursively smoothed with span/period ≤66 — infinite tail in theory, bounded *effective* memory. Tests: (a) every signal's max parameter ≤66; (b) finite-window signals bit-identical when history before *t−66* is dropped; (c) **per-member** warmup — empirically measure each EMA-family signal's convergence (ADX is double-smoothed, MACD-hist is EMAs-of-EMAs, so they need more warmup than a raw EMA) and set the buffer from the *slowest* member, not a global asserted constant.
 
-`panel members · per-category weights · gate (entry/exit SMA) · sizing curve (r_lo, r_hi, steps) · hysteresis band · rebalance granularity`.
+### 5.6 Config (and what is NOT swept)
+
+Swept: `panel membership · per-category weights · gate (entry/exit SMA) · rebalance granularity`. **Fixed a priori (not swept):** `r_lo`, `r_hi` (read off the §6.1 bucket curve), the cap-above-`r_hi` rule (kept only if §6.1 says the 60–80% return peak is significant). Total free parameters tuned on data are **capped and pre-registered** before any OOS run (see §6.4) — the effective sample is tiny, so every extra knob is overfit risk.
 
 ---
 
 ## 6. Test plan
 
-| Test | Input | Expected / pass criteria |
-|---|---|---|
-| Thesis (sanity) | resonance buckets × fwd-20d TQQQ | win-rate rises with resonance (reproduce 48→62%) |
-| Strategy backtest | 2020-10→now, real TQQQ | beats SMA22/44-gate baseline on Calmar **and** drawdown, or it's not worth the complexity |
-| Sizing ablation | full-size gate vs resonance-sized | resonance sizing improves Calmar / cuts drawdown at similar return |
-| Per-regime | 2021 bull / 2022 bear / 2023-24 / 2025 | smaller drawdown in 2022 & 2025 than the bare gate |
-| Walk-forward | 60/40 split in-window | sized strategy's edge survives OOS split |
-| Cost/turnover | sweep rebalance granularity | net edge survives realistic cost; switches stay sane |
-| Baseline floor | vs buy-hold TQQQ & QQQ | must beat both risk-adjusted |
+The window has **one** bear (2022). A sizing overlay that simply de-levers *mechanically* cuts drawdown, so naive "beats the gate on drawdown" proves nothing. The plan below is built to *try to kill* the idea, not flatter it.
 
-**Honesty rails (carried from prior work):** one real bear (2022) in this window — sub-20% drawdown here is optimistic; the bare gate's *full-cycle* drawdown was −76%. Report in-window numbers as in-window. No single-best-cell worship; prefer plateaus.
+### 6.1 Significance, not just point estimates
+
+| Test | Input | Pass criteria |
+|---|---|---|
+| Thesis CI | resonance buckets × fwd-20d | report **block-bootstrap CIs** + effective non-overlapping N per bucket; the win-rate trend must have a CI that excludes the null. If it doesn't, the premise fails — stop. |
+| Return-by-bucket | same buckets, forward *return* (not win-rate) | show the return curve with CIs; only keep the "cap above 80%" rule if the 60–80% peak is significant — else drop the cap and the claim. |
+
+### 6.2 No data-snooping — frozen train/test + genuine OOS
+
+The gate (SMA22/44), the panel, and the sizing thresholds were all discovered on 2020-10→now. So an in-window 60/40 split is **not** out-of-sample — the "OOS" slice already shaped the choices.
+
+| Test | Protocol | Pass criteria |
+|---|---|---|
+| Frozen split | **freeze** gate + panel + r_lo/r_hi + weights on a train slice (≤2022-12), report untouched on 2023→now | edge persists on the held-out slice |
+| **True OOS** | run the *frozen* config on a **different leveraged underlying** (SPXL/UPRO/SOXL) and on **synthetic 3× QQQ pre-2010** | edge survives on data that did not inform any choice — this is the real test |
+
+In-window per-regime numbers (2021/2022/2023-24/2025) are **descriptive only**, never validation — one path each, and 2025 is a partial year.
+
+### 6.3 Is it the *signal*, or just less leverage?
+
+| Test | Control | Pass criteria |
+|---|---|---|
+| Matched-exposure | a **constant** scaler and a **volatility-targeted** scaler, each tuned to the *same average exposure* as the resonance sizer | resonance must beat *both* matched-exposure controls on Calmar — otherwise the "edge" is just de-levering and we ship the simpler vol-target instead |
+
+### 6.4 Overfit guard (hard, not vibes)
+
+- **Cap free parameters tuned on data.** Fix `r_lo`/`r_hi` *a priori* from the §6.1 bucket curve — do **not** re-sweep them. Pre-register a single config before looking at OOS.
+- Penalize multiple testing: report a **deflated** Sharpe/Calmar (Bonferroni or López de Prado deflated-Sharpe) over the number of configs tried.
+- Cost/turnover: net edge must survive realistic cost; report switch count.
+
+### 6.5 Baseline floor
+Must beat buy-hold TQQQ **and** QQQ risk-adjusted, **and** the bare SMA22/44 gate, **and** the matched-exposure control. Failing any → don't ship; simpler wins.
+
+**Honesty rails:** sub-20% drawdown in this window is optimistic — the bare gate's *full-cycle* (1999–2026 synthetic) drawdown was −76%. Report in-window numbers as in-window. No single-best-cell worship; prefer plateaus. If §6.1 or §6.3 fails, the design is **rejected**, not patched.
 
 ---
 
