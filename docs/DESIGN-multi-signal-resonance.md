@@ -116,7 +116,7 @@ Your example — *buy TQQQ when QQQ<SMA10 AND VIX<23 AND fractal buy AND SPY<SMA
 
 - **Trend:** price > SMA{20,50,66}, price > EMA{20,50}, SMA22>SMA44, SMA50-rising.
 - **Momentum:** RSI14>50, MACD-hist>0, ROC{20,60}>0, price>Donchian50-mid.
-- **Volatility:** realizedVol<expanding-median, ATR%<median, VIX<25, VIX<SMA20, VIX-falling.
+- **Volatility:** realizedVol<rolling-66 median, ATR%<rolling-66 median, VIX<25, VIX<SMA20, VIX-falling. *(Use a bounded 66-bar rolling median, NOT an expanding median — an expanding window grows past the 66-bar cap and would violate the constraint.)*
 - **Structure:** within 5% of 60-day high, ADX>20 & +DI>−DI, higher-high+higher-low.
 - **Cross-asset:** SPY>SMA22, SPY>SMA44 (broad-market confirm).
 - **(Optional)** fractal:simple_turn as a momentum/structure member.
@@ -138,6 +138,8 @@ Your example — *buy TQQQ when QQQ<SMA10 AND VIX<23 AND fractal buy AND SPY<SMA
 ### 5.5 No-lookahead + costs
 
 Signals computed on close[t]; target weight applied to t+1 return (shift +1). Warmup buffer: load from 2019-06 so every ≤66 signal is valid by 2020-10; **measure only over 2020-10 → now** (real TQQQ). Charge turnover cost on size changes; cash earns the 13-week T-bill.
+
+**Lookback invariant:** every panel signal must use a *bounded* window ≤ 66 bars — no expanding/all-history windows (medians, z-scores, percentiles included). A unit test asserts each signal's first valid index ≤ 66 and that its value at bar *t* is unchanged when history before *t−66* is truncated.
 
 ### 5.6 Config (sweepable)
 
