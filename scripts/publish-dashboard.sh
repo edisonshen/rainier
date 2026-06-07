@@ -15,31 +15,47 @@
 # "the url will be /trading"). The source HTML is still read from
 # `$DASHBOARD_SOURCE_DIR/<name>.html`; only the destination path changes.
 #
+# SELF-ISOLATING PUBLISH (no dependency on the target checkout's state)
+# ---------------------------------------------------------------------
+# $TARGET_DIR (DASHBOARD_PUBLISH_TARGET_DIR, e.g. the operator's fengshen-site)
+# is a SHARED working tree — other agents leave it parked on their own worker
+# branches, sometimes dirty. Committing/pushing from it would either trip the
+# dirty-guard or push the WRONG branch. So this script NEVER operates on that
+# checkout. It treats $TARGET_DIR purely as "the repo to source a worktree
+# from": it fetches origin and publishes via an EPHEMERAL detached worktree on
+# origin/master, then removes it (trap on EXIT, so cleanup runs on failure too).
+#
 # ASCII flow:
 #
 #   rainier render CLI ─▶ $DASHBOARD_SOURCE_DIR/<name>.html
 #                                │
-#                                ▼   cp (creates dirs)
-#                    default:    $DASHBOARD_PUBLISH_TARGET_DIR/public/trading/<name>/index.html
-#                    with --root: $DASHBOARD_PUBLISH_TARGET_DIR/public/trading/index.html
+#   git -C $TARGET_DIR fetch origin                  (no checkout mutation)
+#   WT=$(mktemp -d); git -C $TARGET_DIR worktree add --detach $WT origin/master
+#                                │   trap: worktree remove --force + prune (EXIT)
+#                                ▼   cp into $WT/$DST_REL (creates dirs)
+#                    default:    $WT/public/trading/<name>/index.html
+#                    with --root: $WT/public/trading/index.html
 #                                │
-#                                ▼   git diff --quiet ?
+#                                ▼   staged diff vs HEAD (origin/master) ?
 #                          ┌──────┴───────┐
-#                       yes│              │no
+#                       no │              │ yes
 #                          ▼              ▼
-#                       exit 0     git add → commit "<name>: YYYY-MM-DD daily render"
-#                       (no-op)                 → git push (origin/main)
+#                       exit 0     git -C $WT commit "<name>: YYYY-MM-DD daily render"
+#                       (no-op)         → push origin HEAD:refs/heads/master
+#                                          (non-FF? re-fetch, reset $WT to new
+#                                           origin/master, re-apply, retry ≤3x)
 #                                                       │
 #                                                       ▼
 #                                            Cloudflare Pages auto-deploys
 #
 # Environment overrides (defaults match the operator's machine):
 #   DASHBOARD_SOURCE_DIR          rendered HTML lives here ($HOME/projects/rainier/out/dashboards)
-#   DASHBOARD_PUBLISH_TARGET_DIR  fengshen-site checkout    ($HOME/projects/fengshen-site)
+#   DASHBOARD_PUBLISH_TARGET_DIR  fengshen-site repo to SOURCE the worktree from
+#                                 ($HOME/projects/fengshen-site)
 #
 # Bootstrap note: the first publish for a brand-new <name> creates
-# `public/trading/<name>/` inside fengshen-site automatically — no manual
-# `.gitkeep` pre-step required. Astro serves `public/` verbatim, so the
+# `public/trading/<name>/` inside the ephemeral worktree automatically — no
+# manual `.gitkeep` pre-step required. Astro serves `public/` verbatim, so the
 # rendered HTML lives at `https://fengshen.dev/trading/<name>/` (or
 # `https://fengshen.dev/trading/` when `--root` is set).
 
@@ -86,81 +102,119 @@ if [ "$ROOT_PUBLISH" -eq 1 ]; then
 else
     DST_REL="public/trading/$NAME/index.html"
 fi
-DST="$TARGET_DIR/$DST_REL"
 
-log "name=$NAME source=$SRC target=$TARGET_DIR"
+# Branch on origin that fengshen-site deploys from. fengshen-site deploys
+# `master`; overridable so the test harness (bare origin seeded on `main`)
+# can exercise the same flow.
+PUBLISH_BRANCH="${DASHBOARD_PUBLISH_BRANCH:-master}"
+
+log "name=$NAME source=$SRC target=$TARGET_DIR branch=$PUBLISH_BRANCH"
 
 if [ ! -f "$SRC" ]; then
     log "ERROR rendered HTML missing: $SRC"
     exit 1
 fi
 
-if [ ! -d "$TARGET_DIR/.git" ]; then
+# Accept both a regular checkout (.git is a directory) and a linked worktree
+# (.git is a FILE — a gitdir pointer created by `git worktree add`). The old
+# `-d "$TARGET_DIR/.git"` test wrongly rejected worktrees, breaking the
+# shared-tree publish path.
+#
+# We require the target to be the worktree ROOT, not merely inside one: ask git
+# for the worktree top-level and compare it to TARGET_DIR. `--show-toplevel`
+# prints the root for both a regular checkout and a linked worktree, and errors
+# (empty output) for a non-repo — so this still rejects non-repos AND a
+# misconfigured subdir like `fengshen-site/public` (where DST_REL would
+# otherwise nest under the subdir and commit `public/public/trading/...`).
+TARGET_TOPLEVEL="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+# Resolve both to physical paths so a symlinked or trailing-slash TARGET_DIR
+# still matches git's canonical top-level.
+TARGET_ABS="$(cd "$TARGET_DIR" 2>/dev/null && pwd -P || true)"
+TARGET_TOP_ABS=""
+if [ -n "$TARGET_TOPLEVEL" ]; then
+    # `|| true` so a permission/race failure on cd degrades to the friendly
+    # error below instead of a bare `set -e` abort with no log line.
+    TARGET_TOP_ABS="$(cd "$TARGET_TOPLEVEL" 2>/dev/null && pwd -P || true)"
+fi
+if [ -z "$TARGET_TOP_ABS" ] || [ "$TARGET_ABS" != "$TARGET_TOP_ABS" ]; then
     log "ERROR target is not a git checkout: $TARGET_DIR"
     exit 1
 fi
 
-cd "$TARGET_DIR"
-
-# Bail if the working tree has unrelated dirt — don't auto-stash.
+# --- Self-isolating publish via an ephemeral origin/<branch> worktree -------
 #
-# The dirty decision is based on RELEVANT changes only: modified/staged/deleted
-# TRACKED files and stray untracked files. git-IGNORED paths are explicitly
-# disregarded — tool droppings such as `.gstack/browse-audit.jsonl` (left by the
-# gstack browse tooling) must never block a publish. This was the 2026-06-04 P0:
-# an untracked-but-ignored `.gstack/` tripped the guard and the breadth
-# dashboard never went live.
+# We never `cd` into $TARGET_DIR's checkout or touch its branch. Instead we
+# fetch origin and add a throwaway DETACHED worktree pinned at
+# origin/$PUBLISH_BRANCH, do all the copy/commit/push there, then remove it.
+# This makes the publish independent of whatever state the shared checkout is
+# parked in (different branch, dirty tree).
+
+log "fetching origin/$PUBLISH_BRANCH"
+git -C "$TARGET_DIR" fetch --quiet origin "$PUBLISH_BRANCH"
+
+WT="$(mktemp -d "${TMPDIR:-/tmp}/publish-dashboard.XXXXXX")"
+
+# Always reap the ephemeral worktree — on success AND on any failure/early-exit
+# (operator rule: cleanup is the last step, even on the failure path). `prune`
+# clears the parent repo's registry entry if `remove` couldn't (e.g. the dir
+# was already gone).
+cleanup() {
+    git -C "$TARGET_DIR" worktree remove --force "$WT" 2>/dev/null || rm -rf "$WT"
+    git -C "$TARGET_DIR" worktree prune 2>/dev/null || true
+}
+trap cleanup EXIT
+
+git -C "$TARGET_DIR" worktree add --quiet --detach "$WT" "origin/$PUBLISH_BRANCH"
+
+DST="$WT/$DST_REL"
+
+# Bounded non-fast-forward retry. The etf + market-breadth publishers run at
+# ~the same minute, and other agents push to master too, so origin can advance
+# between our fetch and our push. On a non-FF rejection we re-fetch, hard-reset
+# the EPHEMERAL worktree onto the NEW origin tip, re-apply the file, and retry.
 #
-# `git status --porcelain` already omits ignored files by default, but we make
-# the contract explicit (and log it) so a future git/config change to that
-# default can't silently re-break the publish. We additionally enumerate the
-# ignored paths that WERE present, purely for an operator-visible log line.
-RELEVANT_STATUS="$(git status --porcelain --untracked-files=normal)"
-if [ -n "$RELEVANT_STATUS" ]; then
-    log "ERROR target working tree dirty (uncommitted changes); refusing to publish"
-    git status --short >&2
-    exit 1
-fi
+# NOTE: `git reset --hard` here is SAFE and intentional — it operates ONLY on
+# $WT, this script's own throwaway detached worktree. It NEVER touches the
+# shared $TARGET_DIR checkout (which is forbidden). Do not "fix" this into a
+# shared-tree reset.
+MAX_ATTEMPTS=3
+attempt=1
+while :; do
+    mkdir -p "$(dirname "$DST")"
+    cp "$SRC" "$DST"
 
-# At this point the tree is clean except (possibly) for git-ignored paths.
-# Surface them so cron logs show the guard ran and chose to disregard them.
-# `--ignored` lists ignored entries as `!! <path>`; we keep only those lines.
-IGNORED_COUNT="$(git status --porcelain --ignored \
-    | grep -c '^!! ' || true)"
-if [ "${IGNORED_COUNT:-0}" -gt 0 ]; then
-    log "disregarding $IGNORED_COUNT git-ignored path(s) in target tree (not dirt)"
-fi
+    # Stage the (possibly new) file so the staged-vs-HEAD diff sees the intent.
+    git -C "$WT" add -- "$DST_REL"
 
-mkdir -p "$(dirname "$DST")"
-cp "$SRC" "$DST"
-
-# Track new files explicitly so `git diff --quiet --` sees the intent below.
-git add -- "$DST_REL"
-
-# `git diff --cached --quiet` returns 0 when staged tree matches HEAD, 1 otherwise.
-if git diff --cached --quiet -- "$DST_REL"; then
-    # Reset the noop stage to keep the working tree pristine.
-    git reset --quiet HEAD -- "$DST_REL" >/dev/null 2>&1 || true
-    # Recovery: if a prior run's commit never made it upstream (e.g., a
-    # non-fast-forward `git push` failure from an unrelated remote advance),
-    # the local branch is ahead of @{u}. Without this check, today's no-op
-    # would silently abandon that unpushed commit. Detect + push it now.
-    AHEAD="$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
-    if [ "$AHEAD" -gt 0 ]; then
-        log "no-op render, but $AHEAD local commit(s) ahead of upstream — pushing"
-        git push --quiet
-        log "done (recovered unpushed commits)"
+    # No-op: staged tree matches origin/$PUBLISH_BRANCH HEAD → nothing to do.
+    # Safe for cron retries (identical render shouldn't churn commits).
+    if git -C "$WT" diff --cached --quiet -- "$DST_REL"; then
+        log "no-op: rendered HTML matches the published copy (no commit)"
         exit 0
     fi
-    log "no-op: rendered HTML matches the published copy (no commit)"
-    exit 0
-fi
 
-DATE_TAG="$(date -u +%Y-%m-%d)"
-MSG="$NAME: $DATE_TAG daily render"
-log "committing: $MSG"
-git commit -m "$MSG" --quiet -- "$DST_REL"
+    DATE_TAG="$(date -u +%Y-%m-%d)"
+    MSG="$NAME: $DATE_TAG daily render"
+    log "committing: $MSG (attempt $attempt/$MAX_ATTEMPTS)"
+    git -C "$WT" commit -m "$MSG" --quiet -- "$DST_REL"
 
-log "pushing to origin"
-git push --quiet
-log "done"
+    log "pushing to origin/$PUBLISH_BRANCH"
+    # Push the detached HEAD straight to the remote branch ref — no local
+    # branch is created or moved anywhere.
+    if git -C "$WT" push --quiet origin "HEAD:refs/heads/$PUBLISH_BRANCH"; then
+        log "done"
+        exit 0
+    fi
+
+    if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+        log "ERROR push rejected after $MAX_ATTEMPTS attempts (origin/$PUBLISH_BRANCH kept advancing); giving up"
+        exit 1
+    fi
+
+    log "push rejected (non-fast-forward); re-fetching and rebasing onto new origin/$PUBLISH_BRANCH"
+    git -C "$TARGET_DIR" fetch --quiet origin "$PUBLISH_BRANCH"
+    # Reset the EPHEMERAL worktree only (see NOTE above) onto the new tip,
+    # discarding our just-made commit; the loop re-applies the file + re-commits.
+    git -C "$WT" reset --hard --quiet "origin/$PUBLISH_BRANCH"
+    attempt=$((attempt + 1))
+done

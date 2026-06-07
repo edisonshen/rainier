@@ -52,6 +52,15 @@ fi
 
 cd "$PROJECT_DIR"
 
+# The render CLI now reads the canonical Neon market.thematic_features_daily
+# store by default (no --source flag needed). The renderer pulls .env itself
+# (get_settings -> load_dotenv) before building the engine.
+#
+# TODO(out-of-scope): we still hardcode `--asof $(date +%Y-%m-%d)`. When Neon's
+# latest data lags today (market holiday, source slip), the render fails loud
+# with "no rows for asof=<today>". The market-breadth wrapper omits --asof and
+# lets the CLI default to max(asof_date); a follow-up should do the same here
+# (drop --asof). Left as-is for this PR to keep scope tight.
 log "render asof=$ASOF rendered_at_pt=$RENDERED_AT_PT output=$OUTPUT"
 "$UV" run rainier dashboard render-etf-html \
     --asof "$ASOF" \

@@ -1,15 +1,20 @@
-"""Unit tests for scripts/publish-dashboard.sh.
+"""Unit tests for scripts/publish-dashboard.sh — self-isolating publisher.
 
-Generic dashboard publisher — copies `out/dashboards/<name>.html` into a
-target git repo's `public/trading/<name>/index.html` and pushes when
-the content actually changed.
+The publisher copies `out/dashboards/<name>.html` into a target git repo's
+`public/trading/<name>/index.html` and pushes it to the deploy branch on
+`origin`. It NEVER operates on the target checkout directly: it sources an
+ephemeral detached worktree on `origin/<branch>`, commits + pushes there, and
+removes the worktree afterwards (trap on EXIT). This makes the publish robust
+to whatever state the shared fengshen-site checkout is parked in (a different
+branch, a dirty tree).
 
-Tests use temporary git repos as both the source dashboard dir and
-the publish target (no writes to ~/projects/fengshen-site). The
-script is selected via the `DASHBOARD_PUBLISH_TARGET_DIR` env var
-so CI never touches the operator's real fengshen-site checkout.
+Harness: a BARE origin repo + a working clone (TARGET_DIR). The script is
+pointed at the clone via `DASHBOARD_PUBLISH_TARGET_DIR`, and the deploy branch
+is overridden to `main` (the seeded branch) via `DASHBOARD_PUBLISH_BRANCH` so
+CI never touches the operator's real fengshen-site checkout.
 
-Test plan pinned by docs/TASK-PLAN-etf-dashboard-publish-cr-31aa.md §Tests.
+Test plan pinned by docs/TASK-PLAN-etf-dashboard-publish-cr-31aa.md §Tests and
+the Part B robustness fix (extend-133).
 """
 
 from __future__ import annotations
@@ -24,6 +29,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "publish-dashboard.sh"
 CRON_WRAPPER = ROOT / "scripts" / "cron-wrapper.sh"
+
+# The harness seeds the bare origin on `main`; the script defaults to `master`.
+# Override so the publish targets the branch the harness actually created.
+PUBLISH_BRANCH = "main"
 
 
 # ---------------------------------------------------------------------------
@@ -61,31 +70,40 @@ def _git(*args: str, cwd: Path, check: bool = True, env: dict | None = None) -> 
 
 
 @pytest.fixture
-def target_repo(tmp_path: Path) -> Path:
-    """A bare-ish git repo that simulates the fengshen-site checkout.
-
-    We create both a 'remote' bare repo and a 'local' working clone, so the
-    publish script can `git push` against a real remote (locally) without
-    touching the network or the operator's real repo.
-    """
+def remote_repo(tmp_path: Path) -> Path:
+    """A BARE origin repo seeded with one commit on `main`. The publisher
+    pushes here; tests read `origin/main` from a fresh fetch to assert what
+    actually landed upstream (the whole point of the self-isolating flow)."""
     remote = tmp_path / "fengshen-site-remote.git"
     subprocess.run(
-        ["git", "init", "--bare", str(remote)], check=True, capture_output=True
+        ["git", "init", "--bare", "-b", "main", str(remote)],
+        check=True,
+        capture_output=True,
     )
+    # Seed an initial commit on main via a scratch clone, then discard it.
+    seed = tmp_path / "_seed"
+    subprocess.run(
+        ["git", "clone", str(remote), str(seed)], check=True, capture_output=True
+    )
+    (seed / "public").mkdir()
+    (seed / "public" / ".gitkeep").write_text("")
+    _git("checkout", "-B", "main", cwd=seed)
+    _git("add", "public/.gitkeep", cwd=seed)
+    _git("commit", "-m", "init", cwd=seed)
+    _git("push", "-u", "origin", "main", cwd=seed)
+    return remote
 
+
+@pytest.fixture
+def target_repo(tmp_path: Path, remote_repo: Path) -> Path:
+    """A working clone of the bare origin — simulates the fengshen-site
+    checkout the script is pointed at (DASHBOARD_PUBLISH_TARGET_DIR)."""
     local = tmp_path / "fengshen-site"
     subprocess.run(
-        ["git", "clone", str(remote), str(local)], check=True, capture_output=True
+        ["git", "clone", str(remote_repo), str(local)],
+        check=True,
+        capture_output=True,
     )
-
-    # Need an initial commit on `main` so the push has something to fast-forward
-    # from. Astro project layout: `public/` is the static asset root.
-    (local / "public").mkdir()
-    (local / "public" / ".gitkeep").write_text("")
-    _git("checkout", "-B", "main", cwd=local)
-    _git("add", "public/.gitkeep", cwd=local)
-    _git("commit", "-m", "init", cwd=local)
-    _git("push", "-u", "origin", "main", cwd=local)
     return local
 
 
@@ -110,6 +128,7 @@ def _run_publisher(
         {
             "DASHBOARD_SOURCE_DIR": str(source_dir),
             "DASHBOARD_PUBLISH_TARGET_DIR": str(target_repo),
+            "DASHBOARD_PUBLISH_BRANCH": PUBLISH_BRANCH,
             # Deterministic git identity inside the script as well.
             "GIT_AUTHOR_NAME": "Test",
             "GIT_AUTHOR_EMAIL": "test@example.com",
@@ -130,302 +149,302 @@ def _run_publisher(
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — no-op when rendered HTML is identical to what's already published.
-# ---------------------------------------------------------------------------
+def _published_html(remote_repo: Path, rel: str) -> str:
+    """Read a file as it exists on the bare origin's HEAD (deploy branch)."""
+    return subprocess.run(
+        ["git", "-C", str(remote_repo), "show", f"{PUBLISH_BRANCH}:{rel}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
 
 
-def test_publish_no_op_on_clean(source_dir: Path, target_repo: Path):
-    """Re-running with byte-identical HTML must exit 0 without a new commit."""
-    name = "etf-ranks"
-    html = "<html><body>identical</body></html>"
-    (source_dir / f"{name}.html").write_text(html)
-
-    # Pre-seed the destination with the same content + commit it so the next
-    # publish is a true no-op.
-    dest_dir = target_repo / "public" / "trading" / name
-    dest_dir.mkdir(parents=True)
-    (dest_dir / "index.html").write_text(html)
-    _git("add", f"public/trading/{name}/index.html", cwd=target_repo)
-    _git("commit", "-m", f"{name}: pre-seed", cwd=target_repo)
-    _git("push", "origin", "main", cwd=target_repo)
-
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-
-    assert result.returncode == 0, (
-        f"expected clean exit on no-op, got rc={result.returncode}\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert head_before == head_after, "no-op must not create a new commit"
-    # Friendly log so the operator can grep cron logs for "no-op".
-    assert "no-op" in result.stdout.lower() or "no change" in result.stdout.lower()
+def _origin_head(remote_repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(remote_repo), "rev-parse", PUBLISH_BRANCH],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — fresh target gets dir created + file copied + committed.
+# Test 1 — publish lands the rendered HTML on origin's deploy branch.
 # ---------------------------------------------------------------------------
 
 
-def test_publish_creates_dir(source_dir: Path, target_repo: Path):
-    """First-ever publish creates `public/trading/<name>/` and lands index.html."""
+def test_publish_lands_on_origin(
+    source_dir: Path, target_repo: Path, remote_repo: Path
+):
+    """A fresh publish copies the HTML, commits, and pushes to origin/<branch>."""
     name = "etf-ranks"
     html = "<html><body>first publish</body></html>"
     (source_dir / f"{name}.html").write_text(html)
-
-    dest = target_repo / "public" / "trading" / name / "index.html"
-    assert not dest.exists(), "test precondition: destination should not exist"
 
     result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
     assert result.returncode == 0, (
         f"rc={result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
-    assert dest.exists(), "destination index.html must be created"
-    assert dest.read_text() == html
+    rel = f"public/trading/{name}/index.html"
+    assert _published_html(remote_repo, rel) == html, "HTML must land on origin"
 
-    # Commit must have happened.
-    log = _git(
-        "log", "--oneline", "-n", "1", "--", f"public/trading/{name}/index.html",
-        cwd=target_repo,
+
+# ---------------------------------------------------------------------------
+# Test 2 — THE KEY TEST: the publish succeeds even when the target checkout is
+# on a DIFFERENT branch and DIRTY. This proves the publisher no longer depends
+# on the shared checkout's state (Part B, extend-133).
+# ---------------------------------------------------------------------------
+
+
+def test_publish_succeeds_when_checkout_dirty_and_off_branch(
+    source_dir: Path, target_repo: Path, remote_repo: Path
+):
+    """Park the TARGET_DIR clone on a different branch AND make it dirty; the
+    publish must STILL land on origin's deploy branch."""
+    name = "market-breadth"
+    html = "<html><body>breadth published from isolated worktree</body></html>"
+    (source_dir / f"{name}.html").write_text(html)
+
+    # Park the checkout on a worker branch and dirty both a tracked and an
+    # untracked file — exactly the shared-tree state that broke the old flow.
+    _git("checkout", "-b", "worker/some-other-work", cwd=target_repo)
+    (target_repo / "public" / ".gitkeep").write_text("hand-edited\n")
+    (target_repo / "stray-uncommitted.txt").write_text("WIP\n")
+
+    head_before = _origin_head(remote_repo)
+    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    assert result.returncode == 0, (
+        "publish must succeed regardless of checkout state\n"
+        f"rc={result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    assert name in log, f"commit log missing dashboard name: {log!r}"
+
+    rel = f"public/trading/{name}/index.html"
+    assert _published_html(remote_repo, rel) == html, (
+        "HTML must land on origin even from a dirty / off-branch checkout"
+    )
+    assert _origin_head(remote_repo) != head_before, "origin must have advanced"
+
+    # The shared checkout's dirt is untouched — we never operated on it.
+    assert (target_repo / "stray-uncommitted.txt").exists()
+    assert (target_repo / "public" / ".gitkeep").read_text() == "hand-edited\n"
+    current_branch = _git(
+        "rev-parse", "--abbrev-ref", "HEAD", cwd=target_repo
+    ).strip()
+    assert current_branch == "worker/some-other-work", (
+        "publish must not move the checkout off its branch"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Test 3 — when the source HTML differs, script commits with expected
-# message format and runs `git push`.
+# Test 3 — modified source HTML produces a `<name>: YYYY-MM-DD daily render`
+# commit on origin.
 # ---------------------------------------------------------------------------
 
 
-def test_publish_commits_when_changed(source_dir: Path, target_repo: Path):
-    """A modified source HTML produces a commit `<name>: YYYY-MM-DD daily render`
-    and the commit lands on origin/main."""
+def test_publish_commits_when_changed(
+    source_dir: Path, target_repo: Path, remote_repo: Path
+):
     name = "etf-ranks"
-    # Seed an initial publish.
     (source_dir / f"{name}.html").write_text("<html>v1</html>")
     r1 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
     assert r1.returncode == 0, r1.stderr
 
-    # Now modify the source and re-publish.
     (source_dir / f"{name}.html").write_text("<html>v2 updated</html>")
     r2 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
     assert r2.returncode == 0, (
         f"rc={r2.returncode}\nstdout: {r2.stdout}\nstderr: {r2.stderr}"
     )
 
-    # Latest commit message: `<name>: YYYY-MM-DD daily render`
-    head_msg = _git("log", "-1", "--pretty=%s", cwd=target_repo).strip()
+    head_msg = subprocess.run(
+        ["git", "-C", str(remote_repo), "log", "-1", "--pretty=%s", PUBLISH_BRANCH],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
     assert re.match(
         rf"^{re.escape(name)}: \d{{4}}-\d{{2}}-\d{{2}} daily render$", head_msg
     ), f"unexpected commit subject: {head_msg!r}"
 
-    # And the push made it to the remote.
-    local_head = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-    remote_head = _git("rev-parse", "origin/main", cwd=target_repo).strip()
-    assert local_head == remote_head, "publisher must `git push` after commit"
+    rel = f"public/trading/{name}/index.html"
+    assert _published_html(remote_repo, rel) == "<html>v2 updated</html>"
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — bail (non-zero, no commit) when target has uncommitted changes.
+# Test 4 — no-op when rendered HTML is byte-identical to what's published.
 # ---------------------------------------------------------------------------
 
 
-def test_publish_bails_on_dirty_target(source_dir: Path, target_repo: Path):
-    """Dirty target working tree → script exits non-zero and does NOT commit
-    or stash anything."""
-    name = "etf-ranks"
-    (source_dir / f"{name}.html").write_text("<html>clean source</html>")
-
-    # Dirty the target: untracked file + modified tracked file.
-    (target_repo / "public" / ".gitkeep").write_text("modified\n")
-    (target_repo / "stray.txt").write_text("untracked\n")
-
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-
-    assert result.returncode != 0, (
-        "publisher must exit non-zero when target is dirty\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert head_before == head_after, "publisher must not commit when bailing"
-
-    # Stray + modified files must still be there — no auto-stash.
-    assert (target_repo / "stray.txt").exists(), "must not stash untracked files"
-    assert (target_repo / "public" / ".gitkeep").read_text() == "modified\n"
-
-    # Clear, actionable error message on stdout or stderr.
-    combined = (result.stdout + result.stderr).lower()
-    assert "dirty" in combined or "uncommitted" in combined, (
-        f"expected dirty/uncommitted in output, got:\n{result.stdout}\n{result.stderr}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 4b — a target whose ONLY working-tree change is a git-IGNORED untracked
-# path must still publish. Regression for the 2026-06-04 P0: the gstack browse
-# tooling left `fengshen-site/.gstack/browse-audit.jsonl` (untracked, but
-# `.gitignore`d), tripping the dirty-tree guard and blocking the daily breadth
-# publish. The guard must base "dirty" on tracked/relevant changes only.
-# ---------------------------------------------------------------------------
-
-
-def test_publish_proceeds_with_only_ignored_untracked(
-    source_dir: Path, target_repo: Path
+def test_publish_no_op_on_identical(
+    source_dir: Path, target_repo: Path, remote_repo: Path
 ):
-    """An ignored untracked path (e.g. `.gstack/`) must NOT block a publish."""
-    name = "market-breadth"
-    html = "<html><body>breadth</body></html>"
+    name = "etf-ranks"
+    html = "<html><body>identical</body></html>"
     (source_dir / f"{name}.html").write_text(html)
 
-    # Ignore `.gstack/` in the target repo (committed `.gitignore`), then drop
-    # an untracked file under it — exactly the P0 droppings.
-    (target_repo / ".gitignore").write_text(".gstack/\n")
-    _git("add", ".gitignore", cwd=target_repo)
-    _git("commit", "-m", "ignore .gstack/", cwd=target_repo)
-    gstack_dir = target_repo / ".gstack"
-    gstack_dir.mkdir()
-    (gstack_dir / "browse-audit.jsonl").write_text('{"audit": 1}\n')
+    r1 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    assert r1.returncode == 0, r1.stderr
+    head_after_first = _origin_head(remote_repo)
 
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    # Second run, identical content → no commit, no push, clean exit.
+    r2 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
+    assert r2.returncode == 0, (
+        f"rc={r2.returncode}\nstdout: {r2.stdout}\nstderr: {r2.stderr}"
+    )
+    assert "no-op" in r2.stdout.lower() or "no change" in r2.stdout.lower()
+    assert _origin_head(remote_repo) == head_after_first, (
+        "identical render must not create a new commit on origin"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — ephemeral worktree is cleaned up after the run (success path).
+# No leftover worktrees registered, tmp dir gone.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_cleans_up_worktree(
+    source_dir: Path, target_repo: Path, remote_repo: Path
+):
+    name = "etf-ranks"
+    (source_dir / f"{name}.html").write_text("<html>v1</html>")
     result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    assert result.returncode == 0, result.stderr
 
+    # `git worktree list` should show only the main checkout (no leftovers).
+    wt_list = _git("worktree", "list", cwd=target_repo)
+    lines = [ln for ln in wt_list.splitlines() if ln.strip()]
+    assert len(lines) == 1, (
+        f"expected only the main worktree, got:\n{wt_list}"
+    )
+    # And no stray publish-dashboard.* temp dirs survived.
+    assert not list(Path("/tmp").glob("publish-dashboard.*")) or all(
+        not p.exists() for p in Path("/tmp").glob("publish-dashboard.*")
+    ), "ephemeral worktree tmp dir must be removed"
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — concurrency: a non-fast-forward push (origin advanced under us) is
+# retried by re-fetching + rebasing the ephemeral worktree, then re-pushing.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_retries_on_non_fast_forward(
+    source_dir: Path, target_repo: Path, remote_repo: Path, tmp_path: Path
+):
+    """Force a REAL non-fast-forward on the publisher's first push, then assert
+    it re-fetches, rebases its ephemeral worktree onto the new tip, and lands
+    on the second attempt — without clobbering the concurrent commit.
+
+    Mechanism: a `pre-receive` hook on the bare origin advances the branch with
+    a concurrent commit during the publisher's FIRST push, so that push is
+    rejected non-FF; on the SECOND push the hook is inert (one-shot via a flag
+    file) and the push succeeds. This deterministically exercises the retry
+    loop instead of relying on wall-clock timing."""
+    name = "etf-ranks"
+    (source_dir / f"{name}.html").write_text("<html>ours</html>")
+
+    # One-shot pre-receive hook: on its first invocation it injects a
+    # concurrent commit onto the branch (advancing origin under the pushing
+    # client, which makes the client's update non-FF and rejected), then drops
+    # a flag so subsequent pushes pass through untouched.
+    hooks = remote_repo / "hooks"
+    hooks.mkdir(exist_ok=True)
+    flag = tmp_path / "hook-fired.flag"
+    concurrent_tree_repo = tmp_path / "_hook_worker"
+    subprocess.run(
+        ["git", "clone", str(remote_repo), str(concurrent_tree_repo)],
+        check=True,
+        capture_output=True,
+    )
+    (concurrent_tree_repo / "CONCURRENT.txt").write_text("from another agent\n")
+    _git("add", "CONCURRENT.txt", cwd=concurrent_tree_repo)
+    _git("commit", "-m", "concurrent: unrelated change", cwd=concurrent_tree_repo)
+    concurrent_sha = _git("rev-parse", "HEAD", cwd=concurrent_tree_repo).strip()
+
+    # Seed the concurrent commit's objects into the bare repo (a hidden ref)
+    # BEFORE the hook is installed, so the hook's update-ref can reach the SHA.
+    _git("push", "origin", f"{concurrent_sha}:refs/heads/_seed_objects",
+         cwd=concurrent_tree_repo)
+
+    # Modern git runs pre-receive inside a quarantine env where ref updates are
+    # forbidden; unset the quarantine vars and target the bare git-dir directly
+    # so the hook can advance the branch (simulating a concurrent push that
+    # landed between the publisher's fetch and its push).
+    pre_receive = hooks / "pre-receive"
+    pre_receive.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        f'if [ ! -f "{flag}" ]; then\n'
+        f'  touch "{flag}"\n'
+        "  env -u GIT_QUARANTINE_PATH -u GIT_OBJECT_DIRECTORY "
+        "-u GIT_ALTERNATE_OBJECT_DIRECTORIES \\\n"
+        f'    git --git-dir="{remote_repo}" update-ref '
+        f"refs/heads/{PUBLISH_BRANCH} {concurrent_sha}\n"
+        '  echo "hook: injected concurrent commit, rejecting this push" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    pre_receive.chmod(0o755)
+
+    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
     assert result.returncode == 0, (
-        "publish must proceed when the only target change is an ignored path\n"
+        "publish must recover from a non-FF rejection via retry\n"
         f"rc={result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    # A new commit must have landed (the rendered HTML).
-    assert head_before != head_after, "publish must commit the rendered HTML"
-    dst = target_repo / "public" / "trading" / name / "index.html"
-    assert dst.exists() and dst.read_text() == html
-    # The ignored droppings are untouched (never committed, never deleted).
-    assert (gstack_dir / "browse-audit.jsonl").exists()
-    porcelain = _git("status", "--porcelain", cwd=target_repo)
-    assert ".gstack" not in porcelain, "ignored path must not become tracked"
-    # The guard explicitly announces it disregarded an ignored path, so cron
-    # logs make it obvious the dirty-tree check was applied (not skipped).
-    assert "ignored" in result.stdout.lower(), (
-        "guard should log that it disregarded git-ignored path(s); "
-        f"stdout: {result.stdout}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 4c — a dirty TRACKED file still blocks the publish, even when an ignored
-# untracked path is also present. The hardened guard must not become so lax it
-# sweeps real edits.
-# ---------------------------------------------------------------------------
-
-
-def test_publish_bails_on_dirty_tracked_even_with_ignored(
-    source_dir: Path, target_repo: Path
-):
-    """A modified tracked file must still refuse, regardless of ignored droppings."""
-    name = "market-breadth"
-    (source_dir / f"{name}.html").write_text("<html>clean source</html>")
-
-    # Ignore `.gstack/` and add an untracked ignored file (the benign case)...
-    (target_repo / ".gitignore").write_text(".gstack/\n")
-    _git("add", ".gitignore", cwd=target_repo)
-    _git("commit", "-m", "ignore .gstack/", cwd=target_repo)
-    (target_repo / ".gstack").mkdir()
-    (target_repo / ".gstack" / "browse-audit.jsonl").write_text("{}\n")
-    # ...AND a genuinely dirty TRACKED file (the case we must still catch).
-    (target_repo / "public" / ".gitkeep").write_text("hand-edited\n")
-
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-
-    assert result.returncode != 0, (
-        "dirty TRACKED file must still block the publish\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert head_before == head_after, "must not commit when a tracked file is dirty"
-    assert (target_repo / "public" / ".gitkeep").read_text() == "hand-edited\n"
+    assert flag.exists(), "the non-FF hook must have fired (race not exercised)"
     combined = (result.stdout + result.stderr).lower()
-    assert "dirty" in combined or "uncommitted" in combined
-
-
-# ---------------------------------------------------------------------------
-# Test 4d — an untracked, NON-ignored file still blocks the publish. The
-# hardened guard ignores only git-IGNORED paths; a genuinely stray untracked
-# file (not in `.gitignore`) is still "dirt" we refuse to sweep up.
-# ---------------------------------------------------------------------------
-
-
-def test_publish_bails_on_untracked_non_ignored(
-    source_dir: Path, target_repo: Path
-):
-    """A stray untracked file that is NOT ignored must still refuse."""
-    name = "market-breadth"
-    (source_dir / f"{name}.html").write_text("<html>clean source</html>")
-
-    # Untracked, and NOT covered by any .gitignore entry.
-    (target_repo / "stray-note.txt").write_text("forgot to commit this\n")
-
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-    result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-
-    assert result.returncode != 0, (
-        "stray untracked (non-ignored) file must still block the publish\n"
+    assert "non-fast-forward" in combined or "rejected" in combined, (
+        "publisher should log the non-FF retry; "
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    assert head_before == head_after, "must not commit when an untracked file is present"
-    assert (target_repo / "stray-note.txt").exists(), "must not stash untracked files"
+
+    # Both the concurrent file AND our render must exist on origin (no clobber).
+    rel = f"public/trading/{name}/index.html"
+    assert _published_html(remote_repo, rel) == "<html>ours</html>"
+    concurrent = subprocess.run(
+        ["git", "-C", str(remote_repo), "show", f"{PUBLISH_BRANCH}:CONCURRENT.txt"],
+        capture_output=True,
+        text=True,
+    )
+    assert concurrent.returncode == 0, (
+        "concurrent agent's commit must survive (publish must not clobber it)"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Test 5 — missing source HTML produces a clean non-zero exit (no copy, no
-# commit). `set -euo pipefail` + the early `[ ! -f "$SRC" ]` guard must turn
-# this into a meaningful error, NOT a silent success.
+# Test 7 — missing source HTML produces a clean non-zero exit (no copy, no
+# commit, nothing pushed).
 # ---------------------------------------------------------------------------
 
 
-def test_publish_errors_when_source_missing(source_dir: Path, target_repo: Path):
-    """No rendered HTML at the source path → exit non-zero, no commit."""
+def test_publish_errors_when_source_missing(
+    source_dir: Path, target_repo: Path, remote_repo: Path
+):
     name = "etf-ranks"
-    # Intentionally do NOT write `etf-ranks.html` into source_dir.
     assert not (source_dir / f"{name}.html").exists()
 
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    head_before = _origin_head(remote_repo)
     result = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-
     assert result.returncode != 0, (
         f"missing source must produce non-zero exit, got rc={result.returncode}\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    assert head_before == head_after, "must not commit when source is missing"
-
+    assert _origin_head(remote_repo) == head_before, "must not push when source missing"
     combined = (result.stdout + result.stderr).lower()
-    assert "missing" in combined or "no such" in combined, (
-        f"expected actionable error mentioning missing source, got:\n"
-        f"{result.stdout}\n{result.stderr}"
-    )
-
-    # And no file should have been published.
-    dst = target_repo / "public" / "trading" / name / "index.html"
-    assert not dst.exists(), "must not create destination when source is missing"
+    assert "missing" in combined or "no such" in combined
 
 
 # ---------------------------------------------------------------------------
-# Test 6 — target is not a git checkout → clean non-zero exit, no file copy.
-# Protects against misconfiguration (DASHBOARD_PUBLISH_TARGET_DIR pointing at
-# a plain directory instead of the fengshen-site clone).
+# Test 8 — target is not a git checkout → clean non-zero exit, nothing pushed.
 # ---------------------------------------------------------------------------
 
 
 def test_publish_errors_when_target_not_git(tmp_path: Path, source_dir: Path):
-    """Non-git target → exit non-zero, no file written."""
     name = "etf-ranks"
     (source_dir / f"{name}.html").write_text("<html>v1</html>")
 
-    # Plain directory, no .git/ inside.
     not_a_git_repo = tmp_path / "fengshen-site-but-not-really"
     not_a_git_repo.mkdir()
     assert not (not_a_git_repo / ".git").exists()
@@ -437,87 +456,81 @@ def test_publish_errors_when_target_not_git(tmp_path: Path, source_dir: Path):
         f"non-git target must produce non-zero exit, got rc={result.returncode}\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
-
     combined = (result.stdout + result.stderr).lower()
-    assert "not a git" in combined or "git checkout" in combined, (
-        f"expected error mentioning git checkout, got:\n"
-        f"{result.stdout}\n{result.stderr}"
-    )
-
-    # And no destination directory created.
-    dst = not_a_git_repo / "public" / "trading" / name
-    assert not dst.exists(), "must not create destination on non-git target"
+    assert "not a git" in combined or "git checkout" in combined
 
 
 # ---------------------------------------------------------------------------
-# Test 7 — pending unpushed commits are recovered on the no-op path.
-# Regression for the "yesterday push failed + today identical render"
-# corner case where the local repo silently drifts ahead of origin.
+# Test 8b — a SUBDIRECTORY inside a repo (not the worktree root) is rejected.
+# The checkout guard requires the target to be the worktree top-level so the
+# publish path can't accidentally nest under a subdir. (Carried from #133.)
 # ---------------------------------------------------------------------------
 
 
-def test_publish_pushes_pending_commits_on_noop(
-    source_dir: Path, target_repo: Path
-):
-    """After a prior commit is left local-only (simulating a failed push),
-    a subsequent no-op render must detect the ahead-of-upstream state and
-    push the pending commit instead of exiting silently."""
+def test_publish_rejects_subdir_of_repo(source_dir: Path, target_repo: Path):
     name = "etf-ranks"
-    html = "<html>v1</html>"
+    (source_dir / f"{name}.html").write_text("<html>v1</html>")
+
+    subdir = target_repo / "public"  # inside the work tree, but not its root
+    assert subdir.is_dir()
+
+    result = _run_publisher(name, source_dir=source_dir, target_repo=subdir)
+    assert result.returncode != 0, (
+        f"subdir target must be rejected, got rc={result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "not a git" in combined or "git checkout" in combined
+
+
+# ---------------------------------------------------------------------------
+# Test 8c — a linked git worktree (`git worktree add`) is still a valid target.
+# Its `.git` is a FILE (gitdir pointer), not a directory; the checkout guard
+# must accept it and proceed. (Carried from #133 — the publisher now sources
+# its OWN worktree from this target, so the target itself may legitimately be
+# a worktree.)
+# ---------------------------------------------------------------------------
+
+
+def test_publish_accepts_linked_worktree(
+    tmp_path: Path, source_dir: Path, target_repo: Path, remote_repo: Path
+):
+    name = "etf-ranks"
+    html = "<html><body>worktree publish</body></html>"
     (source_dir / f"{name}.html").write_text(html)
 
-    # First run: lands a commit and pushes.
-    r1 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    assert r1.returncode == 0, r1.stderr
-
-    # Simulate "yesterday's push failed" by rewinding the remote one commit.
-    # Resolve the parent SHA in the working clone (where the reflog lives),
-    # then point the bare remote's main ref at it directly. We avoid
-    # `HEAD~1` against the bare repo because its HEAD is symbolic-only.
-    remote_url = _git("config", "remote.origin.url", cwd=target_repo).strip()
-    parent_sha = _git("rev-parse", "HEAD~1", cwd=target_repo).strip()
+    # Create a linked worktree of the target clone (its `.git` is a FILE).
+    worktree = tmp_path / "fengshen-site-worktree"
     _git(
-        "update-ref",
-        "refs/heads/main",
-        parent_sha,
-        cwd=Path(remote_url),
+        "worktree", "add", "-b", "publish-wt", str(worktree), PUBLISH_BRANCH,
+        cwd=target_repo,
     )
-    # Confirm we are now ahead of origin/main.
-    _git("fetch", "origin", cwd=target_repo)
-    ahead = _git(
-        "rev-list", "--count", "origin/main..HEAD", cwd=target_repo
-    ).strip()
-    assert ahead == "1", f"setup error: expected 1 ahead, got {ahead}"
-
-    # Re-run with identical source HTML → the no-op path triggers, but the
-    # pending commit must still be pushed.
-    r2 = _run_publisher(name, source_dir=source_dir, target_repo=target_repo)
-    assert r2.returncode == 0, (
-        f"rc={r2.returncode}\nstdout: {r2.stdout}\nstderr: {r2.stderr}"
+    assert (worktree / ".git").is_file(), (
+        "test precondition: a linked worktree's .git must be a FILE, not a dir"
     )
 
-    # Local and origin should be back in sync.
-    _git("fetch", "origin", cwd=target_repo)
-    local_head = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-    origin_head = _git("rev-parse", "origin/main", cwd=target_repo).strip()
-    assert local_head == origin_head, (
-        f"pending commit was not recovered: local={local_head[:8]} "
-        f"origin={origin_head[:8]}"
+    result = _run_publisher(name, source_dir=source_dir, target_repo=worktree)
+    combined = (result.stdout + result.stderr).lower()
+    assert "target is not a git checkout" not in combined, (
+        "checkout guard wrongly rejected a linked worktree\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+    assert result.returncode == 0, (
+        f"publish from a linked-worktree target must succeed, got rc={result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    rel = f"public/trading/{name}/index.html"
+    assert _published_html(remote_repo, rel) == html
 
 
 # ---------------------------------------------------------------------------
-# Test 7b — `--root` flag publishes to `public/trading/index.html` (the
-# combined trading dashboard's URL = `/trading/`, DESIGN §4 D1 operator
-# override 2026-05-27). Default path remains `public/trading/<name>/`.
+# Test 9 — `--root` flag publishes to `public/trading/index.html`.
 # ---------------------------------------------------------------------------
 
 
 def test_publish_root_flag_lands_at_trading_root(
-    source_dir: Path, target_repo: Path
+    source_dir: Path, target_repo: Path, remote_repo: Path
 ):
-    """With `--root`, the rendered HTML lands at `public/trading/index.html`,
-    not the default `public/trading/<name>/index.html`."""
     name = "dashboard"
     html = "<html><body>combined v1</body></html>"
     (source_dir / f"{name}.html").write_text(html)
@@ -528,29 +541,22 @@ def test_publish_root_flag_lands_at_trading_root(
     assert result.returncode == 0, (
         f"rc={result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
-
-    root_dst = target_repo / "public" / "trading" / "index.html"
-    nested_dst = target_repo / "public" / "trading" / name / "index.html"
-
-    assert root_dst.exists(), (
-        f"--root must publish to public/trading/index.html (got nothing at {root_dst})"
+    assert _published_html(remote_repo, "public/trading/index.html") == html
+    # The nested per-name path must NOT also be created.
+    nested = subprocess.run(
+        ["git", "-C", str(remote_repo), "show",
+         f"{PUBLISH_BRANCH}:public/trading/{name}/index.html"],
+        capture_output=True,
+        text=True,
     )
-    assert root_dst.read_text() == html
-    assert not nested_dst.exists(), (
-        "--root must NOT also create the nested `public/trading/<name>/` path "
-        f"(found stale file at {nested_dst})"
-    )
+    assert nested.returncode != 0, "--root must not also create the nested path"
 
 
 def test_publish_root_flag_rejects_unknown_args(
     source_dir: Path, target_repo: Path
 ):
-    """Unknown flags after `<name>` exit non-zero with a usage hint —
-    silent ignore would let typos like `--roto` silently fall back to the
-    default nested path and silently misroute the combined dashboard."""
     name = "dashboard"
     (source_dir / f"{name}.html").write_text("<html>v1</html>")
-
     result = _run_publisher(
         name, source_dir=source_dir, target_repo=target_repo, extra_args=["--bogus"]
     )
@@ -559,31 +565,30 @@ def test_publish_root_flag_rejects_unknown_args(
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     combined = (result.stdout + result.stderr).lower()
-    assert "unknown" in combined or "usage" in combined, (
-        f"expected unknown-flag error, got:\n{result.stdout}\n{result.stderr}"
-    )
+    assert "unknown" in combined or "usage" in combined
+
+
+def test_publish_rejects_path_traversal_name(
+    source_dir: Path, target_repo: Path
+):
+    """A `<name>` with `/` or `..` is rejected before any git op (carried)."""
+    (source_dir / "etf-ranks.html").write_text("<html>v1</html>")
+    for bad in ["../escape", "a/b", ".."]:
+        result = _run_publisher(bad, source_dir=source_dir, target_repo=target_repo)
+        assert result.returncode != 0, f"name {bad!r} must be rejected"
+        combined = (result.stdout + result.stderr).lower()
+        assert "invalid" in combined or "usage" in combined
 
 
 # ---------------------------------------------------------------------------
-# Test 8 — cron-wrapper integration: invokes render then publish in order.
+# Test 10 — cron-wrapper integration: invokes render then publish in order.
 # ---------------------------------------------------------------------------
 
 
 def test_cron_wrapper_invokes_render_then_publish(tmp_path: Path):
-    """`cron-wrapper.sh` runs the supplied command verbatim and logs phases.
-
-    We construct a 'fake render && fake publish' command that drops two files
-    in order, then assert the file order matches (render first, publish
-    second) and the wrapper's [OK] line appears in the log.
-
-    This is the integration shape used by the new cron entry; the wrapper is
-    already generic so we're verifying it cleanly hosts the new chained
-    command without bespoke per-job code.
-    """
+    """`cron-wrapper.sh` runs the supplied command verbatim and logs phases."""
     project = tmp_path / "rainier"
     (project / "scripts").mkdir(parents=True)
-    # Drop the real wrapper into a clone of the project layout cron-wrapper.sh
-    # expects (it cd's into `dirname(scripts)/`).
     wrapper_dst = project / "scripts" / "cron-wrapper.sh"
     wrapper_dst.write_text(CRON_WRAPPER.read_text())
     wrapper_dst.chmod(0o755)
@@ -592,12 +597,8 @@ def test_cron_wrapper_invokes_render_then_publish(tmp_path: Path):
     marker_publish = tmp_path / "publish.marker"
     log = tmp_path / "cron.log"
 
-    # The command argument is `eval`d by cron-wrapper, exactly as it would be
-    # from cron.yaml. Order matters: render must touch its marker FIRST, then
-    # `&&` chains to the publisher.
     command = (
         f"date >> {marker_render} && "
-        # tiny sleep so mtimes differ even on coarse filesystems
         f"sleep 0.01 && "
         f"date >> {marker_publish}"
     )
@@ -622,8 +623,6 @@ def test_cron_wrapper_invokes_render_then_publish(tmp_path: Path):
     )
     assert marker_render.exists(), "render step never ran"
     assert marker_publish.exists(), "publish step never ran"
-
-    # Render's marker must be older than publish's marker — proves order.
     assert marker_render.stat().st_mtime <= marker_publish.stat().st_mtime, (
         "render must run before publish"
     )
