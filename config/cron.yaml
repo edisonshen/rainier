@@ -164,22 +164,33 @@ jobs:
   # seeded (breadth dashboard is live). On a fresh host, run the one-shot seed
   # first or flip this back to `enabled: false` until the seed completes.
   - name: market-breadth-daily
-    description: "Refresh sp500 OHLCV + compute breadth indicators (writes market.breadth_indicator_daily)"
+    description: "Refresh sp500 OHLCV + SPY benchmark OHLCV + compute breadth indicators (writes market.breadth_indicator_daily + market.benchmark_ohlcv)"
     schedule: "45 12 * * 1-5"   # 12:45 PST Mon-Fri (15 min pre-close)
     # This job is COMPUTE-ONLY since 2026-06-03 (retire-fengshen-dashboar-aec0):
     # the `&& scripts/publish-market-breadth.sh` tail was dropped because
     # fengshen's PG-backed /trading is now the canonical source and no longer
-    # reads git-pushed HTML. The two compute steps are KEPT — they write
-    # market.breadth_indicator_daily, which fengshen reads.
+    # reads git-pushed HTML. The compute steps are KEPT — they write the
+    # market.* tables fengshen reads.
     #
     # Compute chain (DESIGN-market-breadth-webpage.md §6, publish step retired):
-    #   1. yfinance incremental refresh -> data/cache/sp500_universe.parquet
-    #   2. indicator recompute          -> market.breadth_indicator_daily
+    #   1. SPY benchmark refresh   -> data/cache/spy_history.parquet
+    #                              -> market.benchmark_ohlcv (dual-write)
+    #   2. yfinance incremental    -> data/cache/sp500_universe.parquet
+    #   3. indicator recompute     -> market.breadth_indicator_daily (dual-write)
+    #
+    # `backfill-spy --incremental` is the FIRST step (added by
+    # benchmark-ohlcv-spy-stale): it is the ONLY command that writes
+    # market.benchmark_ohlcv — the SPY daily price pane fengshen's /trading
+    # reads. Before this fix it lived only in an operator-run command and was
+    # never scheduled, so market.benchmark_ohlcv silently went stale (last bar
+    # 2026-05-29) while breadth/thematic kept current. The incremental run
+    # fetches the trailing 5 calendar days and upserts on (symbol, date), so a
+    # missed cron self-heals and re-runs never duplicate rows.
     #
     # `&&` enforces serial execution and propagates the first non-zero exit
     # to cron-wrapper.sh, which fires the Discord alert (discord_on_failure
     # below).
-    command: "uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators"
+    command: "uv run rainier market-breadth backfill-spy --incremental && uv run rainier market-breadth backfill-ohlcv --incremental && uv run rainier market-breadth compute-indicators"
     log: "data/market-breadth.log"
     discord_on_failure: true
     enabled: true
