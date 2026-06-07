@@ -450,6 +450,66 @@ def test_publish_errors_when_target_not_git(tmp_path: Path, source_dir: Path):
 
 
 # ---------------------------------------------------------------------------
+# Test 6b — a linked git worktree (`git worktree add`) is a valid target.
+# Its `.git` is a FILE (gitdir pointer), not a directory, so the old
+# `-d "$TARGET_DIR/.git"` guard wrongly rejected it. The checkout guard must
+# accept it and proceed PAST the "target is not a git checkout" error.
+# Regression for the shared-tree publish path (publish into an isolated
+# worktree on origin/master rather than the main checkout).
+# ---------------------------------------------------------------------------
+
+
+def test_publish_accepts_linked_worktree(
+    tmp_path: Path, source_dir: Path, target_repo: Path
+):
+    """A `git worktree add` target (`.git` is a file) must NOT be rejected by
+    the checkout guard. The publish should succeed end-to-end."""
+    name = "etf-ranks"
+    html = "<html><body>worktree publish</body></html>"
+    (source_dir / f"{name}.html").write_text(html)
+
+    # Create a linked worktree in the target repo. `main` is already checked
+    # out in the primary tree, so put the worktree on a fresh branch that
+    # tracks origin/main (the publish path commits + `git push`es upstream).
+    # Its `.git` is a FILE pointing into the parent's `.git/worktrees/<id>`,
+    # not a directory — exactly the case the old `-d` guard mishandled.
+    worktree = tmp_path / "fengshen-site-worktree"
+    _git(
+        "worktree", "add", "-b", "publish-wt", str(worktree), "origin/main",
+        cwd=target_repo,
+    )
+    _git("branch", "--set-upstream-to=origin/main", "publish-wt", cwd=worktree)
+    # The worktree branch name (`publish-wt`) differs from its upstream
+    # (`main`); push.default=upstream makes `git push` target the tracked
+    # branch regardless of name (the shared-tree publish setup the operator
+    # uses, where the worktree publishes to origin/master).
+    _git("config", "push.default", "upstream", cwd=worktree)
+    gitpath = worktree / ".git"
+    assert gitpath.is_file(), (
+        "test precondition: a linked worktree's .git must be a FILE, not a dir"
+    )
+
+    result = _run_publisher(name, source_dir=source_dir, target_repo=worktree)
+
+    # The script must get PAST the checkout guard — that's the core regression.
+    combined = (result.stdout + result.stderr).lower()
+    assert "target is not a git checkout" not in combined, (
+        "checkout guard wrongly rejected a linked worktree\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    # And it should actually publish (proceed through copy/commit/push).
+    assert result.returncode == 0, (
+        f"publish into a worktree must succeed, got rc={result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    dst = worktree / "public" / "trading" / name / "index.html"
+    assert dst.exists() and dst.read_text() == html, (
+        "rendered HTML must land in the worktree's public/ tree"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 7 — pending unpushed commits are recovered on the no-op path.
 # Regression for the "yesterday push failed + today identical render"
 # corner case where the local repo silently drifts ahead of origin.

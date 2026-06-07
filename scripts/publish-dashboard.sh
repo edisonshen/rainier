@@ -95,7 +95,13 @@ if [ ! -f "$SRC" ]; then
     exit 1
 fi
 
-if [ ! -d "$TARGET_DIR/.git" ]; then
+# Accept both a regular checkout (.git is a directory) and a linked worktree
+# (.git is a FILE — a gitdir pointer created by `git worktree add`). The old
+# `-d "$TARGET_DIR/.git"` test wrongly rejected worktrees, breaking the
+# shared-tree publish path. Ask git itself, and compare the printed value
+# ("true") rather than relying on exit code, which can be 0 even in bare/.git
+# internal dirs where this prints "false".
+if [ "$(git -C "$TARGET_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
     log "ERROR target is not a git checkout: $TARGET_DIR"
     exit 1
 fi
