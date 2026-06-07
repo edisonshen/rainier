@@ -1,6 +1,6 @@
 # Design Plan — Multi-Signal Resonance for TQQQ Conviction
 
-**Status:** draft for review · **Scope:** signal-resonance layer for the TQQQ timing strategy · **Window:** 2020-10 → now (real TQQQ) · **Constraint:** no moving-average / lookback > 66 bars · **Depends on:** existing `signals/`, `backtest/` engine · **PR base:** main
+**Status:** draft for review · **Scope:** signal-resonance layer for the TQQQ timing strategy · **Window:** 2020-10 → now (real TQQQ) · **Constraint:** no moving-average / lookback > 66 bars · **Depends on:** `src/rainier/signals/`, `src/rainier/backtest/` engine · **PR base:** main
 
 ---
 
@@ -107,10 +107,12 @@ Your example — *buy TQQQ when QQQ<SMA10 AND VIX<23 AND fractal buy AND SPY<SMA
 
 | Component | Role | Where |
 |---|---|---|
-| `SignalPanel` | registry of ≤66-lookback signals; each `(df) → risk-on series ∈ {0,1}` | new `signals/panel.py` |
-| `ResonanceScorer` | panel → daily conviction score ∈ [0,1] (weighted consensus) | new `signals/resonance.py` |
-| `ResonanceStrategy` | Layer-1 gate × Layer-2 size → daily target weight | new `signals/resonance_strategy.py` |
-| Daily-MTM sim | weight → equity, no lookahead, financing + costs | reuse `leveraged_common.sim` |
+| `SignalPanel` | registry of ≤66-lookback signals; each `(df) → risk-on series ∈ {0,1}` | new `src/rainier/signals/panel.py` |
+| `ResonanceScorer` | panel → daily conviction score ∈ [0,1] (weighted consensus) | new `src/rainier/signals/resonance.py` |
+| `ResonanceStrategy` | Layer-1 gate × Layer-2 size → daily target weight (implements/extends the `SignalEmitter` boundary) | new `src/rainier/signals/resonance_strategy.py` |
+| Daily-MTM sim | weight → equity, no lookahead, financing + costs | `src/rainier/backtest/` (productionize the prototype in `scripts/leveraged_common.py`) |
+
+*Note: the panel signals and the daily-MTM sim currently live only as untracked exploratory scripts (`scripts/regime_signal_search.py`, `scripts/leveraged_common.py`). v1 promotes them into `src/rainier/` per the module map in `CLAUDE.md`; the scripts are the reference implementation, not the shipping location.*
 
 ### 5.2 The panel (≤66 lookback, ~26 signals)
 
