@@ -112,7 +112,9 @@ TARGET_TOPLEVEL="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null ||
 TARGET_ABS="$(cd "$TARGET_DIR" 2>/dev/null && pwd -P || true)"
 TARGET_TOP_ABS=""
 if [ -n "$TARGET_TOPLEVEL" ]; then
-    TARGET_TOP_ABS="$(cd "$TARGET_TOPLEVEL" && pwd -P)"
+    # `|| true` so a permission/race failure on cd degrades to the friendly
+    # error below instead of a bare `set -e` abort with no log line.
+    TARGET_TOP_ABS="$(cd "$TARGET_TOPLEVEL" 2>/dev/null && pwd -P || true)"
 fi
 if [ -z "$TARGET_TOP_ABS" ] || [ "$TARGET_ABS" != "$TARGET_TOP_ABS" ]; then
     log "ERROR target is not a git checkout: $TARGET_DIR"
