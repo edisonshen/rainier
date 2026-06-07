@@ -115,7 +115,7 @@ v1 is **trend-only** (Q7) — every member is a *risk-on / uptrend-confirming* s
 - **Volatility:** realizedVol(20, rolling std) < its **rolling-40 median** (20+40 = 60, finite), ATR%(14, **simple rolling mean** of true range, *not* Wilder/EWMA) < its rolling-46 median (14+46 = 60), VIX<25, VIX<SMA20, VIX-falling. *(Replaces the prototype's `expanding(60).median()` and EWMA `atr_pct` — both unbounded.)*
 - **Structure:** within 5% of 60-day high, ADX>20 & +DI>−DI, higher-high+higher-low.
 - **Cross-asset:** SPY>SMA22, SPY>SMA44 (NEW code — `build_signals(qqq, vix)` takes no SPY today; v1 adds an SPY input).
-- **Breadth (NEW, in v1 — Q5):** **% of top-N QQQ holdings above their SMA** — the closest proxy to "market breadth" (yfinance has no breadth index). Built in v1, and **also surfaced on the QQQ market-breadth dashboard** (separate deliverable, §7).
+- **Breadth (NEW, in v1 — Q5):** **% of top-N QQQ holdings above their SMA50** (the SMA period is pinned ≤66, *not* the conventional 200-day, to honor the cap). Two hard requirements: (1) use **point-in-time** constituents — computing "% above MA" from *today's* holdings on *past* dates leaks survivorship bias into the score; if point-in-time holdings aren't available, use a **frozen ex-ante universe** and **exclude breadth from the OOS claims** in §6.2. (2) it's a finite-window member (SMA50 over a fixed universe), counted in the §5.5 invariant. Built in v1, and **also surfaced on the QQQ market-breadth dashboard** (separate deliverable, §7).
 
 *Every member's **composed/total** lookback ≤ 66 (a 20-day measure vs a 40-day median = 60, not "66 because the outer window is 66"). Finite-window members have exact composed support ≤66; EMA-family members (EMA, RSI, MACD, ADX) have bounded effective memory (invariant in §5.5).*
 
@@ -123,7 +123,7 @@ v1 is **trend-only** (Q7) — every member is a *risk-on / uptrend-confirming* s
 
 `resonance[t] = Σ wᵢ · signalᵢ[t] / Σ wᵢ` ∈ [0,1] — the **power-weighted** fraction risk-on.
 
-- **Per-signal power weights `wᵢ`** (Q2) — a strong signal moves the score more. Default prior = **category-balanced** (Q4): the 5 categories weighted equally, split within, so the many trend signals don't make the score really mean "trend ×4." Beyond that prior, weights are a **swept/tested** config (capped per §6.4 — every free weight is overfit risk on a tiny sample).
+- **Per-signal power weights `wᵢ`** (Q2) — a strong signal moves the score more. Default prior = **category-balanced** (Q4): the **6 categories** (Trend, Momentum, Volatility, Structure, Cross-asset, Breadth) weighted equally, split within, so the many trend signals don't make the score really mean "trend ×4." Beyond that prior, weights are a **swept/tested** config (capped per §6.4 — every free weight is overfit risk on a tiny sample).
 - A/B includes **equal-weight vs category-balanced vs tuned** weights to confirm weighting actually helps (Q4: "testing can tell us more").
 
 ### 5.4 The dual-threshold gate (state machine)
@@ -145,7 +145,7 @@ Every input (TQQQ, QQQ, SPY, VIX, breadth) uses its **close[t]** value; the scor
 
 **Leakage test:** inject a known future spike into bar *t+1*; assert state[t] is unchanged across all inputs.
 
-**Lookback invariant:** the **composed/total** lookback of every member ≤ 66, no expanding windows. "Composed" matters for *nested* indicators (realizedVol(20) into a rolling-k median has span 20+k, so k ≤ 46). *Finite-window* members (SMA, rolling-median, Donchian, ROC, rewritten nested-vol) have exact composed support ≤66; *EMA-family* (EMA, RSI, MACD, ADX) have bounded effective memory. Tests: (a) every composed span ≤66; (b) finite-window signals bit-identical when history before *t−66* dropped; (c) **per-member** warmup — empirically measure each EMA-family signal's convergence (ADX double-smoothed, MACD-hist EMAs-of-EMAs) and set the buffer from the *slowest* member. The two prototype `expanding(60).median()` members fail test (b) and **must** be rewritten — required, not optional.
+**Lookback invariant:** the **composed/total** lookback of every member ≤ 66, no expanding windows. "Composed" matters for *nested* indicators (realizedVol(20) into a rolling-k median has span 20+k, so k ≤ 46). *Finite-window* members (SMA, rolling-median, Donchian, ROC, rewritten nested-vol, breadth-%-above-SMA50) have exact composed support ≤66; *EMA-family* (EMA, RSI, MACD, ADX) have bounded effective memory. Tests: (a) every composed span ≤66; (b) finite-window signals bit-identical when history before *t−66* dropped; (c) **per-member** warmup — empirically measure each EMA-family signal's convergence (ADX double-smoothed, MACD-hist EMAs-of-EMAs), take the *slowest* member, and **freeze that as a pre-registered integer constant** (e.g. WARMUP_BARS=150) — the warmup must NOT shift with data, or `t0` moves run-to-run; the determinism test asserts `t0` is data-independent. The two prototype `expanding(60).median()` members fail test (b) and **must** be rewritten — required, not optional.
 
 ### 5.6 Config (and what is NOT swept)
 
@@ -167,15 +167,17 @@ The gate, panel, weights, and thresholds were all discovered on 2020-10→now. F
 
 | Test | Protocol | Pass criteria |
 |---|---|---|
-| Re-derived split | Re-run the **entire** selection (panel, weights, BUY/SELL thresholds, combination mode) on **only ≤2022-12** data — discard prior picks — report **once** on 2023→now | edge persists. If impractical, 2023→now is **descriptive only** and the row below is load-bearing. |
+| Re-derived split (**mandatory**) | Re-run the **entire** selection (panel, weights, BUY/SELL thresholds, combination mode) on **only ≤2022-12** data — discard prior picks — report **once** on 2023→now | edge persists on the held-out slice |
 | **True OOS** (load-bearing) | run the frozen config on **synthetic 3× QQQ pre-2010** (dot-com + GFC) and a **different leveraged underlying** | edge survives on data that informed no choice |
+
+The re-derived split is **required**, not optional — the True-OOS row alone (synthetic + a near-clone underlying) is **not sufficient** to ship. Minimum to ship: the re-derived 2023→now slice **plus** ≥1 genuinely independent True-OOS slice (pre-2010 synthetic or SOXL — *not* SPXL/UPRO, which §6.2 flags as near-clones).
 
 For a different underlying, the signal source **switches** to that underlying's own inputs. **SPXL/UPRO are near-clones** of the QQQ trade → weak evidence; **SOXL (semis)** is genuinely different → stronger. For pre-2010 synthetic, **pre-register** the cost params (`rate` = historical 3-month T-bill *series*; `fee` fixed) and report drawdown sensitivity to ±50 bps fee. In-window per-regime numbers are **descriptive only**.
 
 ### 6.3 The A/B — does the weighted gate actually beat the simple one?
 | Test | Comparators (all on the §6.2 OOS slices) | Pass criteria |
 |---|---|---|
-| Gate A/B | resonance-gate · SMA22/44-gate · (resonance AND SMA) · (resonance OR SMA) · buy-hold TQQQ · buy-hold QQQ | the resonance-gate (or a combination) must beat the **SMA22/44 gate AND buy-hold** on Calmar **and** drawdown, on **every** OOS slice. If the plain SMA gate wins, **ship the SMA gate** and stop. |
+| Gate A/B | resonance-gate · SMA22/44-gate · (resonance AND SMA) · (resonance OR SMA) · buy-hold TQQQ · buy-hold QQQ | the resonance-gate (or a combination) must beat the **SMA22/44 gate AND buy-hold** on Calmar **and** drawdown, on **every** required OOS slice (§6.2). **Anti-gaming:** a *combination* (AND/OR) winner must ALSO (i) beat its own SMA-only component, and (ii) the **resonance-only** gate must itself beat buy-hold on ≥1 slice — otherwise the weighted score isn't carrying signal, the combination is just the SMA gate in disguise, and the conclusion is **ship the SMA gate**. |
 | Weighting A/B | equal-weight vs category-balanced vs tuned weights | weighting must measurably help, else use equal weights (simpler) |
 
 ### 6.4 Overfit guard (hard, not vibes)
