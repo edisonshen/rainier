@@ -123,12 +123,9 @@ v1 models your confirmed-buy as an **optional pullback sub-score / alternate ent
 
 ### 5.2 The panel (≤66 lookback)
 
-**Provenance — important:** v1 does **NOT** pin the full `regime_signal_search.build_signals` list. That list is mostly **>66** lookback (SMA100/150/200, EMA100/200, ROC120, 12-1 momentum, 90/120-day highs, slow 50/150 & 50/200 crosses) and uses **expanding** medians — both forbidden here. v1 instead:
-1. takes the **≤66 subset** of `build_signals` (the complement of the existing `BLOCK` exclusion set in `scripts/full_combo_search.py` / `leveraged_common.py`),
-2. **rewrites** its two expanding-median members to bounded windows (below),
-3. **adds** new members (SPY cross-asset, optional fractal, breadth proxy) as fresh code.
+**Provenance — important:** v1 does **NOT** pin the full `regime_signal_search.build_signals` list. That list is mostly **>66** lookback (SMA100/150/200, EMA100/200, ROC120, 12-1 momentum, 90/120-day highs, slow 50/150 & 50/200 crosses) and uses **expanding** medians — both forbidden here.
 
-The names below are the *intended* set, not a claim about the current prototype. The frozen final list + per-category counts are recorded at build time; new members (3) each count against the §6.4 parameter budget.
+**The enumerated list below IS the single source of truth** for the v1 panel (the resonance denominator and category counts derive from it — nothing else). It was *seeded* from the ≤66 subset of `build_signals` (the complement of the `BLOCK` set in `scripts/full_combo_search.py`), then deliberately **deduplicated** — keep one threshold per indicator (RSI>50, drop RSI>55; VIX<25, drop VIX<20/<30; one of ADX/+DI) so no single indicator is triple-counted in the consensus — with two expanding-median members **rewritten** to bounded form and `price>SMA66` **added**. So the list is *not* identical to the raw BLOCK-complement; where prose and the list disagree, **the list wins**. New members (SPY cross-asset, optional fractal, breadth proxy) are fresh code and each count against the §6.4 parameter budget. The frozen list is recorded verbatim at build time.
 
 - **Trend** (from ≤66 subset): price > SMA{20,50,66}, price > EMA{20,50}, SMA22>SMA44, SMA50-rising.
 - **Momentum** (from ≤66 subset): RSI14>50, MACD-hist>0, ROC{20,60}>0, price>Donchian50-mid.
