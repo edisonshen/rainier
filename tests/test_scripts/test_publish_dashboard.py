@@ -510,6 +510,38 @@ def test_publish_accepts_linked_worktree(
 
 
 # ---------------------------------------------------------------------------
+# Test 6c — a SUBDIRECTORY inside a repo (not the worktree root) is rejected.
+# `--is-inside-work-tree` alone would wrongly accept `fengshen-site/public`,
+# nesting the publish as `public/public/trading/...`; the guard must require
+# the target to be the worktree top-level. (codex iter-1 [P2] hardening.)
+# ---------------------------------------------------------------------------
+
+
+def test_publish_rejects_subdir_of_repo(source_dir: Path, target_repo: Path):
+    """Pointing the target at a subdir inside the repo (not the root) must be
+    rejected with the checkout-guard error and must not publish."""
+    name = "etf-ranks"
+    (source_dir / f"{name}.html").write_text("<html>v1</html>")
+
+    subdir = target_repo / "public"  # inside the work tree, but not its root
+    assert subdir.is_dir()
+
+    result = _run_publisher(name, source_dir=source_dir, target_repo=subdir)
+    assert result.returncode != 0, (
+        f"subdir target must be rejected, got rc={result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "not a git" in combined or "git checkout" in combined, (
+        f"expected checkout-guard error, got:\n{result.stdout}\n{result.stderr}"
+    )
+    # No nested publish should have been created under the subdir.
+    assert not (subdir / "public" / "trading" / name).exists(), (
+        "must not nest a publish under a subdir target"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 7 — pending unpushed commits are recovered on the no-op path.
 # Regression for the "yesterday push failed + today identical render"
 # corner case where the local repo silently drifts ahead of origin.

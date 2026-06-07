@@ -98,10 +98,23 @@ fi
 # Accept both a regular checkout (.git is a directory) and a linked worktree
 # (.git is a FILE — a gitdir pointer created by `git worktree add`). The old
 # `-d "$TARGET_DIR/.git"` test wrongly rejected worktrees, breaking the
-# shared-tree publish path. Ask git itself, and compare the printed value
-# ("true") rather than relying on exit code, which can be 0 even in bare/.git
-# internal dirs where this prints "false".
-if [ "$(git -C "$TARGET_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
+# shared-tree publish path.
+#
+# We require the target to be the worktree ROOT, not merely inside one: ask git
+# for the worktree top-level and compare it to TARGET_DIR. `--show-toplevel`
+# prints the root for both a regular checkout and a linked worktree, and errors
+# (empty output) for a non-repo — so this still rejects non-repos AND a
+# misconfigured subdir like `fengshen-site/public` (where DST_REL would
+# otherwise nest under the subdir and commit `public/public/trading/...`).
+TARGET_TOPLEVEL="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+# Resolve both to physical paths so a symlinked or trailing-slash TARGET_DIR
+# still matches git's canonical top-level.
+TARGET_ABS="$(cd "$TARGET_DIR" 2>/dev/null && pwd -P || true)"
+TARGET_TOP_ABS=""
+if [ -n "$TARGET_TOPLEVEL" ]; then
+    TARGET_TOP_ABS="$(cd "$TARGET_TOPLEVEL" && pwd -P)"
+fi
+if [ -z "$TARGET_TOP_ABS" ] || [ "$TARGET_ABS" != "$TARGET_TOP_ABS" ]; then
     log "ERROR target is not a git checkout: $TARGET_DIR"
     exit 1
 fi
