@@ -163,6 +163,9 @@ def _run_wrapper(
             "RAINIER_UV": str(uv_stub),
             "DASHBOARD_SOURCE_DIR": str(source_dir),
             "DASHBOARD_PUBLISH_TARGET_DIR": str(target_repo),
+            # The harness seeds `main`; the publisher defaults to `master`.
+            # Override so the isolated-worktree publish targets the seeded branch.
+            "DASHBOARD_PUBLISH_BRANCH": "main",
             "GIT_AUTHOR_NAME": "Test",
             "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "Test",
@@ -215,23 +218,27 @@ def test_empty_render_is_not_published(
     empty_html = f"<html><body><p>{EMPTY_MARKER}</p></body></html>"
     uv_stub = _write_uv_stub(tmp_path, source_dir, empty_html)
 
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    origin_before = _git("rev-parse", "origin/main", cwd=target_repo).strip()
     result = _run_wrapper(
         tmp_path=tmp_path,
         source_dir=source_dir,
         target_repo=target_repo,
         uv_stub=uv_stub,
     )
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    _git("fetch", "origin", cwd=target_repo)
+    origin_after = _git("rev-parse", "origin/main", cwd=target_repo).strip()
 
     assert result.returncode != 0, (
         f"empty render must exit non-zero, got rc={result.returncode}\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    assert head_before == head_after, "must not commit on empty render"
+    assert origin_before == origin_after, "must not push on empty render"
 
-    dst = target_repo / "public" / "trading" / "etf-ranks" / "index.html"
-    assert not dst.exists(), "must not publish empty HTML"
+    published = _git(
+        "show", "origin/main:public/trading/etf-ranks/index.html",
+        cwd=target_repo, check=False,
+    )
+    assert published == "", "must not publish empty HTML to origin"
 
     combined = (result.stdout + result.stderr).lower()
     assert "empty" in combined or "no features" in combined, (
@@ -263,22 +270,20 @@ def test_happy_path_publishes(
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
-    dst = target_repo / "public" / "trading" / "etf-ranks" / "index.html"
-    assert dst.exists(), "publish step did not land index.html"
-    # Read against the rendered content (textwrap.dedent in the stub adds a
-    # trailing newline, so use `in` rather than equality).
-    assert HAPPY_MARKER in dst.read_text()
+    # The publisher is self-isolating: it lands the file on origin/main via an
+    # ephemeral worktree, NOT in the target working checkout. Assert against
+    # what reached origin (fetch fresh, then read the remote-tracking ref).
+    _git("fetch", "origin", cwd=target_repo)
+    published = _git(
+        "show", "origin/main:public/trading/etf-ranks/index.html", cwd=target_repo
+    )
+    assert HAPPY_MARKER in published, "publish step did not land index.html on origin"
 
     # Commit subject from publish-dashboard.sh.
-    head_msg = _git("log", "-1", "--pretty=%s", cwd=target_repo).strip()
+    head_msg = _git("log", "-1", "--pretty=%s", "origin/main", cwd=target_repo).strip()
     assert re.match(
         r"^etf-ranks: \d{4}-\d{2}-\d{2} daily render$", head_msg
     ), f"unexpected commit subject: {head_msg!r}"
-
-    # And pushed to origin.
-    local_head = _git("rev-parse", "HEAD", cwd=target_repo).strip()
-    remote_head = _git("rev-parse", "origin/main", cwd=target_repo).strip()
-    assert local_head == remote_head, "wrapper did not push to origin"
 
 
 # ---------------------------------------------------------------------------
@@ -303,17 +308,21 @@ def test_renderer_failure_halts_chain(
     )
     stub.chmod(0o755)
 
-    head_before = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    origin_before = _git("rev-parse", "origin/main", cwd=target_repo).strip()
     result = _run_wrapper(
         tmp_path=tmp_path,
         source_dir=source_dir,
         target_repo=target_repo,
         uv_stub=stub,
     )
-    head_after = _git("rev-parse", "HEAD", cwd=target_repo).strip()
+    _git("fetch", "origin", cwd=target_repo)
+    origin_after = _git("rev-parse", "origin/main", cwd=target_repo).strip()
 
     assert result.returncode != 0, "renderer failure must propagate"
-    assert head_before == head_after, "no commit on renderer failure"
+    assert origin_before == origin_after, "no push on renderer failure"
 
-    dst = target_repo / "public" / "trading" / "etf-ranks" / "index.html"
-    assert not dst.exists(), "must not publish when render failed"
+    published = _git(
+        "show", "origin/main:public/trading/etf-ranks/index.html",
+        cwd=target_repo, check=False,
+    )
+    assert published == "", "must not publish when render failed"

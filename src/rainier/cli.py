@@ -4052,19 +4052,33 @@ def market_breadth_compute_indicators(
 
 @market_breadth.command("render-html")
 @click.option(
+    "--source",
+    type=click.Choice(["neon", "parquet"]),
+    default="neon",
+    show_default=True,
+    help=(
+        "Data source. 'neon' (default) reads the canonical "
+        "market.breadth_indicator_daily + market.benchmark_ohlcv store; "
+        "'parquet' reads the local caches (--input / --spy-path). Passing "
+        "--input or --spy-path implies parquet."
+    ),
+)
+@click.option(
     "--input",
     "input_path",
     type=click.Path(exists=True),
-    default="data/cache/sp500_breadth_daily.parquet",
-    show_default=True,
-    help="Long-format breadth parquet (asof_date, indicator, value).",
+    default=None,
+    help=(
+        "Long-format breadth parquet (parquet source only). "
+        "[default: data/cache/sp500_breadth_daily.parquet]"
+    ),
 )
 @click.option(
     "--asof",
     default=None,
     help=(
         "Display + filter date (YYYY-MM-DD). Defaults to the most recent "
-        "asof_date present in the input parquet (the cron's 'today')."
+        "asof_date present in the source (parquet last row / Neon max)."
     ),
 )
 @click.option(
@@ -4091,41 +4105,49 @@ def market_breadth_compute_indicators(
     "--spy-path",
     "spy_path",
     type=click.Path(),
-    default="data/cache/spy_history.parquet",
-    show_default=True,
+    default=None,
     help=(
-        "Optional SPY OHLCV parquet (from `market-breadth backfill-spy`). "
+        "Optional SPY OHLCV parquet (parquet source only; implies parquet). "
         "When present, the SPY price pane renders at the top of the page. "
-        "Missing file → SPY pane is omitted (back-compat path)."
+        "Missing file → SPY pane is omitted (back-compat path). "
+        "[default: data/cache/spy_history.parquet]"
     ),
 )
 def market_breadth_render_html(
-    input_path: str,
+    source: str,
+    input_path: str | None,
     asof: str | None,
     rendered_at_pt: str,
     window_days: int,
     output_path: str,
-    spy_path: str,
+    spy_path: str | None,
 ) -> None:
     """Render the S&P 500 market-breadth self-contained HTML dashboard.
 
-    Reads `data/cache/sp500_breadth_daily.parquet` and writes a single
-    deterministic HTML file. Sub-second runtime on the operator's machine
-    for ~9k rows (12 indicators × ~750 days).
+    Default source is the canonical Neon ``market.breadth_indicator_daily``
+    store (SPY pane from ``market.benchmark_ohlcv``); ``--source parquet`` (or
+    passing ``--input`` / ``--spy-path``) reads the local caches for offline /
+    back-compat use. Fails loud on a zero-row Neon result — never silently
+    publishes a stale parquet.
     """
+    import os
     import sys
     from datetime import date as _date
 
     import pandas as _pd
 
-    from rainier.market_breadth.render import write_breadth_html
+    from rainier.market_breadth.render import render_breadth_html
 
-    if asof is None:
-        # Resolve asof from the parquet's last row so cron callers don't
-        # need to thread `$(date +%Y-%m-%d)` through (which would carry
-        # the same `%`-in-crontab footgun the publish-etf-dashboard.sh
-        # script was built to avoid).
-        breadth = _pd.read_parquet(input_path)
+    # Passing an explicit parquet path implies the parquet source (back-compat).
+    if input_path is not None or spy_path is not None:
+        source = "parquet"
+
+    if source == "parquet":
+        eff_input = input_path or "data/cache/sp500_breadth_daily.parquet"
+        if not Path(eff_input).exists():
+            click.echo(f"error: breadth parquet not found: {eff_input}", err=True)
+            sys.exit(1)
+        breadth = _pd.read_parquet(eff_input)
         # Fail-loud on zero-row parquet. Otherwise `.max()` returns `pd.NaT`,
         # `NaT.date()` returns `NaT` again (not a real Python `date`), and
         # `render_breadth_html(asof=NaT).isoformat()` renders the literal
@@ -4134,37 +4156,68 @@ def market_breadth_render_html(
         # `&&` propagates this non-zero exit to cron-wrapper.sh which fires
         # a Discord alert (discord_on_failure: true).
         if breadth.empty:
-            click.echo(
-                f"error: input parquet has no rows: {input_path}", err=True,
-            )
+            click.echo(f"error: input parquet has no rows: {eff_input}", err=True)
             sys.exit(1)
-        asof_max = breadth["asof_date"].max()
-        # Catch `NaT` even on non-empty parquets where every `asof_date`
-        # cell happens to be null. Same publish-stale rationale.
-        if _pd.isna(asof_max):
-            click.echo(
-                f"error: input parquet has no usable asof_date values: {input_path}",
-                err=True,
-            )
-            sys.exit(1)
-        if hasattr(asof_max, "date"):
-            asof_dt = asof_max.date()
-        elif isinstance(asof_max, _date):
-            asof_dt = asof_max
+        spy_ohlcv: _pd.DataFrame | None = None
+        eff_spy = spy_path or "data/cache/spy_history.parquet"
+        if Path(eff_spy).exists():
+            spy_ohlcv = _pd.read_parquet(eff_spy)
+        if asof is None:
+            asof_max = breadth["asof_date"].max()
+            # Catch `NaT` even on non-empty parquets where every `asof_date`
+            # cell happens to be null. Same publish-stale rationale.
+            if _pd.isna(asof_max):
+                click.echo(
+                    f"error: input parquet has no usable asof_date values: {eff_input}",
+                    err=True,
+                )
+                sys.exit(1)
+            if hasattr(asof_max, "date"):
+                asof_dt = asof_max.date()
+            elif isinstance(asof_max, _date):
+                asof_dt = asof_max
+            else:
+                asof_dt = _date.fromisoformat(str(asof_max))
         else:
-            asof_dt = _date.fromisoformat(str(asof_max))
-    else:
-        asof_dt = _date.fromisoformat(asof)
+            asof_dt = _date.fromisoformat(asof)
+    else:  # neon (default)
+        from rainier.dashboard import neon_source as _ns
+        from rainier.db.engine import get_engine
 
-    written = write_breadth_html(
-        breadth_path=input_path,
-        output_path=output_path,
+        # get_engine() reads os.environ["DATABASE_URL"] directly and does NOT
+        # load .env; load it first so the cron path (uv run from PROJECT_DIR)
+        # finds the var.
+        _ns.ensure_env_loaded()
+        engine = get_engine()
+        try:
+            asof_dt = (
+                _date.fromisoformat(asof)
+                if asof is not None
+                else _ns.latest_breadth_asof(engine)
+            )
+            breadth = _ns.load_breadth_neon(engine, asof_dt)
+            spy_ohlcv = _ns.load_spy_neon(engine)
+        except _ns.EmptyNeonResultError as exc:
+            click.echo(f"error: {exc}", err=True)
+            sys.exit(1)
+        finally:
+            engine.dispose()
+        if spy_ohlcv is not None and spy_ohlcv.empty:
+            spy_ohlcv = None
+
+    html = render_breadth_html(
+        breadth=breadth,
         asof=asof_dt,
         rendered_at_pt=rendered_at_pt,
         window_days=window_days,
-        spy_path=spy_path,
+        spy_ohlcv=spy_ohlcv,
     )
-    click.echo(f"wrote market-breadth dashboard -> {written}")
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp.write_text(html, encoding="utf-8")
+    os.replace(tmp, out)
+    click.echo(f"wrote market-breadth dashboard -> {out}")
 
 
 # Composition root — wire the research engine's `llm-research` subgroup
@@ -4941,11 +4994,25 @@ def dashboard() -> None:
 
 @dashboard.command("render-etf-html")
 @click.option(
+    "--source",
+    type=click.Choice(["neon", "parquet"]),
+    default="neon",
+    show_default=True,
+    help=(
+        "Data source for the features frame. 'neon' (default) reads the "
+        "canonical market.thematic_features_daily store; 'parquet' reads the "
+        "local cache (--features). Passing --features implies parquet."
+    ),
+)
+@click.option(
     "--features",
     "features_path",
     type=click.Path(exists=True),
-    default="data/cache/thematic_features_daily.parquet",
-    show_default=True,
+    default=None,
+    help=(
+        "Local features parquet (parquet source only). "
+        "[default: data/cache/thematic_features_daily.parquet]"
+    ),
 )
 @click.option(
     "--registry",
@@ -4956,8 +5023,12 @@ def dashboard() -> None:
 )
 @click.option(
     "--asof",
-    required=True,
-    help="Date to render (YYYY-MM-DD). The renderer slices features to this asof_date.",
+    default=None,
+    help=(
+        "Date to render (YYYY-MM-DD). The renderer slices features to this "
+        "asof_date. Required for the parquet source; optional for neon "
+        "(defaults to max(asof_date) in market.thematic_features_daily)."
+    ),
 )
 @click.option(
     "--rendered-at-pt",
@@ -4992,9 +5063,10 @@ def dashboard() -> None:
     ),
 )
 def dashboard_render_etf_html(
-    features_path: str,
+    source: str,
+    features_path: str | None,
     registry_path: str,
-    asof: str,
+    asof: str | None,
     rendered_at_pt: str,
     history_days: int,
     output_path: str,
@@ -5002,29 +5074,75 @@ def dashboard_render_etf_html(
 ) -> None:
     """Render the ETF-ranks self-contained HTML dashboard.
 
-    Reads `thematic_features_daily.parquet` + `sector_registry.parquet` and
-    writes a single deterministic HTML file. Sub-second runtime on the
-    operator's machine for ~94 rows × 30-day history.
+    Default source is the canonical Neon ``market.thematic_features_daily``
+    store (kept fresh by other jobs); ``--source parquet`` (or passing
+    ``--features``) reads the local cache for offline / back-compat use. The
+    sector registry stays a parquet (human-edited config). Fails loud on a
+    zero-row Neon result — never silently publishes a stale parquet.
     """
+    import os
+    import sys
     from datetime import date as _date
 
-    from rainier.dashboard.render_etf import write_etf_html
+    import pandas as _pd
 
-    asof_dt = _date.fromisoformat(asof)
-    # CLI default points at the cache path; pass None to the renderer when
-    # the file doesn't exist so the renderer's fallback kicks in cleanly
-    # (no spurious "file not found" surprise).
+    from rainier.dashboard.render_etf import render_etf_html
+
+    # Passing an explicit --features implies the parquet source (back-compat).
+    if features_path is not None:
+        source = "parquet"
+
     names_arg: str | None = names_path if Path(names_path).exists() else None
-    written = write_etf_html(
-        features_path=features_path,
-        registry_path=registry_path,
-        output_path=output_path,
+    registry = _pd.read_parquet(registry_path)
+
+    if source == "parquet":
+        eff_features = features_path or "data/cache/thematic_features_daily.parquet"
+        if not Path(eff_features).exists():
+            click.echo(f"error: features parquet not found: {eff_features}", err=True)
+            sys.exit(1)
+        if asof is None:
+            click.echo(
+                "error: --asof is required for the parquet source", err=True
+            )
+            sys.exit(1)
+        features = _pd.read_parquet(eff_features)
+        asof_dt = _date.fromisoformat(asof)
+    else:  # neon (default)
+        from rainier.dashboard import neon_source as _ns
+        from rainier.db.engine import get_engine
+
+        # get_engine() reads os.environ["DATABASE_URL"] directly and does NOT
+        # load .env; load it first so the cron path (uv run from PROJECT_DIR)
+        # finds the var.
+        _ns.ensure_env_loaded()
+        engine = get_engine()
+        try:
+            asof_dt = (
+                _date.fromisoformat(asof)
+                if asof is not None
+                else _ns.latest_etf_asof(engine)
+            )
+            features = _ns.load_etf_features_neon(engine, asof_dt)
+        except _ns.EmptyNeonResultError as exc:
+            click.echo(f"error: {exc}", err=True)
+            sys.exit(1)
+        finally:
+            engine.dispose()
+
+    html = render_etf_html(
+        features=features,
+        registry=registry,
         asof=asof_dt,
         rendered_at_pt=rendered_at_pt,
         history_days=history_days,
         names_path=names_arg,
     )
-    click.echo(f"wrote ETF dashboard -> {written}")
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp.write_text(html, encoding="utf-8")
+    os.replace(tmp, out)
+    click.echo(f"wrote ETF dashboard -> {out}")
 
 
 @dashboard.command("render-combined")
