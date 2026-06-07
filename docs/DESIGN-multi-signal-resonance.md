@@ -33,7 +33,7 @@ The win-rate rises with agreement — a promising, monotone signal. **But treat 
 
 Right now there is no integrated system — just a pile of exploratory scripts. Two things exist:
 
-- **A 26-signal panel** (`regime_signal_search.build_signals`), each emitting a daily risk-on (1) / risk-off (0) series, all with lookback ≤ 66.
+- **An exploratory signal panel** (`regime_signal_search.build_signals`), each emitting a daily risk-on (1) / risk-off (0) series. It is *unfiltered* — most members today use >66 lookback and two use expanding medians; v1 takes only its **≤66 subset** and rewrites the expanding members (see §5.2).
 - **A timing gate** — the asymmetric SMA gate (enter when QQQ > SMA22, exit when QQQ < SMA44). In-window it was the single best risk-adjusted design (Calmar ≈ 1.37, #2 of 270 in a full sweep, on a stable plateau).
 
 ```
@@ -161,7 +161,7 @@ raw resonance r[t]  ──►  (1) curve: size = clamp((r−r_lo)/(r_hi−r_lo),
                     ──►  (4) rebalance only when the held step actually changes
 ```
 
-Boot: at the first valid bar `t0`, held_step = target_step[t0] (no dwell required — there is no prior to confirm against). Moves are **direct** to the confirmed target (e.g. 0→1 in one transition once the new step holds `dwell` bars), not forced stepwise through ½. Hysteresis lives **only** here — not on the raw score (the §5.3 over-spec is removed). Deterministic and unit-testable; a test asserts a fixed input sequence yields a fixed held-step sequence.
+Boot: at the first valid bar `t0` (after the §5.5c per-member warmup), held_step = target_step[t0] — provisional, taken without confirmation since there's no prior; every *subsequent* move still requires the full `dwell`. Moves are **direct** to the confirmed target (e.g. 0→1 in one transition once the new step holds `dwell` bars), not forced stepwise through ½. The dwell counter resets whenever target_step changes value. Hysteresis lives **only** here — not on the raw score (the §5.3 over-spec is removed). Deterministic and unit-testable; a test asserts a fixed input sequence yields a fixed held-step sequence.
 
 ### 5.5 No-lookahead + costs
 
@@ -207,7 +207,7 @@ In-window per-regime numbers (2021/2022/2023-24/2025) are **descriptive only**, 
 
 | Test | Control (precisely pinned) | Pass criteria |
 |---|---|---|
-| Matched-exposure | (a) **constant** scaler = the resonance sizer's *exact* mean weight; (b) **vol-target** scaler matched on *both* mean exposure AND realized-vol budget. Both computed on the **frozen §6.2 test slice**, not re-fit. | resonance must beat the **better** of (a)/(b) on Calmar — else the "edge" is just de-levering, and we ship the simpler vol-target instead |
+| Matched-exposure | (a) **constant** scaler = the resonance sizer's *exact* mean weight; (b) **vol-target** scaler matched on *both* mean exposure AND realized-vol budget. **Per slice:** on each §6.2 OOS slice, both controls' mean is re-derived from *that slice's own* realized resonance-weight series (not carried across underlyings). | resonance must beat the **better** of (a)/(b) on Calmar **on every §6.2 OOS slice** (2023→now, pre-2010 synthetic, different-underlying) — not one cherry-picked slice. Else the "edge" is just de-levering, and we ship the simpler vol-target instead. |
 
 ### 6.4 Overfit guard (hard, not vibes)
 
