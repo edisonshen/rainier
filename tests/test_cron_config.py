@@ -51,6 +51,26 @@ def test_market_breadth_keeps_compute_drops_publish(jobs: dict[str, dict]) -> No
     assert not PUBLISH_SCRIPT_RE.search(cmd)
 
 
+def test_market_breadth_refreshes_benchmark_ohlcv(jobs: dict[str, dict]) -> None:
+    """REGRESSION (benchmark-ohlcv-spy-stale): the daily breadth cron must invoke
+    `backfill-spy`, the ONLY command that writes market.benchmark_ohlcv (via
+    _dual_write_benchmark_pg). Before this fix the daily job ran backfill-ohlcv +
+    compute-indicators but never backfill-spy, so benchmark_ohlcv (SPY price pane
+    fengshen reads) silently went stale — breadth/thematic kept current while the
+    SPY OHLCV table lagged from 2026-05-29 onward.
+
+    The job is enabled and the command runs backfill-spy --incremental so today's
+    SPY bar lands in market.benchmark_ohlcv every trading day."""
+    job = jobs["market-breadth-daily"]
+    assert job["enabled"] is True
+    cmd = job["command"]
+    assert "backfill-spy" in cmd, (
+        "market-breadth-daily must run `backfill-spy` to keep market.benchmark_ohlcv "
+        "fresh — without it the SPY price pane fengshen reads goes stale"
+    )
+    assert "--incremental" in cmd
+
+
 def test_no_enabled_job_publishes_to_fengshen(jobs: dict[str, dict]) -> None:
     """Net invariant: zero enabled jobs git-push HTML to fengshen-site."""
     offenders = [
