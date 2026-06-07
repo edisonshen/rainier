@@ -98,9 +98,9 @@ v1 is **not** that naive version. Two differences, both of which we **A/B test**
 | `SignalPanel` | registry of ≤66-lookback signals; each `(df) → risk-on series ∈ {0,1}` | new `src/rainier/signals/panel.py` |
 | `ResonanceScorer` | panel + per-signal weights → daily score ∈ [0,1] | new `src/rainier/signals/resonance.py` |
 | `ResonanceGate` | dual-threshold state machine → daily **per-asset target weights** {TQQQ} | new `src/rainier/signals/resonance_gate.py` |
-| Daily-MTM sim | per-asset weights → equity, no lookahead, costs | `src/rainier/backtest/` (productionize `scripts/leveraged_common.py`) |
+| Daily-MTM sim | per-asset weights → equity, no lookahead, costs | `src/rainier/backtest/` (productionize `run_portfolio` from `scripts/regime_switch_study.py` — the per-asset variant; `leveraged_common.sim` is its scalar single-asset cousin) |
 
-**New boundary — NOT `SignalEmitter`.** `SignalEmitter` returns `list[Signal]` (discrete entry/SL/TP trades); the current engine consumes discrete trades and can't represent a held daily weight. v1 adds a **`WeightStrategy`** protocol — `(df, symbol, timeframe) → daily per-asset weight series` (a dict like `{TQQQ: 0 or 1}`, weights ≥0 summing ≤1, remainder cash). Per-asset (not a bare boolean) so a future non-cash risk-off is representable without a redesign; matches the existing `run_portfolio` sim, which already takes a per-asset weights dict. Additive: it doesn't touch `SignalEmitter` or the discrete-trade engine.
+**New boundary — NOT `SignalEmitter`.** `SignalEmitter` returns `list[Signal]` (discrete entry/SL/TP trades); the current engine consumes discrete trades and can't represent a held daily weight. v1 adds a **`WeightStrategy`** protocol — `(df, symbol, timeframe) → daily per-asset weight series` (a dict like `{TQQQ: 0 or 1}`, weights ≥0 summing ≤1, remainder cash). Per-asset (not a bare boolean) so a future non-cash risk-off is representable without a redesign; matches the existing **`run_portfolio`** sim (`scripts/regime_switch_study.py`), which already takes a per-asset weights dict (`{asset: series}`). Additive: it doesn't touch `SignalEmitter` or the discrete-trade engine.
 
 *Reference artifacts (local, NOT committed in this PR): the panel + sim live only as untracked exploratory scripts (`scripts/regime_signal_search.py`, `scripts/leveraged_common.py`, `scripts/full_combo_search.py`, `scripts/resonance_study.py`). Numbers in this doc are exploratory, reproduced via those scripts. v1's **first step** is to promote them into `src/rainier/` (committed) per the `CLAUDE.md` module map.*
 
@@ -129,13 +129,13 @@ v1 is **trend-only** (Q7) — every member is a *risk-on / uptrend-confirming* s
 ### 5.4 The dual-threshold gate (state machine)
 
 ```
-score r[t]  ──►  if state==CASH  and r[t] ≥ BUY  → state = TQQQ (enter at close)
-            ──►  if state==TQQQ  and r[t] ≤ SELL → state = CASH (sell all)
+score r[t]  ──►  if state==CASH  and r[t] ≥ BUY  → state := TQQQ
+            ──►  if state==TQQQ  and r[t] ≤ SELL → state := CASH
             ──►  else                            → hold state
        BUY > SELL ; the gap is the hysteresis band.
 ```
 
-Boot: at the first valid bar `t0` (after the §5.5c per-member warmup), state = TQQQ if `r[t0] ≥ BUY` else CASH. Deterministic and unit-testable — a fixed score sequence yields a fixed state sequence; a test asserts it. No second hysteresis layer, no sizing curve.
+`state[t]` is decided on **close[t]** and is **effective on the t→t+1 return** (the +1 shift in §5.5) — no same-close execution, no lookahead. Boot: at the first valid bar `t0` (after the §5.5c per-member warmup), state = TQQQ if `r[t0] ≥ BUY` else CASH. Deterministic and unit-testable — a fixed score sequence yields a fixed state sequence; a test asserts it. No second hysteresis layer, no sizing curve.
 
 ### 5.5 No-lookahead + costs
 
