@@ -86,9 +86,14 @@ LAYER 1 — TIMING (fast):        LAYER 2 — CONVICTION (resonance):
 
 This directly uses the confirmed 48%→62% win-rate edge as a **sizing** signal, where lag doesn't hurt, instead of a **timing** signal, where it does.
 
-### Your "confirmed buy" idea fits here
+### Your "confirmed buy" is a *second* axis — pullback resonance
 
-Your example — *buy TQQQ when QQQ<SMA10 AND VIX<23 AND fractal buy AND SPY<SMA10 AND breadth<30%* — is exactly a **high-conviction entry**: a cluster of signals resonating. In this design that's not a separate rule; it's the **high end of the resonance score**. A confirmed buy = gate ON **and** resonance above a high threshold → full size. The design generalizes your 5-signal idea into a tunable conviction dial across the whole panel.
+A distinction the design must respect: your example — *QQQ<SMA10 AND SPY<SMA10 AND breadth<30% AND VIX<23 AND fractal buy* — is built from **oversold / pullback** conditions (price *below* short MAs, washed-out breadth). The trend-resonance score above counts *risk-on* signals (price *above* MAs), so this exact cluster would score **low**, not high. They are two different axes:
+
+- **Trend resonance** — "the uptrend is broadly confirmed" (price above MAs, momentum positive, vol calm). Drives Layer-2 **sizing**.
+- **Pullback resonance** — "an oversold dip is bottoming *inside* an uptrend" (price below SMA10, breadth washed out, fractal turn, VIX not panicked). A separate **entry** trigger for buying the dip.
+
+v1 models your confirmed-buy as an **optional pullback sub-score / alternate entry**, regime-gated (only buy dips while a slower trend filter is still up — don't catch knives in a real bear), **not** as the high end of trend resonance. Richer, and an open decision (Q7).
 
 ### What it looks like day to day
 
@@ -109,8 +114,10 @@ Your example — *buy TQQQ when QQQ<SMA10 AND VIX<23 AND fractal buy AND SPY<SMA
 |---|---|---|
 | `SignalPanel` | registry of ≤66-lookback signals; each `(df) → risk-on series ∈ {0,1}` | new `src/rainier/signals/panel.py` |
 | `ResonanceScorer` | panel → daily conviction score ∈ [0,1] (weighted consensus) | new `src/rainier/signals/resonance.py` |
-| `ResonanceStrategy` | Layer-1 gate × Layer-2 size → daily target weight (implements/extends the `SignalEmitter` boundary) | new `src/rainier/signals/resonance_strategy.py` |
-| Daily-MTM sim | weight → equity, no lookahead, financing + costs | `src/rainier/backtest/` (productionize the prototype in `scripts/leveraged_common.py`) |
+| `ResonanceStrategy` | Layer-1 gate × Layer-2 size → daily **target-weight series** ∈ [0,1] | new `src/rainier/signals/resonance_strategy.py` |
+| Daily-MTM sim | weight series → equity, no lookahead, financing + costs | `src/rainier/backtest/` (productionize the prototype in `scripts/leveraged_common.py`) |
+
+**New boundary — NOT `SignalEmitter`.** The existing `SignalEmitter` returns `list[Signal]` (discrete entry/SL/TP trades) and the current engine consumes discrete trades — it *cannot* represent a continuously-sized daily weight. v1 introduces a distinct **`WeightStrategy`** protocol — `(df, symbol, timeframe) → daily target-weight series ∈ [0,1]` — plus a weight-consuming backtest path (the daily-MTM sim). This is **additive**: it does not change `SignalEmitter` or the discrete-trade engine, which keep serving the pin-bar/fractal strategies.
 
 *Note: the panel signals and the daily-MTM sim currently live only as untracked exploratory scripts (`scripts/regime_signal_search.py`, `scripts/leveraged_common.py`). v1 promotes them into `src/rainier/` per the module map in `CLAUDE.md`; the scripts are the reference implementation, not the shipping location.*
 
@@ -173,6 +180,7 @@ Signals computed on close[t]; target weight applied to t+1 return (shift +1). Wa
 - **Q4 — Panel weighting:** equal-per-signal (simple) or **category-balanced** (so trend doesn't dominate)? I lean category-balanced.
 - **Q5 — Breadth proxy now or later?** Build the "% of top QQQ holdings above MA" breadth signal for v1, or ship v1 without it and add later?
 - **Q6 — Max conviction cap:** cap size at full 3× TQQQ, or allow a *defensive* sub-full mode (e.g. never exceed 1× in the first N days after a regime flip)?
+- **Q7 — Pullback axis in v1?** Include the second (pullback/oversold) conviction axis — your confirmed-buy idea — in v1, or ship trend-resonance sizing first and add pullback entries in v2? Needs the breadth proxy (Q5) to be at its best.
 
 ---
 
