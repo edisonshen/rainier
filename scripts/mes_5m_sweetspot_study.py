@@ -743,19 +743,31 @@ def _execute_trade(entry_bar: int, direction: str, xc: ExitConfig,
     while j < n:
         # Intrabar risk (ATR stop/target) takes precedence over the close-based exits,
         # INCLUDING the session-end flatten: a stop touched on the session's last bar must
-        # fill at the stop, not at that bar's close. Within a bar a stop is assumed hit
-        # before a target (conservative). The stop/target sides flip with direction.
+        # fill at the stop, not at that bar's close. The bar OPEN is the one price we know
+        # happened first, so a gap THROUGH the stop or target is resolved at the open before
+        # any ambiguous intrabar ordering: a bar that opens past the target is a target fill
+        # even if its later range also dips to the stop (and vice-versa). Only when the open
+        # is BETWEEN stop and target do we fall back to the conservative "stop before target"
+        # rule for the unknown intrabar sequence. The stop/target sides flip with direction.
         if xc.kind == "atr":
             if short:
-                if h[j] >= stop:
-                    return j, max(o[j], stop), "stop"
+                if o[j] >= stop:                 # gap-open through the stop (above)
+                    return j, o[j], "stop"
+                if o[j] <= tp:                   # gap-open through the target (below)
+                    return j, o[j], "target"
+                if h[j] >= stop:                 # ambiguous bar: stop first (conservative)
+                    return j, stop, "stop"
                 if low[j] <= tp:
-                    return j, min(o[j], tp), "target"
+                    return j, tp, "target"
             else:
-                if low[j] <= stop:
-                    return j, min(o[j], stop), "stop"
+                if o[j] <= stop:                 # gap-open through the stop (below)
+                    return j, o[j], "stop"
+                if o[j] >= tp:                   # gap-open through the target (above)
+                    return j, o[j], "target"
+                if low[j] <= stop:               # ambiguous bar: stop first (conservative)
+                    return j, stop, "stop"
                 if h[j] >= tp:
-                    return j, max(o[j], tp), "target"
+                    return j, tp, "target"
         if flatten[j]:  # force-close at session end / RTH close (covers gap/overnight)
             return j, c[j], "session_end"
         if xc.kind == "time":
@@ -1452,6 +1464,8 @@ def build_verdict(best: Row, baseline: Row, bh: Result, wf) -> str:
     # Attribute the win to the filters ACTUALLY present in the winning config (don't hardcode
     # "trend + VWMA" — the sweet spot might be TD-based, or bare with just a better exit).
     e = best.entry
+    winner_has_filters = any((e.require_vwma, e.require_ribbon, e.require_stacked,
+                              e.require_td, e.require_hvn))
     present = []
     if e.require_vwma:
         present.append("the VWMA55 reclaim")
@@ -1505,7 +1519,7 @@ walk-forward row, not the leaderboard top, is the honest read.</p></div>
 {'lower' if b.max_dd < bh.max_dd else 'higher'} drawdown ({pct(b.max_dd)} vs {pct(bh.max_dd)}).</li>
 <li>vs <b>bare fractal</b> ({pct(base.total_return)}, Ret/DD {num(base.mar)}): confluence
 {'improves' if beats_base else 'does NOT improve'} the risk-adjusted result.
-{base_note if beats_base else not_beat_note}</li>
+{base_note if (beats_base or not winner_has_filters) else not_beat_note}</li>
 <li>{oos_note}</li>
 </ul>
 <p style="margin:8px 0 0">Honest caveat: 5 months is one broad regime. Even a config that survives this

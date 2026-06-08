@@ -777,6 +777,24 @@ def test_short_drags_when_combined_underperforms_long_even_if_short_leg_ok(mod):
     assert "matches" not in html
 
 
+def test_verdict_uses_no_confluence_note_when_bare_fractal_wins(mod):
+    """Regression (codex iter-3 P3): if the sweet spot IS the bare fractal (no confluence filters),
+    the 'vs bare fractal' line must use the no-filter base_note, NOT the generic 'filters discarded
+    winners' note — the winner has no filters to have discarded anything."""
+    bare = mod.EntryConfig(False, False, False, False, False)   # no confluence filters
+    best = _stub_row(mod, 0.094, 3.0, "long")
+    best = mod.Row(bare, mod.ExitConfig("time", bars=48), best.res, mode="long")
+    baseline = best                                            # winner == the bare baseline
+    bh = mod.Result(trades=[], equity=np.array([1.0]))
+    bh.total_return = 0.065
+    bh.mar = 0.7
+    bh.max_dd = 0.097
+    wf = _stub_wf(mod, 0.05, 2.7, n=74)
+    html = mod.build_verdict(best, baseline, bh, wf)
+    assert "uses NO confluence filter" in html
+    assert "filters\n                     discarded" not in html and "discarded winning dip-buys" not in html
+
+
 def test_combined_verdict_conservative_without_long_wf(mod):
     """With no long walk-forward to compare against, the section must NOT claim combined beats long."""
     long_best = _stub_row(mod, 0.06, 3.7, "long")
@@ -980,6 +998,79 @@ def test_atr_stop_beats_session_end_on_last_bar(mod):
     assert res.trades[0].exit_bar == 2
     # filled at min(open=100, stop=95) = 95, not the bar close (99)
     assert res.trades[0].exit_price == pytest.approx(95.0)
+
+
+def test_long_gap_open_through_target_books_target_not_stop(mod):
+    """Regression (codex iter-3 P2): a long bar that OPENS above the target is a target fill at the
+    open, even if the same bar's later range also dips below the stop. The open is known to occur
+    first, so booking it as a stop would mis-report a winner as a loser."""
+    base = pd.Timestamp("2026-02-02 14:00:00+00:00")
+    rows = [
+        {"timestamp": base, **_bar(100, 101, 99, 100.5)},                              # signal bar
+        {"timestamp": base + pd.Timedelta(minutes=5), **_bar(100, 101, 99, 100.0)},    # entry @ open=100
+        # next bar GAPS open to 112 (above tp=110), then its range also crosses stop=95 (low=90).
+        {"timestamp": base + pd.Timedelta(minutes=10), **_bar(112, 113, 90, 95.0)},
+        {"timestamp": base + pd.Timedelta(minutes=15), **_bar(95, 96, 94, 95.0)},
+    ]
+    df = pd.DataFrame(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = np.full(len(df), 5.0)   # stop=100-5=95, tp=100+2*5=110
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("atr", atr_k=1.0, rr=2.0)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last, bars_per_yr=1e5, n_years=0.01)
+    assert res.n == 1
+    assert res.trades[0].reason == "target"            # NOT "stop"
+    assert res.trades[0].exit_price == pytest.approx(112.0)   # filled at the gap-open, above tp
+    assert res.trades[0].ret > 0
+
+
+def test_short_gap_open_through_target_books_target_not_stop(mod):
+    """Mirror of the long gap case: a short bar that OPENS below its target is a target fill at the
+    open, even if the bar's later range also spikes above the stop."""
+    base = pd.Timestamp("2026-02-02 14:00:00+00:00")
+    rows = [
+        {"timestamp": base, **_bar(100, 101, 99, 100.0)},
+        {"timestamp": base + pd.Timedelta(minutes=5), **_bar(100, 101, 99, 100.0)},    # entry @ open=100
+        # short: stop=105 (above), tp=90 (below). bar gaps open to 88 (below tp), high 110 (above stop).
+        {"timestamp": base + pd.Timedelta(minutes=10), **_bar(88, 110, 87, 105.0)},
+        {"timestamp": base + pd.Timedelta(minutes=15), **_bar(88, 89, 87, 88.0)},
+    ]
+    df = pd.DataFrame(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = np.full(len(df), 5.0)   # stop=100+5=105, tp=100-2*5=90
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("atr", atr_k=1.0, rr=2.0)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                       bars_per_yr=1e5, n_years=0.01, direction="short")
+    assert res.n == 1
+    assert res.trades[0].reason == "target"
+    assert res.trades[0].exit_price == pytest.approx(88.0)   # gap-open below tp
+    assert res.trades[0].ret > 0
+
+
+def test_long_gap_open_through_stop_fills_at_open(mod):
+    """A long bar that gaps OPEN below the stop fills at the (worse) open, not the stop level."""
+    base = pd.Timestamp("2026-02-02 14:00:00+00:00")
+    rows = [
+        {"timestamp": base, **_bar(100, 101, 99, 100.5)},
+        {"timestamp": base + pd.Timedelta(minutes=5), **_bar(100, 101, 99, 100.0)},    # entry @ 100
+        {"timestamp": base + pd.Timedelta(minutes=10), **_bar(90, 91, 89, 90.0)},      # gaps below stop=95
+        {"timestamp": base + pd.Timedelta(minutes=15), **_bar(90, 91, 89, 90.0)},
+    ]
+    df = pd.DataFrame(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = np.full(len(df), 5.0)   # stop=95
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("atr", atr_k=1.0, rr=2.0)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last, bars_per_yr=1e5, n_years=0.01)
+    assert res.trades[0].reason == "stop"
+    assert res.trades[0].exit_price == pytest.approx(90.0)   # filled at the gap-open, below the stop
 
 
 # ---------------------------------------------------------------------------
