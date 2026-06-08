@@ -352,6 +352,25 @@ def test_in_rth_filter(mod):
     assert out[1]      # 15:00 UTC inside RTH
 
 
+def test_rth_entry_never_fills_outside_rth(mod):
+    """An RTH-gated signal on the LAST RTH bar (entry would fill at the cash close, outside
+    RTH) must be suppressed (codex P2 regression)."""
+    # Build a fractal-positive series, then stamp the LAST (signal) bar at 19:55 UTC so its
+    # t+1 entry bar would be 20:00 (outside RTH). The RTH config must drop that signal.
+    df = _df(_fractal_positive_series())
+    base = mod.fractal_up_trend(df)
+    sig_bar = int(np.argmax(base))
+    assert base[sig_bar]
+    # shift timestamps so the signal bar lands at 19:55 UTC (last RTH bar); its entry bar
+    # (t+1) is then 20:00 UTC, OUTSIDE RTH.
+    anchor = pd.Timestamp("2026-02-02 19:55:00+00:00")
+    df["timestamp"] = [anchor + pd.Timedelta(minutes=5 * (i - sig_bar)) for i in range(len(df))]
+    rth_cfg = mod.EntryConfig(False, False, False, False, True)  # require_rth
+    e = mod.compute_entries(df, rth_cfg)
+    # signal bar is in RTH but its entry bar (20:00) is OUT of RTH → suppressed
+    assert not e[sig_bar]
+
+
 # ---------------------------------------------------------------------------
 # regression: HVN add-on is actually wired into compute_entries + the grid
 # ---------------------------------------------------------------------------

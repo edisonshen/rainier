@@ -479,7 +479,13 @@ def compute_entries(df: pd.DataFrame, ec: EntryConfig,
     if ec.require_td:
         sig &= get("td", lambda: td_buy_context(df, lookback=6, min_count=7))
     if ec.require_rth:
-        sig &= get("rth", lambda: in_rth(df))
+        rth = get("rth", lambda: in_rth(df))
+        # The entry fills NEXT bar (t+1), so the entry bar must also be in RTH — otherwise an
+        # entry on the last RTH bar (e.g. 19:55) fills at 20:00 (outside RTH) and is never
+        # flattened at the cash close. Require both the signal bar AND its successor in RTH.
+        next_rth = np.roll(rth, -1)
+        next_rth[-1] = False
+        sig &= rth & next_rth
     if ec.require_hvn:
         sig &= get("hvn", lambda: hvn_proximity(df))
     return sig
@@ -878,7 +884,9 @@ def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
     top = ranked[:25]
     n_thin = len(rows) - len(robust)
 
-    top_rows = "\n".join(f"<tr{' style=\"background:#0e1714\"' if r is best else ''}>{_row_cells(r)}</tr>" for r in top)
+    hl = " style='background:#0e1714'"  # highlight the featured sweet-spot row
+    top_rows = "\n".join(
+        f"<tr{hl if r is best else ''}>{_row_cells(r)}</tr>" for r in top)
 
     bh_row = (
         f"<tr><td>Buy &amp; hold MES</td><td>—</td><td class='r'>—</td><td class='r'>—</td>"
