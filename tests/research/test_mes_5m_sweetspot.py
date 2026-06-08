@@ -141,6 +141,20 @@ def test_td_buy_context_window(mod):
     assert not ctx[-1]         # far past the bottom
 
 
+def test_td_buy_context_uses_completion_event_not_running_count(mod):
+    """In a LONG selloff the count climbs past min_count; context must NOT stay true for every
+    later bar — only within `lookback` of the completion event (codex P2 regression)."""
+    # 30 strictly-descending bars: buy-setup completes (count hits 7) at index 4+6 = 10,
+    # then keeps climbing to 9, 10, ... Context must be False well after the completion window.
+    closes = list(np.arange(200, 170, -1.0))
+    rows = [_bar(c, c + 0.5, c - 0.5, c) for c in closes]
+    df = _df(rows)
+    ctx = mod.td_buy_context(df, lookback=6, min_count=7)
+    assert ctx[10]        # completion event (count reaches 7) → within window
+    assert ctx[15]        # still within lookback (16th-ish bar)
+    assert not ctx[-1]    # many bars after completion, deep in the selloff → NOT true anymore
+
+
 # ---------------------------------------------------------------------------
 # ribbon filters
 # ---------------------------------------------------------------------------
@@ -327,6 +341,25 @@ def test_simulate_flattens_at_session_end(mod):
     assert res.trades[0].reason == "session_end"
     # exit bar is the last bar of session 1 (index 2)
     assert res.trades[0].exit_bar == 2
+
+
+def test_session_last_bar_rolls_at_17et_not_utc_midnight(mod):
+    """The CME equity session rolls at 17:00 ET, not 00:00 UTC (codex P2 regression).
+
+    EST: 17:00 ET = 22:00 UTC. Bars at 21:55 ET-eve and 22:00 ET-eve straddle the close; the
+    21:55 (= last bar of the trading day) must be the session_last bar, and 00:00 UTC must NOT.
+    """
+    ts = [
+        "2026-02-02 21:55:00+00:00",  # 16:55 ET — last bar before the 17:00 ET close
+        "2026-02-02 22:00:00+00:00",  # 17:00 ET — opens the next trading day
+        "2026-02-03 00:00:00+00:00",  # 19:00 ET — same trading day, mid-session (NOT boundary)
+        "2026-02-03 02:00:00+00:00",  # 21:00 ET — still same trading day (trailing bar)
+    ]
+    df = pd.DataFrame([{"timestamp": pd.Timestamp(t), **_bar(100, 101, 99, 100.0)} for t in ts])
+    out = mod.session_last_bar(df)
+    assert out[0]       # 16:55 ET is the last bar before the 17:00 ET close
+    assert not out[1]   # 17:00 ET opens the next trading day
+    assert not out[2]   # 00:00 UTC is mid-session of the new trading day, NOT a boundary
 
 
 def test_rth_last_bar_marks_cash_close_edt(mod):

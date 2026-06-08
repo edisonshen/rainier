@@ -274,26 +274,32 @@ def td_setup_buy(df: pd.DataFrame, completed: int = 9) -> np.ndarray:
 
 
 def td_buy_context(df: pd.DataFrame, lookback: int = 6, min_count: int = 7) -> np.ndarray:
-    """True at bar t if a buy-setup of >= min_count completed within the last `lookback`
-    bars — i.e. recent downside exhaustion, the timing window the operator buys into.
+    """True at bar t if a buy-setup COMPLETION (the count crossing up through `min_count`)
+    occurred within the last `lookback` bars — i.e. recent downside exhaustion, the timing
+    window the operator buys into.
 
-    Uses the rolling buy-setup count: at each bar, was the count >= min_count at some
-    point in [t-lookback, t]? This is the practical "we are near a TD7/9 bottom" filter.
+    We roll the COMPLETION EVENT, not the raw running count. Using `count >= min_count` would
+    stay true for every bar of a long selloff (the count keeps climbing past min_count), which
+    would admit entries many bars after the actual TD7/9 print. A completion event is the bar
+    where the run first reaches `min_count` (count == min_count, the prior bar was below it).
     """
     c = df["close"].to_numpy()
     n = len(df)
     run = 0
-    counts = np.zeros(n, dtype=int)
+    event = np.zeros(n, dtype=bool)
     for t in range(n):
+        prev_run = run
         if t >= 4 and c[t] < c[t - 4]:
             run += 1
         else:
             run = 0
-        counts[t] = run
+        # completion: the run crosses UP through min_count exactly once per setup
+        if run == min_count and prev_run == min_count - 1:
+            event[t] = True
     out = np.zeros(n, dtype=bool)
     for t in range(n):
         lo = max(0, t - lookback)
-        if counts[lo : t + 1].max(initial=0) >= min_count:
+        if event[lo : t + 1].any():
             out[t] = True
     return out
 
@@ -390,9 +396,22 @@ def in_rth(df: pd.DataFrame) -> np.ndarray:
 
 
 def session_last_bar(df: pd.DataFrame) -> np.ndarray:
-    """True at the last bar of each UTC calendar day (for end-of-session flatten)."""
-    d = df["timestamp"].dt.date
-    return (d != d.shift(-1)).to_numpy()
+    """True at the last bar of each CME equity-futures trading day (for end-of-session flatten).
+
+    The CME equity-index session runs 18:00 ET → 17:00 ET next day (with a 17:00–18:00 ET
+    break). The trading "day" therefore rolls at 17:00 ET, NOT at 00:00 UTC. Bucketing by UTC
+    calendar date would force flats around 00:00 UTC mid-session and hold across the real
+    break; we bucket by ET trading-day (a bar at/after 17:00 ET belongs to the next day) so the
+    flatten lands at the actual session close.
+    """
+    ts_utc = df["timestamp"]
+    if ts_utc.dt.tz is None:
+        ts_utc = ts_utc.dt.tz_localize("UTC")
+    et = ts_utc.dt.tz_convert("America/New_York")
+    # shift forward 7h so 17:00 ET maps to 00:00 of the next trading day → date() buckets it
+    trading_day = (et + pd.Timedelta(hours=7)).dt.date
+    td = pd.Series(trading_day, index=df.index)
+    return (td != td.shift(-1)).to_numpy()
 
 
 def rth_last_bar(df: pd.DataFrame) -> np.ndarray:
@@ -752,7 +771,11 @@ class Row:
     res: Result
 
 
-def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float) -> list[Row]:
+def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float,
+             score_start: int = 0) -> list[Row]:
+    """Sweep every entry×exit config. `score_start` (>0 when `df` carries a leading warm-up
+    buffer) masks entries before it and excludes warm-up bars from the risk metrics, so a
+    warmed grid is comparable to a warmed single run."""
     atr_s = atr(df, 14).to_numpy()
     vwma_s = vwma(df, 55).to_numpy()
     sess_last = session_last_bar(df)
@@ -762,12 +785,16 @@ def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float) -> list[Row]:
     exits = exit_grid()
     for ec in entry_grid():
         entries = compute_entries(df, ec, cache)
+        if score_start > 0:
+            entries = entries.copy()
+            entries[:score_start] = False
         if entries.sum() == 0:
             continue
-        # RTH-gated configs also flatten at the cash-session close, not just UTC day-end.
+        # RTH-gated configs also flatten at the cash-session close, not just session end.
         flatten = (sess_last | rth_last) if ec.require_rth else sess_last
         for xc in exits:
-            res = simulate(df, entries, xc, atr_s, vwma_s, flatten, bars_per_yr, n_years)
+            res = simulate(df, entries, xc, atr_s, vwma_s, flatten,
+                           bars_per_yr, n_years, score_start=score_start)
             if res.n > 0:
                 rows.append(Row(ec, xc, res))
     return rows
@@ -824,8 +851,9 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     oos_res = simulate(oos_warm, entries, is_best.exit, atr_o, vwma_o, flatten_o,
                        bars_per_yr, oos_years, score_start=warm_len)
 
-    # best-with-hindsight on OOS (the honesty benchmark)
-    oos_rows = run_grid(oos_df, bars_per_yr, oos_years)
+    # best-with-hindsight on OOS (the honesty benchmark) — warmed the SAME way as the frozen
+    # run (oos_warm + score_start) so the two rows compare like with like, not warmed-vs-cold.
+    oos_rows = run_grid(oos_warm, bars_per_yr, oos_years, score_start=warm_len)
     oos_eligible = [r for r in oos_rows if r.res.n >= MIN_TRADES] or \
                    [r for r in oos_rows if r.res.n >= 10] or oos_rows
     oos_best = max(oos_eligible, key=_mar_key)

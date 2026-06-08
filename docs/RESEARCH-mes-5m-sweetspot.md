@@ -100,8 +100,10 @@ here). The recurring pattern is clear and consistent:
   traversed quickly.
 
 This is the intuition the backtest is built to test: *the triangle is only worth taking with
-trend + VWMA confluence.* The screenshots say the bare triangle should be worse than the
-filtered one. **The data, interestingly, disagrees — see below.**
+confluence.* The data is split on which confluence: the **TD7 exhaustion-timing** filter
+genuinely improves the risk-adjusted result (the "fire right after a selloff exhausts" read
+holds up), while the **trend (VWMA/ribbon)** filters did not add value on this single
+up-trending window — see below.
 
 ---
 
@@ -121,45 +123,45 @@ samples can't win. We pick the **featured "sweet spot" as the best Ret/DD among 
 thin ~32-trade config whose ratio is a small-sample fluke. We do not crown a trade-count
 outlier.
 
-**The sweet spot:** the **bare green triangle with a 4-hour time-stop exit** —
-**+10.6% return, Ret/DD 2.75, 57% win rate, 199 trades.** It beats **buy-and-hold MES**
-(≈+7%, Ret/DD ≈0.74) on both return and drawdown. (The Ret/DD here counts *in-trade*
-drawdown — the worst the equity dipped mid-trade, not just trade-to-trade — so it is a
-conservative, honest risk figure.)
+**The sweet spot:** the **green triangle + a recent TD7 exhaustion, exited on a 2-ATR stop
+with a 3:1 reward target** (`fractal+TD7 · ATR2×RR3`) — **+6.1% return, Ret/DD 3.74,
+Sharpe 3.54, 43% win rate, 72 trades.** It beats both **buy-and-hold MES** (≈+7% return but
+Ret/DD only ≈0.72 — buy-and-hold makes a similar return while eating a far bigger drawdown)
+**and the bare green triangle** (`fractal · time48`: +9.8% return but Ret/DD 3.18, 199
+trades) on a risk-adjusted basis. (Ret/DD counts *in-trade* drawdown — the worst the equity
+dipped mid-trade — so it is a conservative, honest risk figure.)
 
-**The honest, counter-intuitive finding:** **adding the confluence filters did NOT improve
-the risk-adjusted result.** Every screenshot-inspired filter (require VWMA, require ribbon,
-require TD) *reduced* the trade count and *did not raise* Ret/DD above the bare triangle.
-Two readings, both worth stating:
+**The key finding — confluence DOES earn its keep, via the TD exhaustion filter.** The bare
+triangle makes the most raw return (+9.8%) simply by buying every sharp dip in an up-drifting
+market and holding. But it takes 199 trades and rides bigger swings to get there. Layering the
+**DeMark TD7 "downside-exhausted" timing filter** cuts the trade count to 72, *raises* the
+risk-adjusted ratio (Ret/DD 3.18 → 3.74, Sharpe 2.17 → 3.54), and pairs naturally with a tight
+2-ATR stop + 3:1 target. This matches the screenshots' intuition: the *best* green triangles
+are the ones that fire right after a selloff has exhausted itself. (The VWMA/ribbon trend
+filters, by contrast, did **not** add risk-adjusted value here — in a 5-month uptrend there
+were few sustained downtrends for them to veto. TD timing helped; trend filtering had little
+to do.)
 
-1. In this **one up-trending regime**, the market drifted higher, so "buy any sharp dip and
-   hold ~4 hours" caught the drift. The filters threw away winning dip-buys without removing
-   proportionally more losers — they cost more than they saved.
-2. The screenshots' confluence logic is a **trend/downtrend discriminator**. In a 5-month
-   uptrend there were few sustained downtrends for it to filter out, so it had little to do.
-   In a genuine bear regime the filters would likely matter — **we just don't have that data
-   to prove it.**
-
-**Walk-forward (the honest read):** we tuned the risk-adjusted-best config on the first 60%
-(warming the rolling indicators from pre-split history, as a real forward test would) and ran
-that frozen config on the unseen last 40%. The in-sample winner that the tuner picked was a
-*different* config than the full-window leaderboard's sweet spot (it only saw 60% of the
-data), and **out of sample it degraded badly — roughly +0.9% return, Ret/DD ≈ 0.67 over ~26
-trades**, far below its in-sample Ret/DD. In other words: **the specific config the
-walk-forward tuner selected did NOT generalize well** — a textbook in-sample-fit warning. The
-full-window sweet spot (bare fractal + 4h-stop) is more robust *by construction* (it's the
-simplest, highest-trade-count config), but the walk-forward result is a flashing caution
-light, not a green one. The exact numbers are in the HTML render's walk-forward table.
+**Walk-forward (the honest read — and the cold shower):** we tuned the risk-adjusted-best
+config on the first 60% (warming the rolling indicators from pre-split history, as a real
+forward test would) and ran that frozen config on the unseen last 40%. **Out of sample it went
+flat — roughly 0% return, Ret/DD ≈ 0 over ~32 trades.** The config the tuner picked on 60% of
+the data did NOT generalize. So while the *full-window* leaderboard says "TD-filtered triangle
+is the sweet spot," the walk-forward says "don't trust any single tuned config on 5 months."
+Both are true at once: the TD filter is a real, sensible edge-improver in-sample, but the
+specific tuned config is fragile out-of-sample. The exact numbers are in the HTML render's
+walk-forward table.
 
 ### Bottom line
 
-> **The operator's green-triangle entry is a real dip-buy signal on MES 5-min, best paired
-> with a simple ~4-hour time-stop; on this window it beat buy-and-hold on both return and
-> drawdown. BUT the walk-forward test is a caution light: the config the tuner picked on the
-> first 60% went flat out-of-sample, and the screenshot-driven confluence filters did not add
-> risk-adjusted value here. 5 months is one regime. Treat the sweet spot as a _hypothesis to
-> forward-test_, not a deployable edge. One bear market could flip the verdict — and the
-> filters that looked useless here are exactly what would matter then.**
+> **The operator's green-triangle entry is a real dip-buy signal on MES 5-min. The featured
+> sweet spot pairs it with a DeMark TD7 exhaustion filter and a 2-ATR / 3:1 stop-target —
+> best risk-adjusted on the full window (Ret/DD 3.74, Sharpe 3.5), beating both buy-and-hold
+> and the bare triangle. The TD timing filter genuinely helps; the trend (VWMA/ribbon)
+> filters didn't, in this one up-regime. BUT the walk-forward is a cold shower: the tuned
+> config went flat out-of-sample. 5 months is one regime. Treat the sweet spot as a
+> _hypothesis to forward-test_, not a deployable edge — the in-sample edge is real but the
+> specific tuning is fragile.**
 
 This is a *credible* result, consistent with project memory: simple signals on short windows
 look good in-sample and must be distrusted out-of-sample (`project_tqqq_regime_switching`).
@@ -189,11 +191,15 @@ deserve production wiring yet.
 
 ## Recommended next step
 
-1. **Forward-test on paper** (the only honest validation on a 5-month sample): run the bare
-   triangle + 4h-stop live-but-simulated for a quarter and compare to this study's stats.
-2. **Get more data** spanning a real downtrend (e.g. a sustained bear stretch). Only then can
-   we tell whether the confluence filters earn their keep — the screenshots strongly suggest
-   they do exactly when this window can't show.
+1. **Forward-test on paper** (the only honest validation on a 5-month sample): run the
+   featured sweet spot (triangle + TD7 exhaustion, 2-ATR / 3:1 exit) — and the simpler bare
+   triangle + 4h-stop as a control — live-but-simulated for a quarter and compare to this
+   study's stats. The walk-forward warns the tuned config is fragile, so the paper test is the
+   real arbiter.
+2. **Get more data** spanning a real downtrend (e.g. a sustained bear stretch). The TD-timing
+   filter helped here; the trend (VWMA/ribbon) filters didn't — but a 5-month uptrend can't
+   test them. Only a window with sustained downtrends can tell whether the trend filters earn
+   their keep, as the screenshots suggest they should.
 3. **If both hold up**, promote to a `FractalSignalEmitter` (separate PR) behind the existing
    `SignalEmitter` protocol. Not before.
 
@@ -221,9 +227,12 @@ volume-dependent signals. The 5-min file had 89 zero-range and 226 zero-volume b
 - `vwma(df, 55)` — `sum(hlc3·vol,55)/sum(vol,55)`, rolling (NOT session-reset). `above_vwma`
   = `close >= vwma`.
 - `td_setup_buy(df, completed=9)` / `td_buy_context(df, lookback=6, min_count=7)` — canonical
-  DeMark buy-setup: count increments while `close < close[4]`, resets otherwise; flags a
-  completed `completed` run. `td_buy_context` = "a ≥`min_count` run completed within the last
-  `lookback` bars." Rolling, not session-reset (mirrors the chart).
+  DeMark buy-setup: count increments while `close < close[4]`, resets otherwise. `td_buy_context`
+  rolls the **completion EVENT** (the bar where the count crosses up through `min_count`), NOT
+  the raw running count, and is True within `lookback` bars of an event. (Using `count ≥
+  min_count` would stay true for every bar of a long selloff as the count keeps climbing,
+  admitting entries long after the actual TD7/9 print.) Rolling, not session-reset (mirrors the
+  chart).
 - `ribbon_bullish` = `close>sma44 AND sma44 rising`. `ribbon_stacked` = `sma22>sma44>sma120`.
 - `hvn_proximity` — VRVP approximation: rolling (240-bar) volume-by-price histogram, flag the
   top-30%-volume bins as HVNs, True when the close sits in an HVN bin. Wired as an **optional
@@ -241,8 +250,10 @@ Long-only, one position at a time, full equity per trade. No lookahead: signal a
 intrabar fill at the level — **checked before** the flatten so a stop on a session-last bar
 fills at the stop), time (holds exactly `bars` bars incl. the entry bar → exit at
 `entry_bar+bars-1`), vwmaCross (close < VWMA55). A `flatten` mask force-closes at the bar
-close: it is the UTC session-end bars, **plus the RTH-close bars for RTH-gated configs** (so
-an RTH entry is closed at the cash-session close, not held into the overnight book). The
+close: it is the **CME equity-futures session-end bars** (the trading day rolls at 17:00 ET,
+computed in US/Eastern — NOT at 00:00 UTC, which would force flats mid-session), **plus the
+RTH-close bars for RTH-gated configs** (so an RTH entry is closed at the cash-session close,
+not held into the overnight book). The
 equity curve is **marked-to-market through each hold** (held bars priced at close vs entry),
 so max-DD and Sharpe capture in-trade adverse excursion, not just the final outcome. Cost =
 `ROUND_TRIP_PTS=1.0` index points per round-trip (fractional on entry).
@@ -261,7 +272,7 @@ bars), run the frozen config OOS, and also report the best-with-hindsight OOS co
 frozen one is far worse than hindsight, it was fit).
 
 ### Cost / leverage note
-MES = $5/point. The sweet spot's +10.6% ≈ the equity-curve return of a single-instrument
+MES = $5/point. The sweet spot's +6.1% ≈ the equity-curve return of a single-instrument
 timing strategy, net of cost — **not** leveraged-futures P&L on margin. On a single contract
 the winner made roughly the equivalent point total reported in the HTML render's stat cards.
 Return-on-margin would be several times larger (and so would the drawdown).
@@ -278,6 +289,7 @@ Return-on-margin would be several times larger (and so would the drawdown).
 | td setup | 30 descending closes | completes "9" exactly at the 13th bar (run hits 9) |
 | td reset | descending → up-close → descending | no "9" before the reset |
 | td context | dip then rally | True near the bottom, False far above it |
+| td context event | long sustained selloff | True near the completion event, False many bars later |
 | ribbon bullish | rising / falling series | True late in uptrend, never in downtrend; False before sma44 defined |
 | ribbon stacked | long rise | True at end, False before sma120 defined |
 | above vwma | jump above VWMA | True at the jump, False in the NaN window |
@@ -288,6 +300,7 @@ Return-on-margin would be several times larger (and so would the drawdown).
 | sim entry timing | signal at bar 0 | entry price = open[1], not close[0] |
 | sim cost | flat round-trip | net return = −cost (≈ −1pt/entry) |
 | sim session flatten | entry near session end, long time-stop | exits at session_end, not held over |
+| session boundary | bars straddling 17:00 ET | flatten at 17:00 ET, not 00:00 UTC |
 | atr precedence | stop touched on session-last bar | fills at the stop, not the bar close |
 | time-stop length | `time3` from bar 0 | holds exactly 3 bars, exits at bar 3 |
 | mark-to-market | deep mid-trade dip, flat exit | equity dips mid-hold; max-DD reflects it |
