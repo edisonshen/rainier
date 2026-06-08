@@ -778,6 +778,23 @@ def test_combined_verdict_cannot_beat_long_when_no_capped_combined_winner(mod):
     assert "barely beats" not in html
 
 
+def test_short_verdict_when_no_short_config_under_cap(mod):
+    """Regression (codex iter-4 P3): when NO short config is under the cap (`short_best=None`), the
+    'subtracts' verdict must say there was no short winner under the cap — NOT describe a nonexistent
+    'marginally positive in-sample' config, which would contradict the table's 'none under cap' row."""
+    long_best = _stub_row(mod, 0.06, 3.7, "long")
+    bh = mod.Result(trades=[], equity=np.array([1.0]))
+    bh.total_return = 0.065
+    bh.mar = 0.7
+    bh.max_dd = 0.097
+    wf_long = _stub_wf(mod, 0.051, 2.72)
+    html = mod.build_long_short_section(long_best, None, None, bh,
+                                        None, None, wf_long=wf_long)
+    assert "no short config even came in under the selectivity cap" in html
+    assert "marginally positive in-sample" not in html
+    assert "no short config came in under the trade-count cap on this window" in html  # table row
+
+
 def test_short_drags_when_combined_underperforms_long_even_if_short_leg_ok(mod):
     """Regression (codex iter-2 P2): when the SHORT-only leg looks fine OOS but the COMBINED book's
     OOS Ret/DD is still below long-only OOS, shorts did NOT add value — the verdict must stay in the

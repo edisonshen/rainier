@@ -1687,10 +1687,18 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
             + ("it did not hold up." if short_oos_fails else "it held up, but see the caveat.")
         )
     if short_drags:
+        # `sb is None` ⇒ no short config came in under the selectivity cap, so there is NO crowned
+        # short winner to characterize as profitable/unprofitable — say exactly that, rather than
+        # describing a nonexistent in-sample winner (which would contradict the table's "none under
+        # the cap" row).
+        short_status = (
+            "no short config even came in under the selectivity cap" if sb is None
+            else "the best short-only config looks unprofitable even in-sample" if sb.total_return <= 0
+            else "the best short-only config looks marginally positive in-sample but does not "
+                 "survive validation")
         short_verdict = (
-            "On this data the SHORT side <b>subtracts</b>. The best short-only config looks "
-            + ("unprofitable even in-sample" if sb is not None and sb.total_return <= 0
-               else "marginally positive in-sample but does not survive validation")
+            "On this data the SHORT side <b>subtracts</b>: "
+            + short_status
             + ", and the combined long+short book "
             + ("does NOT beat" if not combined_beats_long else "barely beats")
             + " long-only on a risk-adjusted, out-of-sample basis."
