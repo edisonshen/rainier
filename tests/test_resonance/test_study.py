@@ -10,6 +10,7 @@ from rainier.backtest.daily_mtm import PortfolioResult
 from rainier.backtest.resonance_study import (
     World,
     beats_baselines,
+    beats_one,
     combine,
     deflate,
     metrics_over,
@@ -39,6 +40,16 @@ def test_beats_baselines_needs_to_beat_both_calmar():
     bh = _perf(calmar=3.0, dd=0.60)        # buy-hold has the higher Calmar
     cand = _perf(calmar=2.5, dd=0.20)      # beats SMA Calmar but not buy-hold's
     assert not beats_baselines(cand, sma, bh)
+
+
+def test_beats_one_is_drawdown_aware():
+    # codex P2 (r8): the resonance-only anti-gaming prerequisite ("beats buy-hold")
+    # must require BOTH higher Calmar AND shallower drawdown.
+    bh = _perf(calmar=1.5, dd=0.40)
+    deeper = _perf(calmar=2.0, dd=0.50)    # higher Calmar but DEEPER drawdown
+    assert not beats_one(deeper, bh)
+    real = _perf(calmar=2.0, dd=0.30)      # higher Calmar AND shallower drawdown
+    assert beats_one(real, bh)
 
 
 def test_csv_dir_resolves_from_cwd_not_package(tmp_path, monkeypatch):

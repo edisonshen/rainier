@@ -393,6 +393,15 @@ def beats_baselines(r: PortfolioResult, sma_r: PortfolioResult,
             and r.max_dd < sma_r.max_dd and r.max_dd < bh_r.max_dd)
 
 
+def beats_one(r: PortfolioResult, base: PortfolioResult) -> bool:
+    """Beat a single baseline on BOTH Calmar and drawdown (drawdown-aware).
+
+    Used for the resonance-only anti-gaming prerequisite (§6.3 (ii)): a higher
+    Calmar with a deeper drawdown than the baseline is NOT a beat (codex P2).
+    """
+    return r.calmar > base.calmar and r.max_dd < base.max_dd
+
+
 def ab_table(world: World, cfg: GateConfig, start: str | None, end: str | None,
              label: str) -> tuple[list[ABRow], dict]:
     """The §6.3 A/B over a window: all comparators + anti-gaming flags."""
@@ -420,8 +429,10 @@ def ab_table(world: World, cfg: GateConfig, start: str | None, end: str | None,
         return beats_baselines(r, sma_r, bh_r)
 
     # anti-gaming: a combo winner must beat its SMA component AND resonance-only
-    # must beat buy-hold on this slice.
-    res_beats_bh = rows["resonance"].calmar > bh_r.calmar
+    # must beat buy-hold on this slice. "Beats buy-hold" is drawdown-aware too —
+    # higher Calmar with a DEEPER drawdown than buy-hold is NOT a beat (codex P2),
+    # consistent with the §6.3 beat definition used everywhere else.
+    res_beats_bh = beats_one(rows["resonance"], bh_r)
     out = []
     for key in ("resonance", "sma", "and", "or", "bh_tqqq", "bh_qqq"):
         r = rows[key]
