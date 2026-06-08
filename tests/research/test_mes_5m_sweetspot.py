@@ -119,6 +119,9 @@ def test_td_setup_buy_completes_at_nine(mod):
     first_true = int(np.argmax(out))
     assert out[first_true]
     assert first_true == 12
+    # fires ONCE on the crossing bar, not on every later bar of the continuing selloff
+    assert out.sum() == 1
+    assert not out[13:].any()
 
 
 def test_td_setup_buy_resets_on_up_close(mod):

@@ -253,13 +253,13 @@ def td_setup_buy(df: pd.DataFrame, completed: int = 9) -> np.ndarray:
       - A completed setup is a run of 9 consecutive bars each closing below close 4 bars
         earlier. The completed "9" flags DOWNSIDE EXHAUSTION → long-reversal timing.
 
-    Returns a bool array True at the bar where the buy-setup count reaches `completed`
-    (default 9; pass 7 for the operator's "7" early-warning context). Count is ROLLING,
-    NOT reset per session (mirrors the chart's rolling indicator).
+    Returns a bool array True ONLY on the bar where the buy-setup count first REACHES
+    `completed` (the crossing bar), not on every later bar of a continuing selloff — a "9"
+    fires once per setup, per DeMark semantics (default 9; pass 7 for the "7" context). Count
+    is ROLLING, NOT reset per session (mirrors the chart's rolling indicator).
     """
     c = df["close"].to_numpy()
     n = len(df)
-    count = np.zeros(n, dtype=int)
     out = np.zeros(n, dtype=bool)
     run = 0
     for t in range(n):
@@ -267,8 +267,8 @@ def td_setup_buy(df: pd.DataFrame, completed: int = 9) -> np.ndarray:
             run += 1
         else:
             run = 0
-        count[t] = run
-        if run >= completed:
+        # fire once, on the bar where the run crosses up into `completed`
+        if run == completed:
             out[t] = True
     return out
 
