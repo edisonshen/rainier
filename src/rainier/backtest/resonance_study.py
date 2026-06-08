@@ -62,6 +62,20 @@ SMA_EXIT = 44
 # ---------------------------------------------------------------------------
 
 def _csv_dir() -> Path:
+    """Default CSV directory, resolved from the INVOCATION context, not the
+    package install path.
+
+    ``__file__``-relative paths break for a wheel/non-editable install (they
+    point inside ``site-packages``). The data lives in the user's working
+    project, so prefer ``<cwd>/data/csv`` (and walk up to the repo root if the
+    CLI is run from a subdirectory). Fall back to the source-tree location only
+    when neither exists, so editable installs still work without a cwd match.
+    """
+    cwd = Path.cwd()
+    for base in (cwd, *cwd.parents):
+        cand = base / "data" / "csv"
+        if cand.is_dir():
+            return cand
     return Path(__file__).resolve().parents[3] / "data" / "csv"
 
 

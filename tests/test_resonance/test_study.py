@@ -41,6 +41,26 @@ def test_beats_baselines_needs_to_beat_both_calmar():
     assert not beats_baselines(cand, sma, bh)
 
 
+def test_csv_dir_resolves_from_cwd_not_package(tmp_path, monkeypatch):
+    # codex P2 (r3): the default CSV dir must resolve from the INVOCATION cwd,
+    # not the package install path (which breaks under a wheel install).
+    from rainier.backtest.resonance_study import _csv_dir
+
+    (tmp_path / "data" / "csv").mkdir(parents=True)
+    sub = tmp_path / "sub" / "nested"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)  # run from a subdirectory
+    assert _csv_dir() == tmp_path / "data" / "csv"  # walks up to find it
+
+
+def test_default_report_path_resolves_from_cwd(tmp_path, monkeypatch):
+    from rainier.backtest.resonance_report import _default_report_path
+
+    (tmp_path / "docs").mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert _default_report_path() == tmp_path / "docs" / "REPORT-resonance-gate-v1.html"
+
+
 def test_deflate_monotone_haircut():
     assert deflate(2.0, 1) == 2.0          # no penalty for a single config
     assert deflate(2.0, 24) < 2.0          # haircut grows with #configs

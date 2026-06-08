@@ -171,9 +171,24 @@ outcome — simpler wins.</div>
 </main></body></html>"""
 
 
-def write_report(out_path: Path | None = None, n_boot: int = 2000) -> Path:
-    out_path = out_path or (
-        Path(__file__).resolve().parents[3] / "docs" / "REPORT-resonance-gate-v1.html")
-    study = run_study(n_boot=n_boot)
+def _default_report_path() -> Path:
+    """Default report path resolved from the INVOCATION context (not the package
+    install tree). Prefer ``<repo-root>/docs`` discovered from cwd (so a
+    wheel-installed console script writes into the user's workspace as the CLI
+    help promises); fall back to ``<cwd>/docs`` and create it if needed."""
+    cwd = Path.cwd()
+    for base in (cwd, *cwd.parents):
+        if (base / "docs").is_dir():
+            return base / "docs" / "REPORT-resonance-gate-v1.html"
+    target = cwd / "docs"
+    target.mkdir(parents=True, exist_ok=True)
+    return target / "REPORT-resonance-gate-v1.html"
+
+
+def write_report(out_path: Path | None = None, n_boot: int = 2000,
+                 csv_dir: Path | None = None) -> Path:
+    out_path = out_path or _default_report_path()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    study = run_study(csv_dir=csv_dir, n_boot=n_boot)
     out_path.write_text(render(study))
     return out_path

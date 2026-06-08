@@ -523,11 +523,15 @@ def report(ctx, csv_path, symbol, tf):
 @cli.command(name="backtest-resonance")
 @click.option("--out", "out_path", default=None, type=click.Path(),
               help="HTML report output path (default docs/REPORT-resonance-gate-v1.html)")
+@click.option("--csv-dir", "csv_dir", default=None,
+              type=click.Path(exists=True, file_okay=False),
+              help="Directory holding {QQQ,TQQQ,SPY,VIX,IRX}_long_1D.csv "
+                   "(default: data/csv discovered from the working dir)")
 @click.option("--n-boot", default=2000, type=int,
               help="Block-bootstrap resamples for the §6.1 thesis CI")
 @click.option("--open/--no-open", "open_after", default=True,
               help="Open the rendered HTML report after writing")
-def backtest_resonance(out_path, n_boot, open_after):
+def backtest_resonance(out_path, csv_dir, n_boot, open_after):
     """Run the Multi-Signal Resonance Gate §6 A/B evaluation → HTML report.
 
     Falsifiable by construction: compares the resonance gate vs the SMA22/44
@@ -543,7 +547,8 @@ def backtest_resonance(out_path, n_boot, open_after):
     from rainier.backtest.resonance_report import write_report
 
     target = Path(out_path) if out_path else None
-    written = write_report(out_path=target, n_boot=n_boot)
+    csv_target = Path(csv_dir) if csv_dir else None
+    written = write_report(out_path=target, n_boot=n_boot, csv_dir=csv_target)
     click.echo(f"Wrote resonance-gate report → {written}")
     if open_after and sys.platform == "darwin":
         subprocess.run(["open", str(written)], check=False)
