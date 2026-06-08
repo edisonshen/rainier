@@ -344,6 +344,7 @@ def select_on_train(world: World, train_end: str = TRAIN_END) -> tuple[GateConfi
     mandatory re-derived split: nothing past train_end informs the pick.
     """
     best, best_calmar, n_tried = None, -np.inf, 0
+    nan_fallback: GateConfig | None = None  # used only if NOTHING finite/inf ran
     for mode in WEIGHT_MODES:
         for buy in BUY_GRID:
             for sell in SELL_GRID:
@@ -356,14 +357,18 @@ def select_on_train(world: World, train_end: str = TRAIN_END) -> tuple[GateConfi
                 cfg = GateConfig(buy, sell, mode)
                 # A zero-drawdown candidate has Calmar = +inf and IS the best —
                 # do NOT reject inf (the old `np.isfinite` filter dropped it and
-                # could leave best=None → crash). Skip only NaN (never comparable).
-                # Seed first valid candidate so best is never None when any ran.
+                # could leave best=None → crash). Skip NaN (never comparable): a
+                # NaN must NOT seed best_calmar, or `m.calmar > NaN` is forever
+                # False and finite candidates can never win (codex P2). Stash it
+                # only as a last-resort fallback when no comparable config exists.
                 if np.isnan(m.calmar):
-                    if best is None:
-                        best, best_calmar = cfg, m.calmar
+                    if nan_fallback is None:
+                        nan_fallback = cfg
                     continue
-                if best is None or m.calmar > best_calmar:
+                if m.calmar > best_calmar:
                     best_calmar, best = m.calmar, cfg
+    if best is None:  # every candidate was NaN
+        return nan_fallback, n_tried, best_calmar
     return best, n_tried, best_calmar
 
 

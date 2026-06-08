@@ -96,6 +96,28 @@ def test_select_on_train_handles_infinite_calmar(monkeypatch):
     assert cfg.buy > cfg.sell
 
 
+def test_select_on_train_nan_first_does_not_block_finite_winner(monkeypatch):
+    # codex P2 (r6): a NaN Calmar on the FIRST candidate must not seed best_calmar
+    # and block a later finite winner (NaN comparisons are always False).
+    import rainier.backtest.resonance_study as rs
+
+    monkeypatch.setattr(rs, "resonance_decision",
+                        lambda w, b, s, m: np.ones(len(w.df)))
+    seq = {"i": 0}
+
+    def fake_metrics(dec, world, ret, start, end, name):
+        p = PortfolioResult(name, np.ones(2))
+        # first candidate NaN, a later one a strong finite Calmar
+        p.calmar = float("nan") if seq["i"] == 0 else 3.0
+        seq["i"] += 1
+        return p
+
+    monkeypatch.setattr(rs, "metrics_over", fake_metrics)
+    cfg, _n, calmar = rs.select_on_train(_synthetic_world(n=300), train_end="2020-12-31")
+    assert cfg is not None
+    assert calmar == 3.0  # finite winner selected, not the NaN seed
+
+
 def test_combine_and_or():
     a = np.array([1.0, 1.0, 0.0, 0.0])
     b = np.array([1.0, 0.0, 1.0, 0.0])

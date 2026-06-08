@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from rainier.signals.panel import (
     MAX_LOOKBACK,
@@ -12,7 +13,20 @@ from rainier.signals.panel import (
     PanelMember,
     SignalPanel,
     breadth_pct_above_sma,
+    rsi,
 )
+
+
+def test_rsi_zero_loss_window_is_100_not_neutral():
+    # codex P2 (r6): an uninterrupted advance (no down days) → RSI 100, not 50,
+    # so RSI14>50 actually fires in the strongest uptrend.
+    up_only = pd.Series([100.0 * (1.01 ** i) for i in range(40)])
+    r = rsi(up_only, 14)
+    assert r.iloc[-1] == pytest.approx(100.0)
+    assert (r.iloc[20:] > 50).all()
+    # a perfectly flat window stays neutral 50
+    flat = pd.Series([100.0] * 40)
+    assert rsi(flat, 14).iloc[-1] == pytest.approx(50.0)
 
 
 def test_panel_size_and_categories():

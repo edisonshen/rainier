@@ -82,12 +82,22 @@ def roc(s: pd.Series, n: int) -> pd.Series:
 
 
 def rsi(s: pd.Series, n: int = 14) -> pd.Series:
-    """Wilder RSI — EMA-family (bounded effective memory)."""
+    """Wilder RSI — EMA-family (bounded effective memory).
+
+    Zero-loss windows (an uninterrupted advance → ``dn == 0``) resolve to RSI
+    **100**, not neutral 50. Filling them with 50 would make ``RSI14>50`` fail
+    to fire in exactly the strongest uptrends (codex P2). A truly flat window
+    (no gains and no losses) stays 50.
+    """
     d = s.diff()
     up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
     dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
     rs = up / dn.replace(0, np.nan)
-    return (100 - 100 / (1 + rs)).fillna(50)
+    out = 100 - 100 / (1 + rs)
+    # dn==0: NaN rs → 100 if there were gains (up>0), else 50 (flat / warmup).
+    zero_loss = dn.eq(0)
+    out = out.where(~zero_loss, np.where(up.gt(0), 100.0, 50.0))
+    return out.fillna(50)
 
 
 def macd_hist(s: pd.Series, f: int = 12, sl: int = 26, sig: int = 9) -> pd.Series:
