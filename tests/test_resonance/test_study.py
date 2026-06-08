@@ -67,6 +67,35 @@ def test_deflate_monotone_haircut():
     assert deflate(2.0, 100) < deflate(2.0, 24)
 
 
+def test_deflate_does_not_flatter_negative_calmar():
+    # codex P2 (r4): deflation must never move a losing metric toward zero.
+    assert deflate(-0.5, 24) == -0.5       # negative passes through unchanged
+    assert deflate(0.0, 24) == 0.0
+    assert deflate(-2.0, 100) == -2.0
+
+
+def test_select_on_train_handles_infinite_calmar(monkeypatch):
+    # codex P2 (r4): a zero-drawdown train slice gives Calmar=inf; select_on_train
+    # must still return a config (not None → crash). Force every candidate to a
+    # no-drawdown (inf-Calmar) metric and assert a config comes back.
+    import rainier.backtest.resonance_study as rs
+
+    monkeypatch.setattr(rs, "resonance_decision",
+                        lambda w, b, s, m: np.ones(len(w.df)))
+
+    def fake_metrics(dec, world, ret, start, end, name):
+        p = PortfolioResult(name, np.ones(2))
+        p.calmar = float("inf")  # zero drawdown
+        return p
+
+    monkeypatch.setattr(rs, "metrics_over", fake_metrics)
+    w = _synthetic_world(n=300)
+    cfg, n_cfg, calmar = rs.select_on_train(w, train_end="2020-12-31")
+    assert cfg is not None
+    assert n_cfg > 0
+    assert cfg.buy > cfg.sell
+
+
 def test_combine_and_or():
     a = np.array([1.0, 1.0, 0.0, 0.0])
     b = np.array([1.0, 0.0, 1.0, 0.0])

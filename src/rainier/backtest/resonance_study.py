@@ -315,7 +315,10 @@ def deflate(best: float, n_configs: int) -> float:
     monotone penalty: divide by (1 + ln(n_configs)). Reported alongside the raw
     metric so the reader sees the deflation, not just the flattering number.
     """
-    if n_configs <= 1:
+    if n_configs <= 1 or best <= 0:
+        # Deflation only ever HURTS a metric. Dividing a negative Calmar by the
+        # >1 factor moves it toward zero (flattering a losing config), so the
+        # haircut applies only to positive metrics; non-positive pass through.
         return best
     return best / (1.0 + np.log(n_configs))
 
@@ -350,8 +353,17 @@ def select_on_train(world: World, train_end: str = TRAIN_END) -> tuple[GateConfi
                 dec = resonance_decision(world, buy, sell, mode)
                 m = metrics_over(dec, world, world.tqqq_ret, WIN_START, train_end,
                                  "train")
-                if m.calmar > best_calmar and np.isfinite(m.calmar):
-                    best_calmar, best = m.calmar, GateConfig(buy, sell, mode)
+                cfg = GateConfig(buy, sell, mode)
+                # A zero-drawdown candidate has Calmar = +inf and IS the best —
+                # do NOT reject inf (the old `np.isfinite` filter dropped it and
+                # could leave best=None → crash). Skip only NaN (never comparable).
+                # Seed first valid candidate so best is never None when any ran.
+                if np.isnan(m.calmar):
+                    if best is None:
+                        best, best_calmar = cfg, m.calmar
+                    continue
+                if best is None or m.calmar > best_calmar:
+                    best_calmar, best = m.calmar, cfg
     return best, n_tried, best_calmar
 
 
