@@ -756,6 +756,28 @@ def test_combined_verdict_claims_beat_only_when_oos_exceeds_long(mod):
     assert "does NOT beat" not in html
 
 
+def test_combined_verdict_cannot_beat_long_when_no_capped_combined_winner(mod):
+    """Regression (codex iter-2 P2): when NO combined config is under the selectivity cap,
+    `combined_best` is None and the table omits the combined row — but `walk_forward` still returns
+    a wf_combined fitted on an out-of-cap (busy) config via the fallback. That fallback must NOT be
+    allowed to claim 'combined beats long-only', or the report would crown a config the cap rejects.
+    Here wf_combined OOS (3.10) > long OOS (2.72), which WOULD say 'barely beats' if not gated."""
+    long_best = _stub_row(mod, 0.06, 3.7, "long")
+    short_best = _stub_row(mod, 0.04, 2.0, "short")
+    combined_best = None                                # no combined config under the cap
+    bh = mod.Result(trades=[], equity=np.array([1.0]))
+    bh.total_return = 0.065
+    bh.mar = 0.7
+    bh.max_dd = 0.097
+    wf_long = _stub_wf(mod, 0.051, 2.72)
+    wf_combined = _stub_wf(mod, 0.07, 3.10)             # fallback busy config; would "beat" if ungated
+    wf_short = _stub_wf(mod, -0.01, -0.4)
+    html = mod.build_long_short_section(long_best, short_best, combined_best, bh,
+                                        wf_combined, wf_short, wf_long=wf_long)
+    assert "does NOT beat" in html
+    assert "barely beats" not in html
+
+
 def test_short_drags_when_combined_underperforms_long_even_if_short_leg_ok(mod):
     """Regression (codex iter-2 P2): when the SHORT-only leg looks fine OOS but the COMBINED book's
     OOS Ret/DD is still below long-only OOS, shorts did NOT add value — the verdict must stay in the

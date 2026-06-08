@@ -1637,8 +1637,14 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
     # combined OOS that is still worse than long-only OOS means the shorts diluted the long edge).
     # The in-sample leaderboard is cherry-picked by selection, so it cannot ground this claim.
     # If we have no long OOS to compare against, fall back to the conservative "did not beat".
+    #
+    # GATE on `cb is not None` (= a combined config was actually UNDER the selectivity cap): when no
+    # combined config is under the cap, the comparison table omits the combined row, yet walk_forward
+    # still returns a wf_combined fitted on an out-of-cap (busy) config via pick_sweet_spot's fallback.
+    # Allowing that fallback to claim "combined beats long" would crown a busy config the cap rejects,
+    # contradicting the report. So an absent capped combined winner can never beat long-only here.
     combined_beats_long = (
-        combined_oos is not None and long_oos is not None
+        cb is not None and combined_oos is not None and long_oos is not None
         and combined_oos.mar > long_oos.mar and combined_oos.total_return > 0)
 
     # Shorts "drag" if the short side is unprofitable in-sample, OR fails to hold up out-of-sample,
