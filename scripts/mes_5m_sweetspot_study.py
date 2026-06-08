@@ -561,7 +561,8 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
     c = df["close"].to_numpy()
     n = len(df)
 
-    equity = np.ones(n)
+    # NaN marks "not yet written" — distinct from a real equity of 1.0 (a breakeven mark).
+    equity = np.full(n, np.nan)
     eq = 1.0
     trades: list[Trade] = []
     held_bars = 0
@@ -639,12 +640,14 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
         equity[exit_bar] = eq
         t = exit_bar + 1
 
-    # forward-fill any remaining flat bars to the last equity level
+    # forward-fill the NOT-WRITTEN (NaN) bars from the last realized equity (1.0 to start).
+    # NaN is the unfilled sentinel, so a genuine breakeven mark of 1.0 is never clobbered.
     prev = 1.0
     for k in range(n):
-        if equity[k] == 1.0 and prev != 1.0:
+        if np.isnan(equity[k]):
             equity[k] = prev
-        prev = equity[k]
+        else:
+            prev = equity[k]
 
     res = Result(trades=trades, equity=equity)
     _finalize(res, df, bars_per_yr, n_years, n, held_bars, score_start)

@@ -527,6 +527,35 @@ def test_equity_marks_in_trade_drawdown(mod):
     assert res.max_dd > 0.2      # max-DD reflects the deep mid-trade excursion
 
 
+def test_equity_breakeven_mark_not_clobbered(mod):
+    """A real equity value of exactly 1.0 (breakeven mark) must NOT be treated as an unfilled
+    slot and overwritten by the forward-fill (codex P2 regression)."""
+    # entry @ open[1]=100; bar 2 returns exactly to 100 (close==entry → marked equity == 1.0),
+    # bar 3 dips to 90, exit @ bar 3 (time-stop). The bar-2 mark must stay 1.0, not become the
+    # later dip value or vice-versa.
+    rows = [
+        _bar(100, 101, 99, 100.0),   # 0 signal
+        _bar(100, 101, 99, 100.0),   # 1 entry @ open 100
+        _bar(100, 101, 99, 100.0),   # 2 close 100 == entry → marked equity exactly 1.0
+        _bar(100, 101, 90, 90.0),    # 3 dip; time-stop exit here
+        _bar(90, 91, 89, 90.0),
+        _bar(90, 91, 89, 90.0),
+    ]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=3)  # exit @ bar 3
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last, bars_per_yr=1e5, n_years=0.01)
+    assert res.n == 1
+    # bar 2 marked at close/entry = 100/100 = 1.0, MINUS no cost yet (cost applied at exit) → 1.0
+    assert res.equity[2] == pytest.approx(1.0)
+    # the curve is NaN-free and monotonic in fill (no clobbered breakeven)
+    assert not np.isnan(res.equity).any()
+
+
 def test_score_start_excludes_warmup_from_metrics(mod):
     """score_start drops leading warm-up bars from exposure + equity risk metrics (codex P3)."""
     # 10 flat warm-up bars (no trade), then one winning trade in the scored region.
