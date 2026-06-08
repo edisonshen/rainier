@@ -23,7 +23,7 @@ What it does:
   2. Faithfully reproduce each signal as a pure function (unit-tested separately).
   3. Backtest the fractal entry ALONE (baseline) and in CONFLUENCE combinations
      (fractal + price>vma55 + ribbon-bullish + TD9-buy-context), reusing the exit
-     families from fractal_backtest_study.py (ATR×R:R, time-stop, VWMA-cross).
+     families (ATR×R:R, time-stop, VWMA-cross) reused from prior fractal backtest work.
   4. Sweep the grid, rank by RISK-ADJUSTED performance (Ret/DD, Sharpe, PF) with a
      trade-count floor, walk-forward validate the top config, benchmark vs buy-and-hold.
   5. Emit docs/RESEARCH-mes-5m-sweetspot.html companion render (the .md is the
