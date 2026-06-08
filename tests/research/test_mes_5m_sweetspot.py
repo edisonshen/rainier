@@ -777,6 +777,40 @@ def test_short_drags_when_combined_underperforms_long_even_if_short_leg_ok(mod):
     assert "matches" not in html
 
 
+def _row_with_n(mod, n, mar, mode="short"):
+    res = mod.Result(trades=[], equity=np.array([1.0]))
+    res.n = n
+    res.mar = mar
+    res.total_return = 0.02
+    ec = mod.EntryConfig(False, False, False, False, False,
+                         direction=mode if mode != "combined" else "long")
+    return mod.Row(ec, mod.ExitConfig("time", bars=24), res, mode=mode)
+
+
+def test_floored_best_returns_none_when_no_config_clears_floor(mod):
+    """Regression (codex iter-4 P2): the short/combined pick must honor the MIN_TRADES floor as a
+    HARD gate — if no config clears it, return None (→ the 'none cleared the floor' report path),
+    not a sparse few-trade row dressed up as robust."""
+    thin = [_row_with_n(mod, mod.MIN_TRADES - 1, 9.9),   # great ratio but below the floor
+            _row_with_n(mod, 5, 5.0)]
+    assert mod.floored_best(thin) is None
+    assert mod.floored_best([]) is None
+
+
+def test_floored_best_crowns_a_config_that_clears_the_floor(mod):
+    """When at least one config clears MIN_TRADES, floored_best returns the robust sweet-spot pick."""
+    rows = [_row_with_n(mod, mod.MIN_TRADES - 1, 99.0),   # thin fluke, must NOT win
+            _row_with_n(mod, mod.MIN_TRADES + 5, 2.0)]     # clears the floor
+    best = mod.floored_best(rows)
+    assert best is not None
+    assert best.res.n >= mod.MIN_TRADES        # the thin 99.0-mar fluke is excluded by the floor
+
+
+def test_floored_best_does_not_change_min_trades(mod):
+    """Guard: the operator-fixed floor is exactly 30 and floored_best keys off it."""
+    assert mod.MIN_TRADES == 30
+
+
 def test_verdict_uses_no_confluence_note_when_bare_fractal_wins(mod):
     """Regression (codex iter-3 P3): if the sweet spot IS the bare fractal (no confluence filters),
     the 'vs bare fractal' line must use the no-filter base_note, NOT the generic 'filters discarded

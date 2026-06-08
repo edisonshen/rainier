@@ -1298,6 +1298,20 @@ def pick_sweet_spot(rows: list[Row]) -> Row:
     return max(pool, key=_mar_key)
 
 
+def floored_best(rows: list[Row]) -> Row | None:
+    """Strict-floor pick for the SHORT / COMBINED sweeps: crown a best ONLY if at least one config
+    clears the MIN_TRADES floor; otherwise None (→ the report's "none cleared the floor" path).
+
+    Unlike the long HEADLINE (`pick_sweet_spot`, which always returns a row so the report can show
+    something with the floor caveat), a sparse few-trade short/combined "best" must NOT be published
+    as if robust — it would silently contradict the floor-based conclusions. So here the floor is
+    a hard gate, not a soft fallback.
+    """
+    if not rows or not any(r.res.n >= MIN_TRADES for r in rows):
+        return None
+    return pick_sweet_spot(rows)
+
+
 def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
                  baseline_row, verdict_html, screenshot_html, long_short_html="") -> str:
     robust = [r for r in rows if r.res.n >= MIN_TRADES]
@@ -1757,9 +1771,9 @@ def main() -> None:
         print(f"    [sweet spot] {best.label():34} n={x.n:>3} "
               f"win={x.win_rate*100:>3.0f}% ret={pct(x.total_return):>8} mar={num(x.mar):>6}")
 
-    # short / combined best (robust pick, same rule) — None if nothing cleared the floor.
-    short_best = pick_sweet_spot(short_rows) if short_rows else None
-    combined_best = pick_sweet_spot(combined_rows) if combined_rows else None
+    # short / combined best (robust pick, same rule) — None if NOTHING cleared the MIN_TRADES floor.
+    short_best = floored_best(short_rows)
+    combined_best = floored_best(combined_rows)
     if short_best:
         x = short_best.res
         print(f"  best SHORT: {short_best.label():34} n={x.n:>3} ret={pct(x.total_return):>8} "
