@@ -787,28 +787,39 @@ def _row_with_n(mod, n, mar, mode="short"):
     return mod.Row(ec, mod.ExitConfig("time", bars=24), res, mode=mode)
 
 
-def test_floored_best_returns_none_when_no_config_clears_floor(mod):
-    """Regression (codex iter-4 P2): the short/combined pick must honor the MIN_TRADES floor as a
-    HARD gate — if no config clears it, return None (→ the 'none cleared the floor' report path),
-    not a sparse few-trade row dressed up as robust."""
-    thin = [_row_with_n(mod, mod.MIN_TRADES - 1, 9.9),   # great ratio but below the floor
-            _row_with_n(mod, 5, 5.0)]
-    assert mod.floored_best(thin) is None
-    assert mod.floored_best([]) is None
+def test_capped_best_returns_none_when_no_config_is_under_the_cap(mod):
+    """The short/combined pick honors the MAX_TRADES selectivity CAP as a HARD gate — if EVERY
+    config fires >= MAX_TRADES (too busy to be a rare high-conviction setup), return None
+    (→ the 'none under the cap' report path), rather than crowning a busy config."""
+    busy = [_row_with_n(mod, mod.MAX_TRADES, 9.9),       # exactly at the cap → ineligible
+            _row_with_n(mod, mod.MAX_TRADES + 20, 5.0)]  # 50-trade config → ineligible
+    assert mod.capped_best(busy) is None
+    assert mod.capped_best([]) is None
 
 
-def test_floored_best_crowns_a_config_that_clears_the_floor(mod):
-    """When at least one config clears MIN_TRADES, floored_best returns the robust sweet-spot pick."""
-    rows = [_row_with_n(mod, mod.MIN_TRADES - 1, 99.0),   # thin fluke, must NOT win
-            _row_with_n(mod, mod.MIN_TRADES + 5, 2.0)]     # clears the floor
-    best = mod.floored_best(rows)
+def test_capped_best_crowns_a_rare_config_under_the_cap(mod):
+    """When at least one config is under MAX_TRADES, capped_best returns the selective sweet-spot
+    pick and EXCLUDES the busy high-frequency configs (even if their Ret/DD looks better)."""
+    rows = [_row_with_n(mod, mod.MAX_TRADES + 20, 99.0),  # 50-trade busy config — must NOT win
+            _row_with_n(mod, 10, 2.0)]                    # rare 10-trade setup — eligible
+    best = mod.capped_best(rows)
     assert best is not None
-    assert best.res.n >= mod.MIN_TRADES        # the thin 99.0-mar fluke is excluded by the floor
+    assert best.res.n < mod.MAX_TRADES   # the busy 99.0-mar config is excluded by the cap
+    assert best.res.n == 10
 
 
-def test_floored_best_does_not_change_min_trades(mod):
-    """Guard: the operator-fixed floor is exactly 30 and floored_best keys off it."""
-    assert mod.MIN_TRADES == 30
+def test_pick_sweet_spot_excludes_busy_configs(mod):
+    """The headline pick is the best Ret/DD among RARE (n < cap) configs; a 50-trade config with a
+    higher Ret/DD must lose to a 10-trade config under the cap."""
+    rows = [_row_with_n(mod, 50, 99.0, mode="long"),   # busy, great ratio — excluded by cap
+            _row_with_n(mod, 10, 3.0, mode="long")]    # rare — the eligible winner
+    best = mod.pick_sweet_spot(rows)
+    assert best.res.n == 10
+
+
+def test_capped_best_does_not_change_max_trades(mod):
+    """Guard: the operator-fixed selectivity cap is exactly 30 and capped_best keys off it."""
+    assert mod.MAX_TRADES == 30
 
 
 def test_verdict_uses_no_confluence_note_when_bare_fractal_wins(mod):

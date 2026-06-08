@@ -24,8 +24,9 @@ What it does:
   3. Backtest the fractal entry ALONE (baseline) and in CONFLUENCE combinations
      (fractal + price>vma55 + ribbon-bullish + TD9-buy-context), reusing the exit
      families (ATR×R:R, time-stop, VWMA-cross) reused from prior fractal backtest work.
-  4. Sweep the grid, rank by RISK-ADJUSTED performance (Ret/DD, Sharpe, PF) with a
-     trade-count floor, walk-forward validate the top config, benchmark vs buy-and-hold.
+  4. Sweep the grid, rank by RISK-ADJUSTED performance (Ret/DD, Sharpe, PF) under a
+     trade-count CAP (only rare <MAX_TRADES setups eligible — the operator's selectivity
+     rule), walk-forward validate the crowned config, benchmark vs buy-and-hold.
   5. Emit docs/RESEARCH-mes-5m-sweetspot.html companion render (the .md is the
      committed source-of-truth; this HTML report is the live render of the numbers).
 
@@ -65,11 +66,15 @@ OUT_HTML = ROOT / "docs" / "RESEARCH-mes-5m-sweetspot.html"
 ROUND_TRIP_PTS = 1.0
 POINT_VALUE = 5.0  # MES = $5 per 1.00 index point per contract
 
-# Robust-sample floor: below this, win-rate / PF / return are noise on a 5-month window.
-MIN_TRADES = 30
-# Headline sweet-spot bar: a config must clear this trade count to be the *featured* pick,
-# so the single highest Ret/DD config (which can be a thin ~30-trade fluke) is not crowned.
-ROBUST_TRADES = 60
+# Selectivity CAP (operator's deliberate choice, 2026-06-08): only configs that fire FEWER than
+# this many times across the ~5-month window are eligible to be crowned. The intent is to surface
+# the RARE, high-conviction A+ confluence setups (the discretionary trades that fire seldom), NOT
+# the high-frequency 200-trade configs. This is the literal inverse of the prior robustness FLOOR.
+#
+# TRADE-OFF, stated plainly: fewer than 30 trades means WIDE confidence intervals and higher fluke
+# risk. We are trading statistical robustness for selectivity by design. A sub-30-trade winner is a
+# *hypothesis*, never a statistically proven edge — the report carries this warning throughout.
+MAX_TRADES = 30
 
 # Regular Trading Hours for the S&P = 09:30-16:00 ET. The CSV is UTC; `in_rth` converts to
 # US/Eastern and gates on ET clock time, so it is correct across the sample's EST→EDT change
@@ -1204,9 +1209,9 @@ def _run_frozen(oos_warm: pd.DataFrame, is_best: Row, warm_len: int,
 
 
 def walk_forward(df: pd.DataFrame, bars_per_yr: float, mode: str = "long"):
-    """Walk-forward validate ONE mode (long / short / combined): pick the robust risk-adjusted
-    best config on the first 60%, run it frozen on the warmed last 40%, and report the
-    best-with-hindsight OOS config for the honesty comparison."""
+    """Walk-forward validate ONE mode (long / short / combined): pick the selective (under-cap)
+    risk-adjusted best config on the first 60%, run it frozen on the warmed last 40%, and report
+    the best-with-hindsight OOS config for the honesty comparison."""
     runner = _grid_runner(mode)
     n = len(df)
     split = int(n * 0.6)
@@ -1218,10 +1223,10 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float, mode: str = "long"):
     is_rows = runner(is_df, bars_per_yr, is_years)
     if not is_rows:
         return None
-    # Select the in-sample config with the SAME robust rule the headline sweet spot uses
-    # (pick_sweet_spot → best Ret/DD among configs with ≥ROBUST_TRADES, falling back to the
-    # floor), so the OOS "cold shower" validates the same KIND of config the report crowns —
-    # not a thin high-Ret/DD fluke the leaderboard would otherwise pick here.
+    # Select the in-sample config with the SAME selectivity-cap rule the headline sweet spot uses
+    # (pick_sweet_spot → best Ret/DD among the rare configs with n < MAX_TRADES, falling back to
+    # all rows), so the OOS "cold shower" validates the same KIND of config the report crowns —
+    # a rare high-conviction setup, not a busy high-frequency config.
     is_best = pick_sweet_spot(is_rows)
 
     # Run that exact config untouched on OOS, but warm the rolling indicators from pre-split
@@ -1239,8 +1244,9 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float, mode: str = "long"):
     label = is_best.label()
     if not oos_rows:  # no traded config OOS (e.g. very short held-out slice) — fall back
         return ((label, is_best.res), oos_res, ("(no OOS config traded)", oos_res))
-    oos_eligible = [r for r in oos_rows if r.res.n >= MIN_TRADES] or \
-                   [r for r in oos_rows if r.res.n >= 10] or oos_rows
+    # Same selectivity cap as the headline: the hindsight-best OOS config must also be a rare
+    # (n < MAX_TRADES) setup, so the two rows compare like with like under the operator's rule.
+    oos_eligible = [r for r in oos_rows if r.res.n < MAX_TRADES] or oos_rows
     oos_best = max(oos_eligible, key=_mar_key)
 
     return ((label, is_best.res), oos_res,
@@ -1285,42 +1291,41 @@ def _spark(series, color, scale=None):
 
 
 def pick_sweet_spot(rows: list[Row]) -> Row:
-    """The HEADLINE sweet spot: best Ret/DD among configs that are NOT a trade-count outlier.
+    """The HEADLINE sweet spot: best Ret/DD among the RARE, selective configs (n < MAX_TRADES).
 
-    The single highest-Ret/DD config can be a thin 30-ish-trade fluke; per the brief, the
-    sweet spot must be robust AND risk-adjusted-good AND not a count outlier. So we pick the
-    best Ret/DD among configs with n >= ROBUST_TRADES (= 2× the floor); if none clear that
-    bar, fall back to the floor, then to all rows.
+    Per the operator's deliberate rule, only configs that fire fewer than MAX_TRADES times across
+    the window are eligible — we want the seldom-firing high-conviction setups, not the busy ones.
+    If somehow NO config is under the cap (unlikely), fall back to all rows so the report still
+    shows something (with the small-sample caveat made explicit).
     """
-    pool = ([r for r in rows if r.res.n >= ROBUST_TRADES]
-            or [r for r in rows if r.res.n >= MIN_TRADES]
-            or rows)
+    pool = [r for r in rows if r.res.n < MAX_TRADES] or rows
     return max(pool, key=_mar_key)
 
 
-def floored_best(rows: list[Row]) -> Row | None:
-    """Strict-floor pick for the SHORT / COMBINED sweeps: crown a best ONLY if at least one config
-    clears the MIN_TRADES floor; otherwise None (→ the report's "none cleared the floor" path).
+def capped_best(rows: list[Row]) -> Row | None:
+    """Hard-cap pick for the SHORT / COMBINED sweeps: crown a best ONLY if at least one config is
+    under the selectivity cap (n < MAX_TRADES); otherwise None (→ the report's "none under the cap"
+    path).
 
     Unlike the long HEADLINE (`pick_sweet_spot`, which always returns a row so the report can show
-    something with the floor caveat), a sparse few-trade short/combined "best" must NOT be published
-    as if robust — it would silently contradict the floor-based conclusions. So here the floor is
-    a hard gate, not a soft fallback.
+    something with the small-sample caveat), a short/combined "best" that exceeds the cap must NOT
+    be published — it would silently contradict the cap-based conclusions. So here the cap is a
+    hard gate, not a soft fallback.
     """
-    if not rows or not any(r.res.n >= MIN_TRADES for r in rows):
+    if not rows or not any(r.res.n < MAX_TRADES for r in rows):
         return None
     return pick_sweet_spot(rows)
 
 
 def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
                  baseline_row, verdict_html, screenshot_html, long_short_html="") -> str:
-    robust = [r for r in rows if r.res.n >= MIN_TRADES]
-    enough = bool(robust)
-    ranked_pool = robust if robust else rows
+    selective = [r for r in rows if r.res.n < MAX_TRADES]
+    any_selective = bool(selective)
+    ranked_pool = selective if selective else rows
     ranked = sorted(ranked_pool, key=_mar_key, reverse=True)
-    best = pick_sweet_spot(rows)  # headline = robust (not the thin top-of-leaderboard fluke)
+    best = pick_sweet_spot(rows)  # headline = best rare/selective config under the cap
     top = ranked[:25]
-    n_thin = len(rows) - len(robust)
+    n_busy = len(rows) - len(selective)  # configs EXCLUDED for trading too often (n >= cap)
 
     hl = " style='background:#0e1714'"  # highlight the featured sweet-spot row
     top_rows = "\n".join(
@@ -1356,9 +1361,11 @@ def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
         is_r, oos_r, oos_best = wf
         wf_html = f"""
       <h2 class="sec" id="wf">Walk-forward — is the edge real, or in-sample fit?</h2>
-      <p>Pick the risk-adjusted-best config (by Ret/DD, with a {MIN_TRADES}-trade floor)
-      on the first 60% of bars (<b>in-sample</b>). Then run that exact config, untouched,
-      on the last 40% (<b>out-of-sample</b>). If OOS collapses, the leaderboard was fit.</p>
+      <p>Pick the risk-adjusted-best config (by Ret/DD, under the same &lt;{MAX_TRADES}-trade
+      selectivity cap) on the first 60% of bars (<b>in-sample</b>). Then run that exact config,
+      untouched, on the last 40% (<b>out-of-sample</b>). If OOS collapses, the leaderboard was fit.
+      Note: a sub-{MAX_TRADES}-trade config split 60/40 leaves very few OOS trades, so the OOS row
+      here is itself a tiny sample — read it as directional, not conclusive.</p>
       <table>
         <tr><th>Window</th><th>Config</th><th class="r">Trades</th><th class="r">Win</th>
         <th class="r">PF</th><th class="r">Return</th><th class="r">Ret/DD</th>
@@ -1385,11 +1392,26 @@ def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
     """
 
     b = best.res
-    sample_note = "" if enough else (
-        f"<div class='box warn'><h4>⚠ Sample too small to trust</h4>"
-        f"<p style='margin:0'>NO config reached {MIN_TRADES} trades on this 5-month window. "
-        f"Every number below is a handful-of-trades sample; 100% win rates and ∞ profit "
-        f"factors are luck. Directional only.</p></div>")
+    # The selectivity cap is the operator's deliberate choice, so the small-sample warning is NOT
+    # an edge case here — it applies to EVERY crowned config by construction (all are < cap trades).
+    # State it loudly and always. The `not any_selective` branch is the rare fallback (no config
+    # was even under the cap), which is a strictly worse / weirder situation worth flagging too.
+    sample_note = (
+        f"<div class='box warn'><h4>⚠ Selectivity cap — read before trusting any number</h4>"
+        f"<p style='margin:0 0 8px'>By the operator's deliberate rule, only configs that fire "
+        f"<b>fewer than {MAX_TRADES} times</b> in this ~5-month window are eligible to be crowned. "
+        f"The goal is to isolate the <b>rare, high-conviction A+ setups</b>, not the busy "
+        f"high-frequency configs. This is a choice to trade <b>statistical robustness for "
+        f"selectivity</b>: under {MAX_TRADES} trades means <b>wide confidence intervals and higher "
+        f"fluke risk</b>. The featured config below fires <b>{b.n} times</b> — its win rate, profit "
+        f"factor and Ret/DD are a small-sample read, NOT a statistically proven edge. Treat every "
+        f"crowned config as a hypothesis to forward-test.</p>"
+        + ("" if any_selective else
+           f"<p style='margin:0'><b>Note:</b> NO config came in under the {MAX_TRADES}-trade cap on "
+           f"this window, so the table below falls back to ALL configs — the cap could not be "
+           f"applied. Read these as the busy configs they are, not as the rare setups the cap "
+           f"intends to surface.</p>")
+        + "</div>")
 
     return f"""{PAGE_HEAD}
 <h1>MES 5-minute — Sweet-Spot Study</h1>
@@ -1402,7 +1424,8 @@ decoded &amp; backtested · MES · round-trip cost {ROUND_TRIP_PTS:g} pt · {len
 {screenshot_html}
 
 <h2 class="sec" id="results">Backtest results — ranked by Ret/DD (risk-adjusted)</h2>
-<p class="muted">{len(df)} bars · {len(rows)} config combos · {n_thin} had &lt;{MIN_TRADES} trades (dropped).
+<p class="muted">{len(df)} bars · {len(rows)} config combos · {n_busy} fired ≥{MAX_TRADES} times
+(EXCLUDED by the selectivity cap — too busy to be a rare high-conviction setup).
 Buy &amp; hold here = <b class="{'pos' if bh.total_return>0 else 'neg'}">{pct(bh.total_return)}</b>
 (Ret/DD {num(bh.mar)}, Sharpe {num(bh.sharpe)}, MaxDD {pct(bh.max_dd)}).</p>
 {sample_note}
@@ -1423,7 +1446,7 @@ Buy &amp; hold here = <b class="{'pos' if bh.total_return>0 else 'neg'}">{pct(bh
 <div class="legend"><b style="color:#3ddc97">▬</b> best confluence config &nbsp;&nbsp;
 <b style="color:#5aa9ff">▬</b> buy &amp; hold MES &nbsp;·&nbsp; {window}</div>
 
-<h3>Top configs ({'n≥'+str(MIN_TRADES) if enough else 'all'}, ranked by Ret/DD)</h3>
+<h3>Top configs ({'n&lt;'+str(MAX_TRADES)+' (selective)' if any_selective else 'all (none under cap)'}, ranked by Ret/DD)</h3>
 <table>
 <tr><th>Entry</th><th>Exit</th><th class="r">Trades</th><th class="r">Win</th><th class="r">PF</th>
 <th class="r">Return</th><th class="r">Ret/DD</th><th class="r">Sharpe</th><th class="r">MaxDD</th><th class="r">Expo</th></tr>
@@ -1432,10 +1455,10 @@ Buy &amp; hold here = <b class="{'pos' if bh.total_return>0 else 'neg'}">{pct(bh
 {bh_row}
 </table>
 <p class="muted"><b>Highlighted = the featured sweet spot</b>, chosen as the best Ret/DD among
-configs with ≥{ROBUST_TRADES} trades — NOT necessarily the single top row. The literal #1 by
-Ret/DD can be a thin ~{MIN_TRADES}-trade config whose ratio is a small-sample fluke; we
-deliberately do not crown a trade-count outlier. The "bare fractal" row is the baseline:
-confluence filters must beat IT (and buy &amp; hold) to be worth the added complexity.</p>
+configs that fire <b>fewer than {MAX_TRADES} times</b> (the operator's selectivity cap to surface
+rare high-conviction setups). Each row shows its trade count so the thinness is visible: a high
+Ret/DD on a handful of trades is a small-sample read, not a proven edge. The "bare fractal" row is
+the baseline: confluence filters must beat IT (and buy &amp; hold) to be worth the added complexity.</p>
 
 {wf_html}
 
@@ -1509,10 +1532,18 @@ def build_verdict(best: Row, baseline: Row, bh: Result, wf) -> str:
     oos_note = ""
     if wf:
         _, oos_r, _ = wf
+        # OOS-survival gate is intentionally low (n >= 3): under the operator's <30-trade
+        # selectivity cap, the in-sample winner is already rare, so its held-out 40% slice yields
+        # only a handful of trades. A positive OOS on a handful is the best signal this cap can
+        # give — we report it as "survived (tiny sample)", never as a proven, tradeable system.
+        survived = oos_r.total_return > 0 and oos_r.n >= 3
         oos_note = (f"Walk-forward OOS on the held-out 40%: the in-sample winner returned "
                     f"<b class='{'pos' if oos_r.total_return>0 else 'neg'}'>{pct(oos_r.total_return)}</b> "
                     f"(Ret/DD {num(oos_r.mar)}, {oos_r.n} trades) — "
-                    + ("the edge survived." if oos_r.total_return > 0 and oos_r.n >= 10
+                    + ("the edge held up on a TINY out-of-sample slice; given the selectivity cap "
+                       "this is the most validation possible here, but it is not proof — too few "
+                       "trades to be statistically confident."
+                       if survived
                        else "the edge did NOT hold up; this is in-sample fit, not a tradeable system."))
     return f"""
 <div class="box warn"><h4>Read this first</h4>
@@ -1595,8 +1626,11 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
     short_oos = wf_short[1] if wf_short else None
     combined_oos = wf_combined[1] if wf_combined else None
     long_oos = wf_long[1] if wf_long else None
+    # n < 3 gate (not 10): under the <30-trade selectivity cap the frozen short config's held-out
+    # 40% slice is necessarily tiny, so a 10-trade minimum would auto-fail every short. We accept a
+    # handful as the most the cap allows, while the verdict text still flags the small sample.
     short_oos_fails = (short_oos is None or short_oos.total_return <= 0
-                       or short_oos.mar <= 0 or short_oos.n < 10)
+                       or short_oos.mar <= 0 or short_oos.n < 3)
 
     # Combined "beats" long ONLY on the apples-to-apples OUT-OF-SAMPLE comparison: its frozen
     # OOS Ret/DD must exceed the long-only frozen OOS Ret/DD (not merely clear zero — a positive
@@ -1621,7 +1655,7 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
                              "DERIVED mirror · evaluated in an UP regime"))
     else:
         rows.append("<tr><td>Short-only</td><td class='r' colspan='9'>"
-                    "no short config cleared the trade-count floor on this window</td></tr>")
+                    "no short config came in under the trade-count cap on this window</td></tr>")
     if cb is not None:
         rows.append(_cmp_row(f"Combined L/S — {combined_best.label()}", cb,
                              "one position at a time, either direction"))
@@ -1757,10 +1791,10 @@ def main() -> None:
     combined_rows = run_combined_grid(df, bars_per_yr, n_years)
     print(f"  long={len(rows)}  short={len(short_rows)}  combined={len(combined_rows)} config combos traded.")
 
-    robust = [r for r in rows if r.res.n >= MIN_TRADES]
-    ranked = sorted(robust if robust else rows, key=_mar_key, reverse=True)
-    best = pick_sweet_spot(rows)  # headline = long-only robust pick (the operator's actual signal)
-    print(f"  Top 5 LONG by Ret/DD (n≥{MIN_TRADES}):")
+    selective = [r for r in rows if r.res.n < MAX_TRADES]
+    ranked = sorted(selective if selective else rows, key=_mar_key, reverse=True)
+    best = pick_sweet_spot(rows)  # headline = long-only selective (rare, under-cap) pick
+    print(f"  Top 5 LONG by Ret/DD (n<{MAX_TRADES}, selectivity cap):")
     for r in ranked[:5]:
         x = r.res
         flag = "  <- SWEET SPOT" if r is best else ""
@@ -1771,9 +1805,9 @@ def main() -> None:
         print(f"    [sweet spot] {best.label():34} n={x.n:>3} "
               f"win={x.win_rate*100:>3.0f}% ret={pct(x.total_return):>8} mar={num(x.mar):>6}")
 
-    # short / combined best (robust pick, same rule) — None if NOTHING cleared the MIN_TRADES floor.
-    short_best = floored_best(short_rows)
-    combined_best = floored_best(combined_rows)
+    # short / combined best (selective pick, same rule) — None if NOTHING came under the MAX_TRADES cap.
+    short_best = capped_best(short_rows)
+    combined_best = capped_best(combined_rows)
     if short_best:
         x = short_best.res
         print(f"  best SHORT: {short_best.label():34} n={x.n:>3} ret={pct(x.total_return):>8} "
