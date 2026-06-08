@@ -71,14 +71,9 @@ MIN_TRADES = 30
 # so the single highest Ret/DD config (which can be a thin ~30-trade fluke) is not crowned.
 ROBUST_TRADES = 60
 
-# Regular Trading Hours for the S&P (ET 09:30-16:00). The CSV is UTC. ET is UTC-5 (EST)
-# / UTC-4 (EDT); the sample (2026-01..06) spans both. We approximate RTH with a UTC
-# window and document it as approximate (a fixed offset can't track the DST change
-# exactly, but it isolates the liquid US cash session well enough for a time-of-day
-# filter). 13:30-20:00 UTC ≈ 09:30-16:00 ET during EDT (most of the sample).
-RTH_START_UTC = 13  # hour
-RTH_START_MIN = 30
-RTH_END_UTC = 20  # hour (exclusive minute 0)
+# Regular Trading Hours for the S&P = 09:30-16:00 ET. The CSV is UTC; `in_rth` converts to
+# US/Eastern and gates on ET clock time, so it is correct across the sample's EST→EDT change
+# (no fixed UTC offset, which would be wrong by an hour for the EST portion).
 
 
 # ---------------------------------------------------------------------------
@@ -377,18 +372,21 @@ def hvn_proximity(df: pd.DataFrame, window: int = 240, bins: int = 24,
 
 
 def in_rth(df: pd.DataFrame) -> np.ndarray:
-    """Approximate RTH (US cash session) filter on the UTC timestamps.
+    """RTH (US cash session) filter — TIMEZONE-AWARE so it tracks the EST↔EDT change.
 
-    13:30-20:00 UTC ≈ 09:30-16:00 ET during EDT. The sample spans an EST→EDT change so
-    this is APPROXIMATE (a fixed offset can't track DST exactly), but it isolates the
-    liquid US session well for a time-of-day filter.
+    Converts UTC timestamps to US/Eastern and gates on 09:30 ≤ ET < 16:00 (regular S&P cash
+    hours). This is correct for BOTH the EST (Jan–early Mar: cash = 14:30–21:00 UTC) and the
+    EDT (Mar–Jun: cash = 13:30–20:00 UTC) portions of the sample — a fixed UTC window would be
+    wrong by an hour for ~40% of the data.
     """
-    ts = df["timestamp"].dt
-    h = ts.hour.to_numpy()
-    m = ts.minute.to_numpy()
-    after_open = (h > RTH_START_UTC) | ((h == RTH_START_UTC) & (m >= RTH_START_MIN))
-    before_close = h < RTH_END_UTC
-    return after_open & before_close
+    ts_utc = df["timestamp"]
+    if ts_utc.dt.tz is None:
+        ts_utc = ts_utc.dt.tz_localize("UTC")
+    et = ts_utc.dt.tz_convert("America/New_York")
+    minute_of_day = et.dt.hour.to_numpy() * 60 + et.dt.minute.to_numpy()
+    open_min = 9 * 60 + 30   # 09:30 ET
+    close_min = 16 * 60      # 16:00 ET
+    return (minute_of_day >= open_min) & (minute_of_day < close_min)
 
 
 def session_last_bar(df: pd.DataFrame) -> np.ndarray:
@@ -525,7 +523,8 @@ class Result:
 
 def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
              atr_series: np.ndarray, vwma_series: np.ndarray,
-             flatten: np.ndarray, bars_per_yr: float, n_years: float) -> Result:
+             flatten: np.ndarray, bars_per_yr: float, n_years: float,
+             score_start: int = 0) -> Result:
     """Event-driven long-only single-position sim.
 
     Timing (no lookahead): signal confirms at close[t]; ENTER at open[t+1]. Exits:
@@ -629,12 +628,15 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
         prev = equity[k]
 
     res = Result(trades=trades, equity=equity)
-    _finalize(res, df, bars_per_yr, n_years, n, held_bars)
+    _finalize(res, df, bars_per_yr, n_years, n, held_bars, score_start)
     return res
 
 
 def _finalize(res: Result, df: pd.DataFrame, bars_per_yr: float, n_years: float,
-              n_bars: int, held_bars: int) -> None:
+              n_bars: int, held_bars: int, score_start: int = 0) -> None:
+    """Compute aggregate stats. `score_start` excludes leading warm-up bars (which carry no
+    trades and flat equity) from the equity-based risk metrics + exposure denominator, so a
+    warm-up buffer prepended for indicator state does not dilute Sharpe / max-DD / exposure."""
     tr = res.trades
     res.n = len(tr)
     if res.n == 0:
@@ -651,10 +653,12 @@ def _finalize(res: Result, df: pd.DataFrame, bars_per_yr: float, n_years: float,
     res.total_return = float(np.prod(1.0 + rets) - 1.0)
     res.cagr = (1.0 + res.total_return) ** (1.0 / n_years) - 1.0 if n_years > 0 else 0.0
     res.avg_hold = held_bars / res.n
-    res.exposure = held_bars / n_bars
+    res.exposure = held_bars / max(1, n_bars - score_start)
     res.total_pts = float(sum((x.exit_price - x.entry_price) - ROUND_TRIP_PTS for x in tr))
 
-    eq = res.equity
+    # equity-based risk metrics over the SCORED region only (drop warm-up bars), rebased to 1.0
+    eq_full = res.equity[score_start:]
+    eq = eq_full / eq_full[0] if len(eq_full) and eq_full[0] != 0 else eq_full
     dr = np.diff(eq) / eq[:-1]
     dr = dr[np.isfinite(dr)]
     if len(dr) > 1 and dr.std() > 0:
@@ -816,8 +820,9 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     flatten_o = (sess_o | rth_last_bar(oos_warm)) if is_best.entry.require_rth else sess_o
     entries = compute_entries(oos_warm, is_best.entry)
     entries[:warm_len] = False  # no entries before the true OOS start
+    # score_start=warm_len so the warm-up bars are excluded from the OOS risk metrics.
     oos_res = simulate(oos_warm, entries, is_best.exit, atr_o, vwma_o, flatten_o,
-                       bars_per_yr, oos_years)
+                       bars_per_yr, oos_years, score_start=warm_len)
 
     # best-with-hindsight on OOS (the honesty benchmark)
     oos_rows = run_grid(oos_df, bars_per_yr, oos_years)

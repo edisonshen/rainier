@@ -123,7 +123,7 @@ outlier.
 
 **The sweet spot:** the **bare green triangle with a 4-hour time-stop exit** —
 **+10.6% return, Ret/DD 2.75, 57% win rate, 199 trades.** It beats **buy-and-hold MES**
-(+7.0%, Ret/DD 0.73) on both return and drawdown. (The Ret/DD here counts *in-trade*
+(≈+7%, Ret/DD ≈0.74) on both return and drawdown. (The Ret/DD here counts *in-trade*
 drawdown — the worst the equity dipped mid-trade, not just trade-to-trade — so it is a
 conservative, honest risk figure.)
 
@@ -229,11 +229,11 @@ volume-dependent signals. The 5-min file had 89 zero-range and 226 zero-volume b
   top-30%-volume bins as HVNs, True when the close sits in an HVN bin. Wired as an **optional
   add-on** on the bare-fractal and full-confluence anchor configs (`require_hvn`), so its
   marginal effect IS in the sweep — but it is not crossed with every combo.
-- `in_rth` — approximate US cash session (13:30–20:00 UTC ≈ 09:30–16:00 ET during EDT). The
-  sample spans an EST→EDT change so a fixed offset can't track DST exactly; documented as
-  approximate. The TD count and VWMA are intentionally NOT session-reset (the Pine versions
-  are rolling) — only end-of-session *flattening* and the time-of-day *filter* are
-  session-aware.
+- `in_rth` — US cash session (09:30–16:00 ET), **timezone-aware**: timestamps are converted
+  UTC→US/Eastern and gated on ET clock time, so it is correct across the sample's EST→EDT
+  change (no fixed UTC offset, which would be wrong by an hour for the ~40% EST portion). The
+  TD count and VWMA are intentionally NOT session-reset (the Pine versions are rolling) — only
+  end-of-session *flattening* and the time-of-day *filter* are session-aware.
 
 ### Simulation (`simulate`)
 Long-only, one position at a time, full equity per trade. No lookahead: signal at `close[t]`
@@ -293,5 +293,7 @@ Return-on-margin would be several times larger (and so would the drawdown).
 | mark-to-market | deep mid-trade dip, flat exit | equity dips mid-hold; max-DD reflects it |
 | hvn applied | base vs require_hvn | HVN entries ⊆ base entries; HVN appears in the grid |
 | hvn breakout | close above prior range | NOT flagged as a high-volume node |
-| rth flatten | 19:55 / 20:00 / next-day RTH bars | 19:55 is the cash-close flatten bar |
-| rth filter | 03:00 UTC vs 15:00 UTC bar | False overnight, True in RTH |
+| rth flatten (EDT) | 19:55 / 20:00 / next-day RTH bars | 15:55 ET is the cash-close flatten bar |
+| rth tz-aware | EST 09:00 / EST 10:00 / EDT 10:00 / overnight | correct RTH in both EST and EDT |
+| rth entry in-session | signal on the last RTH bar | suppressed (entry would fill after close) |
+| warm-up exclusion | flat warm-up bars + a scored trade | score_start lifts exposure; return unchanged |

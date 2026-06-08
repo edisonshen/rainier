@@ -329,45 +329,48 @@ def test_simulate_flattens_at_session_end(mod):
     assert res.trades[0].exit_bar == 2
 
 
-def test_rth_last_bar_marks_cash_close(mod):
-    # bars at 19:55 (in RTH), 20:00 (out), and a fresh day in RTH — the 19:55 bar is rth_last
-    ts = ["2026-02-02 19:55:00+00:00", "2026-02-02 20:00:00+00:00",
-          "2026-02-03 15:00:00+00:00"]
+def test_rth_last_bar_marks_cash_close_edt(mod):
+    # EDT (April): cash close = 16:00 ET = 20:00 UTC. 19:55 UTC = 15:55 ET (last RTH bar).
+    ts = ["2026-04-06 19:55:00+00:00", "2026-04-06 20:00:00+00:00",
+          "2026-04-07 15:00:00+00:00"]
     df = pd.DataFrame([{"timestamp": pd.Timestamp(t), **_bar(100, 101, 99, 100.0)} for t in ts])
     out = mod.rth_last_bar(df)
-    assert out[0]       # last RTH bar before the 20:00 close
-    assert not out[1]   # 20:00 is outside RTH
+    assert out[0]       # 15:55 ET — last RTH bar before the close
+    assert not out[1]   # 16:00 ET is outside RTH (exclusive close)
     assert out[2]       # the lone RTH bar of the next day is also its last RTH bar
 
 
-def test_in_rth_filter(mod):
-    rows = []
-    # 03:00 UTC (overnight) and 15:00 UTC (RTH)
-    for hh in (3, 15):
-        rows.append({"timestamp": pd.Timestamp(f"2026-02-02 {hh:02d}:00:00+00:00"),
-                     **_bar(100, 101, 99, 100.5)})
+def test_in_rth_is_timezone_aware(mod):
+    # 15:00 UTC is RTH under BOTH EST (10:00 ET) and EDT (11:00 ET). 14:00 UTC is RTH only
+    # under EDT (10:00 ET); under EST it is 09:00 ET — BEFORE the 09:30 open → NOT RTH.
+    rows = [
+        {"timestamp": pd.Timestamp("2026-02-02 14:00:00+00:00"), **_bar(1, 2, 0.5, 1)},  # EST 09:00 → out
+        {"timestamp": pd.Timestamp("2026-02-02 15:00:00+00:00"), **_bar(1, 2, 0.5, 1)},  # EST 10:00 → in
+        {"timestamp": pd.Timestamp("2026-04-06 14:00:00+00:00"), **_bar(1, 2, 0.5, 1)},  # EDT 10:00 → in
+        {"timestamp": pd.Timestamp("2026-02-02 03:00:00+00:00"), **_bar(1, 2, 0.5, 1)},  # overnight → out
+    ]
     df = pd.DataFrame(rows)
     out = mod.in_rth(df)
-    assert not out[0]  # 03:00 UTC outside RTH
-    assert out[1]      # 15:00 UTC inside RTH
+    assert not out[0]  # EST premarket
+    assert out[1]      # EST cash hours
+    assert out[2]      # EDT cash hours (same UTC hour, different ET → still RTH)
+    assert not out[3]  # overnight
 
 
 def test_rth_entry_never_fills_outside_rth(mod):
     """An RTH-gated signal on the LAST RTH bar (entry would fill at the cash close, outside
     RTH) must be suppressed (codex P2 regression)."""
-    # Build a fractal-positive series, then stamp the LAST (signal) bar at 19:55 UTC so its
-    # t+1 entry bar would be 20:00 (outside RTH). The RTH config must drop that signal.
     df = _df(_fractal_positive_series())
     base = mod.fractal_up_trend(df)
     sig_bar = int(np.argmax(base))
     assert base[sig_bar]
-    # shift timestamps so the signal bar lands at 19:55 UTC (last RTH bar); its entry bar
-    # (t+1) is then 20:00 UTC, OUTSIDE RTH.
-    anchor = pd.Timestamp("2026-02-02 19:55:00+00:00")
+    # EDT date: stamp the signal bar at 19:55 UTC (15:55 ET, last RTH bar). Its entry bar
+    # (t+1) is 20:00 UTC = 16:00 ET, OUTSIDE RTH.
+    anchor = pd.Timestamp("2026-04-06 19:55:00+00:00")
     df["timestamp"] = [anchor + pd.Timedelta(minutes=5 * (i - sig_bar)) for i in range(len(df))]
     rth_cfg = mod.EntryConfig(False, False, False, False, True)  # require_rth
     e = mod.compute_entries(df, rth_cfg)
-    # signal bar is in RTH but its entry bar (20:00) is OUT of RTH → suppressed
+    # signal bar is in RTH but its entry bar (16:00 ET) is OUT of RTH → suppressed
     assert not e[sig_bar]
 
 
@@ -486,3 +489,26 @@ def test_equity_marks_in_trade_drawdown(mod):
     # final return is ~flat (only cost), BUT the equity curve must have dipped at bar 2.
     assert res.equity[2] < 0.9   # ~71/100 marked → ≥10% in-trade drawdown
     assert res.max_dd > 0.2      # max-DD reflects the deep mid-trade excursion
+
+
+def test_score_start_excludes_warmup_from_metrics(mod):
+    """score_start drops leading warm-up bars from exposure + equity risk metrics (codex P3)."""
+    # 10 flat warm-up bars (no trade), then one winning trade in the scored region.
+    rows = [_bar(100, 101, 99, 100.0) for _ in range(10)]
+    rows += [_bar(100, 101, 99, 100.0), _bar(100, 101, 99, 100.0)]  # signal, entry
+    rows += [_bar(100, 110, 100, 109.0) for _ in range(4)]          # run up
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[10] = True  # signal in the scored region; entry at bar 11
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=3)
+    full = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                        bars_per_yr=1e5, n_years=0.01, score_start=0)
+    scored = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                          bars_per_yr=1e5, n_years=0.01, score_start=10)
+    # excluding 10 flat warm-up bars raises exposure (same held bars / smaller denominator)
+    assert scored.exposure > full.exposure
+    # total_return (trade-based) is unchanged by score_start
+    assert scored.total_return == pytest.approx(full.total_return)
