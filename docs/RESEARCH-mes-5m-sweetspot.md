@@ -119,8 +119,8 @@ is **not** inflated by annualizing a 5-month window) with a **30-trade floor** s
 samples can't win.
 
 **The sweet spot:** the **bare green triangle with a 4-hour time-stop exit** —
-**+11.7% return, Ret/DD 4.0, 57% win rate, 198 trades.** It beats **buy-and-hold MES**
-(+7.0%, Ret/DD 0.72) on both return and drawdown.
+**+10.6% return, Ret/DD 3.5, 57% win rate, 199 trades.** It beats **buy-and-hold MES**
+(+7.1%, Ret/DD 0.74) on both return and drawdown.
 
 **The honest, counter-intuitive finding:** **adding the confluence filters did NOT improve
 the risk-adjusted result.** Every screenshot-inspired filter (require VWMA, require ribbon,
@@ -135,20 +135,26 @@ Two readings, both worth stating:
    In a genuine bear regime the filters would likely matter — **we just don't have that data
    to prove it.**
 
-**Walk-forward (the honest read):** we tuned on the first 60% and ran the frozen winner on
-the unseen last 40%. The in-sample pick (triangle + RTH + 4h-stop) returned **+3.6%** in
-sample and **+1.8%** out of sample (Ret/DD 1.38, 26 trades). **The edge survived — but it
-degraded and the OOS sample is thin (26 trades).** That is a *cautiously positive* result,
-not a green light.
+**Walk-forward (the honest read):** we tuned the risk-adjusted-best config on the first 60%
+(warming the rolling indicators from pre-split history, as a real forward test would) and ran
+that frozen config on the unseen last 40%. The in-sample winner that the tuner picked was a
+*different* config than the full-window leaderboard's sweet spot (it only saw 60% of the
+data), and **out of sample it collapsed to roughly flat (~+0.0%, Ret/DD ≈ 0.05 over ~32
+trades).** In other words: **the specific config the walk-forward tuner selected did NOT
+generalize** — a textbook in-sample-fit warning. The full-window sweet spot (bare fractal +
+4h-stop) is more robust *by construction* (it's the simplest, highest-trade-count config),
+but the walk-forward result is a flashing caution light, not a green one. The exact numbers
+are in the HTML render's walk-forward table.
 
 ### Bottom line
 
-> **The operator's green-triangle entry is a real, tradeable dip-buy signal on MES 5-min,
-> best paired with a simple ~4-hour time-stop. It beat buy-and-hold on this window and
-> survived (weakly) walk-forward. BUT: the screenshot-driven confluence filters did not add
-> risk-adjusted value here, and 5 months is one regime. Treat the sweet spot as a
-> _hypothesis to forward-test_, not a deployable edge. One bear market could flip the
-> verdict — and the filters that looked useless here are exactly what would save you then.**
+> **The operator's green-triangle entry is a real dip-buy signal on MES 5-min, best paired
+> with a simple ~4-hour time-stop; on this window it beat buy-and-hold on both return and
+> drawdown. BUT the walk-forward test is a caution light: the config the tuner picked on the
+> first 60% went flat out-of-sample, and the screenshot-driven confluence filters did not add
+> risk-adjusted value here. 5 months is one regime. Treat the sweet spot as a _hypothesis to
+> forward-test_, not a deployable edge. One bear market could flip the verdict — and the
+> filters that looked useless here are exactly what would matter then.**
 
 This is a *credible* result, consistent with project memory: simple signals on short windows
 look good in-sample and must be distrusted out-of-sample (`project_tqqq_regime_switching`).
@@ -242,7 +248,7 @@ tune Ret/DD in-sample with the floor, run the frozen config OOS, and also report
 best-with-hindsight OOS config (if the frozen one is far worse than hindsight, it was fit).
 
 ### Cost / leverage note
-MES = $5/point. The sweet spot's +11.7% ≈ the equity-curve return of a single-instrument
+MES = $5/point. The sweet spot's +10.6% ≈ the equity-curve return of a single-instrument
 timing strategy, net of cost — **not** leveraged-futures P&L on margin. On a single contract
 the winner made roughly the equivalent point total reported in the HTML render's stat cards.
 Return-on-margin would be several times larger (and so would the drawdown).

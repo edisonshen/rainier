@@ -362,6 +362,11 @@ def hvn_proximity(df: pd.DataFrame, window: int = 240, bins: int = 24,
         idx = np.clip(np.digitize(seg_c, edges) - 1, 0, bins - 1)
         vol_by_bin = np.zeros(bins)
         np.add.at(vol_by_bin, idx, seg_v)
+        # If the current close is OUTSIDE the measured price range, it is a breakout beyond
+        # the visible volume profile — there is no measured node there, so it is NOT an HVN.
+        # (Clipping it into the nearest edge bin would falsely tag breakouts as support.)
+        if c[t] < lo or c[t] > hi:
+            continue
         thresh = np.quantile(vol_by_bin[vol_by_bin > 0], 1.0 - top_frac) if (vol_by_bin > 0).any() else np.inf
         price_bin = int(np.clip(np.digitize([c[t]], edges)[0] - 1, 0, bins - 1))
         out[t] = vol_by_bin[price_bin] >= thresh
@@ -560,7 +565,10 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
                 exit_bar, exit_price, reason = j, c[j], "session_end"
                 break
             if xc.kind == "time":
-                if j - entry_bar >= xc.bars:
+                # Hold exactly `bars` 5-minute bars: the entry bar (filled at its open) is
+                # held bar #1, so exit at the close of bar entry_bar + bars - 1. `time6` thus
+                # holds 6 bars / 30 minutes, matching its label.
+                if j - entry_bar >= xc.bars - 1:
                     exit_bar, exit_price, reason = j, c[j], "time"
                     break
             elif xc.kind == "vwma":
@@ -741,6 +749,12 @@ def _mar_key(r: Row) -> float:
     return cal
 
 
+# Longest composed lookback across all signals (sma233, hvn window 240) — the OOS frozen-config
+# run prepends this many pre-split bars so rolling indicators are warmed, matching a real
+# forward test (where history before the split IS available). Warm-up bars never trade.
+WARMUP_BARS = 240
+
+
 def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     n = len(df)
     split = int(n * 0.6)
@@ -756,12 +770,20 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
                [r for r in is_rows if r.res.n >= 10] or is_rows
     is_best = max(eligible, key=_mar_key)
 
-    # run that exact config untouched on OOS
-    atr_o = atr(oos_df, 14).to_numpy()
-    vwma_o = vwma(oos_df, 55).to_numpy()
-    sess_o = session_last_bar(oos_df)
-    entries = compute_entries(oos_df, is_best.entry)
-    oos_res = simulate(oos_df, entries, is_best.exit, atr_o, vwma_o, sess_o, bars_per_yr, oos_years)
+    # Run that exact config untouched on OOS, but warm the rolling indicators from pre-split
+    # history (a real forward test would have it). Build a frame = [warm-up | OOS], compute on
+    # it, then zero out any entry inside the warm-up region so warm-up bars never trade and
+    # only post-split trades are scored.
+    warm_start = max(0, split - WARMUP_BARS)
+    warm_len = split - warm_start
+    oos_warm = df.iloc[warm_start:].reset_index(drop=True)
+    atr_o = atr(oos_warm, 14).to_numpy()
+    vwma_o = vwma(oos_warm, 55).to_numpy()
+    sess_o = session_last_bar(oos_warm)
+    entries = compute_entries(oos_warm, is_best.entry)
+    entries[:warm_len] = False  # no entries before the true OOS start
+    oos_res = simulate(oos_warm, entries, is_best.exit, atr_o, vwma_o, sess_o,
+                       bars_per_yr, oos_years)
 
     # best-with-hindsight on OOS (the honesty benchmark)
     oos_rows = run_grid(oos_df, bars_per_yr, oos_years)

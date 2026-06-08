@@ -361,6 +361,17 @@ def test_hvn_in_entry_grid(mod):
     assert any(ec.require_hvn for ec in grid)
 
 
+def test_hvn_rejects_breakout_outside_range(mod):
+    """A close ABOVE the prior visible range is a breakout, not an HVN (codex P3 regression)."""
+    window = 20
+    # build a flat-ish base inside [99, 101], then a breakout close at 200
+    rows = [_bar(100, 101, 99, 100.0, v=1000) for _ in range(window)]
+    rows.append(_bar(150, 205, 150, 200.0, v=1000))  # breakout far above the range
+    df = _df(rows)
+    out = mod.hvn_proximity(df, window=window, bins=8, top_frac=0.3)
+    assert not out[-1]  # breakout close outside [99,101] => not classified as an HVN
+
+
 # ---------------------------------------------------------------------------
 # regression: intrabar ATR stop/target takes precedence over session-end flatten
 # ---------------------------------------------------------------------------
@@ -393,3 +404,25 @@ def test_atr_stop_beats_session_end_on_last_bar(mod):
     assert res.trades[0].exit_bar == 2
     # filled at min(open=100, stop=95) = 95, not the bar close (99)
     assert res.trades[0].exit_price == pytest.approx(95.0)
+
+
+# ---------------------------------------------------------------------------
+# regression: time-stop holds EXACTLY `bars` 5-minute bars (entry bar = bar #1)
+# ---------------------------------------------------------------------------
+
+def test_time_stop_holds_exactly_n_bars(mod):
+    # signal at bar 0 → entry at open[1]. time3 must exit at the close of bar 1+3-1 = 3.
+    rows = [_bar(100, 101, 99, 100.0) for _ in range(10)]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=3)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last, bars_per_yr=1e5, n_years=0.01)
+    assert res.n == 1
+    assert res.trades[0].entry_bar == 1
+    # held bars = entry_bar(1), 2, 3 = exactly 3 bars; exit at bar 3
+    assert res.trades[0].exit_bar == 3
+    assert res.trades[0].reason == "time"
