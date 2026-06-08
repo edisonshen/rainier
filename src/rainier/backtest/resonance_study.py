@@ -100,6 +100,11 @@ def build_world(
     if real_tqqq:
         tq = _load("TQQQ_long", csv_dir)[["timestamp", "close"]].rename(columns={"close": "tqqq"})
         df = df.merge(tq, on="timestamp", how="left")
+        # Drop pre-inception rows (TQQQ launched 2010-02): a left-join leaves the
+        # tqqq column NaN before then, and pct_change().fillna(0) would otherwise
+        # fabricate years of flat 0% "real TQQQ" history. Start at real inception
+        # so any caller (not just the internal 2019-06 window) gets honest data.
+        df = df[df["tqqq"].notna()].reset_index(drop=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
     df["irx"] = df["irx"].ffill().fillna(2.0) / 100.0
     rate_daily = (df["irx"] / ANNUAL).to_numpy()
@@ -174,9 +179,14 @@ def metrics_over(
     res.cagr = seg[-1] ** (1.0 / yrs) - 1.0
     res.max_dd = max_drawdown(seg)
     res.calmar = res.cagr / res.max_dd if res.max_dd > 0 else float("inf")
-    # switches over the window only
-    sw = shift_decision(decision)[idx]
-    res.switches = int(np.sum(np.abs(np.diff(np.r_[0.0, sw])) > 1e-9))
+    # Switches over the window only. Seed the diff with the position carried
+    # INTO the window (the shifted weight just before idx[0]), not 0 — otherwise
+    # a strategy already invested when the window opens (e.g. buy-hold over a
+    # later sub-window) is miscounted as a fresh entry on the first bar.
+    shifted = shift_decision(decision)
+    sw = shifted[idx]
+    prior = shifted[idx[0] - 1] if idx[0] > 0 else 0.0
+    res.switches = int(np.sum(np.abs(np.diff(np.r_[prior, sw])) > 1e-9))
     res.exposure = float(np.mean(sw))
     return res
 

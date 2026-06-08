@@ -86,6 +86,15 @@ def test_metrics_over_window_no_lookahead_and_finite():
     assert m.switches >= 0
 
 
+def test_metrics_over_window_switch_count_ignores_carried_position():
+    # codex P3: a position held INTO the window is not a fresh entry. Always-in
+    # (buy-hold) measured over a later sub-window must report 0 switches, not 1.
+    w = _synthetic_world()
+    always_in = np.ones(len(w.df))
+    m = metrics_over(always_in, w, w.tqqq_ret, "2020-10-01", None, "bh")
+    assert m.switches == 0
+
+
 def test_thesis_test_returns_buckets_and_ci():
     w = _synthetic_world()
     score = np.clip(0.5 + (w.qqq_ret * 30), 0, 1)  # crude score correlated to ret
@@ -94,6 +103,17 @@ def test_thesis_test_returns_buckets_and_ci():
     lo, hi = res.slope_ci
     assert np.isfinite(lo) and np.isfinite(hi)
     assert isinstance(res.excludes_null, bool)
+
+
+@pytest.mark.slow
+def test_build_world_real_tqqq_starts_at_inception():
+    # codex P2: real_tqqq=True must NOT fabricate flat pre-2010 history even when
+    # start predates TQQQ's 2010-02 inception — drop the pre-inception NaN rows.
+    from rainier.backtest.resonance_study import build_world
+
+    w = build_world(start="1999-01-01", real_tqqq=True)
+    assert w.ts.iloc[0] >= pd.Timestamp("2010-02-01", tz="UTC")
+    assert not np.isnan(w.tqqq_ret).any()
 
 
 @pytest.mark.slow
