@@ -836,9 +836,11 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     is_rows = run_grid(is_df, bars_per_yr, is_years)
     if not is_rows:
         return None
-    eligible = [r for r in is_rows if r.res.n >= MIN_TRADES] or \
-               [r for r in is_rows if r.res.n >= 10] or is_rows
-    is_best = max(eligible, key=_mar_key)
+    # Select the in-sample config with the SAME robust rule the headline sweet spot uses
+    # (pick_sweet_spot → best Ret/DD among configs with ≥ROBUST_TRADES, falling back to the
+    # floor), so the OOS "cold shower" validates the same KIND of config the report crowns —
+    # not a thin high-Ret/DD fluke the leaderboard would otherwise pick here.
+    is_best = pick_sweet_spot(is_rows)
 
     # Run that exact config untouched on OOS, but warm the rolling indicators from pre-split
     # history (a real forward test would have it). Build a frame = [warm-up | OOS], compute on

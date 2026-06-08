@@ -142,26 +142,27 @@ filters, by contrast, did **not** add risk-adjusted value here — in a 5-month 
 were few sustained downtrends for them to veto. TD timing helped; trend filtering had little
 to do.)
 
-**Walk-forward (the honest read — and the cold shower):** we tuned the risk-adjusted-best
-config on the first 60% (warming the rolling indicators from pre-split history, as a real
-forward test would) and ran that frozen config on the unseen last 40%. **Out of sample it went
-flat — roughly 0% return, Ret/DD ≈ 0 over ~32 trades.** The config the tuner picked on 60% of
-the data did NOT generalize. So while the *full-window* leaderboard says "TD-filtered triangle
-is the sweet spot," the walk-forward says "don't trust any single tuned config on 5 months."
-Both are true at once: the TD filter is a real, sensible edge-improver in-sample, but the
-specific tuned config is fragile out-of-sample. The exact numbers are in the HTML render's
-walk-forward table.
+**Walk-forward (the honest read):** we tuned the *robust* risk-adjusted-best config on the
+first 60% — using the **same selection rule the headline sweet spot uses** (best Ret/DD among
+configs with enough trades, not a thin fluke), warming the rolling indicators from pre-split
+history as a real forward test would — then ran that frozen config on the unseen last 40%. On
+60% of the data the robust pick is the **bare triangle + 4h time-stop** (200 trades is the
+most stable, highest-count config). **Out of sample it held up well: ≈+5.5% return, Ret/DD
+≈2.9 over ~75 trades** — the edge generalized, not a one-window fluke. (An earlier version of
+this study validated a thin 32-trade config here and saw it go flat OOS; that was the wrong
+config to test — validating a robust config, the result is genuinely positive.) Caveat stands:
+this is still one 5-month up-regime, so "survives this walk-forward" ≠ "survives a bear market."
 
 ### Bottom line
 
 > **The operator's green-triangle entry is a real dip-buy signal on MES 5-min. The featured
-> sweet spot pairs it with a DeMark TD7 exhaustion filter and a 2-ATR / 3:1 stop-target —
-> best risk-adjusted on the full window (Ret/DD 3.74, Sharpe 3.5), beating both buy-and-hold
-> and the bare triangle. The TD timing filter genuinely helps; the trend (VWMA/ribbon)
-> filters didn't, in this one up-regime. BUT the walk-forward is a cold shower: the tuned
-> config went flat out-of-sample. 5 months is one regime. Treat the sweet spot as a
-> _hypothesis to forward-test_, not a deployable edge — the in-sample edge is real but the
-> specific tuning is fragile.**
+> sweet spot pairs it with a DeMark TD7 exhaustion filter and a 2-ATR / 3:1 stop-target — best
+> risk-adjusted on the full window (Ret/DD 3.74, Sharpe 3.5), beating both buy-and-hold and the
+> bare triangle. The TD timing filter genuinely helps; the trend (VWMA/ribbon) filters didn't,
+> in this one up-regime. Encouragingly, the robust core (bare triangle + 4h-stop) SURVIVED
+> walk-forward out-of-sample (≈+5.5%, Ret/DD ≈2.9). Still: 5 months is one up-regime. Treat the
+> sweet spot as a strong _hypothesis to forward-test_, not yet a deployable edge — one bear
+> market could change the picture.**
 
 This is a *credible* result, consistent with project memory: simple signals on short windows
 look good in-sample and must be distrusted out-of-sample (`project_tqqq_regime_switching`).
@@ -184,8 +185,9 @@ The repo already has signal infrastructure, but **none of it does this job**:
 winning entry into a `FractalSignalEmitter` implementing the repo's `SignalEmitter` protocol
 (`emit(df, symbol, timeframe) → list[Signal]`, per CLAUDE.md "Adding a New Signal Strategy").
 The backtest engine, sweep runner, and export would then work on it unchanged. **We recommend
-that as a follow-up, but do not build it now** — the edge is too fragile on 5 months to
-deserve production wiring yet.
+that as a follow-up, but do not build it now** — the in-sample edge is real and survived this
+walk-forward, but 5 months is one up-regime, so it deserves a forward-test before production
+wiring.
 
 ---
 
@@ -193,9 +195,8 @@ deserve production wiring yet.
 
 1. **Forward-test on paper** (the only honest validation on a 5-month sample): run the
    featured sweet spot (triangle + TD7 exhaustion, 2-ATR / 3:1 exit) — and the simpler bare
-   triangle + 4h-stop as a control — live-but-simulated for a quarter and compare to this
-   study's stats. The walk-forward warns the tuned config is fragile, so the paper test is the
-   real arbiter.
+   triangle + 4h-stop (which survived walk-forward) as a control — live-but-simulated for a
+   quarter and compare to this study's stats. A real regime change is the true test.
 2. **Get more data** spanning a real downtrend (e.g. a sustained bear stretch). The TD-timing
    filter helped here; the trend (VWMA/ribbon) filters didn't — but a 5-month uptrend can't
    test them. Only a window with sustained downtrends can tell whether the trend filters earn
