@@ -81,6 +81,28 @@ def test_load_clean_drops_zero_range_and_zero_volume(mod, tmp_path):
     assert out.iloc[0]["close"] == 101
 
 
+def test_load_clean_keeps_valid_row_when_later_dup_is_phantom(mod, tmp_path):
+    """If a duplicate timestamp's LATER row is a phantom, the valid earlier row must survive —
+    phantom filtering happens BEFORE dedup (codex P2 regression)."""
+    p = tmp_path / "MES_5m.csv"
+    df = pd.DataFrame(
+        [
+            # valid bar at 14:00
+            {"timestamp": "2026-01-01 14:00:00+00:00", "open": 100, "high": 102, "low": 98, "close": 101, "volume": 500},
+            # DUPLICATE 14:00 whose later row is a zero-range phantom — must NOT win dedup
+            {"timestamp": "2026-01-01 14:00:00+00:00", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 500},
+            {"timestamp": "2026-01-01 14:05:00+00:00", "open": 101, "high": 103, "low": 100, "close": 102, "volume": 600},
+        ]
+    )
+    df.to_csv(p, index=False)
+    out = mod.load_clean_5m(p)
+    # 14:00 must survive (the valid row), NOT be dropped because the later dup was a phantom
+    assert (out["timestamp"] == pd.Timestamp("2026-01-01 14:00:00+00:00")).any()
+    row = out[out["timestamp"] == pd.Timestamp("2026-01-01 14:00:00+00:00")].iloc[0]
+    assert row["close"] == 101  # the valid bar, not the phantom
+    assert len(out) == 2
+
+
 # ---------------------------------------------------------------------------
 # vwma — rolling, volume-weighted, not session-reset
 # ---------------------------------------------------------------------------

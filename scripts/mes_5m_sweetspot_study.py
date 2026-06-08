@@ -143,9 +143,12 @@ def load_clean_5m(path: Path) -> pd.DataFrame:
     highs/lows and break volume-dependent signals (the fractal's volume gate, the VWMA).
     """
     df = pd.read_csv(path, parse_dates=["timestamp"])
-    df = df.drop_duplicates("timestamp", keep="last")
+    # Drop phantom rows FIRST, then dedup — otherwise a duplicate timestamp whose later row is a
+    # phantom would have the valid row discarded by keep="last" and then the phantom filtered
+    # out, silently losing that timestamp entirely.
     df = df[(df["high"] - df["low"]) > 0]  # drop zero-range junk
     df = df[df["volume"] > 0]              # drop zero-volume edge bars (VWMA needs volume)
+    df = df.drop_duplicates("timestamp", keep="last")
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
@@ -857,11 +860,13 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     # best-with-hindsight on OOS (the honesty benchmark) — warmed the SAME way as the frozen
     # run (oos_warm + score_start) so the two rows compare like with like, not warmed-vs-cold.
     oos_rows = run_grid(oos_warm, bars_per_yr, oos_years, score_start=warm_len)
+    label = f"{is_best.entry.label()} · {is_best.exit.label()}"
+    if not oos_rows:  # no traded config OOS (e.g. very short held-out slice) — fall back
+        return ((label, is_best.res), oos_res, ("(no OOS config traded)", oos_res))
     oos_eligible = [r for r in oos_rows if r.res.n >= MIN_TRADES] or \
                    [r for r in oos_rows if r.res.n >= 10] or oos_rows
     oos_best = max(oos_eligible, key=_mar_key)
 
-    label = f"{is_best.entry.label()} · {is_best.exit.label()}"
     return ((label, is_best.res), oos_res,
             (f"{oos_best.entry.label()} · {oos_best.exit.label()}", oos_best.res))
 
