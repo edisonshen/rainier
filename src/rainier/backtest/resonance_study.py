@@ -341,6 +341,17 @@ class ABRow:
     beats_sma_and_bh: bool = False
 
 
+def beats_baselines(r: PortfolioResult, sma_r: PortfolioResult,
+                    bh_r: PortfolioResult) -> bool:
+    """§6.3 pass: beat BOTH the SMA gate and buy-hold on Calmar AND drawdown.
+
+    Drawdown must undercut both baselines (codex P2) — a higher-Calmar row with
+    a deeper drawdown than the SMA gate is NOT a win.
+    """
+    return (r.calmar > sma_r.calmar and r.calmar > bh_r.calmar
+            and r.max_dd < sma_r.max_dd and r.max_dd < bh_r.max_dd)
+
+
 def ab_table(world: World, cfg: GateConfig, start: str | None, end: str | None,
              label: str) -> tuple[list[ABRow], dict]:
     """The §6.3 A/B over a window: all comparators + anti-gaming flags."""
@@ -365,8 +376,7 @@ def ab_table(world: World, cfg: GateConfig, start: str | None, end: str | None,
     sma_r, bh_r = rows["sma"], rows["bh_tqqq"]
 
     def beats(r):
-        return (r.calmar > sma_r.calmar and r.calmar > bh_r.calmar
-                and r.max_dd < bh_r.max_dd)
+        return beats_baselines(r, sma_r, bh_r)
 
     # anti-gaming: a combo winner must beat its SMA component AND resonance-only
     # must beat buy-hold on this slice.
@@ -435,15 +445,19 @@ def run_study(csv_dir: Path | None = None, n_boot: int = 2000) -> StudyResult:
     except Exception:  # noqa: BLE001 — OOS slice is best-effort if data is short
         oos_ab = oos_anti = None
 
-    # Verdict (§6.3 anti-gaming). Resonance/combo must beat SMA+BH on the
-    # re-derived test AND survive the pre-2010 OOS slice.
+    # Verdict (§6.3 anti-gaming). The combination mode (resonance-only / AND /
+    # OR) was NOT selected on train (select_on_train sweeps weights+thresholds
+    # only), so letting a combo win on the held-out test slice would let the
+    # test window pick the mode after the fact — data snooping (codex P2). Per
+    # the anti-gaming rule, the load-bearing claim is that the **resonance-only**
+    # gate itself beats SMA+buy-hold; a combo that wins only because resonance-
+    # only does not is "the SMA gate in disguise". So the ship verdict requires
+    # resonance-only to win — combos are reported descriptively but cannot flip
+    # the verdict. Resonance/combo must also survive the pre-2010 OOS slice.
     res_row = next(r for r in test_ab if r.name == "resonance-gate")
-    combo_win = any(r.beats_sma_and_bh for r in test_ab
-                    if r.name in ("resonance AND SMA", "resonance OR SMA"))
-    test_pass = (res_row.beats_sma_and_bh or combo_win) and test_anti["res_beats_bh"]
-    oos_pass = bool(oos_ab) and any(
-        r.beats_sma_and_bh for r in oos_ab
-        if r.name in ("resonance-gate", "resonance AND SMA", "resonance OR SMA"))
+    test_pass = res_row.beats_sma_and_bh and test_anti["res_beats_bh"]
+    res_oos = next((r for r in (oos_ab or []) if r.name == "resonance-gate"), None)
+    oos_pass = bool(res_oos and res_oos.beats_sma_and_bh)
     if not thesis.excludes_null:
         verdict = ("PREMISE FAILS — §6.1 win-rate slope CI includes 0; the "
                    "more-agreement→higher-win-rate lead is not significant. "

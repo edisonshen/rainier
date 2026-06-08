@@ -6,14 +6,39 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from rainier.backtest.daily_mtm import PortfolioResult
 from rainier.backtest.resonance_study import (
     World,
+    beats_baselines,
     combine,
     deflate,
     metrics_over,
     sma_gate_decision,
     thesis_test,
 )
+
+
+def _perf(calmar, dd):
+    p = PortfolioResult("x", np.ones(2))
+    p.calmar, p.max_dd = calmar, dd
+    return p
+
+
+def test_beats_baselines_requires_dd_below_sma_too():
+    # codex P2 #1: higher Calmar than SMA but DEEPER drawdown than SMA is NOT a win.
+    sma = _perf(calmar=2.0, dd=0.30)
+    bh = _perf(calmar=1.5, dd=0.60)
+    deeper = _perf(calmar=2.5, dd=0.40)   # beats Calmar but DD 0.40 > SMA's 0.30
+    assert not beats_baselines(deeper, sma, bh)
+    real_win = _perf(calmar=2.5, dd=0.25)  # beats Calmar AND DD vs both
+    assert beats_baselines(real_win, sma, bh)
+
+
+def test_beats_baselines_needs_to_beat_both_calmar():
+    sma = _perf(calmar=2.0, dd=0.30)
+    bh = _perf(calmar=3.0, dd=0.60)        # buy-hold has the higher Calmar
+    cand = _perf(calmar=2.5, dd=0.20)      # beats SMA Calmar but not buy-hold's
+    assert not beats_baselines(cand, sma, bh)
 
 
 def test_deflate_monotone_haircut():
@@ -80,3 +105,9 @@ def test_run_study_smoke():
     assert r.verdict
     assert r.n_configs > 0
     assert any(row.name == "SMA22/44 gate" for row in r.test_ab)
+    # codex P2 #2: the ship-resonance verdict must NOT be reachable via a combo
+    # chosen on the held-out test slice — it requires resonance-ONLY to win.
+    if r.verdict.startswith("SHIP THE RESONANCE"):
+        res_row = next(x for x in r.test_ab if x.name == "resonance-gate")
+        assert res_row.beats_sma_and_bh, "resonance-only must win to ship resonance"
+        assert r.thesis.excludes_null
