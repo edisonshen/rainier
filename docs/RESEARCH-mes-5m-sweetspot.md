@@ -281,9 +281,11 @@ The repo already has signal infrastructure, but **none of it does this job**:
 winning entry into a `FractalSignalEmitter` implementing the repo's `SignalEmitter` protocol
 (`emit(df, symbol, timeframe) → list[Signal]`, per CLAUDE.md "Adding a New Signal Strategy").
 The backtest engine, sweep runner, and export would then work on it unchanged. **We recommend
-that as a follow-up, but do not build it now** — the in-sample edge is real and survived this
-walk-forward, but 5 months is one up-regime, so it deserves a forward-test before production
-wiring.
+that ONLY as a future follow-up, and explicitly do NOT build it now** — under the selectivity
+cap the in-sample winner is a thin ~26-trade config that did **not** survive walk-forward (its
+~3-trade out-of-sample slice went slightly negative). On this sample there is no validated edge
+to promote: it must first earn a much larger forward-test sample before any production wiring is
+justified.
 
 ---
 
