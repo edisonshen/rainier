@@ -78,8 +78,10 @@ was provided for it.)
 **(5) VRVP — volume-by-price.** The left-edge histogram shows how much volume traded at each
 price. Fat bars ("high-volume nodes") act as support/resistance; thin bars get crossed fast.
 This is the most discretionary of the five. We **approximate** it with a rolling
-volume-by-price node-proximity flag and **test it only as an optional add-on — it is NOT in
-the core sweep.** We say so plainly because faking precision here would be dishonest.
+volume-by-price node-proximity flag and test it as an **optional add-on** layered onto the
+bare-fractal and full-confluence anchor configs (so its marginal effect is genuinely
+measured), rather than crossing it with every combo. We keep it low-priority and say so
+plainly, because faking precision on a discretionary tool would be dishonest.
 
 ---
 
@@ -109,7 +111,8 @@ We backtested the green-triangle entry **alone** (the baseline) and in **conflue
 combinations** (triangle + above-VWMA55 + ribbon-rising/stacked + recent-TD-buy + an
 optional regular-trading-hours filter), each paired with realistic exits (ATR stop × reward
 target, time-stops of 30 min / 1 h / 2 h / 4 h, and a "exit when price loses the VWMA55"
-rule). That is **306 config combinations**. We charged a **1.0-index-point round-trip cost**
+rule). That is **374 config combinations** (including the optional HVN/VRVP add-ons). We
+charged a **1.0-index-point round-trip cost**
 (MES is liquid; ~0.5–1.0 pt of slippage+commission is realistic). We ranked by **Ret/DD**
 (total window return ÷ worst drawdown — a risk-adjusted score that, unlike annualized Calmar,
 is **not** inflated by annualizing a 5-month window) with a **30-trade floor** so tiny lucky
@@ -212,8 +215,9 @@ volume-dependent signals. The 5-min file had 89 zero-range and 226 zero-volume b
   `lookback` bars." Rolling, not session-reset (mirrors the chart).
 - `ribbon_bullish` = `close>sma44 AND sma44 rising`. `ribbon_stacked` = `sma22>sma44>sma120`.
 - `hvn_proximity` — VRVP approximation: rolling (240-bar) volume-by-price histogram, flag the
-  top-30%-volume bins as HVNs, True when the close sits in an HVN bin. **Optional add-on, not
-  in the core sweep.**
+  top-30%-volume bins as HVNs, True when the close sits in an HVN bin. Wired as an **optional
+  add-on** on the bare-fractal and full-confluence anchor configs (`require_hvn`), so its
+  marginal effect IS in the sweep — but it is not crossed with every combo.
 - `in_rth` — approximate US cash session (13:30–20:00 UTC ≈ 09:30–16:00 ET during EDT). The
   sample spans an EST→EDT change so a fixed offset can't track DST exactly; documented as
   approximate. The TD count and VWMA are intentionally NOT session-reset (the Pine versions

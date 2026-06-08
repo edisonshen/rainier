@@ -13,9 +13,10 @@ The operator trades MES on a 5-minute chart with a discretionary indicator stack
   (2) MA ribbon     — sma5/ema25/sma22/sma44/sma120/sma200/sma233 + BB(20,2): trend context.
   (3) VWAP 55       — a 55-bar ROLLING VWMA (NOT session VWAP): dynamic S/R.
   (4) 九轉序列【老貓】 — DeMark TD Sequential SETUP count (the 7/9 numbers): exhaustion timing.
-  (5) VRVP          — visible-range volume profile: discretionary S/R. Treated QUALITATIVELY
-                      here; a rolling volume-by-price high-volume-node proximity flag is
-                      computed and tested as an optional filter, but kept out of the core sweep.
+  (5) VRVP          — visible-range volume profile: discretionary S/R. Approximated with a
+                      rolling volume-by-price high-volume-node proximity flag and wired as an
+                      OPTIONAL add-on on the anchor configs (its marginal effect is measured,
+                      but it is not crossed with every combo — it is the lowest-priority signal).
 
 What it does:
   1. Load + clean MES_5m (drop zero-range / zero-volume phantom bars, dedup, sort).
@@ -344,7 +345,8 @@ def hvn_proximity(df: pd.DataFrame, window: int = 240, bins: int = 24,
     Rolling volume-by-price histogram over the last `window` bars (≈ a session-ish visible
     range). Bins the close range, sums volume per bin, flags the bins in the top
     `top_frac` of volume as HVNs; True at t if close[t] falls in an HVN bin. LOWER priority
-    — tested as an optional filter only, NOT in the core sweep (VRVP is discretionary).
+    (VRVP is discretionary) — wired as an OPTIONAL add-on on the anchor configs via
+    `EntryConfig.require_hvn`, not crossed with every combo.
     """
     c = df["close"].to_numpy()
     vol = df["volume"].to_numpy()
@@ -399,6 +401,7 @@ class EntryConfig:
     require_stacked: bool     # sma22>sma44>sma120 (stricter; implies a trend)
     require_td: bool          # recent TD buy-setup (>=7) within lookback
     require_rth: bool
+    require_hvn: bool = False  # VRVP approximation: price near a high-volume node (optional)
 
     def label(self) -> str:
         bits = ["fractal"]
@@ -412,6 +415,8 @@ class EntryConfig:
             bits.append("TD7")
         if self.require_rth:
             bits.append("RTH")
+        if self.require_hvn:
+            bits.append("HVN")
         return "+".join(bits)
 
 
@@ -455,6 +460,8 @@ def compute_entries(df: pd.DataFrame, ec: EntryConfig,
         sig &= get("td", lambda: td_buy_context(df, lookback=6, min_count=7))
     if ec.require_rth:
         sig &= get("rth", lambda: in_rth(df))
+    if ec.require_hvn:
+        sig &= get("hvn", lambda: hvn_proximity(df))
     return sig
 
 
@@ -538,9 +545,10 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
         reason = ""
         j = entry_bar
         while j < n:
-            if sess_last[j]:  # forced flatten at session end (covers gap/overnight)
-                exit_bar, exit_price, reason = j, c[j], "session_end"
-                break
+            # Intrabar risk (ATR stop/target) takes precedence over the close-based
+            # exits, INCLUDING the session-end flatten: a stop touched on the session's
+            # last bar must fill at the stop, not at that bar's close. Within a bar a
+            # stop is assumed hit before a target (conservative).
             if xc.kind == "atr":
                 if low[j] <= stop:
                     exit_bar, exit_price, reason = j, min(o[j], stop), "stop"
@@ -548,7 +556,10 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
                 if h[j] >= tp:
                     exit_bar, exit_price, reason = j, max(o[j], tp), "target"
                     break
-            elif xc.kind == "time":
+            if sess_last[j]:  # forced flatten at session end (covers gap/overnight)
+                exit_bar, exit_price, reason = j, c[j], "session_end"
+                break
+            if xc.kind == "time":
                 if j - entry_bar >= xc.bars:
                     exit_bar, exit_price, reason = j, c[j], "time"
                     break
@@ -655,6 +666,9 @@ def entry_grid() -> list[EntryConfig]:
 
     require_stacked implies a trend, so we don't combine it with require_ribbon (redundant);
     require_rth is an orthogonal time-of-day filter toggled across the meaningful combos.
+    The VRVP/HVN approximation is the lowest-priority signal, so it is NOT crossed with every
+    combo (that would double the grid); it is added as an optional add-on on the bare fractal
+    and on the full-confluence config so its marginal effect is genuinely measured.
     """
     out: list[EntryConfig] = []
     base_combos = [
@@ -670,7 +684,11 @@ def entry_grid() -> list[EntryConfig]:
         (True, False, True, True),     # + vwma + stacked + TD
     ]
     for (v, r, s, td), rth in itertools.product(base_combos, [False, True]):
-        out.append(EntryConfig(v, r, s, td, rth))
+        out.append(EntryConfig(v, r, s, td, rth, require_hvn=False))
+    # Optional VRVP/HVN add-on on the two anchor configs (bare + full confluence), RTH off/on.
+    for (v, r, s, td) in [(False, False, False, False), (True, True, False, True)]:
+        for rth in (False, True):
+            out.append(EntryConfig(v, r, s, td, rth, require_hvn=True))
     return out
 
 
@@ -959,8 +977,8 @@ risk. The walk-forward row, not the leaderboard top, is the honest read.</p></di
 {'beats' if beats_bh else 'does NOT beat'} buy-and-hold on raw return, with
 {'lower' if b.max_dd < bh.max_dd else 'higher'} drawdown ({pct(b.max_dd)} vs {pct(bh.max_dd)}).</li>
 <li>vs <b>bare fractal</b> ({pct(base.total_return)}, Ret/DD {num(base.mar)}): confluence
-{'improves' if beats_base else 'does NOT improve'} the risk-adjusted result — this is the screenshots'
-core lesson (a green triangle is only worth taking WITH trend + VWMA confluence; into a downtrend it fails).</li>
+{'improves' if beats_base else 'does NOT improve'} the risk-adjusted result.
+{('This matches the screenshots — a green triangle is worth more WITH trend + VWMA confluence.' if beats_base else 'This CONTRADICTS the screenshots intuition (which said confluence should help): on this single up-trending window the trend/VWMA/TD filters discarded winning dip-buys without removing proportionally more losers. Likely because the filters are a downtrend discriminator and there were few sustained downtrends here to filter — in a genuine bear regime they would probably matter, but this 5-month sample cannot show it.')}</li>
 <li>{oos_note}</li>
 </ul>
 <p style="margin:8px 0 0">Honest caveat: 5 months is one broad regime. Even a config that survives this
@@ -988,8 +1006,8 @@ but price is <i>below a falling ribbon</i> and below the VWMA55 — a counter-tr
 knife" that the ribbon context vetoes. Several reds and greens cluster with no follow-through.</li>
 <li><b>VRVP / high-volume nodes:</b> price stalls and reverses at the fat part of the left-edge
 histogram (high-volume nodes act as S/R); thin nodes get traversed fast. This is discretionary —
-we approximate it with a rolling volume-by-price node-proximity flag and test it as an optional
-filter only (it is NOT in the core sweep).</li>
+we approximate it with a rolling volume-by-price node-proximity flag and wire it as an optional
+add-on on the anchor configs (its marginal effect is measured, but it is the lowest-priority signal).</li>
 </ul>
 <p class="muted">These observations drove the confluence rules tested below: fractal + price&gt;VWMA55
 + ribbon-rising/stacked + recent-TD-buy is the "good entry" the screenshots depict; bare fractal is

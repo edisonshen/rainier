@@ -339,3 +339,57 @@ def test_in_rth_filter(mod):
     out = mod.in_rth(df)
     assert not out[0]  # 03:00 UTC outside RTH
     assert out[1]      # 15:00 UTC inside RTH
+
+
+# ---------------------------------------------------------------------------
+# regression: HVN add-on is actually wired into compute_entries + the grid
+# ---------------------------------------------------------------------------
+
+def test_hvn_filter_is_applied(mod):
+    df = _df(_fractal_positive_series())
+    base = mod.EntryConfig(False, False, False, False, False, require_hvn=False)
+    with_hvn = mod.EntryConfig(False, False, False, False, False, require_hvn=True)
+    e_base = mod.compute_entries(df, base)
+    e_hvn = mod.compute_entries(df, with_hvn)
+    # HVN is an additional AND-filter: its entries are a subset of the base fractal entries.
+    assert (e_hvn <= e_base).all()
+
+
+def test_hvn_in_entry_grid(mod):
+    grid = mod.entry_grid()
+    # the VRVP/HVN add-on must actually appear in the swept grid (codex P2 regression)
+    assert any(ec.require_hvn for ec in grid)
+
+
+# ---------------------------------------------------------------------------
+# regression: intrabar ATR stop/target takes precedence over session-end flatten
+# ---------------------------------------------------------------------------
+
+def test_atr_stop_beats_session_end_on_last_bar(mod):
+    """A stop touched on a session's last bar must fill at the stop, not at the close."""
+    # entry at open[1]; the session's LAST bar (index 2) trades through the stop intrabar.
+    base = pd.Timestamp("2026-02-02 19:50:00+00:00")
+    rows = [
+        {"timestamp": base, **_bar(100, 101, 99, 100.5)},                    # signal bar
+        {"timestamp": base + pd.Timedelta(minutes=5), **_bar(100, 101, 99, 100.0)},  # entry @ open=100
+        # session-last bar: low spikes well below the stop AND closes higher than the stop.
+        {"timestamp": base + pd.Timedelta(minutes=10), **_bar(100, 101, 80, 99.0)},
+        # next session (so bar 2 is the session-last bar)
+        {"timestamp": pd.Timestamp("2026-02-03 14:00:00+00:00"), **_bar(99, 100, 98, 99.0)},
+    ]
+    df = pd.DataFrame(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    # large ATR so the stop sits ~ entry-? ; we instead pin ATR via a controlled series:
+    # use a tiny atr so stop is just below entry and the bar-2 low (80) blows through it.
+    atr_s = np.full(len(df), 5.0)  # k will be applied by the config
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    # stop = entry - 1.0*ATR = 100 - 5 = 95; bar2 low=80 <= 95 => stop fills.
+    xc = mod.ExitConfig("atr", atr_k=1.0, rr=2.0)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last, bars_per_yr=1e5, n_years=0.01)
+    assert res.n == 1
+    assert res.trades[0].reason == "stop"           # NOT "session_end"
+    assert res.trades[0].exit_bar == 2
+    # filled at min(open=100, stop=95) = 95, not the bar close (99)
+    assert res.trades[0].exit_price == pytest.approx(95.0)
