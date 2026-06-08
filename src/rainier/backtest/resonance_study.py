@@ -471,14 +471,21 @@ def run_study(csv_dir: Path | None = None, n_boot: int = 2000) -> StudyResult:
     cfg, n_cfg, train_calmar = select_on_train(real)
     test_ab, test_anti = ab_table(real, cfg, TEST_START, None, "test 2023→now")
 
-    # §6.2(b) True-OOS: frozen cfg on synthetic 3×QQQ pre-2010 (dot-com + GFC)
+    # §6.2(b) True-OOS: frozen cfg on synthetic 3×QQQ pre-2010 (dot-com + GFC).
+    # Skip ONLY when the pre-2010 data is genuinely unavailable (missing CSV or
+    # too few rows for the 2000-2009 window). Real bugs in build_world/ab_table
+    # MUST surface — this OOS slice is load-bearing for the §6.2 verdict, so a
+    # blanket except would let a broken evaluation masquerade as a clean run.
     oos_ab = oos_anti = None
     try:
         synth = build_world(start="1999-06-01", end="2009-12-31",
                             real_tqqq=False, csv_dir=csv_dir)
+        if len(_window_idx(synth.ts, "2000-01-01", "2009-12-31")) < 60:
+            raise FileNotFoundError("pre-2010 OOS window has too few rows")
         oos_ab, oos_anti = ab_table(synth, cfg, "2000-01-01", "2009-12-31",
                                     "pre-2010 synthetic 3×QQQ")
-    except Exception:  # noqa: BLE001 — OOS slice is best-effort if data is short
+    except FileNotFoundError:
+        # genuine data-unavailable: leave the OOS slice unreported (not a failure)
         oos_ab = oos_anti = None
 
     # Verdict (§6.3 anti-gaming). The combination mode (resonance-only / AND /

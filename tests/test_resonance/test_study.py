@@ -155,6 +155,27 @@ def test_thesis_test_returns_buckets_and_ci():
 
 
 @pytest.mark.slow
+def test_run_study_propagates_oos_bugs_not_swallowed(monkeypatch):
+    # codex P2 (r5): a real bug in the OOS path must NOT be silently swallowed
+    # into oos_ab=None — only genuine data-unavailability (FileNotFoundError) is.
+    import rainier.backtest.resonance_study as rs
+
+    real_ab_table = rs.ab_table
+    calls = {"n": 0}
+
+    def flaky_ab_table(world, cfg, start, end, label):
+        calls["n"] += 1
+        # second call is the pre-2010 OOS slice — simulate a code bug there
+        if "synthetic" in label:
+            raise ValueError("simulated bug in ab_table")
+        return real_ab_table(world, cfg, start, end, label)
+
+    monkeypatch.setattr(rs, "ab_table", flaky_ab_table)
+    with pytest.raises(ValueError, match="simulated bug"):
+        rs.run_study(n_boot=50)
+
+
+@pytest.mark.slow
 def test_build_world_real_tqqq_starts_at_inception():
     # codex P2: real_tqqq=True must NOT fabricate flat pre-2010 history even when
     # start predates TQQQ's 2010-02 inception — drop the pre-inception NaN rows.
