@@ -306,6 +306,349 @@ def test_compute_entries_is_subset_of_base_fractal(mod):
     assert (e_strict <= e_base).all()
 
 
+# ===========================================================================
+# SHORT side — the DERIVED mirror of the long signal (not in the operator's Pine)
+# ===========================================================================
+
+def _fractal_down_positive_series() -> list[dict]:
+    """Hand-built series that satisfies fractalsUp + strongBearFractal at the final bar.
+
+    Exact axis-flip of `_fractal_positive_series`: a long uptrend (so ema5>ema11 at t-3), then
+    an up-fractal in the HIGHS (high[3] is the local PEAK) followed by a strong red reversal that
+    makes a new low. Lows/highs/closes mirrored about the price level.
+    """
+    # long uptrend so ema5>ema11 holds at t-3
+    pre = [_bar(c, c + 0.5, c - 0.5, c) for c in np.arange(110, 140, 1.0)]
+    # the fractal window (last 6 bars). Build highs: high[5]<high[4]<high[3]>high[2]>high[1] (peak)
+    window = [
+        # t-5: low high (start of the peak)
+        _bar(140, 141, 139, 140.5),
+        # t-4: higher high
+        _bar(140.5, 143, 139, 142),
+        # t-3: peak (highest high). small green body (for body-expansion contrast).
+        _bar(142, 145, 141.5, 142.5),
+        # t-2: red, high falls
+        _bar(142.5, 143, 140, 140.2),
+        # t-1: big red body (close[t-1]<open[t-1]); body large
+        _bar(141.0, 141.5, 136, 136.5),
+        # t: red close<open[t-1]; new low<low[t-3]; close[t]<open[t-1]
+        _bar(136.5, 137, 133, 133.5, v=5000),  # high volume so volume gate can pass
+    ]
+    return pre + window
+
+
+def test_fractal_down_trend_fires_on_constructed_top(mod):
+    df = _df(_fractal_down_positive_series())
+    sig = mod.fractal_down_trend(df)
+    assert sig[-1], "fractalDownTrend should fire on the hand-built peak reversal"
+
+
+def test_fractal_down_trend_silent_on_flat_market(mod):
+    rows = [_bar(100, 100.5, 99.5, 100.0) for _ in range(60)]
+    df = _df(rows)
+    sig = mod.fractal_down_trend(df)
+    assert not sig.any(), "no short fractal on a flat tape"
+
+
+def test_fractal_down_trend_silent_on_pure_downtrend(mod):
+    # monotonic down: highs never form the required up-fractal shape
+    closes = list(np.arange(160, 100, -1.0))
+    rows = [_bar(c, c + 0.2, c - 1, c - 0.5) for c in closes]
+    df = _df(rows)
+    sig = mod.fractal_down_trend(df)
+    assert not sig.any()
+
+
+def test_fractal_down_trend_is_causal(mod):
+    """A short signal at bar t must depend ONLY on bars <= t (no lookahead)."""
+    df = _df(_fractal_down_positive_series())
+    sig = mod.fractal_down_trend(df)
+    first = int(np.argmax(sig))
+    assert sig[first]
+    df2 = pd.concat([df, _df([_bar(1, 2, 0.5, 1)])], ignore_index=True)
+    sig2 = mod.fractal_down_trend(df2)
+    assert sig2[first] == sig[first]
+
+
+def test_fractal_down_is_mirror_not_identical_to_long(mod):
+    """On the LONG-positive fixture the short fractal must NOT fire (and vice-versa) — they are
+    opposite-direction signals, not the same array."""
+    long_df = _df(_fractal_positive_series())
+    short_df = _df(_fractal_down_positive_series())
+    assert mod.fractal_up_trend(long_df)[-1]
+    assert not mod.fractal_down_trend(long_df)[-1]   # long bottom ≠ short top
+    assert mod.fractal_down_trend(short_df)[-1]
+    assert not mod.fractal_up_trend(short_df)[-1]
+
+
+def test_td_setup_sell_completes_at_nine(mod):
+    # strictly ascending closes => every bar t>=4 has close>close[4] => count climbs
+    closes = list(np.arange(70, 100, 1.0))  # 30 ascending bars
+    rows = [_bar(c, c + 1, c - 1, c) for c in closes]
+    df = _df(rows)
+    out = mod.td_setup_sell(df, completed=9)
+    first_true = int(np.argmax(out))
+    assert out[first_true]
+    assert first_true == 12        # run hits 9 at t = 4 + 8 = 12 (mirror of the buy test)
+    assert out.sum() == 1
+    assert not out[13:].any()
+
+
+def test_td_setup_sell_resets_on_down_close(mod):
+    closes = list(np.arange(92, 100, 1.0)) + [10.0] + list(np.arange(70, 100, 1.0))
+    rows = [_bar(c, c + 1, c - 1, c) for c in closes]
+    df = _df(rows)
+    out = mod.td_setup_sell(df, completed=9)
+    assert not out[:9].any()
+
+
+def test_td_sell_context_uses_completion_event(mod):
+    """In a long rally the count climbs past min_count; sell context must NOT stay true for every
+    later bar — only within lookback of the completion event (mirror of the buy-context test)."""
+    closes = list(np.arange(170, 200, 1.0))  # 30 strictly ascending
+    rows = [_bar(c, c + 0.5, c - 0.5, c) for c in closes]
+    df = _df(rows)
+    ctx = mod.td_sell_context(df, lookback=6, min_count=7)
+    assert ctx[10]        # completion event (count reaches 7)
+    assert ctx[15]        # still within lookback
+    assert not ctx[-1]    # deep in the rally, far past the completion → no longer true
+
+
+def test_ribbon_bearish_requires_below_and_falling(mod):
+    closes = list(np.arange(200, 100, -1.0))  # falling
+    rows = [_bar(c, c + 0.5, c - 0.5, c) for c in closes]
+    df = _df(rows)
+    out = mod.ribbon_bearish(df)
+    assert out[-1]             # falling downtrend => bearish at the end
+    assert not out[:44].any()  # sma44 undefined early
+
+
+def test_ribbon_bearish_false_in_uptrend(mod):
+    closes = list(np.arange(100, 200, 1.0))
+    rows = [_bar(c, c + 0.5, c - 0.5, c) for c in closes]
+    df = _df(rows)
+    assert not mod.ribbon_bearish(df).any()
+
+
+def test_ribbon_stacked_bear_true_only_when_ordered(mod):
+    closes = list(np.arange(260, 100, -1.0))  # long fall => sma22<sma44<sma120
+    rows = [_bar(c, c + 0.5, c - 0.5, c) for c in closes]
+    df = _df(rows)
+    out = mod.ribbon_stacked_bear(df)
+    assert out[-1]
+    assert not out[:119].any()
+
+
+def test_below_vwma(mod):
+    rows = [_bar(50, 51, 49, 50, v=100) for _ in range(5)]
+    rows += [_bar(10, 11, 9, 10, v=100)]   # drop well below the VWMA
+    df = _df(rows)
+    out = mod.below_vwma(df, n=4)
+    assert out[-1]
+    assert not out[0]   # NaN window => treated False
+
+
+def test_short_confluence_is_subset_of_base_short_fractal(mod):
+    df = _df(_fractal_down_positive_series())
+    base = mod.EntryConfig(False, False, False, False, False, direction="short")
+    strict = mod.EntryConfig(True, True, False, True, False, direction="short")
+    e_base = mod.compute_entries(df, base)
+    e_strict = mod.compute_entries(df, strict)
+    assert (e_strict <= e_base).all()
+
+
+def test_compute_entries_dispatches_on_direction(mod):
+    """A short EntryConfig must use the short base signal, not the long one (cache isolation)."""
+    df = _df(_fractal_down_positive_series())
+    cache = {}
+    long_e = mod.compute_entries(df, mod.EntryConfig(False, False, False, False, False,
+                                                     direction="long"), cache)
+    short_e = mod.compute_entries(df, mod.EntryConfig(False, False, False, False, False,
+                                                      direction="short"), cache)
+    # the short fixture fires the short fractal at the last bar, not the long fractal
+    assert short_e[-1]
+    assert not long_e[-1]
+
+
+# ---------------------------------------------------------------------------
+# SHORT simulation — direction-signed P&L + mirrored exits
+# ---------------------------------------------------------------------------
+
+def test_simulate_short_profits_when_price_falls(mod):
+    # falling price => a short is profitable (entry/exit - 1 > 0)
+    rows = [_bar(100 - i, 101 - i, 99 - i, 100 - i) for i in range(8)]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=3)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                       bars_per_yr=1e5, n_years=0.01, direction="short")
+    assert res.n == 1
+    assert res.trades[0].direction == "short"
+    assert res.trades[0].ret > 0          # short into a decline → gain
+    assert res.total_pts > 0
+
+
+def test_simulate_short_loses_when_price_rises(mod):
+    rows = [_bar(100 + i, 101 + i, 99 + i, 100 + i) for i in range(8)]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=3)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                       bars_per_yr=1e5, n_years=0.01, direction="short")
+    assert res.trades[0].ret < 0          # short into a rally → loss
+
+
+def test_simulate_short_atr_stop_is_above_entry(mod):
+    """Short ATR stop sits ABOVE the entry; an upside spike fills at the stop (mirror of long)."""
+    rows = [_bar(100, 101, 99, 100), _bar(100, 101, 99, 100),
+            _bar(100, 110, 100, 108), _bar(100, 101, 99, 100)]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = np.full(len(df), 5.0)         # stop = entry + 1*5 = 105
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("atr", atr_k=1.0, rr=2.0)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                       bars_per_yr=1e5, n_years=0.01, direction="short")
+    assert res.trades[0].reason == "stop"
+    assert res.trades[0].exit_price == pytest.approx(105.0)  # filled at the stop ABOVE entry
+
+
+def test_simulate_short_atr_target_is_below_entry(mod):
+    rows = [_bar(100, 101, 99, 100), _bar(100, 101, 99, 100),
+            _bar(95, 96, 88, 90), _bar(100, 101, 99, 100)]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = np.full(len(df), 5.0)         # stop=105, target = 100 - 2*(105-100) = 90
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("atr", atr_k=1.0, rr=2.0)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                       bars_per_yr=1e5, n_years=0.01, direction="short")
+    assert res.trades[0].reason == "target"
+    assert res.trades[0].exit_price == pytest.approx(90.0)   # target BELOW entry
+
+
+def test_simulate_short_vwma_exit_on_reclaim(mod):
+    """A short's vwmaCross exit triggers when price RECLAIMS the VWMA (close > VWMA), the mirror
+    of the long exit (close < VWMA)."""
+    # 5 low bars set a low VWMA, then a bar pops well above it → short should exit on reclaim.
+    rows = [_bar(10, 11, 9, 10, v=100) for _ in range(5)]
+    rows += [_bar(10, 11, 9, 10, v=100)]            # signal bar (close ~ VWMA)
+    rows += [_bar(50, 51, 49, 50, v=100)]           # entry bar opens at 50, far above VWMA
+    rows += [_bar(50, 51, 49, 50, v=100) for _ in range(3)]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[5] = True
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("vwma")
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                       bars_per_yr=1e5, n_years=0.01, direction="short")
+    assert res.n == 1
+    assert res.trades[0].reason == "vwmaCross"
+
+
+def test_simulate_short_marks_in_trade_drawdown(mod):
+    """A short whose price spikes UP mid-hold (adverse) must mark a drawdown on the equity curve."""
+    rows = [
+        _bar(100, 101, 99, 100.0),   # 0 signal
+        _bar(100, 101, 99, 100.0),   # 1 entry @ open 100 (short)
+        _bar(100, 130, 100, 129.0),  # 2 price spikes UP (adverse for a short)
+        _bar(128, 129, 99, 100.0),   # 3 back to 100
+        _bar(100, 101, 99, 100.0),   # 4 time-stop exit @ ~100
+        _bar(100, 101, 99, 100.0),
+    ]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=4)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last,
+                       bars_per_yr=1e5, n_years=0.01, direction="short")
+    assert res.equity[2] < 0.9   # short marked-to-market at entry/close = 100/129 ≈ 0.78 → drawdown
+    assert res.max_dd > 0.2
+
+
+# ---------------------------------------------------------------------------
+# COMBINED simulation — one position at a time, either direction
+# ---------------------------------------------------------------------------
+
+def test_combined_one_position_at_a_time(mod):
+    """A long entry while a long is already open is ignored; the next trade can only start after
+    the prior exit (no pyramiding, no double-booking)."""
+    rows = [_bar(100, 101, 99, 100.0) for _ in range(12)]
+    df = _df(rows)
+    long_e = np.zeros(len(df), dtype=bool)
+    short_e = np.zeros(len(df), dtype=bool)
+    long_e[0] = True
+    long_e[2] = True   # fires WHILE the first trade is open (entry@1, time3 holds 1..3) → ignored
+    short_e[4] = True  # fires after the first exit → a new SHORT trade
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=3)
+    res = mod.simulate_combined(df, long_e, short_e, xc, atr_s, vwma_s, sess_last,
+                                bars_per_yr=1e5, n_years=0.01)
+    assert res.n == 2                       # the in-trade signal at bar 2 was skipped
+    assert res.trades[0].direction == "long"
+    assert res.trades[0].entry_bar == 1
+    assert res.trades[1].direction == "short"
+    assert res.trades[1].entry_bar == 5     # after the long exited at bar 3
+
+
+def test_combined_long_wins_tie_break(mod):
+    """On a bar where BOTH a long and a short signal fire, the documented tie-break takes LONG."""
+    rows = [_bar(100, 101, 99, 100.0) for _ in range(8)]
+    df = _df(rows)
+    long_e = np.zeros(len(df), dtype=bool)
+    short_e = np.zeros(len(df), dtype=bool)
+    long_e[0] = True
+    short_e[0] = True   # same bar → long must win
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=3)
+    res = mod.simulate_combined(df, long_e, short_e, xc, atr_s, vwma_s, sess_last,
+                                bars_per_yr=1e5, n_years=0.01)
+    assert res.n == 1
+    assert res.trades[0].direction == "long"
+
+
+def test_run_combined_grid_produces_combined_rows(mod):
+    """The combined sweep must emit Rows tagged mode='combined' (so the report can label L/S)."""
+    df = _df(_fractal_positive_series() + _fractal_down_positive_series())
+    rows = mod.run_combined_grid(df, bars_per_yr=1e5, n_years=0.01)
+    # at least the bare L/S config should trade on a fixture carrying both a long and short signal
+    assert any(r.mode == "combined" for r in rows)
+
+
+def test_entry_grid_short_mirrors_long_shape(mod):
+    """The short grid is the exact mirror of the long grid: same flag combos, direction='short'."""
+    long_grid = mod.entry_grid("long")
+    short_grid = mod.entry_grid("short")
+    assert len(long_grid) == len(short_grid)
+    for lc, sc in zip(long_grid, short_grid):
+        assert lc.direction == "long" and sc.direction == "short"
+        assert (lc.require_vwma, lc.require_ribbon, lc.require_stacked,
+                lc.require_td, lc.require_rth, lc.require_hvn) == \
+               (sc.require_vwma, sc.require_ribbon, sc.require_stacked,
+                sc.require_td, sc.require_rth, sc.require_hvn)
+
+
 # ---------------------------------------------------------------------------
 # simulate — no-lookahead timing + cost
 # ---------------------------------------------------------------------------

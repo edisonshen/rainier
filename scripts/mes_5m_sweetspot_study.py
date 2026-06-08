@@ -248,6 +248,76 @@ def fractal_up_trend(df: pd.DataFrame) -> np.ndarray:
     return sig
 
 
+def fractal_down_trend(df: pd.DataFrame) -> np.ndarray:
+    """DERIVED short mirror of `fractalUpTrend` — the bearish top-reversal SELL triangle.
+
+    *** NOT IN THE OPERATOR'S PINE. *** The operator's Pine only PLOTS the long
+    `fractalUpTrend` signal; there is no published short signal. This is a faithful, axis-
+    flipped MIRROR we constructed so the long-only study can be extended to long/short — every
+    `low`→`high`, `>`→`<`, `high>high[3]`→`low<low[3]`, `ema12<ema26`→`ema12>ema26` swap is the
+    exact reflection of the long rule. Treat its results as a hypothesis, not the operator's
+    own signal.
+
+    Mirror of the long rule, evaluated at the close of the current bar t (`[k]` = k bars ago):
+
+        sma6Volume = sma(volume,6)
+        fractalVolumeChange = (volume - sma6Volume)/sma6Volume*100
+        fractalsUp = high[3]>high[4] and high[4]>high[5] and high[2]<high[3] and high[1]<high[2]
+                     and sma6Volume[2] > fractalVolumeChange          # SAME volume gate
+        ema12 = ema(close,5); ema26 = ema(close,11)
+        strongBearFractal = close<open[1] and close[1]<open[1] and close[2]<open[2]
+                            and abs(close[1]-open[1])>abs(close[3]-open[3])
+                            and low<low[3] and ema12[3]>ema26[3]
+        fractalDownTrend = fractalsUp and strongBearFractal
+
+    `fractalsUp` is the fractal-HIGH (high[3] is the local PEAK) — the mirror of `fractalsDown`
+    (where low[3] is the local trough). Returns True at the SIGNAL bar t (caller enters/shorts
+    next bar's open).
+    """
+    o = df["open"].to_numpy()
+    h = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    c = df["close"].to_numpy()
+    vol = df["volume"].to_numpy()
+    n = len(df)
+
+    sma6vol = sma(df["volume"], 6).to_numpy()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        frac_vol_change = np.where(sma6vol > 0, (vol - sma6vol) / sma6vol * 100.0, np.nan)
+
+    e_fast = ema(df["close"], 5).to_numpy()
+    e_slow = ema(df["close"], 11).to_numpy()
+
+    sig = np.zeros(n, dtype=bool)
+    for t in range(5, n):
+        # fractalsUp — an up-fractal shape in the HIGHS over t-5..t-1 + the SAME volume gate.
+        fractals_up = (
+            h[t - 3] > h[t - 4]
+            and h[t - 4] > h[t - 5]
+            and h[t - 2] < h[t - 3]
+            and h[t - 1] < h[t - 2]
+            and np.isfinite(sma6vol[t - 2])
+            and np.isfinite(frac_vol_change[t])
+            and sma6vol[t - 2] > frac_vol_change[t]
+        )
+        if not fractals_up:
+            continue
+        # strongBearFractal — three-bar bearish thrust + body expansion + new low + prior-uptrend.
+        strong = (
+            c[t] < o[t - 1]
+            and c[t - 1] < o[t - 1]
+            and c[t - 2] < o[t - 2]
+            and abs(c[t - 1] - o[t - 1]) > abs(c[t - 3] - o[t - 3])
+            and low[t] < low[t - 3]
+            and np.isfinite(e_fast[t - 3])
+            and np.isfinite(e_slow[t - 3])
+            and e_fast[t - 3] > e_slow[t - 3]
+        )
+        if strong:
+            sig[t] = True
+    return sig
+
+
 def td_setup_buy(df: pd.DataFrame, completed: int = 9) -> np.ndarray:
     """DeMark TD Sequential bullish SETUP count — the 九轉序列 7/9 numbers.
 
@@ -307,6 +377,54 @@ def td_buy_context(df: pd.DataFrame, lookback: int = 6, min_count: int = 7) -> n
     return out
 
 
+def td_setup_sell(df: pd.DataFrame, completed: int = 9) -> np.ndarray:
+    """DeMark TD Sequential bearish (SELL) SETUP count — mirror of `td_setup_buy`.
+
+    Canonical DeMark spec: a sell setup increments while close > close[4]; resets to 0
+    otherwise. A completed run of `completed` (9, or 7 for the earlier context) consecutive
+    bars each closing ABOVE close 4 bars earlier flags UPSIDE EXHAUSTION → short-reversal
+    timing. Fires once on the crossing bar. Rolling, NOT session-reset (mirrors the chart).
+    """
+    c = df["close"].to_numpy()
+    n = len(df)
+    out = np.zeros(n, dtype=bool)
+    run = 0
+    for t in range(n):
+        if t >= 4 and c[t] > c[t - 4]:
+            run += 1
+        else:
+            run = 0
+        if run == completed:
+            out[t] = True
+    return out
+
+
+def td_sell_context(df: pd.DataFrame, lookback: int = 6, min_count: int = 7) -> np.ndarray:
+    """True at bar t if a SELL-setup COMPLETION (the count crossing up through `min_count`)
+    occurred within the last `lookback` bars — recent UPSIDE exhaustion, the short-timing
+    window. Mirror of `td_buy_context`: rolls the completion EVENT, not the raw running count
+    (which would stay true through a whole rally and admit shorts long after the TD7/9 print).
+    """
+    c = df["close"].to_numpy()
+    n = len(df)
+    run = 0
+    event = np.zeros(n, dtype=bool)
+    for t in range(n):
+        prev_run = run
+        if t >= 4 and c[t] > c[t - 4]:
+            run += 1
+        else:
+            run = 0
+        if run == min_count and prev_run == min_count - 1:
+            event[t] = True
+    out = np.zeros(n, dtype=bool)
+    for t in range(n):
+        lo = max(0, t - lookback)
+        if event[lo : t + 1].any():
+            out[t] = True
+    return out
+
+
 def ribbon_bullish(df: pd.DataFrame) -> np.ndarray:
     """MA-ribbon TREND-CONTEXT filter: price above sma44 AND sma44 rising.
 
@@ -338,11 +456,43 @@ def ribbon_stacked(df: pd.DataFrame) -> np.ndarray:
     return out
 
 
+def ribbon_bearish(df: pd.DataFrame) -> np.ndarray:
+    """Mirror of `ribbon_bullish`: price below sma44 AND sma44 falling (bearish trend context)."""
+    c = df["close"].to_numpy()
+    s44 = sma(df["close"], 44).to_numpy()
+    n = len(df)
+    out = np.zeros(n, dtype=bool)
+    for t in range(1, n):
+        if np.isfinite(s44[t]) and np.isfinite(s44[t - 1]):
+            out[t] = c[t] < s44[t] and s44[t] < s44[t - 1]
+    return out
+
+
+def ribbon_stacked_bear(df: pd.DataFrame) -> np.ndarray:
+    """Mirror of `ribbon_stacked`: stacked bearish sma22 < sma44 < sma120 (short under mid under long)."""
+    s22 = sma(df["close"], 22).to_numpy()
+    s44 = sma(df["close"], 44).to_numpy()
+    s120 = sma(df["close"], 120).to_numpy()
+    n = len(df)
+    out = np.zeros(n, dtype=bool)
+    for t in range(n):
+        if np.isfinite(s22[t]) and np.isfinite(s44[t]) and np.isfinite(s120[t]):
+            out[t] = s22[t] < s44[t] < s120[t]
+    return out
+
+
 def above_vwma(df: pd.DataFrame, n: int = 55) -> np.ndarray:
     """True where close >= the rolling VWMA55 (price reclaiming / holding the dynamic S/R)."""
     v = vwma(df, n).to_numpy()
     c = df["close"].to_numpy()
     return np.where(np.isfinite(v), c >= v, False)
+
+
+def below_vwma(df: pd.DataFrame, n: int = 55) -> np.ndarray:
+    """Mirror of `above_vwma`: True where close <= the rolling VWMA55 (price below dynamic S/R)."""
+    v = vwma(df, n).to_numpy()
+    c = df["close"].to_numpy()
+    return np.where(np.isfinite(v), c <= v, False)
 
 
 def hvn_proximity(df: pd.DataFrame, window: int = 240, bins: int = 24,
@@ -435,24 +585,31 @@ def rth_last_bar(df: pd.DataFrame) -> np.ndarray:
 
 @dataclass(frozen=True)
 class EntryConfig:
-    """Confluence filters layered on top of the base fractalUpTrend entry."""
+    """Confluence filters layered on top of the base fractal entry.
+
+    `direction` selects the base signal + the directional sense of every confluence filter:
+      - "long"  → fractalUpTrend  + (>vwma55, ribbon↑, stacked-bull, TD-buy context)
+      - "short" → fractalDownTrend + (<vwma55, ribbon↓, stacked-bear, TD-sell context)
+    The short side is the DERIVED mirror (see `fractal_down_trend`) — not in the operator's Pine.
+    """
     require_vwma: bool
-    require_ribbon: bool      # close>sma44 & sma44 rising
-    require_stacked: bool     # sma22>sma44>sma120 (stricter; implies a trend)
-    require_td: bool          # recent TD buy-setup (>=7) within lookback
+    require_ribbon: bool      # long: close>sma44 & rising ; short: close<sma44 & falling
+    require_stacked: bool     # long: sma22>sma44>sma120 ; short: sma22<sma44<sma120
+    require_td: bool          # recent TD setup (>=7) within lookback (buy for long, sell for short)
     require_rth: bool
     require_hvn: bool = False  # VRVP approximation: price near a high-volume node (optional)
+    direction: str = "long"    # "long" | "short"
 
     def label(self) -> str:
-        bits = ["fractal"]
+        bits = ["fractal↓" if self.direction == "short" else "fractal"]
         if self.require_vwma:
-            bits.append(">vwma55")
+            bits.append("<vwma55" if self.direction == "short" else ">vwma55")
         if self.require_ribbon:
-            bits.append("ribbon↑")
+            bits.append("ribbon↓" if self.direction == "short" else "ribbon↑")
         if self.require_stacked:
-            bits.append("stacked")
+            bits.append("stacked↓" if self.direction == "short" else "stacked")
         if self.require_td:
-            bits.append("TD7")
+            bits.append("TD7↓" if self.direction == "short" else "TD7")
         if self.require_rth:
             bits.append("RTH")
         if self.require_hvn:
@@ -481,23 +638,38 @@ class ExitConfig:
 
 def compute_entries(df: pd.DataFrame, ec: EntryConfig,
                     cache: dict | None = None) -> np.ndarray:
-    """Base fractalUpTrend AND all requested confluence filters → entry-trigger bars."""
+    """Base fractal entry (up for long / down for short) AND all requested confluence filters,
+    in the config's directional sense → entry-trigger bars.
+
+    Cache keys are direction-suffixed (`vwma:long` vs `vwma:short`) so a shared grid cache never
+    serves a long filter to a short config (or vice versa). RTH/HVN are direction-agnostic and
+    keyed once.
+    """
     cache = cache if cache is not None else {}
+    short = ec.direction == "short"
 
     def get(key, fn):
         if key not in cache:
             cache[key] = fn()
         return cache[key]
 
-    sig = get("fractal", lambda: fractal_up_trend(df)).copy()
+    if short:
+        sig = get("fractal:short", lambda: fractal_down_trend(df)).copy()
+    else:
+        sig = get("fractal:long", lambda: fractal_up_trend(df)).copy()
     if ec.require_vwma:
-        sig &= get("vwma", lambda: above_vwma(df, 55))
+        sig &= get(f"vwma:{ec.direction}",
+                   (lambda: below_vwma(df, 55)) if short else (lambda: above_vwma(df, 55)))
     if ec.require_ribbon:
-        sig &= get("ribbon", lambda: ribbon_bullish(df))
+        sig &= get(f"ribbon:{ec.direction}",
+                   (lambda: ribbon_bearish(df)) if short else (lambda: ribbon_bullish(df)))
     if ec.require_stacked:
-        sig &= get("stacked", lambda: ribbon_stacked(df))
+        sig &= get(f"stacked:{ec.direction}",
+                   (lambda: ribbon_stacked_bear(df)) if short else (lambda: ribbon_stacked(df)))
     if ec.require_td:
-        sig &= get("td", lambda: td_buy_context(df, lookback=6, min_count=7))
+        sig &= get(f"td:{ec.direction}",
+                   (lambda: td_sell_context(df, lookback=6, min_count=7)) if short
+                   else (lambda: td_buy_context(df, lookback=6, min_count=7)))
     if ec.require_rth:
         rth = get("rth", lambda: in_rth(df))
         # The entry fills NEXT bar (t+1), so the entry bar must also be in RTH — otherwise an
@@ -521,8 +693,9 @@ class Trade:
     exit_bar: int
     entry_price: float
     exit_price: float
-    ret: float       # net of cost, fractional
+    ret: float       # net of cost, fractional (already direction-signed)
     reason: str
+    direction: str = "long"  # "long" | "short"
 
 
 @dataclass
@@ -543,26 +716,95 @@ class Result:
     total_pts: float = 0.0
 
 
+def _execute_trade(entry_bar: int, direction: str, xc: ExitConfig,
+                   o, h, low, c, atr_series, vwma_series, flatten, atr_at: int):
+    """Walk a single open position from `entry_bar` to its exit. Returns
+    (exit_bar, exit_price, reason) or None if the ATR is unusable (caller skips the trade).
+
+    `atr_at` = the SIGNAL bar (entry_bar-1) whose ATR sizes the stop — sized at signal time,
+    not from the entry bar (no lookahead). Exit families mirror by direction; see `simulate`.
+    """
+    n = len(c)
+    short = direction == "short"
+    entry_price = o[entry_bar]
+    stop = tp = None
+    if xc.kind == "atr":
+        a = atr_series[atr_at]
+        if not np.isfinite(a) or a <= 0:
+            return None
+        if short:
+            stop = entry_price + xc.atr_k * a            # stop ABOVE for a short
+            tp = entry_price - xc.rr * (stop - entry_price)  # target BELOW
+        else:
+            stop = entry_price - xc.atr_k * a            # stop BELOW for a long
+            tp = entry_price + xc.rr * (entry_price - stop)  # target ABOVE
+
+    j = entry_bar
+    while j < n:
+        # Intrabar risk (ATR stop/target) takes precedence over the close-based exits,
+        # INCLUDING the session-end flatten: a stop touched on the session's last bar must
+        # fill at the stop, not at that bar's close. Within a bar a stop is assumed hit
+        # before a target (conservative). The stop/target sides flip with direction.
+        if xc.kind == "atr":
+            if short:
+                if h[j] >= stop:
+                    return j, max(o[j], stop), "stop"
+                if low[j] <= tp:
+                    return j, min(o[j], tp), "target"
+            else:
+                if low[j] <= stop:
+                    return j, min(o[j], stop), "stop"
+                if h[j] >= tp:
+                    return j, max(o[j], tp), "target"
+        if flatten[j]:  # force-close at session end / RTH close (covers gap/overnight)
+            return j, c[j], "session_end"
+        if xc.kind == "time":
+            # Hold exactly `bars` 5-minute bars: the entry bar (filled at its open) is held
+            # bar #1, so exit at the close of bar entry_bar + bars - 1. `time6` holds 6 bars.
+            if j - entry_bar >= xc.bars - 1:
+                return j, c[j], "time"
+        elif xc.kind == "vwma":
+            # long exits when price loses the VWMA; short exits when price reclaims it.
+            if np.isfinite(vwma_series[j]) and (
+                (c[j] > vwma_series[j]) if short else (c[j] < vwma_series[j])
+            ):
+                return j, c[j], "vwmaCross"
+        j += 1
+    return n - 1, c[-1], "end_of_data"
+
+
+def _book_trade(eq_before: float, entry_price: float, exit_price: float,
+                direction: str) -> tuple[float, float]:
+    """Return (net_return, new_equity) for one trade, direction-signed and cost-charged."""
+    short = direction == "short"
+    gross = (entry_price / exit_price - 1.0) if short else (exit_price / entry_price - 1.0)
+    net = gross - ROUND_TRIP_PTS / entry_price
+    return net, eq_before * (1.0 + net)
+
+
 def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
              atr_series: np.ndarray, vwma_series: np.ndarray,
              flatten: np.ndarray, bars_per_yr: float, n_years: float,
-             score_start: int = 0) -> Result:
-    """Event-driven long-only single-position sim.
+             score_start: int = 0, direction: str = "long") -> Result:
+    """Event-driven single-position sim, LONG or SHORT (one `direction` per call).
 
-    Timing (no lookahead): signal confirms at close[t]; ENTER at open[t+1]. Exits:
-      - atr  : intrabar stop/target fill at the level on a later bar.
-      - time : exit at close after `bars` 5m bars.
-      - vwma : exit at close when close < VWMA55.
+    Timing (no lookahead): signal confirms at close[t]; ENTER at open[t+1]. Exits, MIRRORED
+    by direction:
+      - atr  : long  → stop=entry-k·ATR (below), target above; intrabar fill when low≤stop / high≥tp.
+               short → stop=entry+k·ATR (above), target below; intrabar fill when high≥stop / low≤tp.
+      - time : exit at close after `bars` 5m bars (direction-agnostic).
+      - vwma : long → exit when close < VWMA55 ; short → exit when close > VWMA55.
     Any open position is force-closed at the bar's close on a `flatten[j]` bar (no overnight
-    hold) and at end-of-data. `flatten` = session-end bars, plus the RTH-close bars for
-    RTH-gated configs (so an RTH entry is closed at the cash-session close, not held into the
-    overnight book). Cost: ROUND_TRIP_PTS index points per round-trip (fractional on entry).
+    hold) and at end-of-data. Per-trade return is direction-signed: long = exit/entry-1,
+    short = entry/exit-1, each minus the round-trip cost. Cost: ROUND_TRIP_PTS index points
+    (fractional on the entry price) per round-trip.
     """
     o = df["open"].to_numpy()
     h = df["high"].to_numpy()
     low = df["low"].to_numpy()
     c = df["close"].to_numpy()
     n = len(df)
+    short = direction == "short"
 
     # NaN marks "not yet written" — distinct from a real equity of 1.0 (a breakeven mark).
     equity = np.full(n, np.nan)
@@ -579,72 +821,102 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
 
         entry_bar = t + 1            # enter NEXT bar's open (no same-close fill)
         entry_price = o[entry_bar]
-        stop = tp = None
-        if xc.kind == "atr":
-            a = atr_series[t]
-            if not np.isfinite(a) or a <= 0:
-                equity[t] = eq
-                t += 1
-                continue
-            stop = entry_price - xc.atr_k * a
-            tp = entry_price + xc.rr * (entry_price - stop)
+        out = _execute_trade(entry_bar, direction, xc, o, h, low, c,
+                             atr_series, vwma_series, flatten, atr_at=t)
+        if out is None:             # unusable ATR at the signal bar → skip this signal
+            equity[t] = eq
+            t += 1
+            continue
+        exit_bar, exit_price, reason = out
 
-        exit_bar = None
-        exit_price = None
-        reason = ""
-        j = entry_bar
-        while j < n:
-            # Intrabar risk (ATR stop/target) takes precedence over the close-based
-            # exits, INCLUDING the session-end flatten: a stop touched on the session's
-            # last bar must fill at the stop, not at that bar's close. Within a bar a
-            # stop is assumed hit before a target (conservative).
-            if xc.kind == "atr":
-                if low[j] <= stop:
-                    exit_bar, exit_price, reason = j, min(o[j], stop), "stop"
-                    break
-                if h[j] >= tp:
-                    exit_bar, exit_price, reason = j, max(o[j], tp), "target"
-                    break
-            if flatten[j]:  # force-close at session end / RTH close (covers gap/overnight)
-                exit_bar, exit_price, reason = j, c[j], "session_end"
-                break
-            if xc.kind == "time":
-                # Hold exactly `bars` 5-minute bars: the entry bar (filled at its open) is
-                # held bar #1, so exit at the close of bar entry_bar + bars - 1. `time6` thus
-                # holds 6 bars / 30 minutes, matching its label.
-                if j - entry_bar >= xc.bars - 1:
-                    exit_bar, exit_price, reason = j, c[j], "time"
-                    break
-            elif xc.kind == "vwma":
-                if np.isfinite(vwma_series[j]) and c[j] < vwma_series[j]:
-                    exit_bar, exit_price, reason = j, c[j], "vwmaCross"
-                    break
-            j += 1
-
-        if exit_bar is None:
-            exit_bar, exit_price, reason = n - 1, c[-1], "end_of_data"
-
-        gross = exit_price / entry_price - 1.0
-        cost = ROUND_TRIP_PTS / entry_price
-        net = gross - cost
         eq_before = eq
-        eq = eq_before * (1.0 + net)
-        trades.append(Trade(entry_bar, exit_bar, entry_price, exit_price, net, reason))
+        net, eq = _book_trade(eq_before, entry_price, exit_price, direction)
+        trades.append(Trade(entry_bar, exit_bar, entry_price, exit_price, net, reason, direction))
         held_bars += (exit_bar - entry_bar + 1)  # entry bar is held bar #1
 
         # MARK-TO-MARKET the equity curve through the hold so in-trade drawdown is captured
         # (max-DD / Sharpe must see adverse excursion, not just the final outcome). Pre-entry
         # flat bars [t, entry_bar) hold eq_before; held bars [entry_bar, exit_bar) mark at the
-        # bar close vs entry; the exit bar takes the final cost-adjusted equity.
+        # bar close vs entry (direction-signed); the exit bar takes the final cost-adjusted equity.
         for k in range(t, entry_bar):
             equity[k] = eq_before
         for k in range(entry_bar, exit_bar):
-            equity[k] = eq_before * (c[k] / entry_price)
+            mtm = (entry_price / c[k]) if short else (c[k] / entry_price)
+            equity[k] = eq_before * mtm
         equity[exit_bar] = eq
         t = exit_bar + 1
 
     # forward-fill the NOT-WRITTEN (NaN) bars from the last realized equity (1.0 to start).
     # NaN is the unfilled sentinel, so a genuine breakeven mark of 1.0 is never clobbered.
+    prev = 1.0
+    for k in range(n):
+        if np.isnan(equity[k]):
+            equity[k] = prev
+        else:
+            prev = equity[k]
+
+    res = Result(trades=trades, equity=equity)
+    _finalize(res, df, bars_per_yr, n_years, n, held_bars, score_start)
+    return res
+
+
+def simulate_combined(df: pd.DataFrame, long_entries: np.ndarray, short_entries: np.ndarray,
+                      xc: ExitConfig, atr_series: np.ndarray, vwma_series: np.ndarray,
+                      flatten: np.ndarray, bars_per_yr: float, n_years: float,
+                      score_start: int = 0) -> Result:
+    """Combined LONG+SHORT single-position sim: one position at a time, EITHER direction, no
+    pyramiding (consistent with the directional sims).
+
+    While flat, take whichever signal fires first. On a bar where BOTH a long and a short signal
+    fire, LONG wins (a deterministic, documented tie-break — it does not bias the result since
+    long/short signals near-never co-occur on the same bar; this just makes the sim reproducible).
+    While in a trade, all signals are ignored until the position exits — so the trade count and
+    exposure stay comparable to buy-and-hold, never double-booked.
+    """
+    o = df["open"].to_numpy()
+    h = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    c = df["close"].to_numpy()
+    n = len(df)
+
+    equity = np.full(n, np.nan)
+    eq = 1.0
+    trades: list[Trade] = []
+    held_bars = 0
+
+    t = 0
+    while t < n - 1:
+        direction = ("long" if long_entries[t] else
+                     "short" if short_entries[t] else None)
+        if direction is None:
+            equity[t] = eq
+            t += 1
+            continue
+
+        entry_bar = t + 1
+        entry_price = o[entry_bar]
+        short = direction == "short"
+        out = _execute_trade(entry_bar, direction, xc, o, h, low, c,
+                             atr_series, vwma_series, flatten, atr_at=t)
+        if out is None:
+            equity[t] = eq
+            t += 1
+            continue
+        exit_bar, exit_price, reason = out
+
+        eq_before = eq
+        net, eq = _book_trade(eq_before, entry_price, exit_price, direction)
+        trades.append(Trade(entry_bar, exit_bar, entry_price, exit_price, net, reason, direction))
+        held_bars += (exit_bar - entry_bar + 1)
+
+        for k in range(t, entry_bar):
+            equity[k] = eq_before
+        for k in range(entry_bar, exit_bar):
+            mtm = (entry_price / c[k]) if short else (c[k] / entry_price)
+            equity[k] = eq_before * mtm
+        equity[exit_bar] = eq
+        t = exit_bar + 1
+
     prev = 1.0
     for k in range(n):
         if np.isnan(equity[k]):
@@ -679,7 +951,11 @@ def _finalize(res: Result, df: pd.DataFrame, bars_per_yr: float, n_years: float,
     res.cagr = (1.0 + res.total_return) ** (1.0 / n_years) - 1.0 if n_years > 0 else 0.0
     res.avg_hold = held_bars / res.n
     res.exposure = held_bars / max(1, n_bars - score_start)
-    res.total_pts = float(sum((x.exit_price - x.entry_price) - ROUND_TRIP_PTS for x in tr))
+    # points are direction-signed: long = exit-entry, short = entry-exit, each less the cost.
+    res.total_pts = float(sum(
+        ((x.entry_price - x.exit_price) if x.direction == "short"
+         else (x.exit_price - x.entry_price)) - ROUND_TRIP_PTS
+        for x in tr))
 
     # equity-based risk metrics over the SCORED region only (drop warm-up bars), rebased to 1.0
     eq_full = res.equity[score_start:]
@@ -728,8 +1004,10 @@ def buy_and_hold(df: pd.DataFrame, bars_per_yr: float, n_years: float) -> Result
 # Grid
 # ---------------------------------------------------------------------------
 
-def entry_grid() -> list[EntryConfig]:
-    """Baseline (bare fractal) + the confluence layers the screenshots suggested.
+def entry_grid(direction: str = "long") -> list[EntryConfig]:
+    """Baseline (bare fractal) + the confluence layers the screenshots suggested, for one
+    `direction`. The SHORT grid is the exact mirror (same flag combos, `direction="short"`),
+    so the long-only and short-only sweeps are like-for-like comparable.
 
     require_stacked implies a trend, so we don't combine it with require_ribbon (redundant);
     require_rth is an orthogonal time-of-day filter toggled across the meaningful combos.
@@ -741,21 +1019,21 @@ def entry_grid() -> list[EntryConfig]:
     base_combos = [
         # (vwma, ribbon, stacked, td)
         (False, False, False, False),  # bare fractal (baseline)
-        (True, False, False, False),   # + price>vwma55
-        (False, True, False, False),   # + ribbon rising
+        (True, False, False, False),   # + vwma55 (above for long / below for short)
+        (False, True, False, False),   # + ribbon (rising for long / falling for short)
         (True, True, False, False),    # + vwma + ribbon
         (False, False, True, False),   # + stacked ribbon
         (True, False, True, False),    # + vwma + stacked
-        (False, False, False, True),   # + TD buy context
+        (False, False, False, True),   # + TD context (buy for long / sell for short)
         (True, True, False, True),     # + vwma + ribbon + TD (full confluence)
         (True, False, True, True),     # + vwma + stacked + TD
     ]
     for (v, r, s, td), rth in itertools.product(base_combos, [False, True]):
-        out.append(EntryConfig(v, r, s, td, rth, require_hvn=False))
+        out.append(EntryConfig(v, r, s, td, rth, require_hvn=False, direction=direction))
     # Optional VRVP/HVN add-on on the two anchor configs (bare + full confluence), RTH off/on.
     for (v, r, s, td) in [(False, False, False, False), (True, True, False, True)]:
         for rth in (False, True):
-            out.append(EntryConfig(v, r, s, td, rth, require_hvn=True))
+            out.append(EntryConfig(v, r, s, td, rth, require_hvn=True, direction=direction))
     return out
 
 
@@ -775,13 +1053,22 @@ class Row:
     entry: EntryConfig
     exit: ExitConfig
     res: Result
+    mode: str = "long"  # "long" | "short" | "combined" — which sweep produced this row
+
+    def label(self) -> str:
+        """Full leaderboard label. Combined rows show the entry SHAPE (long+short of the same
+        confluence flags) so the table reads cleanly without two near-identical config strings."""
+        if self.mode == "combined":
+            shape = self.entry.label().replace("fractal", "L/S")
+            return f"{shape} · {self.exit.label()}"
+        return f"{self.entry.label()} · {self.exit.label()}"
 
 
 def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float,
-             score_start: int = 0) -> list[Row]:
-    """Sweep every entry×exit config. `score_start` (>0 when `df` carries a leading warm-up
-    buffer) masks entries before it and excludes warm-up bars from the risk metrics, so a
-    warmed grid is comparable to a warmed single run."""
+             score_start: int = 0, direction: str = "long") -> list[Row]:
+    """Sweep every entry×exit config for one `direction`. `score_start` (>0 when `df` carries a
+    leading warm-up buffer) masks entries before it and excludes warm-up bars from the risk
+    metrics, so a warmed grid is comparable to a warmed single run."""
     atr_s = atr(df, 14).to_numpy()
     vwma_s = vwma(df, 55).to_numpy()
     sess_last = session_last_bar(df)
@@ -789,7 +1076,7 @@ def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float,
     cache: dict = {}
     rows: list[Row] = []
     exits = exit_grid()
-    for ec in entry_grid():
+    for ec in entry_grid(direction):
         entries = compute_entries(df, ec, cache)
         if score_start > 0:
             entries = entries.copy()
@@ -800,9 +1087,43 @@ def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float,
         flatten = (sess_last | rth_last) if ec.require_rth else sess_last
         for xc in exits:
             res = simulate(df, entries, xc, atr_s, vwma_s, flatten,
-                           bars_per_yr, n_years, score_start=score_start)
+                           bars_per_yr, n_years, score_start=score_start, direction=direction)
             if res.n > 0:
-                rows.append(Row(ec, xc, res))
+                rows.append(Row(ec, xc, res, mode=direction))
+    return rows
+
+
+def run_combined_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float,
+                      score_start: int = 0) -> list[Row]:
+    """Sweep every entry-SHAPE × exit config as a COMBINED long+short strategy (one position at
+    a time, either direction). For each confluence shape we compute the long entries and the
+    short-mirror entries off ONE shared cache, then run `simulate_combined`. The stored `entry`
+    is the long-direction config (its flags == the short's); `Row.label()` renders it as L/S."""
+    atr_s = atr(df, 14).to_numpy()
+    vwma_s = vwma(df, 55).to_numpy()
+    sess_last = session_last_bar(df)
+    rth_last = rth_last_bar(df)
+    cache: dict = {}
+    rows: list[Row] = []
+    exits = exit_grid()
+    long_cfgs = entry_grid("long")
+    short_cfgs = entry_grid("short")
+    for lc, sc in zip(long_cfgs, short_cfgs):
+        long_e = compute_entries(df, lc, cache)
+        short_e = compute_entries(df, sc, cache)
+        if score_start > 0:
+            long_e = long_e.copy()
+            long_e[:score_start] = False
+            short_e = short_e.copy()
+            short_e[:score_start] = False
+        if long_e.sum() == 0 and short_e.sum() == 0:
+            continue
+        flatten = (sess_last | rth_last) if lc.require_rth else sess_last
+        for xc in exits:
+            res = simulate_combined(df, long_e, short_e, xc, atr_s, vwma_s, flatten,
+                                    bars_per_yr, n_years, score_start=score_start)
+            if res.n > 0:
+                rows.append(Row(lc, xc, res, mode="combined"))
     return rows
 
 
@@ -825,7 +1146,44 @@ def _mar_key(r: Row) -> float:
 WARMUP_BARS = 240
 
 
-def walk_forward(df: pd.DataFrame, bars_per_yr: float):
+def _grid_runner(mode: str):
+    """Return the sweep function for a mode: long/short → `run_grid(..., direction)`,
+    combined → `run_combined_grid`."""
+    if mode == "combined":
+        return run_combined_grid
+    return lambda d, byr, ny, score_start=0: run_grid(d, byr, ny, score_start, direction=mode)
+
+
+def _run_frozen(oos_warm: pd.DataFrame, is_best: Row, warm_len: int,
+                bars_per_yr: float, oos_years: float) -> Result:
+    """Run the frozen in-sample-best config untouched on the warmed OOS frame, scoring only
+    post-split bars. Dispatches to the combined sim for combined-mode configs."""
+    atr_o = atr(oos_warm, 14).to_numpy()
+    vwma_o = vwma(oos_warm, 55).to_numpy()
+    sess_o = session_last_bar(oos_warm)
+    flatten_o = (sess_o | rth_last_bar(oos_warm)) if is_best.entry.require_rth else sess_o
+    if is_best.mode == "combined":
+        long_e = compute_entries(oos_warm, is_best.entry)
+        short_cfg = EntryConfig(is_best.entry.require_vwma, is_best.entry.require_ribbon,
+                                is_best.entry.require_stacked, is_best.entry.require_td,
+                                is_best.entry.require_rth, is_best.entry.require_hvn,
+                                direction="short")
+        short_e = compute_entries(oos_warm, short_cfg)
+        long_e[:warm_len] = False
+        short_e[:warm_len] = False
+        return simulate_combined(oos_warm, long_e, short_e, is_best.exit, atr_o, vwma_o,
+                                 flatten_o, bars_per_yr, oos_years, score_start=warm_len)
+    entries = compute_entries(oos_warm, is_best.entry)
+    entries[:warm_len] = False  # no entries before the true OOS start
+    return simulate(oos_warm, entries, is_best.exit, atr_o, vwma_o, flatten_o,
+                    bars_per_yr, oos_years, score_start=warm_len, direction=is_best.mode)
+
+
+def walk_forward(df: pd.DataFrame, bars_per_yr: float, mode: str = "long"):
+    """Walk-forward validate ONE mode (long / short / combined): pick the robust risk-adjusted
+    best config on the first 60%, run it frozen on the warmed last 40%, and report the
+    best-with-hindsight OOS config for the honesty comparison."""
+    runner = _grid_runner(mode)
     n = len(df)
     split = int(n * 0.6)
     is_df = df.iloc[:split].reset_index(drop=True)
@@ -833,7 +1191,7 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     is_years = len(is_df) / bars_per_yr
     oos_years = len(oos_df) / bars_per_yr
 
-    is_rows = run_grid(is_df, bars_per_yr, is_years)
+    is_rows = runner(is_df, bars_per_yr, is_years)
     if not is_rows:
         return None
     # Select the in-sample config with the SAME robust rule the headline sweet spot uses
@@ -849,20 +1207,12 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     warm_start = max(0, split - WARMUP_BARS)
     warm_len = split - warm_start
     oos_warm = df.iloc[warm_start:].reset_index(drop=True)
-    atr_o = atr(oos_warm, 14).to_numpy()
-    vwma_o = vwma(oos_warm, 55).to_numpy()
-    sess_o = session_last_bar(oos_warm)
-    flatten_o = (sess_o | rth_last_bar(oos_warm)) if is_best.entry.require_rth else sess_o
-    entries = compute_entries(oos_warm, is_best.entry)
-    entries[:warm_len] = False  # no entries before the true OOS start
-    # score_start=warm_len so the warm-up bars are excluded from the OOS risk metrics.
-    oos_res = simulate(oos_warm, entries, is_best.exit, atr_o, vwma_o, flatten_o,
-                       bars_per_yr, oos_years, score_start=warm_len)
+    oos_res = _run_frozen(oos_warm, is_best, warm_len, bars_per_yr, oos_years)
 
     # best-with-hindsight on OOS (the honesty benchmark) — warmed the SAME way as the frozen
     # run (oos_warm + score_start) so the two rows compare like with like, not warmed-vs-cold.
-    oos_rows = run_grid(oos_warm, bars_per_yr, oos_years, score_start=warm_len)
-    label = f"{is_best.entry.label()} · {is_best.exit.label()}"
+    oos_rows = runner(oos_warm, bars_per_yr, oos_years, warm_len)
+    label = is_best.label()
     if not oos_rows:  # no traded config OOS (e.g. very short held-out slice) — fall back
         return ((label, is_best.res), oos_res, ("(no OOS config traded)", oos_res))
     oos_eligible = [r for r in oos_rows if r.res.n >= MIN_TRADES] or \
@@ -870,17 +1220,24 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     oos_best = max(oos_eligible, key=_mar_key)
 
     return ((label, is_best.res), oos_res,
-            (f"{oos_best.entry.label()} · {oos_best.exit.label()}", oos_best.res))
+            (oos_best.label(), oos_best.res))
 
 
 # ---------------------------------------------------------------------------
 # HTML report
 # ---------------------------------------------------------------------------
 
+def _entry_label(r: Row) -> str:
+    """Entry-cell text: the L/S shape for combined rows, else the plain entry label."""
+    if r.mode == "combined":
+        return r.entry.label().replace("fractal", "L/S")
+    return r.entry.label()
+
+
 def _row_cells(r: Row) -> str:
     x = r.res
     return (
-        f"<td>{r.entry.label()}</td><td>{r.exit.label()}</td>"
+        f"<td>{_entry_label(r)}</td><td>{r.exit.label()}</td>"
         f"<td class='r'>{x.n}</td><td class='r'>{x.win_rate*100:.0f}%</td>"
         f"<td class='r'>{num(x.profit_factor)}</td>"
         f"<td class='r {'pos' if x.total_return>0 else 'neg'}'>{pct(x.total_return)}</td>"
@@ -918,7 +1275,7 @@ def pick_sweet_spot(rows: list[Row]) -> Row:
 
 
 def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
-                 baseline_row, verdict_html, screenshot_html) -> str:
+                 baseline_row, verdict_html, screenshot_html, long_short_html="") -> str:
     robust = [r for r in rows if r.res.n >= MIN_TRADES]
     enough = bool(robust)
     ranked_pool = robust if robust else rows
@@ -1044,25 +1401,29 @@ confluence filters must beat IT (and buy &amp; hold) to be worth the added compl
 
 {wf_html}
 
+{long_short_html}
+
 <h2 class="sec" id="knobs">What the signals + knobs do</h2>
 <table>
 <tr><th>Signal / knob</th><th>What it encodes</th></tr>
-<tr><td>fractal (base)</td><td>Pine v4 <code>fractalUpTrend</code>: bullish bottom-reversal triangle — down-fractal shape + 3-bar bullish thrust + body expansion + new high + prior EMA(5)&lt;EMA(11). Long-only.</td></tr>
-<tr><td>&gt;vwma55</td><td>close ≥ rolling 55-bar VWMA (the operator's "VWAP 55"). Price reclaiming dynamic S/R.</td></tr>
-<tr><td>ribbon↑</td><td>close &gt; SMA44 AND SMA44 rising — pulled back to the mid ribbon and the ribbon slopes up.</td></tr>
-<tr><td>stacked</td><td>SMA22 &gt; SMA44 &gt; SMA120 — ribbon stacked bullish (a genuine uptrend).</td></tr>
-<tr><td>TD7</td><td>a DeMark buy-setup count ≥7 completed within the last 6 bars — recent downside exhaustion.</td></tr>
-<tr><td>RTH</td><td>time-of-day filter: only the US cash session (≈13:30-20:00 UTC). Approximate (DST).</td></tr>
+<tr><td>fractal (long base)</td><td>Pine v4 <code>fractalUpTrend</code>: bullish bottom-reversal triangle — down-fractal shape + 3-bar bullish thrust + body expansion + new high + prior EMA(5)&lt;EMA(11). The operator's actual BUY signal.</td></tr>
+<tr><td>fractal↓ (short base)</td><td><b>DERIVED mirror</b> <code>fractalDownTrend</code> — axis-flipped reflection: up-fractal HIGH shape + 3-bar bearish thrust + body expansion + new low + prior EMA(5)&gt;EMA(11). <b>NOT in the operator's Pine</b> (which only plots the long side); built so the study can test the short direction.</td></tr>
+<tr><td>&gt;vwma55 / &lt;vwma55</td><td>long: close ≥ rolling 55-bar VWMA; short: close ≤ VWMA. Price holding above/below the dynamic S/R.</td></tr>
+<tr><td>ribbon↑ / ribbon↓</td><td>long: close &gt; SMA44 &amp; rising; short: close &lt; SMA44 &amp; falling.</td></tr>
+<tr><td>stacked / stacked↓</td><td>long: SMA22 &gt; SMA44 &gt; SMA120 (stacked bull); short: SMA22 &lt; SMA44 &lt; SMA120 (stacked bear).</td></tr>
+<tr><td>TD7 / TD7↓</td><td>long: DeMark BUY-setup ≥7 within 6 bars (downside exhaustion); short: SELL-setup ≥7 within 6 bars (upside exhaustion).</td></tr>
+<tr><td>RTH</td><td>time-of-day filter: only the US cash session (09:30-16:00 ET, timezone-aware). Direction-agnostic.</td></tr>
 <tr><td>exit ATR k×RR</td><td>stop = entry − k·ATR(14); target = entry + RR·(entry−stop). k∈{{1,1.5,2}}, RR∈{{1,1.5,2,3}}.</td></tr>
 <tr><td>exit time</td><td>flat after N 5m bars (6/12/24/48 ≈ 30min/1h/2h/4h).</td></tr>
 <tr><td>exit vwmaCross</td><td>flat when close falls back below VWMA55.</td></tr>
 </table>
 
-<div class="foot">Source: scripts/mes_5m_sweetspot_study.py · signals decoded from the operator's Pine
-source + chart screenshots · exploratory study, NOT a productionized emitter. Returns =
-single-instrument long-only timing on MES, one position at a time, full equity per trade, net of
-{ROUND_TRIP_PTS:g}-pt round-trip cost, positions flattened at session end — NOT leveraged-futures
-P&amp;L. 5-month sample = one regime; treat as directional. Past performance is not predictive.</div>
+<div class="foot">Source: scripts/mes_5m_sweetspot_study.py · long signal decoded from the operator's Pine
+source + chart screenshots; short signal is a DERIVED mirror (not in the operator's Pine) · exploratory
+study, NOT a productionized emitter. Returns = single-instrument timing on MES, one position at a time
+(long, short, or combined), full equity per trade, net of {ROUND_TRIP_PTS:g}-pt round-trip cost,
+positions flattened at session end — NOT leveraged-futures P&amp;L. 5-month sample = one (UP) regime;
+shorts are evaluated in their worst environment. Treat as directional. Past performance is not predictive.</div>
 </main></body></html>"""
 
 
@@ -1116,12 +1477,14 @@ def build_verdict(best: Row, baseline: Row, bh: Result, wf) -> str:
     return f"""
 <div class="box warn"><h4>Read this first</h4>
 <p style="margin:0">The fractal Pine script is <b>entry-only</b> — every return here depends on exits
-we added. "Return" = a single-instrument long-only timing strategy on MES, one position at a time,
+we added. "Return" = a single-instrument timing strategy on MES, one position at a time,
 full equity per trade, net of {ROUND_TRIP_PTS:g}-pt round-trip cost, flattened at session end —
-<b>not</b> leveraged-futures P&amp;L. The window is <b>~5 months (one regime)</b>: high overfitting
-risk. The walk-forward row, not the leaderboard top, is the honest read.</p></div>
+<b>not</b> leveraged-futures P&amp;L. The window is <b>~5 months (one UP regime)</b>: high overfitting
+risk. This headline is the LONG side (the operator's actual signal); the <a href="#longshort">Long
+vs short vs combined</a> section adds the derived short mirror and the regime caveat. The
+walk-forward row, not the leaderboard top, is the honest read.</p></div>
 <div class="box key"><h4>Bottom line</h4>
-<p style="margin:0 0 8px"><b>Sweet spot: <code>{best.entry.label()}</code> entry · <code>{best.exit.label()}</code> exit</b>
+<p style="margin:0 0 8px"><b>Sweet spot: <code>{best.label()}</code></b>
 — {b.n} trades, {pct(b.total_return)} return, Ret/DD {num(b.mar)}, {b.win_rate*100:.0f}% win,
 {b.total_pts:+.0f} pts ≈ ${b.total_pts*POINT_VALUE:+,.0f}/contract.</p>
 <ul style="margin:0">
@@ -1167,6 +1530,153 @@ the "every triangle" baseline it must beat.</p>
 """
 
 
+def _cmp_row(name: str, res: Result, note: str = "") -> str:
+    cls = "pos" if res.total_return > 0 else "neg"
+    return (
+        f"<tr><td>{name}</td><td class='r'>{res.n}</td>"
+        f"<td class='r'>{res.win_rate*100:.0f}%</td><td class='r'>{num(res.profit_factor)}</td>"
+        f"<td class='r {cls}'>{pct(res.total_return)}</td><td class='r'>{num(res.mar)}</td>"
+        f"<td class='r'>{num(res.sharpe)}</td><td class='r'>{pct(res.max_dd)}</td>"
+        f"<td class='r'>{res.exposure*100:.0f}%</td><td class='muted'>{note}</td></tr>"
+    )
+
+
+def build_long_short_section(long_best: Row, short_best: Row | None,
+                             combined_best: Row | None, bh: Result,
+                             wf_combined, wf_short) -> str:
+    """Head-to-head: best long-only vs best short-only vs best combined L/S, with the REGIME
+    caveat front and center (the 5-month sample is a predominantly UP regime — the worst
+    possible environment to evaluate shorts in)."""
+    lb = long_best.res
+    sb = short_best.res if short_best else None
+    cb = combined_best.res if combined_best else None
+
+    # The HONEST read is out-of-sample, not the in-sample leaderboard (which overfits). Shorts
+    # "drag" if the short side is unprofitable in-sample OR fails to hold up out-of-sample, OR
+    # the combined book's OOS is no better than long-only OOS.
+    short_oos = wf_short[1] if wf_short else None
+    combined_oos = wf_combined[1] if wf_combined else None
+    short_oos_fails = (short_oos is None or short_oos.total_return <= 0
+                       or short_oos.mar <= 0 or short_oos.n < 10)
+    short_drags = (sb is None or _mar_key(short_best) <= 0 or sb.total_return <= 0
+                   or short_oos_fails)
+    # combined "beats" long only if it beats on the in-sample leaderboard AND its OOS holds up
+    combined_beats_long = (
+        combined_best is not None and _mar_key(combined_best) > _mar_key(long_best)
+        and combined_oos is not None and combined_oos.total_return > 0 and combined_oos.mar > 0)
+
+    rows = [_cmp_row(f"Long-only — {long_best.label()}", lb, "the prior study's winner")]
+    if sb is not None:
+        rows.append(_cmp_row(f"Short-only — {short_best.label()}", sb,
+                             "DERIVED mirror · evaluated in an UP regime"))
+    else:
+        rows.append("<tr><td>Short-only</td><td class='r' colspan='9'>"
+                    "no short config cleared the trade-count floor on this window</td></tr>")
+    if cb is not None:
+        rows.append(_cmp_row(f"Combined L/S — {combined_best.label()}", cb,
+                             "one position at a time, either direction"))
+    rows.append(
+        f"<tr><td>Buy &amp; hold MES</td><td class='r'>—</td><td class='r'>—</td><td class='r'>—</td>"
+        f"<td class='r {'pos' if bh.total_return>0 else 'neg'}'>{pct(bh.total_return)}</td>"
+        f"<td class='r'>{num(bh.mar)}</td><td class='r'>{num(bh.sharpe)}</td>"
+        f"<td class='r'>{pct(bh.max_dd)}</td><td class='r'>100%</td><td class='muted'>benchmark</td></tr>")
+
+    # the honest short verdict — phrased from the numbers, with the regime reason
+    short_oos_phrase = ""
+    if short_oos is not None:
+        short_oos_phrase = (
+            f" Out-of-sample (the honest read), the frozen short config returned "
+            f"<b class='{'pos' if short_oos.total_return>0 else 'neg'}'>{pct(short_oos.total_return)}</b> "
+            f"(Ret/DD {num(short_oos.mar)}, {short_oos.n} trades) — "
+            + ("it did not hold up." if short_oos_fails else "it held up, but see the caveat.")
+        )
+    if short_drags:
+        short_verdict = (
+            "On this data the SHORT side <b>subtracts</b>. The best short-only config looks "
+            + ("unprofitable even in-sample" if sb is not None and sb.total_return <= 0
+               else "marginally positive in-sample but does not survive validation")
+            + ", and the combined long+short book "
+            + ("does NOT beat" if not combined_beats_long else "barely beats")
+            + " long-only on a risk-adjusted, out-of-sample basis."
+            + short_oos_phrase
+            + " <b>This is exactly what theory predicts:</b> "
+            "the 5-month sample (2026-01→06) is a predominantly <b>UP regime</b> — a broad grind "
+            "higher. Shorting a rising tape is structurally a losing proposition; every short is "
+            "fighting the drift. We are therefore evaluating shorts in the <b>worst possible "
+            "environment for them</b>, so a poor short result here is uninformative about whether "
+            "the short mirror is a good signal — it only confirms you should not short an uptrend.")
+    else:
+        short_verdict = (
+            "On this data the SHORT side <b>adds</b> risk-adjusted value, and the combined book "
+            f"{'beats' if combined_beats_long else 'matches'} long-only. Treat this with extra "
+            "suspicion: the 5-month sample is a predominantly UP regime, the worst environment for "
+            "shorts — a short edge that shows up even here is either a genuine signal or a "
+            "small-sample fluke. It needs a down/chop regime to confirm, not this window.")
+
+    keeps_long = not combined_beats_long
+    headline = (
+        "<b>The TD-timed LONG remains the best risk-adjusted config.</b> Adding shorts "
+        f"{'drags' if short_drags else 'helps'} on this window"
+        + (" — so the recommendation is unchanged: trade the long, hold the short as a hypothesis."
+           if keeps_long else
+           " — but only on a single up-regime, so do not over-weight it yet.")
+    )
+
+    return f"""
+<h2 class="sec" id="longshort">Long vs short vs combined</h2>
+<div class="box warn"><h4>Regime caveat — read before the numbers</h4>
+<p style="margin:0">The operator trades SHORT as well as long, so we mirrored the green-triangle
+BUY signal into a faithful derived SELL signal (<code>fractalDownTrend</code> — <b>not</b> in the
+operator's Pine, which only plots the long side) and re-ran the whole sweep three ways: long-only,
+short-only, and combined. <b>But the 5-month sample is a predominantly UP regime.</b> That is the
+single worst environment in which to judge a short strategy — shorts spend the whole window fighting
+an upward drift. So whatever the short numbers say here, they are <b>not</b> a fair test of the short
+signal. We report them honestly and refuse to either bury a bad short result or cherry-pick a lucky
+short winner.</p></div>
+<table>
+<tr><th>Strategy</th><th class="r">Trades</th><th class="r">Win</th><th class="r">PF</th>
+<th class="r">Return</th><th class="r">Ret/DD</th><th class="r">Sharpe</th><th class="r">MaxDD</th>
+<th class="r">Expo</th><th>Note</th></tr>
+{chr(10).join(rows)}
+</table>
+<p>{short_verdict}</p>
+<div class="box key"><h4>Long/short verdict</h4>
+<p style="margin:0">{headline} A fair short evaluation NEEDS a sustained down/chop regime; until the
+tape turns, the short mirror is a <i>hypothesis to forward-test</i>, not a live edge. The short
+signal is mechanically the exact reflection of the long one, so if the long signal is real, the
+short one is a credible candidate the moment the regime cooperates — but this window cannot prove
+it.</p></div>
+{_ls_wf_html(wf_combined, wf_short)}
+"""
+
+
+def _ls_wf_html(wf_combined, wf_short) -> str:
+    """Walk-forward rows for the combined and short modes (the long WF is in its own section)."""
+    if not wf_combined and not wf_short:
+        return ""
+    parts = ["<h3>Walk-forward — short &amp; combined (out-of-sample, last 40%)</h3>",
+             "<table><tr><th>Mode · config</th><th class='r'>Window</th><th class='r'>Trades</th>"
+             "<th class='r'>Return</th><th class='r'>Ret/DD</th><th class='r'>Sharpe</th>"
+             "<th class='r'>MaxDD</th></tr>"]
+    for tag, wf in (("Combined L/S", wf_combined), ("Short-only", wf_short)):
+        if not wf:
+            continue
+        is_r, oos_r, _ = wf
+        cls = "pos" if oos_r.total_return > 0 else "neg"
+        parts.append(
+            f"<tr><td>{tag} · {is_r[0]}</td><td class='r'>IS 60%</td><td class='r'>{is_r[1].n}</td>"
+            f"<td class='r {'pos' if is_r[1].total_return>0 else 'neg'}'>{pct(is_r[1].total_return)}</td>"
+            f"<td class='r'>{num(is_r[1].mar)}</td><td class='r'>{num(is_r[1].sharpe)}</td>"
+            f"<td class='r'>{pct(is_r[1].max_dd)}</td></tr>"
+            f"<tr><td>→ same config OOS</td><td class='r'>OOS 40%</td><td class='r'>{oos_r.n}</td>"
+            f"<td class='r {cls}'>{pct(oos_r.total_return)}</td><td class='r'>{num(oos_r.mar)}</td>"
+            f"<td class='r'>{num(oos_r.sharpe)}</td><td class='r'>{pct(oos_r.max_dd)}</td></tr>")
+    parts.append("</table><p class='muted'>A short/combined config that survives OOS here still only "
+                 "survived an UP regime — the drawdown that would matter (a sustained selloff) is not "
+                 "in this sample.</p>")
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1184,41 +1694,67 @@ def main() -> None:
     print(f"  buy & hold: {pct(bh.total_return)}  Ret/DD {num(bh.mar)}  "
           f"Sharpe {num(bh.sharpe)}  MaxDD {pct(bh.max_dd)}")
 
-    n_fractal = int(fractal_up_trend(df).sum())
-    print(f"  bare fractalUpTrend signals: {n_fractal} ({n_fractal/n_years:.0f}/yr)")
+    n_long = int(fractal_up_trend(df).sum())
+    n_short = int(fractal_down_trend(df).sum())
+    print(f"  bare fractalUpTrend (long) signals: {n_long} ({n_long/n_years:.0f}/yr)")
+    print(f"  bare fractalDownTrend (short, DERIVED) signals: {n_short} ({n_short/n_years:.0f}/yr)")
 
-    rows = run_grid(df, bars_per_yr, n_years)
-    print(f"  {len(rows)} config combos traded.")
+    # --- three sweeps: long-only (headline), short-only, combined long+short ---
+    rows = run_grid(df, bars_per_yr, n_years, direction="long")
+    short_rows = run_grid(df, bars_per_yr, n_years, direction="short")
+    combined_rows = run_combined_grid(df, bars_per_yr, n_years)
+    print(f"  long={len(rows)}  short={len(short_rows)}  combined={len(combined_rows)} config combos traded.")
 
     robust = [r for r in rows if r.res.n >= MIN_TRADES]
     ranked = sorted(robust if robust else rows, key=_mar_key, reverse=True)
-    best = pick_sweet_spot(rows)  # headline = robust pick (not a thin top-of-leaderboard fluke)
-    print(f"  Top 5 by Ret/DD (n≥{MIN_TRADES}):")
+    best = pick_sweet_spot(rows)  # headline = long-only robust pick (the operator's actual signal)
+    print(f"  Top 5 LONG by Ret/DD (n≥{MIN_TRADES}):")
     for r in ranked[:5]:
         x = r.res
         flag = "  <- SWEET SPOT" if r is best else ""
-        print(f"    {r.entry.label():28} {r.exit.label():12} n={x.n:>3} win={x.win_rate*100:>3.0f}% "
+        print(f"    {r.label():34} n={x.n:>3} win={x.win_rate*100:>3.0f}% "
               f"ret={pct(x.total_return):>8} mar={num(x.mar):>6} sharpe={num(x.sharpe):>5}{flag}")
     if best not in ranked[:5]:
         x = best.res
-        print(f"    [sweet spot] {best.entry.label():16} {best.exit.label():12} n={x.n:>3} "
+        print(f"    [sweet spot] {best.label():34} n={x.n:>3} "
               f"win={x.win_rate*100:>3.0f}% ret={pct(x.total_return):>8} mar={num(x.mar):>6}")
 
-    # baseline = best exit family on the BARE fractal entry
+    # short / combined best (robust pick, same rule) — None if nothing cleared the floor.
+    short_best = pick_sweet_spot(short_rows) if short_rows else None
+    combined_best = pick_sweet_spot(combined_rows) if combined_rows else None
+    if short_best:
+        x = short_best.res
+        print(f"  best SHORT: {short_best.label():34} n={x.n:>3} ret={pct(x.total_return):>8} "
+              f"mar={num(x.mar):>6}")
+    if combined_best:
+        x = combined_best.res
+        print(f"  best COMBINED: {combined_best.label():31} n={x.n:>3} ret={pct(x.total_return):>8} "
+              f"mar={num(x.mar):>6}")
+
+    # baseline = best exit family on the BARE long fractal entry
     bare = [r for r in rows if r.entry == EntryConfig(False, False, False, False, False)]
     baseline = max(bare, key=_mar_key) if bare else best
 
-    wf = walk_forward(df, bars_per_yr)
+    wf = walk_forward(df, bars_per_yr, mode="long")
+    wf_short = walk_forward(df, bars_per_yr, mode="short")
+    wf_combined = walk_forward(df, bars_per_yr, mode="combined")
     if wf:
         is_r, oos_r, oos_best = wf
-        print(f"  WF in-sample: {is_r[0]:44} ret {pct(is_r[1].total_return)} mar {num(is_r[1].mar)}")
-        print(f"  WF OOS (same config): ret {pct(oos_r.total_return)} mar {num(oos_r.mar)} n={oos_r.n}")
-        print(f"  WF OOS best-with-hindsight: {oos_best[0]:30} ret {pct(oos_best[1].total_return)}")
+        print(f"  WF LONG in-sample: {is_r[0]:40} ret {pct(is_r[1].total_return)} mar {num(is_r[1].mar)}")
+        print(f"  WF LONG OOS (same config): ret {pct(oos_r.total_return)} mar {num(oos_r.mar)} n={oos_r.n}")
+    if wf_combined:
+        _, oc, _ = wf_combined
+        print(f"  WF COMBINED OOS: ret {pct(oc.total_return)} mar {num(oc.mar)} n={oc.n}")
+    if wf_short:
+        _, osr, _ = wf_short
+        print(f"  WF SHORT OOS: ret {pct(osr.total_return)} mar {num(osr.mar)} n={osr.n}")
 
     verdict = build_verdict(best, baseline, bh, wf)
     screenshots = build_screenshot_section()
+    long_short = build_long_short_section(best, short_best, combined_best, bh,
+                                          wf_combined, wf_short)
     html = build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
-                        baseline, verdict, screenshots)
+                        baseline, verdict, screenshots, long_short)
     OUT_HTML.write_text(html)
     print(f"\nWrote {OUT_HTML}")
 

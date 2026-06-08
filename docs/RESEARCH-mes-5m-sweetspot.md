@@ -1,7 +1,7 @@
 # RESEARCH — MES 5-minute "sweet spot" study
 
 - **Status:** exploratory research (one PR for the artifact; no production wiring)
-- **Scope:** decode the operator's discretionary 5-min MES chart stack → backtest it → find the risk-adjusted-best config
+- **Scope:** decode the operator's discretionary 5-min MES chart stack → backtest it (long, short-mirror, and combined) → find the risk-adjusted-best config
 - **Priority:** P2 (research; informs a future FractalSignalEmitter, builds nothing live)
 - **Artifacts:** `scripts/mes_5m_sweetspot_study.py` (runnable), `docs/RESEARCH-mes-5m-sweetspot.html` (live render of the numbers)
 - **Data:** `data/csv/MES_5m.csv` — ~28k 5-min bars, 2026-01-09 → 2026-06-08 (~5 months)
@@ -113,7 +113,9 @@ We backtested the green-triangle entry **alone** (the baseline) and in **conflue
 combinations** (triangle + above-VWMA55 + ribbon-rising/stacked + recent-TD-buy + an
 optional regular-trading-hours filter), each paired with realistic exits (ATR stop × reward
 target, time-stops of 30 min / 1 h / 2 h / 4 h, and a "exit when price loses the VWMA55"
-rule). That is **374 config combinations** (including the optional HVN/VRVP add-ons). We
+rule). That is **374 config combinations per direction** (including the optional HVN/VRVP
+add-ons). This section is the **long** side; the short and combined sweeps are in
+[Long vs short vs combined](#long-vs-short-vs-combined-the-operator-trades-both-ways). We
 charged a **1.0-index-point round-trip cost**
 (MES is liquid; ~0.5–1.0 pt of slippage+commission is realistic). We ranked by **Ret/DD**
 (total window return ÷ worst drawdown — a risk-adjusted score that, unlike annualized Calmar,
@@ -176,6 +178,74 @@ look good in-sample and must be distrusted out-of-sample (`project_tqqq_regime_s
 
 ---
 
+## Long vs short vs combined (the operator trades both ways)
+
+Everything above is the **long** side — the operator's actual green-triangle BUY signal. But the
+operator also **shorts**. The operator's Pine only *plots* the long signal, so there is no
+published short rule. We therefore built a faithful **derived mirror** and clearly label it as
+such: it is **not** the operator's own signal.
+
+**The derived short signal (`fractalDownTrend`).** It is the exact axis-flip of the long
+triangle: where the long fires on a bullish bottom reversal, the short fires on a bearish **top**
+reversal. Every comparison is reflected — the up-fractal in the *highs* (a local peak) replaces
+the down-fractal in the lows; three **red** bars replace three green; a **new low** replaces a new
+high; a prior fast-EMA-**above**-slow replaces fast-below-slow. The volume gate is identical. We
+mirrored the TD count too (a **sell**-setup 7/9 = *upside* exhaustion), and flipped each
+confluence filter (price *below* VWMA55, ribbon *falling*, ribbon stacked *bearish*).
+
+```
+   LONG  (operator's Pine)          SHORT  (our derived mirror — NOT in the Pine)
+   ───────────────────────          ────────────────────────────────────────────
+   down-fractal in LOWS             up-fractal in HIGHS   (high[3] = local peak)
+   3 green bars, body expands       3 red bars, body expands
+   new HIGH > high[3]               new LOW < low[3]
+   ema5 < ema11 (was falling)       ema5 > ema11 (was rising)
+   → BUY the bottom reversal        → SELL the top reversal
+```
+
+We re-ran the **entire sweep three ways**: long-only (the headline above), short-only, and a
+**combined** book that can be long *or* short, **one position at a time, no pyramiding** (a long
+signal while already in a trade is ignored; on the rare bar where both fire, long wins — a
+documented, reproducible tie-break). Each is ranked the same way (Ret/DD with the trade-count
+floor) and walk-forward validated.
+
+### The honest result: on this regime, shorts DRAG
+
+> **⚠ Regime caveat — this is the whole point.** The 5-month sample (2026-01 → 06) is a
+> **predominantly UP regime** — a broad grind higher. That is the **single worst environment in
+> which to evaluate a short strategy**: every short spends the whole window fighting an upward
+> drift. So whatever the short numbers say here, **they are not a fair test of the short signal.**
+
+What we found (exact figures in the HTML render; the stable picture):
+
+- **Short-only** looks *mildly* positive **in-sample** (a low-double-digit Ret/DD on the best
+  config) but **fails out-of-sample**: the frozen short config goes **negative OOS** (≈−1.4%
+  return, **Ret/DD ≈ −0.6**). The in-sample number was overfit; the held-out window exposes it.
+- **Combined long+short** looks great in-sample (its in-sample Ret/DD even *tops* long-only,
+  because the leaderboard cherry-picks the few shorts that worked) — but **out-of-sample it is
+  clearly worse than long-only** (combined OOS Ret/DD ≈1.6 vs long-only OOS Ret/DD ≈2.7). The
+  shorts that survive selection in-sample do not generalize; they just dilute the long edge OOS.
+- **The TD-timed LONG remains the best risk-adjusted config**, in-sample and out.
+
+**Why shorts drag here — and why that's expected, not a signal flaw.** Shorting a rising tape is
+structurally a losing proposition. The short result on this data tells us almost nothing about
+whether the mirror is a *good signal* — it only confirms the obvious: **don't short an uptrend.**
+The short signal is mechanically the exact reflection of the long one, so if the long signal is
+real (and it is, on this window), the short signal is a **credible candidate the moment the
+regime cooperates.** This window simply cannot prove it either way.
+
+### Bottom line (long/short)
+
+> **Keep trading the LONG.** On this 5-month UP regime the derived short mirror **subtracts**:
+> short-only fails out-of-sample, and the combined book underperforms long-only out-of-sample.
+> This is exactly what theory predicts when you evaluate shorts in a sustained uptrend — it is
+> **not** evidence the short signal is bad, only that you shouldn't short a rising market. A fair
+> short evaluation **needs a down/chop regime.** Until the tape turns, treat the short mirror as a
+> **hypothesis to forward-test**, not a live edge — and forward-test it specifically through a
+> sustained selloff, where it would actually have a chance to earn its keep.
+
+---
+
 ## Where this fits vs the existing codebase (the gap)
 
 The repo already has signal infrastructure, but **none of it does this job**:
@@ -207,10 +277,13 @@ wiring.
    quarter and compare to this study's stats. A real regime change is the true test.
 2. **Get more data** spanning a real downtrend (e.g. a sustained bear stretch). The TD-timing
    filter helped here; the trend (VWMA/ribbon) filters didn't — but a 5-month uptrend can't
-   test them. Only a window with sustained downtrends can tell whether the trend filters earn
-   their keep, as the screenshots suggest they should.
+   test them. **This is doubly true for the short mirror:** the only fair test of the derived
+   short signal is a down/chop regime, which this UP window does not contain. Re-run the
+   short-only and combined sweeps on a window with sustained selloffs before drawing any
+   conclusion about shorts.
 3. **If both hold up**, promote to a `FractalSignalEmitter` (separate PR) behind the existing
-   `SignalEmitter` protocol. Not before.
+   `SignalEmitter` protocol — long first; add the short mirror only if a down-regime test
+   validates it. Not before.
 
 ---
 
@@ -233,15 +306,24 @@ volume-dependent signals. The 5-min file had 89 zero-range and 226 zero-volume b
   AND `|close[t-1]-open[t-1]| > |close[t-3]-open[t-3]|` (body expansion) AND `high[t]>high[t-3]`
   AND `ema5[t-3] < ema11[t-3]`. Returns the SIGNAL bar `t`; the sim enters at `open[t+1]`
   (no same-close fill — honors the repo's r2 timing fix).
+- `fractal_down_trend(df)` — the **DERIVED short mirror** (NOT in the operator's Pine). Exact
+  axis-flip: `fractalsUp` = the up-fractal in the **highs** over `t-5..t-1` (`high[t-3]` the
+  local peak) AND the SAME volume gate. `strongBearFractal` = `close[t]<open[t-1]` AND
+  `close[t-1]<open[t-1]` AND `close[t-2]<open[t-2]` AND `|close[t-1]-open[t-1]| >
+  |close[t-3]-open[t-3]|` AND `low[t]<low[t-3]` AND `ema5[t-3] > ema11[t-3]`. Every `<`/`>`,
+  `low`/`high`, and EMA-cross direction is the reflection of the long rule.
 - `vwma(df, 55)` — `sum(hlc3·vol,55)/sum(vol,55)`, rolling (NOT session-reset). `above_vwma`
-  = `close >= vwma`.
+  = `close >= vwma`; `below_vwma` = `close <= vwma` (the short mirror).
 - `td_setup_buy(df, completed=9)` / `td_buy_context(df, lookback=6, min_count=7)` — canonical
   DeMark buy-setup: count increments while `close < close[4]`, resets otherwise. `td_buy_context`
   rolls the **completion EVENT** (the bar where the count crosses up through `min_count`), NOT
   the raw running count, and is True within `lookback` bars of an event. (Using `count ≥
   min_count` would stay true for every bar of a long selloff as the count keeps climbing,
   admitting entries long after the actual TD7/9 print.) Rolling, not session-reset (mirrors the
-  chart).
+  chart). `td_setup_sell` / `td_sell_context` are the **mirror** (count increments while
+  `close > close[4]` → upside exhaustion, the short-timing context).
+- `ribbon_bearish` (`close<sma44 AND sma44 falling`) and `ribbon_stacked_bear`
+  (`sma22<sma44<sma120`) are the short mirrors of `ribbon_bullish` / `ribbon_stacked`.
 - `ribbon_bullish` = `close>sma44 AND sma44 rising`. `ribbon_stacked` = `sma22>sma44>sma120`.
 - `hvn_proximity` — VRVP approximation: rolling (240-bar) volume-by-price histogram, flag the
   top-30%-volume bins as HVNs, True when the close sits in an HVN bin. Wired as an **optional
@@ -253,18 +335,27 @@ volume-dependent signals. The 5-min file had 89 zero-range and 226 zero-volume b
   TD count and VWMA are intentionally NOT session-reset (the Pine versions are rolling) — only
   end-of-session *flattening* and the time-of-day *filter* are session-aware.
 
-### Simulation (`simulate`)
-Long-only, one position at a time, full equity per trade. No lookahead: signal at `close[t]`
-→ enter `open[t+1]`. Exits: ATR (`stop=entry-k·ATR(14)`, `target=entry+RR·(entry-stop)`,
-intrabar fill at the level — **checked before** the flatten so a stop on a session-last bar
-fills at the stop), time (holds exactly `bars` bars incl. the entry bar → exit at
-`entry_bar+bars-1`), vwmaCross (close < VWMA55). A `flatten` mask force-closes at the bar
-close: it is the **CME equity-futures session-end bars** (the trading day rolls at 17:00 ET,
-computed in US/Eastern — NOT at 00:00 UTC, which would force flats mid-session), **plus the
-RTH-close bars for RTH-gated configs** (so an RTH entry is closed at the cash-session close,
-not held into the overnight book). The
-equity curve is **marked-to-market through each hold** (held bars priced at close vs entry),
-so max-DD and Sharpe capture in-trade adverse excursion, not just the final outcome. Cost =
+### Simulation (`simulate`, `simulate_combined`)
+One position at a time, full equity per trade, takes a `direction` (`"long"` | `"short"`). No
+lookahead: signal at `close[t]` → enter `open[t+1]`. Per-trade return is **direction-signed**:
+long = `exit/entry-1`, short = `entry/exit-1`, each net of cost. Exits MIRROR by direction:
+- **ATR** — long: `stop=entry-k·ATR(14)` (below), target above, intrabar fill when `low≤stop` /
+  `high≥tp`. Short: `stop=entry+k·ATR` (above), target below, fill when `high≥stop` / `low≤tp`.
+  Intrabar risk is **checked before** the flatten so a stop on a session-last bar fills at the stop.
+- **time** — holds exactly `bars` bars incl. the entry bar → exit at `entry_bar+bars-1` (direction-agnostic).
+- **vwmaCross** — long exits when `close < VWMA55`; short exits when `close > VWMA55` (reclaim).
+
+The shared trade walk lives in `_execute_trade` (entry → exit) and `_book_trade` (direction-signed
+P&L); both `simulate` and `simulate_combined` call them, so the long and short mechanics can never
+drift apart. **`simulate_combined`** runs the long+short book: while flat it takes whichever signal
+fires first (long wins a same-bar tie, documented + reproducible); while in a trade all signals are
+ignored (no pyramiding) — so trade count and exposure stay comparable to buy-and-hold.
+
+A `flatten` mask force-closes at the bar close: the **CME equity-futures session-end bars** (the
+trading day rolls at 17:00 ET, computed in US/Eastern — NOT at 00:00 UTC, which would force flats
+mid-session), **plus the RTH-close bars for RTH-gated configs**. The equity curve is
+**marked-to-market through each hold** (held bars priced at close vs entry, direction-signed), so
+max-DD and Sharpe capture in-trade adverse excursion, not just the final outcome. Cost =
 `ROUND_TRIP_PTS=1.0` index points per round-trip (fractional on entry).
 
 ### Ranking & validation
@@ -278,7 +369,10 @@ also optimistic on a short window. Trade floor = `MIN_TRADES=30`; the **featured
 ~30-trade fluke that tops the raw Ret/DD list is never crowned. Walk-forward: 60/40 split,
 tune Ret/DD in-sample with the floor (indicators warmed from `WARMUP_BARS=240` pre-split
 bars), run the frozen config OOS, and also report the best-with-hindsight OOS config (if the
-frozen one is far worse than hindsight, it was fit).
+frozen one is far worse than hindsight, it was fit). `walk_forward(df, mode=)` runs the same
+validation for **each** of long / short / combined; the long/short verdict keys off the
+**out-of-sample** result (not the overfit in-sample leaderboard) when deciding whether shorts
+add or drag.
 
 ### Cost / leverage note
 MES = $5/point. The sweet spot's ≈+6% ≈ the equity-curve return of a single-instrument
@@ -319,3 +413,24 @@ Return-on-margin would be several times larger (and so would the drawdown).
 | rth tz-aware | EST 09:00 / EST 10:00 / EDT 10:00 / overnight | correct RTH in both EST and EDT |
 | rth entry in-session | signal on the last RTH bar | suppressed (entry would fill after close) |
 | warm-up exclusion | flat warm-up bars + a scored trade | score_start lifts exposure; return unchanged |
+| **short fractal fires** | hand-built peak reversal | `fractalDownTrend` True at the constructed bar |
+| short fractal silent | flat tape / pure downtrend | no short signal |
+| short fractal causal | mutate a FUTURE bar | earlier short signal unchanged |
+| short ≠ long mirror | long fixture vs short fixture | long fires only on bottoms, short only on tops |
+| td sell setup | 30 ascending closes | completes "9" at the 13th bar (mirror of buy) |
+| td sell reset | ascending → down-close → ascending | no "9" before the reset |
+| td sell context event | long sustained rally | True near completion, False many bars later |
+| ribbon bearish | falling / rising series | True late in downtrend, never in uptrend |
+| ribbon stacked bear | long fall | sma22<sma44<sma120 True at end |
+| below vwma | drop below VWMA | True at the drop, False in NaN window |
+| short confluence subset | strict short config vs base short | strict ⊆ base-short entries |
+| direction dispatch | long vs short EntryConfig, shared cache | short uses short base, long uses long base |
+| short sim P&L sign | falling / rising price | short gains on a decline, loses on a rally |
+| short ATR stop side | upside spike | stop ABOVE entry; fills at the stop |
+| short ATR target side | downside dip | target BELOW entry; fills at the target |
+| short vwma exit | price reclaims VWMA | short exits on `close > VWMA` (reclaim) |
+| short mark-to-market | adverse upside spike mid-hold | equity drawdown marked; max-DD reflects it |
+| combined one-at-a-time | long signal while a trade is open | in-trade signal skipped; next trade after exit |
+| combined tie-break | long & short on the same bar | long wins (documented, reproducible) |
+| combined grid rows | fixture with a long + a short | sweep emits `mode="combined"` rows |
+| short grid mirrors long | long grid vs short grid | same flag combos, opposite direction |
