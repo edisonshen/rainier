@@ -506,6 +506,44 @@ def test_simulate_short_loses_when_price_rises(mod):
     assert res.trades[0].ret < 0          # short into a rally → loss
 
 
+def test_book_trade_short_pnl_is_linear_relative_to_entry(mod):
+    """Regression (codex P2): short P&L must be LINEAR relative to the ENTRY price, not a
+    price ratio. A short 100→90 earns +10% gross (NOT +11.1% from entry/exit-1); 100→110
+    loses -10% gross (NOT -9.1%). Cost is ROUND_TRIP_PTS/entry on top."""
+    cost = mod.ROUND_TRIP_PTS / 100.0
+    # winning short: 100 -> 90  => gross +10%
+    net_win, eq_win = mod._book_trade(1.0, 100.0, 90.0, "short")
+    assert net_win == pytest.approx(0.10 - cost)
+    assert eq_win == pytest.approx(1.0 * (1.0 + 0.10 - cost))
+    # losing short: 100 -> 110 => gross -10%
+    net_loss, _ = mod._book_trade(1.0, 100.0, 110.0, "short")
+    assert net_loss == pytest.approx(-0.10 - cost)
+
+
+def test_book_trade_long_short_symmetric_about_entry(mod):
+    """A long 100→110 and a short 100→90 are equal-and-opposite moves about the entry, so their
+    gross returns have identical magnitude (+10%) — the entry-price denominator makes them symmetric."""
+    cost = mod.ROUND_TRIP_PTS / 100.0
+    net_long, _ = mod._book_trade(1.0, 100.0, 110.0, "long")
+    net_short, _ = mod._book_trade(1.0, 100.0, 90.0, "short")
+    assert net_long == pytest.approx(net_short)        # both +10% gross, same cost
+    assert net_long == pytest.approx(0.10 - cost)
+
+
+def test_mtm_factor_matches_book_trade_basis(mod):
+    """The mark-to-market factor used for in-trade equity must use the SAME linear-relative-to-entry
+    basis as _book_trade, so the equity curve and the booked return agree at the exit price."""
+    # short held to 90 from 100: mtm factor = (2*100-90)/100 = 1.10 (the gross +10%)
+    assert mod._mtm_factor(100.0, 90.0, short=True) == pytest.approx(1.10)
+    # adverse short to 110: factor = (2*100-110)/100 = 0.90 (the gross -10%)
+    assert mod._mtm_factor(100.0, 110.0, short=True) == pytest.approx(0.90)
+    # long to 110: factor = 110/100 = 1.10
+    assert mod._mtm_factor(100.0, 110.0, short=False) == pytest.approx(1.10)
+    # at the exit price the mtm factor equals 1 + the booked GROSS return (cost-free check)
+    net, _ = mod._book_trade(1.0, 100.0, 90.0, "short")
+    assert mod._mtm_factor(100.0, 90.0, short=True) == pytest.approx(1.0 + net + mod.ROUND_TRIP_PTS / 100.0)
+
+
 def test_simulate_short_atr_stop_is_above_entry(mod):
     """Short ATR stop sits ABOVE the entry; an upside spike fills at the stop (mirror of long)."""
     rows = [_bar(100, 101, 99, 100), _bar(100, 101, 99, 100),
@@ -647,6 +685,89 @@ def test_entry_grid_short_mirrors_long_shape(mod):
                 lc.require_td, lc.require_rth, lc.require_hvn) == \
                (sc.require_vwma, sc.require_ribbon, sc.require_stacked,
                 sc.require_td, sc.require_rth, sc.require_hvn)
+
+
+def _stub_row(mod, total_return, mar, mode):
+    """Minimal Row carrying just the fields the long/short verdict reads (label + res metrics)."""
+    res = mod.Result(trades=[], equity=np.array([1.0]))
+    res.n = 50
+    res.total_return = total_return
+    res.mar = mar
+    res.win_rate = 0.5
+    res.profit_factor = 1.2
+    res.max_dd = 0.05
+    res.exposure = 0.3
+    ec = mod.EntryConfig(False, False, False, False, False, direction=mode if mode != "combined" else "long")
+    return mod.Row(ec, mod.ExitConfig("time", bars=48), res, mode=mode)
+
+
+def _stub_wf(mod, oos_return, oos_mar, n=40):
+    """Build a (in_sample, oos_result, oos_best) walk-forward tuple; only oos ([1]) is read here."""
+    oos = mod.Result(trades=[], equity=np.array([1.0]))
+    oos.n = n
+    oos.total_return = oos_return
+    oos.mar = oos_mar
+    oos.sharpe = 1.0
+    oos.max_dd = 0.05
+    is_res = mod.Result(trades=[], equity=np.array([1.0]))
+    is_res.n = 60
+    is_res.total_return = oos_return
+    is_res.mar = oos_mar
+    return (("stub-config", is_res), oos, ("oos-best", oos))
+
+
+def test_combined_verdict_does_not_claim_beat_when_oos_worse_than_long(mod):
+    """Regression (codex P2): a POSITIVE combined OOS that is still WORSE than the long-only OOS
+    must NOT be reported as beating long-only. Combined OOS Ret/DD 1.6 < long OOS 2.7 ⇒ 'does NOT beat'."""
+    long_best = _stub_row(mod, 0.06, 3.7, "long")
+    short_best = _stub_row(mod, 0.03, 2.5, "short")
+    combined_best = _stub_row(mod, 0.065, 4.8, "combined")  # in-sample mar > long (cherry-picked)
+    bh = mod.Result(trades=[], equity=np.array([1.0]))
+    bh.total_return = 0.065
+    bh.mar = 0.7
+    bh.sharpe = 1.0
+    bh.max_dd = 0.097
+    wf_long = _stub_wf(mod, 0.051, 2.72)       # long OOS Ret/DD 2.72
+    wf_combined = _stub_wf(mod, 0.016, 1.61)   # combined OOS positive but 1.61 < 2.72
+    wf_short = _stub_wf(mod, -0.014, -0.62)
+    html = mod.build_long_short_section(long_best, short_best, combined_best, bh,
+                                        wf_combined, wf_short, wf_long=wf_long)
+    assert "does NOT beat" in html
+    assert "barely beats" not in html
+
+
+def test_combined_verdict_claims_beat_only_when_oos_exceeds_long(mod):
+    """The 'barely beats' phrasing fires ONLY when combined OOS Ret/DD truly exceeds long OOS."""
+    long_best = _stub_row(mod, 0.06, 3.7, "long")
+    short_best = _stub_row(mod, 0.03, 2.5, "short")
+    combined_best = _stub_row(mod, 0.08, 4.8, "combined")
+    bh = mod.Result(trades=[], equity=np.array([1.0]))
+    bh.total_return = 0.065
+    bh.mar = 0.7
+    bh.max_dd = 0.097
+    wf_long = _stub_wf(mod, 0.051, 2.72)
+    wf_combined = _stub_wf(mod, 0.07, 3.10)    # combined OOS 3.10 > long OOS 2.72
+    # short still DRAGS (fails OOS) so the verdict stays in the short_drags branch, but the
+    # combined book legitimately beats long-only OOS → the phrasing is 'barely beats', not 'does NOT'.
+    wf_short = _stub_wf(mod, -0.01, -0.4)
+    html = mod.build_long_short_section(long_best, short_best, combined_best, bh,
+                                        wf_combined, wf_short, wf_long=wf_long)
+    assert "barely beats" in html
+    assert "does NOT beat" not in html
+
+
+def test_combined_verdict_conservative_without_long_wf(mod):
+    """With no long walk-forward to compare against, the section must NOT claim combined beats long."""
+    long_best = _stub_row(mod, 0.06, 3.7, "long")
+    combined_best = _stub_row(mod, 0.08, 4.8, "combined")
+    bh = mod.Result(trades=[], equity=np.array([1.0]))
+    bh.total_return = 0.065
+    bh.mar = 0.7
+    bh.max_dd = 0.097
+    wf_combined = _stub_wf(mod, 0.07, 3.10)
+    html = mod.build_long_short_section(long_best, None, combined_best, bh,
+                                        wf_combined, None, wf_long=None)
+    assert "barely beats" not in html
 
 
 # ---------------------------------------------------------------------------

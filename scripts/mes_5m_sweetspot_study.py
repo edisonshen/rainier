@@ -775,11 +775,24 @@ def _execute_trade(entry_bar: int, direction: str, xc: ExitConfig,
 
 def _book_trade(eq_before: float, entry_price: float, exit_price: float,
                 direction: str) -> tuple[float, float]:
-    """Return (net_return, new_equity) for one trade, direction-signed and cost-charged."""
+    """Return (net_return, new_equity) for one trade, direction-signed and cost-charged.
+
+    P&L is LINEAR relative to the entry price for BOTH directions (the correct fractional
+    return on the notional put up at entry): long = (exit-entry)/entry, short = (entry-exit)/entry.
+    A short 100→90 earns +10% (not +11.1% as `entry/exit-1` would give); 100→110 loses -10%.
+    Using the same entry-price denominator both ways keeps long and short symmetric.
+    """
     short = direction == "short"
-    gross = (entry_price / exit_price - 1.0) if short else (exit_price / entry_price - 1.0)
+    gross = ((entry_price - exit_price) / entry_price) if short else ((exit_price - entry_price) / entry_price)
     net = gross - ROUND_TRIP_PTS / entry_price
     return net, eq_before * (1.0 + net)
+
+
+def _mtm_factor(entry_price: float, close: float, short: bool) -> float:
+    """Mark-to-market equity factor for a held bar, LINEAR relative to entry (matches _book_trade).
+    long = 1+(close-entry)/entry = close/entry; short = 1+(entry-close)/entry = (2*entry-close)/entry.
+    """
+    return ((2.0 * entry_price - close) / entry_price) if short else (close / entry_price)
 
 
 def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
@@ -837,12 +850,12 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
         # MARK-TO-MARKET the equity curve through the hold so in-trade drawdown is captured
         # (max-DD / Sharpe must see adverse excursion, not just the final outcome). Pre-entry
         # flat bars [t, entry_bar) hold eq_before; held bars [entry_bar, exit_bar) mark at the
-        # bar close vs entry (direction-signed); the exit bar takes the final cost-adjusted equity.
+        # bar close vs entry (direction-signed, LINEAR relative to entry — same basis as
+        # _book_trade); the exit bar takes the final cost-adjusted equity.
         for k in range(t, entry_bar):
             equity[k] = eq_before
         for k in range(entry_bar, exit_bar):
-            mtm = (entry_price / c[k]) if short else (c[k] / entry_price)
-            equity[k] = eq_before * mtm
+            equity[k] = eq_before * _mtm_factor(entry_price, c[k], short)
         equity[exit_bar] = eq
         t = exit_bar + 1
 
@@ -912,8 +925,7 @@ def simulate_combined(df: pd.DataFrame, long_entries: np.ndarray, short_entries:
         for k in range(t, entry_bar):
             equity[k] = eq_before
         for k in range(entry_bar, exit_bar):
-            mtm = (entry_price / c[k]) if short else (c[k] / entry_price)
-            equity[k] = eq_before * mtm
+            equity[k] = eq_before * _mtm_factor(entry_price, c[k], short)
         equity[exit_bar] = eq
         t = exit_bar + 1
 
@@ -1543,7 +1555,7 @@ def _cmp_row(name: str, res: Result, note: str = "") -> str:
 
 def build_long_short_section(long_best: Row, short_best: Row | None,
                              combined_best: Row | None, bh: Result,
-                             wf_combined, wf_short) -> str:
+                             wf_combined, wf_short, wf_long=None) -> str:
     """Head-to-head: best long-only vs best short-only vs best combined L/S, with the REGIME
     caveat front and center (the 5-month sample is a predominantly UP regime — the worst
     possible environment to evaluate shorts in)."""
@@ -1556,14 +1568,19 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
     # the combined book's OOS is no better than long-only OOS.
     short_oos = wf_short[1] if wf_short else None
     combined_oos = wf_combined[1] if wf_combined else None
+    long_oos = wf_long[1] if wf_long else None
     short_oos_fails = (short_oos is None or short_oos.total_return <= 0
                        or short_oos.mar <= 0 or short_oos.n < 10)
     short_drags = (sb is None or _mar_key(short_best) <= 0 or sb.total_return <= 0
                    or short_oos_fails)
-    # combined "beats" long only if it beats on the in-sample leaderboard AND its OOS holds up
+    # Combined "beats" long ONLY on the apples-to-apples OUT-OF-SAMPLE comparison: its frozen
+    # OOS Ret/DD must exceed the long-only frozen OOS Ret/DD (not merely clear zero — a positive
+    # combined OOS that is still worse than long-only OOS means the shorts diluted the long edge).
+    # The in-sample leaderboard is cherry-picked by selection, so it cannot ground this claim.
+    # If we have no long OOS to compare against, fall back to the conservative "did not beat".
     combined_beats_long = (
-        combined_best is not None and _mar_key(combined_best) > _mar_key(long_best)
-        and combined_oos is not None and combined_oos.total_return > 0 and combined_oos.mar > 0)
+        combined_oos is not None and long_oos is not None
+        and combined_oos.mar > long_oos.mar and combined_oos.total_return > 0)
 
     rows = [_cmp_row(f"Long-only — {long_best.label()}", lb, "the prior study's winner")]
     if sb is not None:
@@ -1752,7 +1769,7 @@ def main() -> None:
     verdict = build_verdict(best, baseline, bh, wf)
     screenshots = build_screenshot_section()
     long_short = build_long_short_section(best, short_best, combined_best, bh,
-                                          wf_combined, wf_short)
+                                          wf_combined, wf_short, wf_long=wf)
     html = build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
                         baseline, verdict, screenshots, long_short)
     OUT_HTML.write_text(html)

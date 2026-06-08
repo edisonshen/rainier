@@ -338,7 +338,11 @@ volume-dependent signals. The 5-min file had 89 zero-range and 226 zero-volume b
 ### Simulation (`simulate`, `simulate_combined`)
 One position at a time, full equity per trade, takes a `direction` (`"long"` | `"short"`). No
 lookahead: signal at `close[t]` → enter `open[t+1]`. Per-trade return is **direction-signed**:
-long = `exit/entry-1`, short = `entry/exit-1`, each net of cost. Exits MIRROR by direction:
+**linear relative to the entry price** for both sides — long = `(exit-entry)/entry`, short =
+`(entry-exit)/entry` — each net of cost. (Using the same entry-price denominator both ways keeps
+long and short symmetric: a short 100→90 earns +10%, not the +11.1% a naive `entry/exit-1` price
+ratio would report.) The mark-to-market factor uses the identical basis so the equity curve and
+the booked return agree. Exits MIRROR by direction:
 - **ATR** — long: `stop=entry-k·ATR(14)` (below), target above, intrabar fill when `low≤stop` /
   `high≥tp`. Short: `stop=entry+k·ATR` (above), target below, fill when `high≥stop` / `low≤tp`.
   Intrabar risk is **checked before** the flatten so a stop on a session-last bar fills at the stop.
@@ -434,3 +438,6 @@ Return-on-margin would be several times larger (and so would the drawdown).
 | combined tie-break | long & short on the same bar | long wins (documented, reproducible) |
 | combined grid rows | fixture with a long + a short | sweep emits `mode="combined"` rows |
 | short grid mirrors long | long grid vs short grid | same flag combos, opposite direction |
+| short P&L is linear | `_book_trade` short 100→90 / 100→110 | +10% / −10% gross (not ±11.1%/9.1%); long/short symmetric about entry |
+| mtm matches book basis | `_mtm_factor` vs `_book_trade` at exit price | mtm factor = 1 + booked gross return (same linear basis) |
+| combined OOS vs long OOS | combined OOS Ret/DD below / above long OOS | "does NOT beat" when below; "barely beats" only when above; conservative w/o long WF |
