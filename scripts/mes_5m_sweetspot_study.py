@@ -1068,6 +1068,36 @@ def build_verdict(best: Row, baseline: Row, bh: Result, wf) -> str:
     base = baseline.res
     beats_bh = b.total_return > bh.total_return
     beats_base = _mar_key(best) > _mar_key(baseline)
+
+    # Attribute the win to the filters ACTUALLY present in the winning config (don't hardcode
+    # "trend + VWMA" — the sweet spot might be TD-based, or bare with just a better exit).
+    e = best.entry
+    present = []
+    if e.require_vwma:
+        present.append("the VWMA55 reclaim")
+    if e.require_ribbon or e.require_stacked:
+        present.append("the rising/stacked MA ribbon")
+    if e.require_td:
+        present.append("the TD exhaustion-timing filter")
+    if e.require_hvn:
+        present.append("the VRVP high-volume-node filter")
+    if present:
+        filt_phrase = (present[0] if len(present) == 1
+                       else ", ".join(present[:-1]) + " and " + present[-1])
+        base_note = (f"The winning edge over the bare triangle comes from <b>{filt_phrase}</b> "
+                     f"(plus the <code>{best.exit.label()}</code> exit) — the other confluence "
+                     f"filters did not add risk-adjusted value on this single up-trending window.")
+    else:
+        base_note = (f"Notably the winner uses NO confluence filter — it is the bare triangle "
+                     f"with the <code>{best.exit.label()}</code> exit. The screenshot-inspired "
+                     f"filters did not improve the risk-adjusted result on this window.")
+    not_beat_note = ("This CONTRADICTS the screenshots' intuition (which said confluence should "
+                     "help): on this single up-trending window the trend/VWMA/TD filters "
+                     "discarded winning dip-buys without removing proportionally more losers. "
+                     "Likely because the filters are a downtrend discriminator and there were "
+                     "few sustained downtrends here to filter — in a genuine bear regime they "
+                     "would probably matter, but this 5-month sample cannot show it.")
+
     oos_note = ""
     if wf:
         _, oos_r, _ = wf
@@ -1093,7 +1123,7 @@ risk. The walk-forward row, not the leaderboard top, is the honest read.</p></di
 {'lower' if b.max_dd < bh.max_dd else 'higher'} drawdown ({pct(b.max_dd)} vs {pct(bh.max_dd)}).</li>
 <li>vs <b>bare fractal</b> ({pct(base.total_return)}, Ret/DD {num(base.mar)}): confluence
 {'improves' if beats_base else 'does NOT improve'} the risk-adjusted result.
-{('This matches the screenshots — a green triangle is worth more WITH trend + VWMA confluence.' if beats_base else 'This CONTRADICTS the screenshots intuition (which said confluence should help): on this single up-trending window the trend/VWMA/TD filters discarded winning dip-buys without removing proportionally more losers. Likely because the filters are a downtrend discriminator and there were few sustained downtrends here to filter — in a genuine bear regime they would probably matter, but this 5-month sample cannot show it.')}</li>
+{base_note if beats_base else not_beat_note}</li>
 <li>{oos_note}</li>
 </ul>
 <p style="margin:8px 0 0">Honest caveat: 5 months is one broad regime. Even a config that survives this
