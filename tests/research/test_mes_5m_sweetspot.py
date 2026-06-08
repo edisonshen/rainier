@@ -329,6 +329,17 @@ def test_simulate_flattens_at_session_end(mod):
     assert res.trades[0].exit_bar == 2
 
 
+def test_rth_last_bar_marks_cash_close(mod):
+    # bars at 19:55 (in RTH), 20:00 (out), and a fresh day in RTH — the 19:55 bar is rth_last
+    ts = ["2026-02-02 19:55:00+00:00", "2026-02-02 20:00:00+00:00",
+          "2026-02-03 15:00:00+00:00"]
+    df = pd.DataFrame([{"timestamp": pd.Timestamp(t), **_bar(100, 101, 99, 100.0)} for t in ts])
+    out = mod.rth_last_bar(df)
+    assert out[0]       # last RTH bar before the 20:00 close
+    assert not out[1]   # 20:00 is outside RTH
+    assert out[2]       # the lone RTH bar of the next day is also its last RTH bar
+
+
 def test_in_rth_filter(mod):
     rows = []
     # 03:00 UTC (overnight) and 15:00 UTC (RTH)

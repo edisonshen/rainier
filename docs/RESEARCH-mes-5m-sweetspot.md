@@ -116,7 +116,10 @@ charged a **1.0-index-point round-trip cost**
 (MES is liquid; ~0.5–1.0 pt of slippage+commission is realistic). We ranked by **Ret/DD**
 (total window return ÷ worst drawdown — a risk-adjusted score that, unlike annualized Calmar,
 is **not** inflated by annualizing a 5-month window) with a **30-trade floor** so tiny lucky
-samples can't win.
+samples can't win. We pick the **featured "sweet spot" as the best Ret/DD among configs with
+≥60 trades** — deliberately *not* the single top row, because the literal #1 by Ret/DD is a
+thin ~32-trade config whose ratio is a small-sample fluke. We do not crown a trade-count
+outlier.
 
 **The sweet spot:** the **bare green triangle with a 4-hour time-stop exit** —
 **+10.6% return, Ret/DD 2.75, 57% win rate, 199 trades.** It beats **buy-and-hold MES**
@@ -235,9 +238,14 @@ volume-dependent signals. The 5-min file had 89 zero-range and 226 zero-volume b
 ### Simulation (`simulate`)
 Long-only, one position at a time, full equity per trade. No lookahead: signal at `close[t]`
 → enter `open[t+1]`. Exits: ATR (`stop=entry-k·ATR(14)`, `target=entry+RR·(entry-stop)`,
-intrabar fill at the level), time (`bars` later, at close), vwmaCross (close < VWMA55).
-Always flatten at the last bar of a UTC session and at end-of-data. Cost = `ROUND_TRIP_PTS=1.0`
-index points charged once per round-trip (converted to fractional on the entry price).
+intrabar fill at the level — **checked before** the flatten so a stop on a session-last bar
+fills at the stop), time (holds exactly `bars` bars incl. the entry bar → exit at
+`entry_bar+bars-1`), vwmaCross (close < VWMA55). A `flatten` mask force-closes at the bar
+close: it is the UTC session-end bars, **plus the RTH-close bars for RTH-gated configs** (so
+an RTH entry is closed at the cash-session close, not held into the overnight book). The
+equity curve is **marked-to-market through each hold** (held bars priced at close vs entry),
+so max-DD and Sharpe capture in-trade adverse excursion, not just the final outcome. Cost =
+`ROUND_TRIP_PTS=1.0` index points per round-trip (fractional on entry).
 
 ### Ranking & validation
 Primary key = **`mar` = window total-return / max-drawdown** (`_mar_key` treats `inf`
@@ -245,9 +253,12 @@ zero-DD as a large-but-finite +1e6 so a real-DD winner isn't beaten by a no-DD f
 negative-return zero-DD config maps to −1e6). We deliberately **avoid annualized Calmar** in
 the headline because annualizing a 0.41-year window inflates CAGR ~2.4×, which would make the
 numbers look far better than they are. Sharpe IS annualized (standard) — note it is therefore
-also optimistic on a short window. Trade floor = `MIN_TRADES=30`. Walk-forward: 60/40 split,
-tune Ret/DD in-sample with the floor, run the frozen config OOS, and also report the
-best-with-hindsight OOS config (if the frozen one is far worse than hindsight, it was fit).
+also optimistic on a short window. Trade floor = `MIN_TRADES=30`; the **featured sweet spot**
+(`pick_sweet_spot`) is the best Ret/DD among configs with `n ≥ ROBUST_TRADES=60`, so a thin
+~30-trade fluke that tops the raw Ret/DD list is never crowned. Walk-forward: 60/40 split,
+tune Ret/DD in-sample with the floor (indicators warmed from `WARMUP_BARS=240` pre-split
+bars), run the frozen config OOS, and also report the best-with-hindsight OOS config (if the
+frozen one is far worse than hindsight, it was fit).
 
 ### Cost / leverage note
 MES = $5/point. The sweet spot's +10.6% ≈ the equity-curve return of a single-instrument
@@ -277,4 +288,10 @@ Return-on-margin would be several times larger (and so would the drawdown).
 | sim entry timing | signal at bar 0 | entry price = open[1], not close[0] |
 | sim cost | flat round-trip | net return = −cost (≈ −1pt/entry) |
 | sim session flatten | entry near session end, long time-stop | exits at session_end, not held over |
+| atr precedence | stop touched on session-last bar | fills at the stop, not the bar close |
+| time-stop length | `time3` from bar 0 | holds exactly 3 bars, exits at bar 3 |
+| mark-to-market | deep mid-trade dip, flat exit | equity dips mid-hold; max-DD reflects it |
+| hvn applied | base vs require_hvn | HVN entries ⊆ base entries; HVN appears in the grid |
+| hvn breakout | close above prior range | NOT flagged as a high-volume node |
+| rth flatten | 19:55 / 20:00 / next-day RTH bars | 19:55 is the cash-close flatten bar |
 | rth filter | 03:00 UTC vs 15:00 UTC bar | False overnight, True in RTH |

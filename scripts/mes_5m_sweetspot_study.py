@@ -67,6 +67,9 @@ POINT_VALUE = 5.0  # MES = $5 per 1.00 index point per contract
 
 # Robust-sample floor: below this, win-rate / PF / return are noise on a 5-month window.
 MIN_TRADES = 30
+# Headline sweet-spot bar: a config must clear this trade count to be the *featured* pick,
+# so the single highest Ret/DD config (which can be a thin ~30-trade fluke) is not crowned.
+ROBUST_TRADES = 60
 
 # Regular Trading Hours for the S&P (ET 09:30-16:00). The CSV is UTC. ET is UTC-5 (EST)
 # / UTC-4 (EDT); the sample (2026-01..06) spans both. We approximate RTH with a UTC
@@ -394,6 +397,18 @@ def session_last_bar(df: pd.DataFrame) -> np.ndarray:
     return (d != d.shift(-1)).to_numpy()
 
 
+def rth_last_bar(df: pd.DataFrame) -> np.ndarray:
+    """True at the last RTH bar of each day — the bar after which `in_rth` turns False.
+
+    Used as an additional flatten boundary for RTH-gated configs so an RTH entry is closed
+    at the cash-session close (~20:00 UTC), NOT held for hours into the overnight book.
+    """
+    rth = in_rth(df)
+    nxt = np.roll(rth, -1)
+    nxt[-1] = False
+    return rth & ~nxt
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -504,16 +519,17 @@ class Result:
 
 def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
              atr_series: np.ndarray, vwma_series: np.ndarray,
-             sess_last: np.ndarray, bars_per_yr: float, n_years: float) -> Result:
+             flatten: np.ndarray, bars_per_yr: float, n_years: float) -> Result:
     """Event-driven long-only single-position sim.
 
     Timing (no lookahead): signal confirms at close[t]; ENTER at open[t+1]. Exits:
       - atr  : intrabar stop/target fill at the level on a later bar.
       - time : exit at close after `bars` 5m bars.
       - vwma : exit at close when close < VWMA55.
-    Always flatten at the last bar of a session (no overnight hold) and at end-of-data.
-    Cost: ROUND_TRIP_PTS index points charged once per round-trip (converted to fractional
-    on the entry price).
+    Any open position is force-closed at the bar's close on a `flatten[j]` bar (no overnight
+    hold) and at end-of-data. `flatten` = session-end bars, plus the RTH-close bars for
+    RTH-gated configs (so an RTH entry is closed at the cash-session close, not held into the
+    overnight book). Cost: ROUND_TRIP_PTS index points per round-trip (fractional on entry).
     """
     o = df["open"].to_numpy()
     h = df["high"].to_numpy()
@@ -561,7 +577,7 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
                 if h[j] >= tp:
                     exit_bar, exit_price, reason = j, max(o[j], tp), "target"
                     break
-            if sess_last[j]:  # forced flatten at session end (covers gap/overnight)
+            if flatten[j]:  # force-close at session end / RTH close (covers gap/overnight)
                 exit_bar, exit_price, reason = j, c[j], "session_end"
                 break
             if xc.kind == "time":
@@ -730,6 +746,7 @@ def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float) -> list[Row]:
     atr_s = atr(df, 14).to_numpy()
     vwma_s = vwma(df, 55).to_numpy()
     sess_last = session_last_bar(df)
+    rth_last = rth_last_bar(df)
     cache: dict = {}
     rows: list[Row] = []
     exits = exit_grid()
@@ -737,8 +754,10 @@ def run_grid(df: pd.DataFrame, bars_per_yr: float, n_years: float) -> list[Row]:
         entries = compute_entries(df, ec, cache)
         if entries.sum() == 0:
             continue
+        # RTH-gated configs also flatten at the cash-session close, not just UTC day-end.
+        flatten = (sess_last | rth_last) if ec.require_rth else sess_last
         for xc in exits:
-            res = simulate(df, entries, xc, atr_s, vwma_s, sess_last, bars_per_yr, n_years)
+            res = simulate(df, entries, xc, atr_s, vwma_s, flatten, bars_per_yr, n_years)
             if res.n > 0:
                 rows.append(Row(ec, xc, res))
     return rows
@@ -788,9 +807,10 @@ def walk_forward(df: pd.DataFrame, bars_per_yr: float):
     atr_o = atr(oos_warm, 14).to_numpy()
     vwma_o = vwma(oos_warm, 55).to_numpy()
     sess_o = session_last_bar(oos_warm)
+    flatten_o = (sess_o | rth_last_bar(oos_warm)) if is_best.entry.require_rth else sess_o
     entries = compute_entries(oos_warm, is_best.entry)
     entries[:warm_len] = False  # no entries before the true OOS start
-    oos_res = simulate(oos_warm, entries, is_best.exit, atr_o, vwma_o, sess_o,
+    oos_res = simulate(oos_warm, entries, is_best.exit, atr_o, vwma_o, flatten_o,
                        bars_per_yr, oos_years)
 
     # best-with-hindsight on OOS (the honesty benchmark)
@@ -820,10 +840,12 @@ def _row_cells(r: Row) -> str:
     )
 
 
-def _spark(series, color):
+def _spark(series, color, scale=None):
+    """Polyline for `series`. `scale=(mn,mx)` forces a shared y-range so two overlaid
+    series are visually comparable (default: self-scale)."""
     if len(series) < 2:
         return ""
-    mn, mx = min(series), max(series)
+    mn, mx = scale if scale is not None else (min(series), max(series))
     rng = (mx - mn) or 1
     w, h = 760, 200
     pts = " ".join(
@@ -832,13 +854,27 @@ def _spark(series, color):
     return f"<polyline fill='none' stroke='{color}' stroke-width='2' points='{pts}'/>"
 
 
+def pick_sweet_spot(rows: list[Row]) -> Row:
+    """The HEADLINE sweet spot: best Ret/DD among configs that are NOT a trade-count outlier.
+
+    The single highest-Ret/DD config can be a thin 30-ish-trade fluke; per the brief, the
+    sweet spot must be robust AND risk-adjusted-good AND not a count outlier. So we pick the
+    best Ret/DD among configs with n >= ROBUST_TRADES (= 2× the floor); if none clear that
+    bar, fall back to the floor, then to all rows.
+    """
+    pool = ([r for r in rows if r.res.n >= ROBUST_TRADES]
+            or [r for r in rows if r.res.n >= MIN_TRADES]
+            or rows)
+    return max(pool, key=_mar_key)
+
+
 def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
                  baseline_row, verdict_html, screenshot_html) -> str:
     robust = [r for r in rows if r.res.n >= MIN_TRADES]
     enough = bool(robust)
     ranked_pool = robust if robust else rows
     ranked = sorted(ranked_pool, key=_mar_key, reverse=True)
-    best = ranked[0]
+    best = pick_sweet_spot(rows)  # headline = robust (not the thin top-of-leaderboard fluke)
     top = ranked[:25]
     n_thin = len(rows) - len(robust)
 
@@ -866,6 +902,8 @@ def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
     step = max(1, len(we) // 240)
     we_pts = [we[i] for i in range(0, len(we), step)]
     bhe_pts = [bhe[i] for i in range(0, len(bhe), step)]
+    # shared y-scale so the two equity curves are visually comparable (same axis)
+    spark_scale = (min(min(we_pts), min(bhe_pts)), max(max(we_pts), max(bhe_pts)))
 
     wf_html = ""
     if wf:
@@ -935,7 +973,7 @@ Buy &amp; hold here = <b class="{'pos' if bh.total_return>0 else 'neg'}">{pct(bh
 <p>Risk-adjusted best: <code>{best.entry.label()}</code> entry · <code>{best.exit.label()}</code> exit
 ({b.n} trades, {b.total_pts:+.0f} pts ≈ ${b.total_pts*POINT_VALUE:+,.0f}/contract).</p>
 
-<svg viewBox="0 0 760 200" width="100%" height="200">{_spark(we_pts,'#3ddc97')}{_spark(bhe_pts,'#5aa9ff')}</svg>
+<svg viewBox="0 0 760 200" width="100%" height="200">{_spark(we_pts,'#3ddc97',spark_scale)}{_spark(bhe_pts,'#5aa9ff',spark_scale)}</svg>
 <div class="legend"><b style="color:#3ddc97">▬</b> best confluence config &nbsp;&nbsp;
 <b style="color:#5aa9ff">▬</b> buy &amp; hold MES &nbsp;·&nbsp; {window}</div>
 
@@ -947,7 +985,10 @@ Buy &amp; hold here = <b class="{'pos' if bh.total_return>0 else 'neg'}">{pct(bh
 {base_row}
 {bh_row}
 </table>
-<p class="muted">Highlighted = the risk-adjusted winner. The "bare fractal" row is the baseline:
+<p class="muted"><b>Highlighted = the featured sweet spot</b>, chosen as the best Ret/DD among
+configs with ≥{ROBUST_TRADES} trades — NOT necessarily the single top row. The literal #1 by
+Ret/DD can be a thin ~{MIN_TRADES}-trade config whose ratio is a small-sample fluke; we
+deliberately do not crown a trade-count outlier. The "bare fractal" row is the baseline:
 confluence filters must beat IT (and buy &amp; hold) to be worth the added complexity.</p>
 
 {wf_html}
@@ -1070,12 +1111,17 @@ def main() -> None:
 
     robust = [r for r in rows if r.res.n >= MIN_TRADES]
     ranked = sorted(robust if robust else rows, key=_mar_key, reverse=True)
-    best = ranked[0]
+    best = pick_sweet_spot(rows)  # headline = robust pick (not a thin top-of-leaderboard fluke)
     print(f"  Top 5 by Ret/DD (n≥{MIN_TRADES}):")
     for r in ranked[:5]:
         x = r.res
+        flag = "  <- SWEET SPOT" if r is best else ""
         print(f"    {r.entry.label():28} {r.exit.label():12} n={x.n:>3} win={x.win_rate*100:>3.0f}% "
-              f"ret={pct(x.total_return):>8} mar={num(x.mar):>6} sharpe={num(x.sharpe):>5}")
+              f"ret={pct(x.total_return):>8} mar={num(x.mar):>6} sharpe={num(x.sharpe):>5}{flag}")
+    if best not in ranked[:5]:
+        x = best.res
+        print(f"    [sweet spot] {best.entry.label():16} {best.exit.label():12} n={x.n:>3} "
+              f"win={x.win_rate*100:>3.0f}% ret={pct(x.total_return):>8} mar={num(x.mar):>6}")
 
     # baseline = best exit family on the BARE fractal entry
     bare = [r for r in rows if r.entry == EntryConfig(False, False, False, False, False)]
