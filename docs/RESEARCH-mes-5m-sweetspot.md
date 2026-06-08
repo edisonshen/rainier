@@ -120,7 +120,11 @@ charged a **1.0-index-point round-trip cost**
 (MES is liquid; ~0.5–1.0 pt of slippage+commission is realistic). We ranked by **Ret/DD**
 (total window return ÷ worst drawdown — a risk-adjusted score that, unlike annualized Calmar,
 is **not** inflated by annualizing a 5-month window) under a **selectivity CAP: only configs
-that fire FEWER than 30 times in the ~5-month window are eligible to be crowned.**
+that take FEWER than 30 trades in the ~5-month window are eligible to be crowned.** (The count is
+*executed round-trip trades* — what the operator means by "fewer than 30 trades." Because the
+simulator holds one position at a time, a config's trade count also reflects its exit horizon: a
+long-hold exit takes fewer trades from the same entry stream. That is intended — the cap is on how
+often you actually trade, not on how often the raw entry signal prints.)
 
 > **Why a cap, not a floor (operator decision, 2026-06-08).** An earlier version of this study
 > did the *opposite* — it imposed a 30-trade *floor* and crowned only busy, high-count configs,
@@ -154,7 +158,7 @@ risk figure.) **26 trades is a thin sample: treat the ratio as suggestive, not p
 **The key finding — the TD exhaustion filter is what selects the rare good entries.** Under the
 selectivity cap, every crowned config is a low-count one by construction. The winner is the
 green triangle gated by the **DeMark TD7 "downside-exhausted" timing filter** and restricted to
-the cash session (RTH): that combination fires only ~26 times in five months — exactly the rare,
+the cash session (RTH): that combination takes only ~26 trades in five months — exactly the rare,
 high-conviction pattern the cap is designed to surface. This matches the screenshots' intuition:
 the *best* green triangles are the ones that fire right after a selloff has exhausted itself.
 (The VWMA/ribbon trend filters thin the count further — to ~7 trades — but at that point the

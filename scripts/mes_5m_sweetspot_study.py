@@ -66,8 +66,9 @@ OUT_HTML = ROOT / "docs" / "RESEARCH-mes-5m-sweetspot.html"
 ROUND_TRIP_PTS = 1.0
 POINT_VALUE = 5.0  # MES = $5 per 1.00 index point per contract
 
-# Selectivity CAP (operator's deliberate choice, 2026-06-08): only configs that fire FEWER than
-# this many times across the ~5-month window are eligible to be crowned. The intent is to surface
+# Selectivity CAP (operator's deliberate choice, 2026-06-08): only configs that take FEWER than
+# this many EXECUTED round-trip trades across the ~5-month window are eligible to be crowned (the
+# cap keys off res.n, executed trades, exit horizon included — see pick_sweet_spot). The intent is
 # the RARE, high-conviction A+ confluence setups (the discretionary trades that fire seldom), NOT
 # the high-frequency 200-trade configs. This is the literal inverse of the prior robustness FLOOR.
 #
@@ -1293,8 +1294,13 @@ def _spark(series, color, scale=None):
 def pick_sweet_spot(rows: list[Row]) -> Row:
     """The HEADLINE sweet spot: best Ret/DD among the RARE, selective configs (n < MAX_TRADES).
 
-    Per the operator's deliberate rule, only configs that fire fewer than MAX_TRADES times across
-    the window are eligible — we want the seldom-firing high-conviction setups, not the busy ones.
+    Per the operator's deliberate rule, only configs that take fewer than MAX_TRADES *executed
+    round-trip trades* across the window are eligible — we want the seldom-traded high-conviction
+    setups, not the busy 200-trade ones. The cap is on EXECUTED trades (`res.n`, what the operator
+    literally means by "configs with fewer than 30 trades"), not on raw entry-signal count: because
+    the simulator holds one position at a time (no pyramiding), a config's executed-trade count also
+    reflects its exit horizon — a long-hold exit can take fewer trades from the same entry stream.
+    That is intended: the operator selects on how often you actually TRADE, exit horizon included.
     If somehow NO config is under the cap (unlikely), fall back to all rows so the report still
     shows something (with the small-sample caveat made explicit).
     """
@@ -1398,12 +1404,12 @@ def build_report(df, rows, bh, wf, window, n_years, bars_per_yr,
     # was even under the cap), which is a strictly worse / weirder situation worth flagging too.
     sample_note = (
         f"<div class='box warn'><h4>⚠ Selectivity cap — read before trusting any number</h4>"
-        f"<p style='margin:0 0 8px'>By the operator's deliberate rule, only configs that fire "
-        f"<b>fewer than {MAX_TRADES} times</b> in this ~5-month window are eligible to be crowned. "
+        f"<p style='margin:0 0 8px'>By the operator's deliberate rule, only configs that take "
+        f"<b>fewer than {MAX_TRADES} trades</b> in this ~5-month window are eligible to be crowned. "
         f"The goal is to isolate the <b>rare, high-conviction A+ setups</b>, not the busy "
         f"high-frequency configs. This is a choice to trade <b>statistical robustness for "
         f"selectivity</b>: under {MAX_TRADES} trades means <b>wide confidence intervals and higher "
-        f"fluke risk</b>. The featured config below fires <b>{b.n} times</b> — its win rate, profit "
+        f"fluke risk</b>. The featured config below takes <b>{b.n} trades</b> — its win rate, profit "
         f"factor and Ret/DD are a small-sample read, NOT a statistically proven edge. Treat every "
         f"crowned config as a hypothesis to forward-test.</p>"
         + ("" if any_selective else
@@ -1424,7 +1430,7 @@ decoded &amp; backtested · MES · round-trip cost {ROUND_TRIP_PTS:g} pt · {len
 {screenshot_html}
 
 <h2 class="sec" id="results">Backtest results — ranked by Ret/DD (risk-adjusted)</h2>
-<p class="muted">{len(df)} bars · {len(rows)} config combos · {n_busy} fired ≥{MAX_TRADES} times
+<p class="muted">{len(df)} bars · {len(rows)} config combos · {n_busy} took ≥{MAX_TRADES} trades
 (EXCLUDED by the selectivity cap — too busy to be a rare high-conviction setup).
 Buy &amp; hold here = <b class="{'pos' if bh.total_return>0 else 'neg'}">{pct(bh.total_return)}</b>
 (Ret/DD {num(bh.mar)}, Sharpe {num(bh.sharpe)}, MaxDD {pct(bh.max_dd)}).</p>
@@ -1455,7 +1461,7 @@ Buy &amp; hold here = <b class="{'pos' if bh.total_return>0 else 'neg'}">{pct(bh
 {bh_row}
 </table>
 <p class="muted"><b>Highlighted = the featured sweet spot</b>, chosen as the best Ret/DD among
-configs that fire <b>fewer than {MAX_TRADES} times</b> (the operator's selectivity cap to surface
+configs that take <b>fewer than {MAX_TRADES} trades</b> (the operator's selectivity cap to surface
 rare high-conviction setups). Each row shows its trade count so the thinness is visible: a high
 Ret/DD on a handful of trades is a small-sample read, not a proven edge. The "bare fractal" row is
 the baseline: confluence filters must beat IT (and buy &amp; hold) to be worth the added complexity.</p>
