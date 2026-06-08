@@ -119,8 +119,10 @@ is **not** inflated by annualizing a 5-month window) with a **30-trade floor** s
 samples can't win.
 
 **The sweet spot:** the **bare green triangle with a 4-hour time-stop exit** —
-**+10.6% return, Ret/DD 3.5, 57% win rate, 199 trades.** It beats **buy-and-hold MES**
-(+7.1%, Ret/DD 0.74) on both return and drawdown.
+**+10.6% return, Ret/DD 2.75, 57% win rate, 199 trades.** It beats **buy-and-hold MES**
+(+7.0%, Ret/DD 0.73) on both return and drawdown. (The Ret/DD here counts *in-trade*
+drawdown — the worst the equity dipped mid-trade, not just trade-to-trade — so it is a
+conservative, honest risk figure.)
 
 **The honest, counter-intuitive finding:** **adding the confluence filters did NOT improve
 the risk-adjusted result.** Every screenshot-inspired filter (require VWMA, require ribbon,
@@ -139,12 +141,12 @@ Two readings, both worth stating:
 (warming the rolling indicators from pre-split history, as a real forward test would) and ran
 that frozen config on the unseen last 40%. The in-sample winner that the tuner picked was a
 *different* config than the full-window leaderboard's sweet spot (it only saw 60% of the
-data), and **out of sample it collapsed to roughly flat (~+0.0%, Ret/DD ≈ 0.05 over ~32
-trades).** In other words: **the specific config the walk-forward tuner selected did NOT
-generalize** — a textbook in-sample-fit warning. The full-window sweet spot (bare fractal +
-4h-stop) is more robust *by construction* (it's the simplest, highest-trade-count config),
-but the walk-forward result is a flashing caution light, not a green one. The exact numbers
-are in the HTML render's walk-forward table.
+data), and **out of sample it degraded badly — roughly +0.9% return, Ret/DD ≈ 0.67 over ~26
+trades**, far below its in-sample Ret/DD. In other words: **the specific config the
+walk-forward tuner selected did NOT generalize well** — a textbook in-sample-fit warning. The
+full-window sweet spot (bare fractal + 4h-stop) is more robust *by construction* (it's the
+simplest, highest-trade-count config), but the walk-forward result is a flashing caution
+light, not a green one. The exact numbers are in the HTML render's walk-forward table.
 
 ### Bottom line
 

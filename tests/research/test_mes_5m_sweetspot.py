@@ -426,3 +426,33 @@ def test_time_stop_holds_exactly_n_bars(mod):
     # held bars = entry_bar(1), 2, 3 = exactly 3 bars; exit at bar 3
     assert res.trades[0].exit_bar == 3
     assert res.trades[0].reason == "time"
+
+
+# ---------------------------------------------------------------------------
+# regression: in-trade drawdown is marked on the equity curve (codex P2)
+# ---------------------------------------------------------------------------
+
+def test_equity_marks_in_trade_drawdown(mod):
+    """A trade that dips deep mid-hold then recovers to a flat exit must still show the
+    in-trade drawdown in the equity curve (max-DD can't ignore adverse excursion)."""
+    # entry @ open[1]=100; price plunges to ~70 at bar 2, recovers to 100 by the time exit.
+    rows = [
+        _bar(100, 101, 99, 100.0),                 # 0 signal
+        _bar(100, 101, 99, 100.0),                 # 1 entry @ open 100
+        _bar(100, 100, 70, 71.0),                  # 2 deep dip (close 71)
+        _bar(72, 101, 72, 100.0),                  # 3 recover to 100
+        _bar(100, 101, 99, 100.0),                 # 4 time-stop exit @ close 100
+        _bar(100, 101, 99, 100.0),
+    ]
+    df = _df(rows)
+    entries = np.zeros(len(df), dtype=bool)
+    entries[0] = True
+    atr_s = mod.atr(df, 14).to_numpy()
+    vwma_s = mod.vwma(df, 4).to_numpy()
+    sess_last = mod.session_last_bar(df)
+    xc = mod.ExitConfig("time", bars=4)  # hold bars 1..4, exit @ bar 4 close (~100)
+    res = mod.simulate(df, entries, xc, atr_s, vwma_s, sess_last, bars_per_yr=1e5, n_years=0.01)
+    assert res.n == 1
+    # final return is ~flat (only cost), BUT the equity curve must have dipped at bar 2.
+    assert res.equity[2] < 0.9   # ~71/100 marked → ≥10% in-trade drawdown
+    assert res.max_dd > 0.2      # max-DD reflects the deep mid-trade excursion

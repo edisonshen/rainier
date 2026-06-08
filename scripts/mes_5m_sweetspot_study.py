@@ -583,12 +583,20 @@ def simulate(df: pd.DataFrame, entries: np.ndarray, xc: ExitConfig,
         gross = exit_price / entry_price - 1.0
         cost = ROUND_TRIP_PTS / entry_price
         net = gross - cost
-        eq *= (1.0 + net)
+        eq_before = eq
+        eq = eq_before * (1.0 + net)
         trades.append(Trade(entry_bar, exit_bar, entry_price, exit_price, net, reason))
-        held_bars += (exit_bar - entry_bar)
+        held_bars += (exit_bar - entry_bar + 1)  # entry bar is held bar #1
 
-        for k in range(t, exit_bar + 1):
-            equity[k] = eq
+        # MARK-TO-MARKET the equity curve through the hold so in-trade drawdown is captured
+        # (max-DD / Sharpe must see adverse excursion, not just the final outcome). Pre-entry
+        # flat bars [t, entry_bar) hold eq_before; held bars [entry_bar, exit_bar) mark at the
+        # bar close vs entry; the exit bar takes the final cost-adjusted equity.
+        for k in range(t, entry_bar):
+            equity[k] = eq_before
+        for k in range(entry_bar, exit_bar):
+            equity[k] = eq_before * (c[k] / entry_price)
+        equity[exit_bar] = eq
         t = exit_bar + 1
 
     # forward-fill any remaining flat bars to the last equity level
