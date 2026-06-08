@@ -1,0 +1,82 @@
+"""Resonance study tests — pure helpers (no heavy data load) + a tiny integration."""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from rainier.backtest.resonance_study import (
+    World,
+    combine,
+    deflate,
+    metrics_over,
+    sma_gate_decision,
+    thesis_test,
+)
+
+
+def test_deflate_monotone_haircut():
+    assert deflate(2.0, 1) == 2.0          # no penalty for a single config
+    assert deflate(2.0, 24) < 2.0          # haircut grows with #configs
+    assert deflate(2.0, 100) < deflate(2.0, 24)
+
+
+def test_combine_and_or():
+    a = np.array([1.0, 1.0, 0.0, 0.0])
+    b = np.array([1.0, 0.0, 1.0, 0.0])
+    assert list(combine(a, b, "AND")) == [1.0, 0.0, 0.0, 0.0]
+    assert list(combine(a, b, "OR")) == [1.0, 1.0, 1.0, 0.0]
+
+
+def _synthetic_world(n=600, seed=0):
+    rng = np.random.default_rng(seed)
+    ts = pd.Series(pd.date_range("2019-06-01", periods=n, freq="B", tz="UTC"))
+    drift = 0.0006 + rng.normal(0, 0.012, n)
+    close = 100.0 * np.cumprod(1 + drift)
+    df = pd.DataFrame({
+        "open": np.r_[close[0], close[:-1]],
+        "high": close * 1.01, "low": close * 0.99, "close": close,
+        "vix": 18.0 + rng.normal(0, 2, n), "spy": close * 0.9,
+    })
+    tqqq_ret = 3.0 * np.r_[0.0, np.diff(close) / close[:-1]]
+    qqq_ret = np.r_[0.0, np.diff(close) / close[:-1]]
+    rate = np.full(n, 0.04 / 252)
+    return World(ts, df, tqqq_ret, qqq_ret, rate, synthetic=False)
+
+
+def test_sma_gate_decision_shape_and_binary():
+    w = _synthetic_world()
+    dec = sma_gate_decision(w)
+    assert dec.shape == (len(w.df),)
+    assert set(np.unique(dec)).issubset({0.0, 1.0})
+
+
+def test_metrics_over_window_no_lookahead_and_finite():
+    w = _synthetic_world()
+    dec = sma_gate_decision(w)
+    m = metrics_over(dec, w, w.tqqq_ret, "2020-10-01", None, "sma")
+    assert np.isfinite(m.calmar)
+    assert 0.0 <= m.exposure <= 1.0
+    assert m.switches >= 0
+
+
+def test_thesis_test_returns_buckets_and_ci():
+    w = _synthetic_world()
+    score = np.clip(0.5 + (w.qqq_ret * 30), 0, 1)  # crude score correlated to ret
+    res = thesis_test(w, score, n_boot=300, seed=1)
+    assert len(res.buckets) == 5
+    lo, hi = res.slope_ci
+    assert np.isfinite(lo) and np.isfinite(hi)
+    assert isinstance(res.excludes_null, bool)
+
+
+@pytest.mark.slow
+def test_run_study_smoke():
+    # Full study on real CSVs — slow; verifies it produces a coherent verdict.
+    from rainier.backtest.resonance_study import run_study
+
+    r = run_study(n_boot=200)
+    assert r.verdict
+    assert r.n_configs > 0
+    assert any(row.name == "SMA22/44 gate" for row in r.test_ab)

@@ -520,6 +520,35 @@ def report(ctx, csv_path, symbol, tf):
     click.echo(report_text)
 
 
+@cli.command(name="backtest-resonance")
+@click.option("--out", "out_path", default=None, type=click.Path(),
+              help="HTML report output path (default docs/REPORT-resonance-gate-v1.html)")
+@click.option("--n-boot", default=2000, type=int,
+              help="Block-bootstrap resamples for the §6.1 thesis CI")
+@click.option("--open/--no-open", "open_after", default=True,
+              help="Open the rendered HTML report after writing")
+def backtest_resonance(out_path, n_boot, open_after):
+    """Run the Multi-Signal Resonance Gate §6 A/B evaluation → HTML report.
+
+    Falsifiable by construction: compares the resonance gate vs the SMA22/44
+    gate vs AND/OR combos vs buy-hold on a re-derived ≤2022 / 2023→now split
+    plus a pre-2010 synthetic-3× OOS slice, with block-bootstrap thesis CIs and
+    a deflated metric over the configs tried. If the gate does not beat the SMA
+    gate + buy-hold OOS, the verdict is "ship the SMA gate" — an expected,
+    valid outcome.
+    """
+    import subprocess
+    import sys
+
+    from rainier.backtest.resonance_report import write_report
+
+    target = Path(out_path) if out_path else None
+    written = write_report(out_path=target, n_boot=n_boot)
+    click.echo(f"Wrote resonance-gate report → {written}")
+    if open_after and sys.platform == "darwin":
+        subprocess.run(["open", str(written)], check=False)
+
+
 def _get_discord_webhook(settings) -> str | None:
     """Get Discord webhook URL from settings (stock/scrape alerts)."""
     return settings.discord_stock_webhook_url or settings.discord_webhook_url or None

@@ -41,6 +41,7 @@ reports/tqqq_*
 # pf_btest_*.md) are NOT ignored. Rendered backtest/demo HTML + XLSX are.
 docs/*-backtest-*.html
 docs/tqqq_*.html
+docs/REPORT-resonance-gate-v1.html
 reports/*.html
 reports/*.xlsx
 

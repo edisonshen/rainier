@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+import numpy as np
 import pandas as pd
 
 from rainier.core.types import AnalysisResult, PatternSignal, Signal, Timeframe
@@ -59,6 +60,42 @@ class SignalEmitter(Protocol):
         symbol: str,
         timeframe: Timeframe,
     ) -> list[Signal]: ...
+
+
+# ---------------------------------------------------------------------------
+# Weight boundary: DataFrame → daily per-asset target weights
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class WeightStrategy(Protocol):
+    """Produces daily per-asset target weights from OHLCV data.
+
+    Distinct from ``SignalEmitter`` (which returns discrete entry/SL/TP
+    ``Signal`` trades). A ``WeightStrategy`` returns a *held* daily weight per
+    asset — the natural shape for an in/out gate fed to the daily mark-to-market
+    portfolio sim (``backtest/daily_mtm.py``).
+
+    Contract:
+      - ``weights(df, symbol, timeframe)`` returns ``dict[str, np.ndarray]``
+        mapping asset name → a daily weight series aligned to ``df`` rows.
+      - Each weight is ≥ 0; the sum across assets on any day is ≤ 1.0; the
+        remainder is implicitly cash (earns the T-bill rate in the sim).
+      - The returned series are **decision** weights at ``close[t]``. The sim is
+        responsible for the +1 shift (apply the close[t] decision to the
+        t→t+1 return), so implementations MUST NOT pre-shift.
+
+    Per-asset (not a bare boolean) so a future non-cash risk-off floor is
+    representable without a redesign. v1's ``ResonanceGate`` returns a single
+    asset with weight ∈ {0.0, 1.0} (binary in/out, remainder cash).
+    """
+
+    def weights(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        timeframe: Timeframe,
+    ) -> dict[str, np.ndarray]: ...
 
 
 # ---------------------------------------------------------------------------
