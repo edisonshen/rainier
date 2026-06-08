@@ -756,6 +756,27 @@ def test_combined_verdict_claims_beat_only_when_oos_exceeds_long(mod):
     assert "does NOT beat" not in html
 
 
+def test_short_drags_when_combined_underperforms_long_even_if_short_leg_ok(mod):
+    """Regression (codex iter-2 P2): when the SHORT-only leg looks fine OOS but the COMBINED book's
+    OOS Ret/DD is still below long-only OOS, shorts did NOT add value — the verdict must stay in the
+    'drags / does NOT beat' branch, never the 'adds value / matches' branch."""
+    long_best = _stub_row(mod, 0.06, 3.7, "long")
+    short_best = _stub_row(mod, 0.04, 2.0, "short")     # short-only looks healthy in-sample
+    combined_best = _stub_row(mod, 0.07, 4.0, "combined")
+    bh = mod.Result(trades=[], equity=np.array([1.0]))
+    bh.total_return = 0.065
+    bh.mar = 0.7
+    bh.max_dd = 0.097
+    wf_long = _stub_wf(mod, 0.051, 2.72)
+    wf_short = _stub_wf(mod, 0.02, 1.50, n=30)          # short-only OOS positive (would pass alone)
+    wf_combined = _stub_wf(mod, 0.03, 1.80)             # but combined OOS 1.80 < long OOS 2.72
+    html = mod.build_long_short_section(long_best, short_best, combined_best, bh,
+                                        wf_combined, wf_short, wf_long=wf_long)
+    assert "does NOT beat" in html
+    assert "SHORT side <b>adds</b>" not in html
+    assert "matches" not in html
+
+
 def test_combined_verdict_conservative_without_long_wf(mod):
     """With no long walk-forward to compare against, the section must NOT claim combined beats long."""
     long_best = _stub_row(mod, 0.06, 3.7, "long")

@@ -1563,16 +1563,13 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
     sb = short_best.res if short_best else None
     cb = combined_best.res if combined_best else None
 
-    # The HONEST read is out-of-sample, not the in-sample leaderboard (which overfits). Shorts
-    # "drag" if the short side is unprofitable in-sample OR fails to hold up out-of-sample, OR
-    # the combined book's OOS is no better than long-only OOS.
+    # The HONEST read is out-of-sample, not the in-sample leaderboard (which overfits).
     short_oos = wf_short[1] if wf_short else None
     combined_oos = wf_combined[1] if wf_combined else None
     long_oos = wf_long[1] if wf_long else None
     short_oos_fails = (short_oos is None or short_oos.total_return <= 0
                        or short_oos.mar <= 0 or short_oos.n < 10)
-    short_drags = (sb is None or _mar_key(short_best) <= 0 or sb.total_return <= 0
-                   or short_oos_fails)
+
     # Combined "beats" long ONLY on the apples-to-apples OUT-OF-SAMPLE comparison: its frozen
     # OOS Ret/DD must exceed the long-only frozen OOS Ret/DD (not merely clear zero — a positive
     # combined OOS that is still worse than long-only OOS means the shorts diluted the long edge).
@@ -1581,6 +1578,14 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
     combined_beats_long = (
         combined_oos is not None and long_oos is not None
         and combined_oos.mar > long_oos.mar and combined_oos.total_return > 0)
+
+    # Shorts "drag" if the short side is unprofitable in-sample, OR fails to hold up out-of-sample,
+    # OR the combined book's OOS does not actually beat long-only OOS. The last clause is what makes
+    # the "adds value" branch self-consistent with `combined_beats_long`: if the combined book can't
+    # beat long-only out-of-sample, the shorts did not add value on the only test that matters, even
+    # if the short-only leg happened to look fine in isolation.
+    short_drags = (sb is None or _mar_key(short_best) <= 0 or sb.total_return <= 0
+                   or short_oos_fails or not combined_beats_long)
 
     rows = [_cmp_row(f"Long-only — {long_best.label()}", lb, "the prior study's winner")]
     if sb is not None:
@@ -1623,9 +1628,11 @@ def build_long_short_section(long_best: Row, short_best: Row | None,
             "environment for them</b>, so a poor short result here is uninformative about whether "
             "the short mirror is a good signal — it only confirms you should not short an uptrend.")
     else:
+        # Reaching here means short_drags is False, which (by its definition) requires
+        # combined_beats_long to be True — so the combined book genuinely beats long-only OOS.
         short_verdict = (
             "On this data the SHORT side <b>adds</b> risk-adjusted value, and the combined book "
-            f"{'beats' if combined_beats_long else 'matches'} long-only. Treat this with extra "
+            "<b>beats</b> long-only out-of-sample. Treat this with extra "
             "suspicion: the 5-month sample is a predominantly UP regime, the worst environment for "
             "shorts — a short edge that shows up even here is either a genuine signal or a "
             "small-sample fluke. It needs a down/chop regime to confirm, not this window.")
