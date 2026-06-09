@@ -50,6 +50,11 @@ class DiscordSendResult:
     candidate_payloads_failed: int    # webhook POSTs that errored
     thesis_ok: int                    # per-ticker thesis embeds delivered
     thesis_failed: int                # per-ticker thesis embeds that errored
+    # The summary embed (the table listing ALL candidates) rides in payload
+    # idx 0. If it lands, the operator saw the report even when a later detail
+    # payload failed — so this is the "did the report show up" signal, distinct
+    # from fully_ok (every payload landed).
+    summary_ok: bool = False
 
     @property
     def fully_ok(self) -> bool:
@@ -904,12 +909,15 @@ def send_stock_candidates(
 
     payloads_ok = 0
     payloads_failed = 0
+    summary_ok = False  # did payload idx 0 (the full-candidate table) land?
     for idx, payload in enumerate(payloads):
         n_embeds = len(payload.get("embeds", []))
         try:
             response = httpx.post(webhook_url, json=payload, timeout=10)
             response.raise_for_status()
             payloads_ok += 1
+            if idx == 0:
+                summary_ok = True
             log.info(
                 "discord_payload_ok",
                 idx=idx, status=response.status_code, embeds=n_embeds,
@@ -925,10 +933,13 @@ def send_stock_candidates(
         "discord_candidates_send_done",
         channel="stock", session=session,
         payloads_ok=payloads_ok, payloads_failed=payloads_failed,
+        summary_ok=summary_ok,
     )
 
     if not theses:
-        return DiscordSendResult(reported, payloads_ok, payloads_failed, 0, 0)
+        return DiscordSendResult(
+            reported, payloads_ok, payloads_failed, 0, 0, summary_ok=summary_ok,
+        )
 
     # Per-ticker rich thesis embeds route to the LLM-dedicated channel when
     # configured (DISCORD_LLM_WEBHOOK_URL), otherwise fall back to the stock
@@ -937,7 +948,9 @@ def send_stock_candidates(
     llm_webhook_url = _resolve_llm_webhook_url(config)
     if not llm_webhook_url:
         log.warning("discord_no_webhook_url_llm")
-        return DiscordSendResult(reported, payloads_ok, payloads_failed, 0, 0)
+        return DiscordSendResult(
+            reported, payloads_ok, payloads_failed, 0, 0, summary_ok=summary_ok,
+        )
 
     # Per-ticker rich thesis embeds — top 5 only, in candidate order.
     thesis_ok = 0
@@ -978,6 +991,7 @@ def send_stock_candidates(
     )
     return DiscordSendResult(
         reported, payloads_ok, payloads_failed, thesis_ok, thesis_failed,
+        summary_ok=summary_ok,
     )
 
 

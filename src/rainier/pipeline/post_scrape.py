@@ -148,14 +148,17 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
         dashboard_base_url=settings.llm_thesis.dashboard_base_url,
         session=session_name,
     )
-    # discord_sent reflects what actually LANDED, not len(candidates). A silent
-    # webhook failure (deleted/rotated webhook, rate-limit) now reads as
-    # discord_sent=0 with discord_payloads_failed>0 instead of a misleading
-    # "sent 20" while the channel stayed empty.
+    # discord_sent reflects what actually LANDED, not len(candidates). The
+    # summary embed (payload idx 0) lists ALL candidates, so summary_ok is the
+    # "did the report show up" signal: it stays len(candidates) on a partial
+    # failure where a later detail payload dropped but the table landed, and
+    # goes 0 only when the summary itself failed. discord_payloads_failed>0
+    # still flags partial drops. A silent dead-webhook now reads discord_sent=0
+    # instead of a misleading "sent 20" while the channel stayed empty.
     log.info(
         "post_scrape_pipeline_done",
         session=session_name,
-        discord_sent=len(candidates) if send_result.fully_ok else 0,
+        discord_sent=len(candidates) if send_result.summary_ok else 0,
         discord_payloads_ok=send_result.candidate_payloads_ok,
         discord_payloads_failed=send_result.candidate_payloads_failed,
         theses_attached=len(theses),

@@ -234,6 +234,32 @@ class TestSendResultAccounting:
         assert result.candidate_payloads_ok == 1
         assert result.candidate_payloads_failed == 0
         assert result.fully_ok is True
+        assert result.summary_ok is True
+
+    def test_partial_delivery_summary_landed(self):
+        """If the summary payload (idx 0, the full candidate table) lands but a
+        later detail payload fails, summary_ok stays True (operator saw the
+        report) while fully_ok is False and the failure is counted. Pipeline
+        logs discord_sent=len(candidates), not 0. (codex [P2] 2026-06-09.)"""
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        # 10 patterned candidates → 11 embeds → 2 payloads (summary+9, then 1).
+        candidates = [_candidate(symbol=f"S{i}") for i in range(10)]
+        assert len(_build_payloads(candidates)) == 2  # guards the fixture intent
+        calls = {"n": 0}
+
+        def _side_effect(url, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return MagicMock(status_code=204, raise_for_status=lambda: None)
+            raise httpx.HTTPError("simulated detail-payload 429 rate-limit")
+
+        with patch("rainier.alerts.discord.httpx.post", side_effect=_side_effect):
+            result = send_stock_candidates(candidates, config)
+
+        assert result.summary_ok is True       # table landed
+        assert result.candidate_payloads_ok == 1
+        assert result.candidate_payloads_failed == 1
+        assert result.fully_ok is False        # but not every payload
 
     def test_failed_post_is_not_fully_ok(self):
         config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
@@ -243,6 +269,7 @@ class TestSendResultAccounting:
         assert result.candidate_payloads_failed == 1
         assert result.candidate_payloads_ok == 0
         assert result.fully_ok is False
+        assert result.summary_ok is False      # the table itself never landed
 
     def test_disabled_or_no_webhook_is_not_fully_ok(self):
         # enabled=False → nothing sent → fully_ok False (no false success).
