@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import os
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from rainier.alerts.discord import (
     DiscordSendResult,
     _build_payloads,
     _format_candidate_embed,
     _format_summary_embed,
+    _resolve_webhook_url,
     format_stock_candidates_json,
     send_stock_candidates,
 )
@@ -429,3 +433,76 @@ class TestSendStockCandidatesWithTheses:
             send_stock_candidates(candidates, config, theses=theses)
         # 1 embed payload + 5 thesis messages (top-5 only) = 6 total.
         assert mock_post.call_count == 6
+
+
+class TestDeliveryContract:
+    """Guards the 2026-06-09 incident at the code level: a message counts as
+    delivered ONLY when Discord accepts the POST, and the candidate table the
+    operator reads is what actually goes to the channel. Deterministic — safe
+    for CI. For a true end-to-end channel check, see the env-gated live test
+    below (and the ``rainier debug post-fake-thesis`` CLI probe)."""
+
+    def test_summary_message_is_posted_to_channel_on_success(self):
+        config = DiscordConfig(enabled=True, stock_webhook_url="https://chan/hook")
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=204)
+            result = send_stock_candidates([_candidate(symbol="NVDA")], config)
+
+        # A POST actually fired at the RESOLVED channel webhook...
+        assert mock_post.call_count >= 1
+        first = mock_post.call_args_list[0]
+        posted_url = first.args[0] if first.args else first.kwargs.get("url")
+        assert posted_url == _resolve_webhook_url(config) == "https://chan/hook"
+        # ...carrying the candidate summary table (the human-readable report)...
+        payload = first.kwargs["json"]
+        titles = [e.get("title", "") for e in payload["embeds"]]
+        assert any("QU100 Actionable Setups" in t for t in titles)
+        assert "NVDA" in json.dumps(payload)
+        # ...and ONLY THEN is delivery reported.
+        assert result.summary_ok is True
+        assert result.fully_ok is True
+
+    def test_delivery_not_reported_when_channel_rejects(self):
+        """A 5xx from Discord must NOT read as delivered — the exact false
+        success that left the channel empty while logs said 'sent 20'."""
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        resp = MagicMock(status_code=500)
+        err = httpx.HTTPStatusError("500", request=MagicMock(), response=resp)
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                raise_for_status=MagicMock(side_effect=err)
+            )
+            result = send_stock_candidates([_candidate()], config)
+        assert result.summary_ok is False
+        assert result.fully_ok is False
+
+
+@pytest.mark.skipif(
+    not os.environ.get("RAINIER_DISCORD_LIVE_TEST"),
+    reason="live delivery test — set RAINIER_DISCORD_LIVE_TEST=1 to actually "
+    "POST to the configured Discord channel (kept out of CI: non-deterministic, "
+    "needs the real webhook secret, and posts a visible message).",
+)
+def test_live_delivery_to_real_channel():
+    """End-to-end proof a message reaches the real channel: POST the candidate
+    report to the configured webhook and assert Discord accepted it (summary
+    payload delivered). Run on demand:
+
+        RAINIER_DISCORD_LIVE_TEST=1 uv run pytest \
+            tests/test_alerts/test_discord.py -k live_delivery -q
+
+    Then eyeball the channel for the "[delivery self-test]" message.
+    """
+    from rainier.core.config import get_settings
+
+    cfg = get_settings().alerts.discord
+    if not cfg.enabled or not _resolve_webhook_url(cfg):
+        pytest.skip("Discord not configured (enabled + a webhook URL required)")
+
+    marker = _candidate(symbol="ZZTEST", pattern_status="[delivery self-test]")
+    result = send_stock_candidates([marker], cfg, session="midday")
+
+    assert result.summary_ok is True, (
+        "Discord did not accept the summary POST — message NOT delivered to "
+        f"the channel (payloads_failed={result.candidate_payloads_failed})"
+    )
