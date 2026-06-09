@@ -3187,42 +3187,16 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
     click.echo(f"  summary webhook (stock_webhook_url) : {_mask_webhook_url(stock_url)}")
     click.echo(f"  thesis  webhook (llm_webhook_url)   : {_mask_webhook_url(thesis_url)}")
 
-    # send_stock_candidates() catches httpx exceptions internally
-    # (`log.exception(...)`) and returns normally, so a 4xx/5xx Discord
-    # response would otherwise let this probe exit 0 with "done." — the
-    # exact false-success path operators use this command to diagnose.
-    # Attach a captor handler to the discord logger so we can detect
-    # those swallowed failures and surface them as a non-zero exit.
-    import logging as _stdlib_logging
-
-    captured_failures: list[_stdlib_logging.LogRecord] = []
-
-    class _DiscordFailureCaptor(_stdlib_logging.Handler):
-        def emit(self, record: _stdlib_logging.LogRecord) -> None:
-            if record.levelno >= _stdlib_logging.ERROR:
-                captured_failures.append(record)
-
-    captor = _DiscordFailureCaptor(level=_stdlib_logging.ERROR)
-    discord_logger = _stdlib_logging.getLogger("rainier.alerts.discord")
-    # Logger.isEnabledFor() is the gate BEFORE handlers run — if the
-    # caller (CI wrapper, structlog config, etc.) raised the discord
-    # logger to CRITICAL, ERROR records get dropped at the logger and
-    # the captor never sees them. Temporarily lower the level to ERROR
-    # so log.exception(...) calls inside send_stock_candidates reach
-    # our handler, then restore on the way out so we don't perturb the
-    # operator's logging config beyond this call.
-    saved_level = discord_logger.level
-    saved_disabled = discord_logger.disabled
-    saved_propagate = discord_logger.propagate
-    discord_logger.setLevel(_stdlib_logging.ERROR)
-    discord_logger.disabled = False
-    # propagate=False so our captured records don't also fire on parent
-    # handlers (which might surface stack traces the operator doesn't
-    # need for the routing diagnostic). The captor is our only sink.
-    discord_logger.propagate = False
-    discord_logger.addHandler(captor)
+    # send_stock_candidates() catches httpx exceptions internally so a
+    # Discord hiccup never crashes the scrape pipeline — but it now RETURNS a
+    # DiscordSendResult whose per-endpoint failure counts reflect what landed.
+    # This probe inspects those counts and exits non-zero on any failed POST,
+    # surfacing the "false success" path (rotated webhook, 4xx/5xx, timeout)
+    # operators use this command to diagnose. Detection is return-value based,
+    # so it works regardless of the logger's level/config and never perturbs
+    # the caller's logging setup.
     try:
-        send_stock_candidates(
+        send_result = send_stock_candidates(
             [candidate],
             discord_cfg,
             theses={fake_symbol: thesis_dict},
@@ -3230,28 +3204,22 @@ def debug_post_fake_thesis(ctx, symbol, verdict, use_llm_webhook):
         )
     except Exception as exc:  # noqa: BLE001 — synthetic-payload bugs surface here
         raise click.ClickException(f"Discord POST failed: {exc}") from exc
-    finally:
-        discord_logger.removeHandler(captor)
-        discord_logger.setLevel(saved_level)
-        discord_logger.disabled = saved_disabled
-        discord_logger.propagate = saved_propagate
 
-    if captured_failures:
-        # Render a terse one-line summary of each captured failure so the
-        # operator can tell which endpoint failed (summary vs thesis)
-        # without having to grep the structured log. We do NOT echo the
-        # full webhook URL — only the logger event name + exception
-        # class. The URL has already been printed in masked form above.
-        summaries = []
-        for rec in captured_failures:
-            exc_type = (
-                rec.exc_info[0].__name__ if rec.exc_info and rec.exc_info[0] else "?"
-            )
-            summaries.append(f"{rec.getMessage()} ({exc_type})")
+    failures: list[str] = []
+    if send_result.candidate_payloads_failed:
+        failures.append(
+            f"summary channel: {send_result.candidate_payloads_failed} "
+            "payload(s) failed"
+        )
+    if send_result.thesis_failed:
+        failures.append(
+            f"thesis channel: {send_result.thesis_failed} embed(s) failed"
+        )
+    if failures:
         raise click.ClickException(
-            "Discord POST failed (send_stock_candidates swallowed the "
-            "error internally; the probe surfaced it): "
-            + "; ".join(summaries)
+            "Discord POST failed (send_stock_candidates caught the error "
+            "internally; the probe surfaced it via return counts): "
+            + "; ".join(failures)
         )
 
     click.echo("done.")

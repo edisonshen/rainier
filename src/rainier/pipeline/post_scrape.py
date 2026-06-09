@@ -141,16 +141,24 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
     # summary embed title that the pre-extraction CLI used (via
     # _build_payloads(candidates, session=session)) — without it, the four
     # daily scans become indistinguishable in the channel.
-    send_stock_candidates(
+    send_result = send_stock_candidates(
         candidates,
         settings.alerts.discord,
         theses=theses or None,
         dashboard_base_url=settings.llm_thesis.dashboard_base_url,
         session=session_name,
     )
+    # discord_sent reflects what actually LANDED, not len(candidates). A silent
+    # webhook failure (deleted/rotated webhook, rate-limit) now reads as
+    # discord_sent=0 with discord_payloads_failed>0 instead of a misleading
+    # "sent 20" while the channel stayed empty.
     log.info(
         "post_scrape_pipeline_done",
         session=session_name,
-        discord_sent=len(candidates),
+        discord_sent=len(candidates) if send_result.fully_ok else 0,
+        discord_payloads_ok=send_result.candidate_payloads_ok,
+        discord_payloads_failed=send_result.candidate_payloads_failed,
         theses_attached=len(theses),
+        theses_sent=send_result.thesis_ok,
+        theses_failed=send_result.thesis_failed,
     )

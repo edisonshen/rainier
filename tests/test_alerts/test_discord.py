@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from rainier.alerts.discord import (
+    DiscordSendResult,
     _build_payloads,
     _format_candidate_embed,
     _format_summary_embed,
@@ -213,6 +216,84 @@ class TestSendStockCandidates:
             mock_post.side_effect = Exception("Connection refused")
             # Should not raise
             send_stock_candidates([_candidate()], config)
+
+
+class TestSendResultAccounting:
+    """The return value must reflect what actually LANDED, so callers (and the
+    pipeline's discord_sent log) stop reporting false success when the webhook
+    silently fails. Regression for the 2026-06-09 'channel empty but logs say
+    sent 20' incident."""
+
+    def test_success_reports_truthful_counts(self):
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=204)
+            result = send_stock_candidates([_candidate()], config)
+        assert isinstance(result, DiscordSendResult)
+        assert result.candidates_reported == 1
+        assert result.candidate_payloads_ok == 1
+        assert result.candidate_payloads_failed == 0
+        assert result.fully_ok is True
+
+    def test_failed_post_is_not_fully_ok(self):
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.side_effect = httpx.HTTPError("simulated 404 deleted webhook")
+            result = send_stock_candidates([_candidate()], config)
+        assert result.candidate_payloads_failed == 1
+        assert result.candidate_payloads_ok == 0
+        assert result.fully_ok is False
+
+    def test_disabled_or_no_webhook_is_not_fully_ok(self):
+        # enabled=False → nothing sent → fully_ok False (no false success).
+        disabled = DiscordConfig(enabled=False, webhook_url="https://x/hook")
+        r1 = send_stock_candidates([_candidate()], disabled)
+        assert r1.candidate_payloads_ok == 0 and r1.fully_ok is False
+        # no webhook URL → same.
+        nowebhook = DiscordConfig(enabled=True, webhook_url="", stock_webhook_url="")
+        r2 = send_stock_candidates([_candidate()], nowebhook)
+        assert r2.candidate_payloads_ok == 0 and r2.fully_ok is False
+
+    def test_empty_candidates_returns_zero_result(self):
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        result = send_stock_candidates([], config)
+        assert result.candidates_reported == 0
+        assert result.fully_ok is False
+
+    def test_per_operation_logs_emitted(self):
+        """Each send operation logs a structured event so the channel-delivery
+        path is observable in data/qu-scrape.log."""
+        from structlog.testing import capture_logs
+
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        with capture_logs() as caplogs:
+            with patch("rainier.alerts.discord.httpx.post") as mock_post:
+                mock_post.return_value = MagicMock(status_code=204)
+                send_stock_candidates([_candidate()], config)
+
+        events = [e.get("event", "") for e in caplogs]
+        assert "discord_candidates_send_starting" in events
+        assert "discord_payload_ok" in events
+        assert "discord_candidates_send_done" in events
+
+    def test_failed_payload_logs_status_and_error(self):
+        """A failed POST logs discord_payload_failed with the HTTP status so
+        the operator can tell 404 (deleted webhook) from 429 (rate-limit)."""
+        from structlog.testing import capture_logs
+
+        config = DiscordConfig(enabled=True, webhook_url="https://example.com/hook")
+        resp = MagicMock(status_code=404)
+        err = httpx.HTTPStatusError("404", request=MagicMock(), response=resp)
+        with capture_logs() as caplogs:
+            with patch("rainier.alerts.discord.httpx.post") as mock_post:
+                mock_post.return_value = MagicMock(
+                    raise_for_status=MagicMock(side_effect=err)
+                )
+                send_stock_candidates([_candidate()], config)
+
+        failed = [e for e in caplogs if e.get("event") == "discord_payload_failed"]
+        assert failed, "expected a discord_payload_failed event"
+        assert failed[0].get("status") == 404
 
 
 class TestFormatJson:
