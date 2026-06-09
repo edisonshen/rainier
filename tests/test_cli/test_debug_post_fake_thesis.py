@@ -372,14 +372,14 @@ def test_discord_post_failure_exits_nonzero_and_does_not_print_done():
 
 def test_failure_surfaces_even_when_discord_logger_is_silenced():
     """The probe must detect swallowed httpx failures even when the
-    process has raised the ``rainier.alerts.discord`` logger to
-    CRITICAL (a common CI / wrapper-script default). Without this,
-    `logger.isEnabledFor(ERROR)` returns False and the captor handler
-    is never invoked.
+    process has silenced the ``rainier.alerts.discord`` logger (a common
+    CI / wrapper-script default).
 
-    Regression test for codex iter-5 [P2]: the probe lowers the logger
-    level to ERROR for its own duration and restores the prior level
-    on exit so the operator's logging config isn't perturbed.
+    The probe now detects failures from ``DiscordSendResult`` counts, not
+    by sniffing log records, so detection is inherently logger-independent
+    and the probe never touches the caller's logging config. This test
+    silences the legacy stdlib logger and asserts the failure still
+    surfaces AND the logger level is left untouched.
     """
     import logging
 

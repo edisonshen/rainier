@@ -3,18 +3,66 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
+from dataclasses import dataclass
 from datetime import date as date_cls
 from datetime import datetime
 from typing import Any
 
 import httpx
+import structlog
 
 from rainier.core.config import DiscordConfig
 from rainier.core.types import Direction, Signal, StockCandidate
 
-log = logging.getLogger(__name__)
+# structlog (NOT stdlib logging) so every Discord operation lands in the same
+# structured stream as the scraper + pipeline (``data/qu-scrape.log``). The
+# module previously used ``logging.getLogger`` whose records never reached that
+# file, so a failed webhook POST logged ``discord_send_failed`` into the void
+# while the pipeline still printed ``discord_sent=20`` — the channel stayed
+# empty and the logs looked healthy. See ``send_stock_candidates``.
+log = structlog.get_logger()
+
+
+def _http_status(exc: Exception) -> int | None:
+    """Extract the HTTP status code from an httpx error, else None.
+
+    ``raise_for_status()`` raises ``HTTPStatusError`` (has ``.response``);
+    connection/timeout errors have no status. Used so per-operation failure
+    logs carry the actual code (404 deleted webhook, 401 rotated token, 429
+    rate-limited) instead of a bare "it failed".
+    """
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) if resp is not None else None
+
+
+@dataclass(frozen=True)
+class DiscordSendResult:
+    """Truthful per-operation outcome of a candidate-report send.
+
+    ``len(candidates)`` is what we *tried* to report; these are what actually
+    reached Discord. The pipeline logs ``discord_sent`` from ``fully_ok`` so a
+    silent webhook failure no longer reads as success.
+    """
+
+    candidates_reported: int          # len(candidates) attempted
+    candidate_payloads_ok: int        # webhook POSTs that returned 2xx
+    candidate_payloads_failed: int    # webhook POSTs that errored
+    thesis_ok: int                    # per-ticker thesis embeds delivered
+    thesis_failed: int                # per-ticker thesis embeds that errored
+    # The summary embed (the table listing ALL candidates) rides in payload
+    # idx 0. If it lands, the operator saw the report even when a later detail
+    # payload failed — so this is the "did the report show up" signal, distinct
+    # from fully_ok (every payload landed).
+    summary_ok: bool = False
+
+    @property
+    def fully_ok(self) -> bool:
+        """True iff every candidate-report payload landed (no failures)."""
+        return (
+            self.candidate_payloads_failed == 0
+            and self.candidate_payloads_ok > 0
+        )
 
 # Pattern type → display label (Caisen methodology)
 PATTERN_LABELS: dict[str, str] = {
@@ -790,7 +838,7 @@ def _load_chart_bytes_for_thesis(thesis: dict) -> bytes | None:
         from rainier.dashboard.data import load_thesis_chart
         return load_thesis_chart(int(raw_id))
     except Exception:
-        log.exception("discord_load_chart_failed thesis_id=%s", raw_id)
+        log.exception("discord_load_chart_failed", thesis_id=raw_id)
         return None
 
 
@@ -816,7 +864,7 @@ def send_stock_candidates(
     *,
     dashboard_base_url: str | None = None,
     session: str | None = None,
-) -> None:
+) -> DiscordSendResult:
     """Send QU100 stock candidate alerts to Discord.
 
     Args:
@@ -837,28 +885,61 @@ def send_stock_candidates(
             multiple same-day scans apart in the stock channel. ``None``
             preserves the legacy session-less title.
     """
+    reported = len(candidates)
     if not candidates:
-        return
+        return DiscordSendResult(0, 0, 0, 0, 0)
     if not config.enabled:
-        log.debug("discord_alerts_disabled")
-        return
+        log.info("discord_alerts_disabled", candidates=reported, session=session)
+        return DiscordSendResult(reported, 0, 0, 0, 0)
 
     webhook_url = _resolve_webhook_url(config)
     if not webhook_url:
-        log.warning("discord_no_webhook_url")
-        return
+        log.warning(
+            "discord_no_webhook_url", channel="stock",
+            candidates=reported, session=session,
+        )
+        return DiscordSendResult(reported, 0, 0, 0, 0)
 
     payloads = _build_payloads(candidates, session=session)
+    log.info(
+        "discord_candidates_send_starting",
+        channel="stock", session=session,
+        candidates=reported, payloads=len(payloads),
+    )
 
-    for payload in payloads:
+    payloads_ok = 0
+    payloads_failed = 0
+    summary_ok = False  # did payload idx 0 (the full-candidate table) land?
+    for idx, payload in enumerate(payloads):
+        n_embeds = len(payload.get("embeds", []))
         try:
             response = httpx.post(webhook_url, json=payload, timeout=10)
             response.raise_for_status()
-        except Exception:
-            log.exception("discord_send_failed")
+            payloads_ok += 1
+            if idx == 0:
+                summary_ok = True
+            log.info(
+                "discord_payload_ok",
+                idx=idx, status=response.status_code, embeds=n_embeds,
+            )
+        except Exception as exc:
+            payloads_failed += 1
+            log.error(
+                "discord_payload_failed",
+                idx=idx, status=_http_status(exc),
+                error_type=type(exc).__name__, embeds=n_embeds,
+            )
+    log.info(
+        "discord_candidates_send_done",
+        channel="stock", session=session,
+        payloads_ok=payloads_ok, payloads_failed=payloads_failed,
+        summary_ok=summary_ok,
+    )
 
     if not theses:
-        return
+        return DiscordSendResult(
+            reported, payloads_ok, payloads_failed, 0, 0, summary_ok=summary_ok,
+        )
 
     # Per-ticker rich thesis embeds route to the LLM-dedicated channel when
     # configured (DISCORD_LLM_WEBHOOK_URL), otherwise fall back to the stock
@@ -867,9 +948,13 @@ def send_stock_candidates(
     llm_webhook_url = _resolve_llm_webhook_url(config)
     if not llm_webhook_url:
         log.warning("discord_no_webhook_url_llm")
-        return
+        return DiscordSendResult(
+            reported, payloads_ok, payloads_failed, 0, 0, summary_ok=summary_ok,
+        )
 
     # Per-ticker rich thesis embeds — top 5 only, in candidate order.
+    thesis_ok = 0
+    thesis_failed = 0
     for candidate in candidates[:5]:
         thesis = theses.get(candidate.symbol)
         if not thesis:
@@ -891,8 +976,23 @@ def send_stock_candidates(
                 chart_bytes=chart_bytes,
                 chart_filename=chart_filename,
             )
-        except Exception:
-            log.exception("discord_thesis_send_failed symbol=%s", candidate.symbol)
+            thesis_ok += 1
+            log.info("discord_thesis_ok", symbol=candidate.symbol)
+        except Exception as exc:
+            thesis_failed += 1
+            log.error(
+                "discord_thesis_send_failed",
+                symbol=candidate.symbol, status=_http_status(exc),
+                error_type=type(exc).__name__,
+            )
+    log.info(
+        "discord_thesis_send_done",
+        thesis_ok=thesis_ok, thesis_failed=thesis_failed,
+    )
+    return DiscordSendResult(
+        reported, payloads_ok, payloads_failed, thesis_ok, thesis_failed,
+        summary_ok=summary_ok,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1015,8 +1115,12 @@ def send_eval_report(
     try:
         response = httpx.post(webhook_url, json={"content": message}, timeout=10)
         response.raise_for_status()
-    except Exception:
-        log.exception("discord_eval_send_failed")
+        log.info("discord_eval_send_ok", status=response.status_code)
+    except Exception as exc:
+        log.error(
+            "discord_eval_send_failed",
+            status=_http_status(exc), error_type=type(exc).__name__,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1145,8 +1249,12 @@ def send_research_report(
     try:
         response = httpx.post(webhook_url, json={"content": message}, timeout=10)
         response.raise_for_status()
-    except Exception:
-        log.exception("discord_research_send_failed")
+        log.info("discord_research_send_ok", status=response.status_code)
+    except Exception as exc:
+        log.error(
+            "discord_research_send_failed",
+            status=_http_status(exc), error_type=type(exc).__name__,
+        )
 
 
 def format_stock_candidates_json(candidates: list[StockCandidate]) -> str:
