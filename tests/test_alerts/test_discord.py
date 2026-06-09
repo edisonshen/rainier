@@ -321,6 +321,41 @@ class TestSendResultAccounting:
         failed = [e for e in caplogs if e.get("event") == "discord_payload_failed"]
         assert failed, "expected a discord_payload_failed event"
         assert failed[0].get("status") == 404
+        # Diagnostic carries the exception class, never the raw message.
+        assert failed[0].get("error_type") == "HTTPStatusError"
+
+    def test_failure_log_never_leaks_webhook_token(self):
+        """httpx.HTTPStatusError.__str__ embeds the request URL, and a Discord
+        webhook URL contains its secret token. Failure logs must carry status +
+        exception class only — never str(exc). Regression for codex [P1]
+        2026-06-09 (credential leak into data/qu-scrape.log)."""
+        from structlog.testing import capture_logs
+
+        secret = "SUPERSECRETtoken9999"
+        url = f"https://discord.com/api/webhooks/123456/{secret}"
+        config = DiscordConfig(enabled=True, webhook_url=url)
+        # Reproduce the real leak vector: httpx auto-generates the error
+        # message in raise_for_status(), and that message embeds the request
+        # URL (which carries the token).
+        req = httpx.Request("POST", url)
+        resp = httpx.Response(401, request=req)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            err = e
+        assert secret in str(err)  # the leak vector exists in the exception
+
+        with capture_logs() as caplogs:
+            with patch("rainier.alerts.discord.httpx.post") as mock_post:
+                mock_post.return_value = MagicMock(
+                    raise_for_status=MagicMock(side_effect=err)
+                )
+                send_stock_candidates([_candidate()], config)
+
+        import json
+        blob = json.dumps(caplogs)
+        assert secret not in blob, "webhook token leaked into structured logs"
+        assert "webhooks/123456" not in blob
 
 
 class TestFormatJson:

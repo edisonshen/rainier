@@ -927,7 +927,7 @@ def send_stock_candidates(
             log.error(
                 "discord_payload_failed",
                 idx=idx, status=_http_status(exc),
-                error=str(exc)[:200], embeds=n_embeds,
+                error_type=type(exc).__name__, embeds=n_embeds,
             )
     log.info(
         "discord_candidates_send_done",
@@ -983,7 +983,7 @@ def send_stock_candidates(
             log.error(
                 "discord_thesis_send_failed",
                 symbol=candidate.symbol, status=_http_status(exc),
-                error=str(exc)[:200],
+                error_type=type(exc).__name__,
             )
     log.info(
         "discord_thesis_send_done",
@@ -1119,7 +1119,7 @@ def send_eval_report(
     except Exception as exc:
         log.error(
             "discord_eval_send_failed",
-            status=_http_status(exc), error=str(exc)[:200],
+            status=_http_status(exc), error_type=type(exc).__name__,
         )
 
 
@@ -1253,7 +1253,7 @@ def send_research_report(
     except Exception as exc:
         log.error(
             "discord_research_send_failed",
-            status=_http_status(exc), error=str(exc)[:200],
+            status=_http_status(exc), error_type=type(exc).__name__,
         )
 
 
