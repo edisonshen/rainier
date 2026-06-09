@@ -356,7 +356,6 @@ class TestSendResultAccounting:
                 )
                 send_stock_candidates([_candidate()], config)
 
-        import json
         blob = json.dumps(caplogs)
         assert secret not in blob, "webhook token leaked into structured logs"
         assert "webhooks/123456" not in blob
@@ -414,6 +413,42 @@ class TestSendStockCandidatesWithTheses:
             send_stock_candidates(candidates, config, theses=theses)
             # 1 embed payload + 5 thesis text messages = 6 calls minimum.
             assert mock_post.call_count == 6
+
+    def test_thesis_failure_counts_and_never_leaks_token(self):
+        """A failed per-ticker thesis POST is counted (thesis_failed) while the
+        summary still reports delivered, AND the discord_thesis_send_failed log
+        carries status + exception class only — never the LLM webhook URL/token.
+        The thesis channel has the same leak vector as the summary channel
+        (codex [P1] 2026-06-09); this locks it too."""
+        from structlog.testing import capture_logs
+
+        secret = "LLMCHANNELtoken4242"
+        llm_url = f"https://discord.com/api/webhooks/777/{secret}"
+        config = DiscordConfig(
+            enabled=True,
+            stock_webhook_url="https://stock/hook",
+            llm_webhook_url=llm_url,
+        )
+        theses = {"NVDA": self._thesis()}
+
+        def _side_effect(url, **kwargs):
+            if url == llm_url:  # thesis embed POST → fail with a URL-bearing error
+                req = httpx.Request("POST", url)
+                httpx.Response(404, request=req).raise_for_status()
+            return MagicMock(status_code=204, raise_for_status=lambda: None)
+
+        with capture_logs() as caplogs:
+            with patch("rainier.alerts.discord.httpx.post", side_effect=_side_effect):
+                result = send_stock_candidates(
+                    [_candidate(symbol="NVDA")], config, theses=theses
+                )
+
+        assert result.thesis_failed == 1
+        assert result.thesis_ok == 0
+        assert result.summary_ok is True  # the table still landed
+        failed = [e for e in caplogs if e.get("event") == "discord_thesis_send_failed"]
+        assert failed and failed[0].get("status") == 404
+        assert secret not in json.dumps(caplogs), "LLM webhook token leaked into logs"
 
     def test_thesis_message_under_1800_chars(self):
         from rainier.alerts.discord import _format_thesis_message
