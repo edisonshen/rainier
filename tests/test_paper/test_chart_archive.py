@@ -502,6 +502,20 @@ def test_persist_timeframe_days_follows_window(pg_legacy_session):
     assert row.timeframe_days == 90
 
 
+def test_persist_rejects_thesis_source():
+    """Guard: thesis rows go through llm_thesis.chart_persistence, never the
+    archive persist path — a 'thesis' (or unknown) source raises before any DB
+    work, so the logical-identity contract can't be polluted."""
+    png = b"\x89PNG\r\n\x1a\nguard"
+    for bad in ("thesis", "bogus"):
+        with pytest.raises(ValueError, match="trade_close/miss_sweep"):
+            persist_archive_chart(
+                symbol="AAPL", as_of=AS_OF, source=bad,
+                png_bytes=png, sha256=hashlib.sha256(png).hexdigest(),
+                timeframe_days=120,
+            )
+
+
 def test_thesis_rows_stay_outside_logical_contract(pg_legacy_session):
     """Future thesis persists: source='thesis', as_of_date NULL — two same-day
     same-symbol thesis charts coexist (NULLs never collide in the partial
