@@ -417,6 +417,79 @@ def test_persist_flip_flop_render_no_unique_violation(pg_legacy_session):
     assert rows[id3].superseded_by is None
 
 
+def test_persist_race_partial_unique_blocks_second_promote(
+    pg_legacy_engine, pg_legacy_session
+):
+    """Two concurrent-ish persists for ONE logical identity, interleaved on two
+    raw connections (the worst-case race the single-threaded daily job never
+    produces): staging (NULL key columns) never trips the partial unique while
+    both transactions are open, and the loser's PROMOTE is rejected by
+    ``idx_chart_images_logical`` — the whole losing transaction rolls back, so
+    'one CURRENT row per (symbol, as_of_date, source)' holds at the DB level
+    and the old row's ``superseded_by`` ends up pointing at the winner only."""
+    from sqlalchemy.exc import IntegrityError
+
+    _seed_stock(pg_legacy_session, "AAPL")
+    pg_legacy_session.commit()
+    png0 = b"\x89PNG\r\n\x1a\nrace-0"
+    cur_id = persist_archive_chart(
+        symbol="AAPL", as_of=AS_OF, source=SOURCE_TRADE_CLOSE,
+        png_bytes=png0, sha256=hashlib.sha256(png0).hexdigest(), timeframe_days=120,
+    )
+
+    ins = text(
+        "INSERT INTO chart_images (symbol, scan_date, source, as_of_date, "
+        "image_bytes, sha256) VALUES ('AAPL', NULL, NULL, NULL, :png, :sha) "
+        "RETURNING id"
+    )
+    supersede = text("UPDATE chart_images SET superseded_by = :n WHERE id = :o")
+    promote = text(
+        "UPDATE chart_images SET as_of_date = :d, source = :s WHERE id = :n"
+    )
+    conn1 = pg_legacy_engine.connect()
+    conn2 = pg_legacy_engine.connect()
+    try:
+        tx1 = conn1.begin()
+        new1 = conn1.execute(
+            ins, {"png": b"race-1", "sha": hashlib.sha256(b"race-1").hexdigest()}
+        ).scalar_one()
+        # Interleave: conn2 stages while conn1's transaction is still OPEN —
+        # two staged rows + the current row coexist without touching the
+        # partial unique (mid-transaction safety of step 1).
+        tx2 = conn2.begin()
+        new2 = conn2.execute(
+            ins, {"png": b"race-2", "sha": hashlib.sha256(b"race-2").hexdigest()}
+        ).scalar_one()
+
+        # conn1 wins: supersede + promote + commit (steps 2-3).
+        conn1.execute(supersede, {"n": new1, "o": cur_id})
+        conn1.execute(promote, {"d": AS_OF, "s": SOURCE_TRADE_CLOSE, "n": new1})
+        tx1.commit()
+
+        # conn2 loses: its promote would create a SECOND current row for the
+        # identity — idx_chart_images_logical rejects it.
+        conn2.execute(supersede, {"n": new2, "o": cur_id})
+        with pytest.raises(IntegrityError, match="idx_chart_images_logical"):
+            conn2.execute(
+                promote, {"d": AS_OF, "s": SOURCE_TRADE_CLOSE, "n": new2}
+            )
+        tx2.rollback()
+    finally:
+        conn1.close()
+        conn2.close()
+
+    rows = {r.id: r for r in _chart_rows(pg_legacy_session, "AAPL")}
+    # Loser's transaction rolled back WHOLE: its staged row and its
+    # superseded_by overwrite are both gone; the winner is the only current.
+    assert new2 not in rows
+    assert rows[cur_id].superseded_by == new1
+    current = [
+        r for r in rows.values()
+        if r.superseded_by is None and r.source == SOURCE_TRADE_CLOSE
+    ]
+    assert [r.id for r in current] == [new1]
+
+
 def test_persist_timeframe_days_follows_window(pg_legacy_session):
     _seed_stock(pg_legacy_session, "AAPL")
     pg_legacy_session.commit()
