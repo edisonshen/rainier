@@ -36,7 +36,7 @@ It answers one question: are big movers concentrated outside our funnel?
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -59,8 +59,18 @@ log = logging.getLogger(__name__)
 # 10 trading-day intervals (operator 2026-06-02, design D8).
 WINDOW_SESSIONS = 10
 # The ingest window must cover the anchor close too: 11 sessions, because the
-# default window_days=10 drops close(window_start) (acceptance 3).
-INGEST_WINDOW_SESSIONS = WINDOW_SESSIONS + 1
+# default window_days=10 drops close(window_start) (acceptance 3). +2 buffer
+# sessions so a market holiday AT window_start (DEFAULT_CALENDAR is Mon-Fri
+# only — no holiday table) still gets a real close fetched just before it for
+# the at-or-before endpoint lookup (review iter-2).
+INGEST_WINDOW_SESSIONS = WINDOW_SESSIONS + 1 + 2
+# Endpoint closes use an at-or-before lookup capped at this many calendar days
+# back, so an unpriced endpoint (e.g. window_end = Thanksgiving, which the
+# no-holiday default calendar happily returns) degrades to the last completed
+# PRICED day — per the plan's "last completed priced trading day" — instead of
+# wiping the whole cohort into missing_price_symbols (review iter-2). 5 days
+# covers a holiday cluster + weekend; anything staler is genuinely missing.
+_CLOSE_LOOKBACK_DAYS = 5
 # Forward-return thresholds — both INCLUSIVE (acceptance 2 / 6).
 MISS_THRESHOLD = 0.10
 DODGE_THRESHOLD = -0.10
@@ -184,17 +194,32 @@ def _held_symbols(session, window_start: date, window_end: date) -> set[str]:
     return {r[0] for r in rows}
 
 
-def _closes_on(session, symbols: set[str], d: date) -> dict[str, float]:
+def _closes_at_or_before(
+    session, symbols: set[str], d: date
+) -> dict[str, float]:
+    """Per-symbol close on ``d``, or the latest close within
+    ``_CLOSE_LOOKBACK_DAYS`` before it. An exact-date lookup would zero out the
+    entire report whenever an endpoint lands on a market holiday (~10
+    Fridays/yr for window_start; every Thanksgiving for window_end) — the
+    no-holiday DEFAULT_CALENDAR can't avoid picking one (review iter-2)."""
     if not symbols:
         return {}
+    floor = canonical_instant(d - timedelta(days=_CLOSE_LOOKBACK_DAYS))
     rows = session.execute(
-        select(StockPrice.symbol, StockPrice.close).where(
+        select(StockPrice.symbol, StockPrice.close, StockPrice.date).where(
             StockPrice.symbol.in_(sorted(symbols)),
-            StockPrice.date == canonical_instant(d),
+            StockPrice.date <= canonical_instant(d),
+            StockPrice.date >= floor,
             StockPrice.close.isnot(None),
         )
     ).all()
-    return {sym: float(px) for sym, px in rows}
+    best: dict[str, Any] = {}
+    out: dict[str, float] = {}
+    for sym, px, dt in rows:
+        if sym not in best or dt > best[sym]:
+            best[sym] = dt
+            out[sym] = float(px)
+    return out
 
 
 def _attribute(
@@ -221,17 +246,27 @@ def _attribute(
 
 
 def compute_weekly_payload(
-    as_of: date, calendar: TradingCalendar | None = None
+    as_of: date,
+    calendar: TradingCalendar | None = None,
+    *,
+    cohort: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the weekly missed-winner payload from raw inputs only:
     money_flow_snapshots (cohort), stock_prices, screened_stocks,
     analysis_results, paper_trade — NEVER from ResearchInsight (the insight
     queue is mutable; the snapshot is the durable record — acceptance 7).
 
+    ``cohort`` lets the live sweep pass the membership it already priced —
+    re-reading here would race the QU midday scrape (the Fri 09:00 PT run is
+    12:00 ET; the morning slot often slips past it), swapping in a cohort the
+    ingest never covered (review iter-2). ``--regenerate`` passes None and
+    fetches the historical cohort itself.
+
     JSON-native throughout so the persisted snapshot re-renders identically.
     """
     window_start, window_end = compute_window(as_of, calendar)
-    cohort = get_current_qu100_cohort(as_of)
+    if cohort is None:
+        cohort = get_current_qu100_cohort(as_of)
     cohort_symbols = sorted({c["symbol"] for c in cohort})
     rank_by_symbol: dict[str, int] = {}
     for c in cohort:
@@ -242,8 +277,8 @@ def compute_weekly_payload(
         with_pattern, screened = _screened_sets(session, window_start, window_end)
         held = _held_symbols(session, window_start, window_end)
         price_universe = set(cohort_symbols) | declined
-        start_closes = _closes_on(session, price_universe, window_start)
-        end_closes = _closes_on(session, price_universe, window_end)
+        start_closes = _closes_at_or_before(session, price_universe, window_start)
+        end_closes = _closes_at_or_before(session, price_universe, window_end)
 
     def _ret(symbol: str) -> float | None:
         start_px = start_closes.get(symbol)
@@ -285,14 +320,23 @@ def compute_weekly_payload(
 
     # R-B: dodged losers — declined in-window, forward return ≤ −10%
     # (inclusive), and NOT held (a loser we held wasn't dodged — acceptance 6).
+    # A declined name with no price visibility is tracked in
+    # missing_price_symbols too: an off-cohort decliner that can't price
+    # (delisted after crashing — exactly the dodged shape) must not vanish
+    # silently from the count it exists to inform (review iter-2).
     dodged: list[dict[str, Any]] = []
     for symbol in sorted(declined):
         ret = _ret(symbol)
-        if ret is None or symbol in held:
+        if ret is None:
+            if symbol not in missing_prices:
+                missing_prices.append(symbol)
+            continue
+        if symbol in held:
             continue
         if ret <= DODGE_THRESHOLD + _EPS:
             dodged.append({"symbol": symbol, "return_pct": round(ret, 6)})
     dodged.sort(key=lambda d: (d["return_pct"], d["symbol"]))
+    missing_prices.sort()
 
     first = cohort[0] if cohort else None
     return {
@@ -499,7 +543,10 @@ def sweep_missed_winners(
     else:
         log.warning("weekly_sweep_empty_cohort as_of=%s", as_of.isoformat())
 
-    payload = compute_weekly_payload(as_of, cal)
+    # Pass the cohort we actually priced — a second read here would race the
+    # QU midday scrape and could swap in a never-ingested membership
+    # (review iter-2).
+    payload = compute_weekly_payload(as_of, cal, cohort=cohort)
     persist_weekly_snapshot(as_of, payload)
     emit_missed_winner_insight(as_of, payload)
     send_weekly_paper_report(payload, discord_config)

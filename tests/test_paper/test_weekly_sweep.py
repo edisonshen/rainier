@@ -268,6 +268,82 @@ def test_threshold_float_epsilon_inclusive_from_below(pg_legacy_session):
 
 
 # ---------------------------------------------------------------------------
+# Holiday-at-endpoint degradation (review iter-2): the no-holiday
+# DEFAULT_CALENDAR can anchor an endpoint on a market holiday (window_end =
+# Thanksgiving annually; window_start ~10 Fridays/yr). The at-or-before close
+# lookup must fall back to the last completed PRICED day instead of wiping the
+# whole cohort into missing_price_symbols.
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_unpriced_window_end_falls_back_to_prior_close(pg_legacy_session):
+    """No bar at window_end (holiday shape) → the Wednesday close before it
+    prices the symbol; it is flagged, not 'missing'."""
+    s = pg_legacy_session
+    _seed_cohort(s, ["HOLE"])
+    _close(s, "HOLE", WINDOW_START, 100.0)
+    _close(s, "HOLE", date(2026, 6, 10), 120.0)  # last priced day before 6/11
+
+    payload = compute_weekly_payload(AS_OF)
+    assert payload["missing_price_symbols"] == []
+    assert _flagged(payload)["HOLE"]["return_pct"] == pytest.approx(0.20)
+
+
+@requires_postgres
+def test_unpriced_window_start_falls_back_to_prior_close(pg_legacy_session):
+    s = pg_legacy_session
+    _seed_cohort(s, ["HOLS"])
+    _close(s, "HOLS", date(2026, 5, 27), 100.0)  # day before window_start
+    _close(s, "HOLS", WINDOW_END, 115.0)
+
+    payload = compute_weekly_payload(AS_OF)
+    assert payload["missing_price_symbols"] == []
+    assert _flagged(payload)["HOLS"]["return_pct"] == pytest.approx(0.15)
+
+
+@requires_postgres
+def test_close_staler_than_lookback_is_missing(pg_legacy_session):
+    """The at-or-before fallback is capped: a close >5 calendar days before the
+    endpoint is genuinely missing, not silently stale-priced."""
+    s = pg_legacy_session
+    _seed_cohort(s, ["STAL"])
+    _close(s, "STAL", date(2026, 5, 20), 100.0)  # 8 days before window_start
+    _close(s, "STAL", WINDOW_END, 130.0)
+
+    payload = compute_weekly_payload(AS_OF)
+    assert payload["missing_price_symbols"] == ["STAL"]
+    assert payload["missed_winners"] == []
+
+
+@requires_postgres
+def test_sweep_reads_cohort_exactly_once(pg_legacy_session):
+    """The payload must be computed from the SAME cohort the ingest priced —
+    a second read would race the QU midday scrape (review iter-2)."""
+    from unittest.mock import patch
+
+    s = pg_legacy_session
+    _seed_cohort(s, ["ONCE"])
+    _window_closes(s, "ONCE", 100.0, 105.0)
+
+    from rainier.paper import sweep as sweep_mod
+
+    real = sweep_mod.get_current_qu100_cohort
+    calls = []
+
+    def counting(as_of):
+        calls.append(as_of)
+        return real(as_of)
+
+    def fetch_fn(symbols, start, end):  # noqa: ARG001
+        return {}
+
+    with patch("rainier.paper.sweep.get_current_qu100_cohort", side_effect=counting):
+        sweep_missed_winners(as_of=AS_OF, fetch_fn=fetch_fn)
+    assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
 # Attribution tiers (acceptance 4; multi-day = highest stage wins)
 # ---------------------------------------------------------------------------
 
@@ -395,10 +471,15 @@ def test_rb_dodged_losers_inclusive_and_held_excluded(pg_legacy_session):
     _declined(s, 923, "DWIN", date(2026, 6, 2), verdict="watch")
     # HLOS was nonetheless held in-window (a different thesis filled).
     _filled_position(s, 924, "HLOS", date(2026, 6, 3), status="open")
+    # DGON: declined, off-cohort, NO prices (delisted-after-crash shape) —
+    # must surface in missing_price_symbols, never silently vanish from R-B
+    # (review iter-2).
+    _declined(s, 925, "DGON", date(2026, 6, 2), verdict="watch")
 
     payload = compute_weekly_payload(AS_OF)
     assert payload["dodged_losers"]["count"] == 1
     assert [d["symbol"] for d in payload["dodged_losers"]["names"]] == ["DODG"]
+    assert "DGON" in payload["missing_price_symbols"]
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +515,9 @@ def test_sweep_ingest_anchored_at_window_end_never_partial_friday(
     assert calls, "sweep must run its own cohort ingest"
     _syms, start, end = calls[0]
     assert end == WINDOW_END, "ingest anchored at window_end, not the run day"
-    assert start == WINDOW_START, "fetch window must cover all 11 sessions"
+    # +2 buffer sessions before window_start (holiday-at-endpoint cover,
+    # review iter-2) — the fetch must still include every in-window session.
+    assert start <= WINDOW_START, "fetch window must cover all 11 sessions"
 
     rows = s.execute(
         select(StockPrice.date).where(StockPrice.symbol == "ANCH")
