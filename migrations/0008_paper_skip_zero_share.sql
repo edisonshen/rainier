@@ -12,6 +12,10 @@
 -- project_two_database_url_engines):
 --   psql "$LEGACY_DATABASE_URL" -f migrations/0008_paper_skip_zero_share.sql
 --
+-- ORDER: apply BEFORE deploying the Phase 3 code — the new fill guard inserts
+-- reason='zero_share_price', which the old 5-reason CHECK rejects
+-- (IntegrityError aborts that fill run). Old code + new schema is safe.
+--
 -- Idempotent: re-applying is safe (DROP IF EXISTS + ADD). market.* and every
 -- other public table are untouched.
 

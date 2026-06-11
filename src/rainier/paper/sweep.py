@@ -39,8 +39,9 @@ import logging
 from datetime import date
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from rainier.alerts.discord import _http_status, send_daily_report
 from rainier.core.database import get_session
 from rainier.core.models import (
     LLMAnalysisRecord,
@@ -170,15 +171,13 @@ def _held_symbols(session, window_start: date, window_end: date) -> set[str]:
     only (entry_date set, status open/closed) whose
     [entry_date, COALESCE(exit_date, window_end)] overlaps the window.
     Pending / never-filled expired rows are NOT held."""
-    from sqlalchemy import func as sa_func
-
     rows = session.execute(
         select(PaperTrade.symbol)
         .where(
             PaperTrade.entry_date.isnot(None),
             PaperTrade.status.in_(("open", "closed")),
             PaperTrade.entry_date <= window_end,
-            sa_func.coalesce(PaperTrade.exit_date, window_end) >= window_start,
+            func.coalesce(PaperTrade.exit_date, window_end) >= window_start,
         )
         .distinct()
     ).all()
@@ -368,11 +367,15 @@ def render_weekly_payload(payload: dict[str, Any]) -> str:
 
 def send_weekly_paper_report(payload: dict[str, Any], discord_config: Any) -> bool:
     """Push the weekly report to Discord. Non-fatal on failure / no webhook:
-    logs + returns False, never raises (mirrors the daily path)."""
-    text = render_weekly_payload(payload)
-    try:
-        from rainier.alerts.discord import _http_status, send_daily_report
+    logs + returns False, never raises (mirrors the daily path).
 
+    ``_http_status``/``send_daily_report`` are module-top imports and the
+    render runs INSIDE the try, so the except path can always execute — the
+    never-raises guarantee is what keeps Discord exceptions away from any
+    caller that might stringify them (review iter-1, security specialist).
+    """
+    try:
+        text = render_weekly_payload(payload)
         webhook = (
             getattr(discord_config, "webhook_url", None) if discord_config else None
         )

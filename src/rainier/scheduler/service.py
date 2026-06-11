@@ -332,7 +332,19 @@ async def run_research_job(eval_date_iso: str | None = None) -> None:
             dodged=payload["dodged_losers"]["count"],
         )
     except Exception as exc:
-        log.error("research_miss_sweep_failed", error=str(exc))
+        # Never log str(exc) here: this try block loads the Discord config —
+        # a pydantic ValidationError from load_settings_fresh() embeds
+        # input_value=... which can carry the token-bearing webhook URL, and
+        # any exception escaping the sweep would be stringified one frame up
+        # from the send (codex [P1] 2026-06-09, commit 96fbd13). Status +
+        # class only.
+        from rainier.alerts.discord import _http_status
+
+        log.error(
+            "research_miss_sweep_failed",
+            status=_http_status(exc),
+            error_type=type(exc).__name__,
+        )
 
     try:
         settings = await asyncio.to_thread(load_settings_fresh)

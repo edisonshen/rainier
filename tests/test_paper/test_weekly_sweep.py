@@ -255,6 +255,18 @@ def test_threshold_plus_10_pct_inclusive(pg_legacy_session):
     assert flagged["WINA"]["rank"] == 1
 
 
+@requires_postgres
+def test_threshold_float_epsilon_inclusive_from_below(pg_legacy_session):
+    """3.00→3.30 is mathematically exactly +10% but floats to just BELOW 0.10
+    (0.09999999999999987) — the _EPS guard must still flag it (review iter-1,
+    the miss-side twin of the dodge-side 100→90 case)."""
+    s = pg_legacy_session
+    assert 3.3 / 3.0 - 1.0 < 0.10  # the float really lands below
+    _seed_cohort(s, ["EPSW"])
+    _window_closes(s, "EPSW", 3.0, 3.3)
+    assert "EPSW" in _flagged(compute_weekly_payload(AS_OF))
+
+
 # ---------------------------------------------------------------------------
 # Attribution tiers (acceptance 4; multi-day = highest stage wins)
 # ---------------------------------------------------------------------------
@@ -537,6 +549,112 @@ def test_weekly_discord_failure_never_leaks_webhook_token(caplog):
     assert "401" in blob and "HTTPStatusError" in blob
 
 
+def test_weekly_discord_skipped_when_disabled_or_no_webhook():
+    """No config / disabled / missing webhook → returns False without ever
+    touching the network (review iter-1 coverage)."""
+    from unittest.mock import patch
+
+    from rainier.paper.sweep import send_weekly_paper_report
+
+    class _Disabled:
+        enabled = False
+        webhook_url = "https://discord.com/api/webhooks/1/x"
+
+    class _NoUrl:
+        enabled = True
+        webhook_url = None
+
+    with patch("rainier.paper.sweep.send_daily_report") as mock_send:
+        assert send_weekly_paper_report({}, None) is False
+        assert send_weekly_paper_report({}, _Disabled()) is False
+        assert send_weekly_paper_report({}, _NoUrl()) is False
+    mock_send.assert_not_called()
+
+
+def test_weekly_discord_success_sends_rendered_text():
+    from unittest.mock import patch
+
+    from rainier.paper.sweep import send_weekly_paper_report
+
+    class _Cfg:
+        enabled = True
+        webhook_url = "https://discord.com/api/webhooks/1/x"
+
+    payload = {"as_of_date": "2026-06-12", "missed_winners": [],
+               "dodged_losers": {"count": 0, "names": []}}
+    cfg = _Cfg()
+    with patch("rainier.paper.sweep.send_daily_report") as mock_send:
+        assert send_weekly_paper_report(payload, cfg) is True
+    mock_send.assert_called_once_with(render_weekly_payload(payload), cfg)
+
+
+def test_weekly_discord_malformed_payload_never_raises():
+    """render runs INSIDE the try (review iter-1): a malformed payload returns
+    False instead of raising into a caller that might stringify it."""
+    from unittest.mock import patch
+
+    from rainier.paper.sweep import send_weekly_paper_report
+
+    class _Cfg:
+        enabled = True
+        webhook_url = "https://discord.com/api/webhooks/1/x"
+
+    bad = {"missed_winners": [{}]}  # w["symbol"] raises KeyError in render
+    with patch("rainier.paper.sweep.send_daily_report") as mock_send:
+        assert send_weekly_paper_report(bad, _Cfg()) is False
+    mock_send.assert_not_called()
+
+
+def test_render_truncates_long_winner_and_missing_lists():
+    """>15 winners → '… +N more'; >10 missing symbols → '(+N more)'
+    (review iter-1 coverage for the Discord-size truncation arithmetic)."""
+    winners = [
+        {"symbol": f"W{i:02d}", "rank": i + 1, "return_pct": 0.20,
+         "bucket": BUCKET_RANK_TOO_LOW}
+        for i in range(16)
+    ]
+    payload = {
+        "as_of_date": "2026-06-12",
+        "missed_winners": winners,
+        "bucket_counts": {BUCKET_RANK_TOO_LOW: 16},
+        "dominant_bucket": BUCKET_RANK_TOO_LOW,
+        "tuning_hypothesis": "h",
+        "dodged_losers": {"count": 0, "names": []},
+        "missing_price_symbols": [f"M{i:02d}" for i in range(11)],
+        "disclosure": "d",
+    }
+    out = render_weekly_payload(payload)
+    assert "… +1 more" in out
+    assert "W14" in out and "W15" not in out  # exactly 15 winner lines
+    assert "(+1 more)" in out
+    assert "M09" in out and "M10" not in out  # exactly 10 missing shown
+
+
+@requires_postgres
+def test_sweep_empty_cohort_skips_ingest_and_persists_clean(pg_legacy_session):
+    """Zero cohort + zero declined → no fetch at all, a clean size-0 snapshot,
+    and one empty missed_winner insight (review iter-1 coverage for the
+    empty-cohort guard branch)."""
+    s = pg_legacy_session
+
+    def fetch_fn(symbols, start, end):  # noqa: ARG001
+        raise AssertionError("empty cohort must never trigger an ingest fetch")
+
+    payload = sweep_missed_winners(as_of=AS_OF, fetch_fn=fetch_fn)
+    assert payload["cohort"] == {"size": 0, "data_date": None, "captured_at": None}
+    assert payload["missed_winners"] == []
+    assert payload["dominant_bucket"] is None
+
+    from rainier.paper.report import REPORT_TYPE_WEEKLY, load_snapshot
+
+    assert load_snapshot(REPORT_TYPE_WEEKLY, AS_OF) == payload
+    rows = s.execute(
+        select(ResearchInsight).where(ResearchInsight.kind == "missed_winner")
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].evidence["winners"] == []
+
+
 # ---------------------------------------------------------------------------
 # CLI: --week snapshot re-render vs --week --regenerate (validation, separate)
 # ---------------------------------------------------------------------------
@@ -595,16 +713,28 @@ def test_cli_week_regenerate_recomputes_from_raw_and_upserts(pg_legacy_session):
                                  "bucket": BUCKET_RANK_TOO_LOW}]}
     persist_weekly_snapshot(AS_OF, stale)
 
-    result = CliRunner().invoke(
-        cli,
-        ["paper", "report", "--week", "--regenerate", "--date", AS_OF.isoformat()],
-    )
+    from unittest.mock import patch
+
+    with patch("rainier.paper.sweep.send_daily_report") as mock_send:
+        result = CliRunner().invoke(
+            cli,
+            ["paper", "report", "--week", "--regenerate", "--date",
+             AS_OF.isoformat()],
+        )
     assert result.exit_code == 0, result.output
     assert "RAWW" in result.output  # recomputed from raw inputs
     assert "SENT" not in result.output
 
     refreshed = load_snapshot(REPORT_TYPE_WEEKLY, AS_OF)
     assert [w["symbol"] for w in refreshed["missed_winners"]] == ["RAWW"]
+
+    # --regenerate is compute + upsert + render ONLY: no insight emission,
+    # no Discord (review iter-1 — pins the docstring's promise).
+    mock_send.assert_not_called()
+    rows = s.execute(
+        select(ResearchInsight).where(ResearchInsight.kind == "missed_winner")
+    ).scalars().all()
+    assert rows == []
 
 
 @requires_postgres

@@ -247,6 +247,47 @@ async def test_run_research_job_continues_when_sweep_fails():
     mock_discord.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_run_research_job_sweep_failure_log_never_leaks_token():
+    """The miss-sweep failure handler must log status + exception class ONLY —
+    never str(exc), whose httpx variant embeds the token-bearing webhook URL
+    (regression for codex [P1] 2026-06-09, commit 96fbd13; review iter-1)."""
+    import httpx
+
+    secret = "SWEEPtokenSECRET999"
+    url = f"https://discord.com/api/webhooks/55555/{secret}"
+    req = httpx.Request("POST", url)
+    resp = httpx.Response(401, request=req)
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        err = e
+    assert secret in str(err)  # the leak vector exists in the exception
+
+    with (
+        patch(
+            "rainier.scheduler.service.load_settings_fresh",
+            return_value=_settings(),
+        ),
+        patch("rainier.llm_thesis.research.mark_stale", return_value=0),
+        patch("rainier.llm_thesis.research.run_research", return_value=[]),
+        patch("rainier.paper.sweep.sweep_missed_winners", side_effect=err),
+        patch("rainier.alerts.discord.send_research_report"),
+        patch("rainier.scheduler.service.log") as mock_log,
+    ):
+        from rainier.scheduler.service import run_research_job
+        await run_research_job(eval_date_iso="2026-06-12")
+
+    blob = repr(mock_log.mock_calls)
+    assert secret not in blob, "webhook token leaked into the failure log"
+    failed = [
+        c for c in mock_log.error.call_args_list
+        if c.args and c.args[0] == "research_miss_sweep_failed"
+    ]
+    assert len(failed) == 1
+    assert failed[0].kwargs == {"status": 401, "error_type": "HTTPStatusError"}
+
+
 # ---------------------------------------------------------------------------
 # Cron registration — Friday 09:00 PT
 # ---------------------------------------------------------------------------
