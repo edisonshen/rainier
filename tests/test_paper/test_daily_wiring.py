@@ -53,6 +53,15 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
     )
     monkeypatch.setattr("rainier.alerts.discord.send_eval_report", lambda **k: None)
 
+    # R-D close-side chart capture (step v addendum, unconditional).
+    def fake_close_charts(*, as_of):
+        calls.append("close_charts")
+        return 0
+
+    monkeypatch.setattr(
+        "rainier.paper.chart_archive.capture_trade_close_charts", fake_close_charts
+    )
+
     # Paper report (step v).
     def fake_compute(as_of):
         calls.append("report")
@@ -103,6 +112,10 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
     assert calls.index("horizon") < calls.index("report")
     assert calls.index("report") < calls.index("reflections")
     assert calls.index("reflections") < calls.index("calibration")
+    # R-D: close-side chart capture runs in the step (v) block — after the
+    # exits are booked (update) and before the daily report goes out.
+    assert calls.index("update") < calls.index("close_charts")
+    assert calls.index("close_charts") < calls.index("report")
 
 
 class _FakeDiscord:
