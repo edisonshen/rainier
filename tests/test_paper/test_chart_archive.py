@@ -27,6 +27,7 @@ DB tests ride the `pg_legacy_engine` (0010 applied) / `pg_chart_mig_engine`
 
 from __future__ import annotations
 
+import functools
 import hashlib
 from datetime import date, datetime, timedelta, timezone
 
@@ -202,8 +203,28 @@ def test_config_chart_lookback_days_default():
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=1)
+def _kaleido_usable() -> bool:
+    """True if kaleido can actually RENDER (installed AND its Chromium starts).
+
+    ``pytest.importorskip("kaleido")`` only proves the package imports; on
+    hosts where the bundled Chromium can't start (sandboxed CI, some Apple
+    Silicon builds) the render itself raises and would redline the suite on an
+    environmental precondition. Probe once, skip with a clear reason — same
+    treatment as tests/test_llm_thesis/test_chart_determinism.py (codex).
+    """
+    try:
+        import plotly.graph_objects as go
+
+        go.Figure().to_image(format="png", engine="kaleido", width=64, height=64)
+    except Exception:
+        return False
+    return True
+
+
 def test_render_archive_chart_png_deterministic():
-    pytest.importorskip("kaleido")
+    if not _kaleido_usable():
+        pytest.skip("kaleido cannot render on this host — skipping byte check")
     df = _mk_df(200)
     dates = _tail_dates(df, 120)
     apps = [_appearance(dates[10], 23)]
@@ -672,7 +693,8 @@ def test_load_daily_bars_window_and_as_of(pg_legacy_session):
 def test_render_on_demand_reproduces_stored_chart_byte_identically(
     pg_legacy_session, monkeypatch
 ):
-    pytest.importorskip("kaleido")
+    if not _kaleido_usable():
+        pytest.skip("kaleido cannot render on this host — skipping byte check")
     _seed_stock(pg_legacy_session, "AAPL")
     pg_legacy_session.commit()
     days = _seed_prices(pg_legacy_session, "AAPL", n=130)
