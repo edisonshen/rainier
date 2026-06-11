@@ -649,6 +649,13 @@ class PaperTrade(Base):
     return_pct: Mapped[float | None] = mapped_column(Float)
     pnl: Mapped[float | None] = mapped_column(Float)
 
+    # R-A (design DESIGN-qu100-llm-feedback-loop Appendix B): post-exit LLM
+    # post-mortem. The CHECK below is the outcome embargo at the schema level —
+    # a reflection can only exist once the trade has resolved (exit_reason set).
+    # Written once by paper/reflection.py (NULL-only update, idempotent); the
+    # last K feed the thesis prompt's calibration section.
+    reflection: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         UniqueConstraint("thesis_id", name="uq_paper_trade_thesis_id"),
         CheckConstraint(
@@ -659,6 +666,11 @@ class PaperTrade(Base):
             "exit_reason IS NULL OR exit_reason IN "
             "('stop_loss','target','time_stop','manual')",
             name="ck_paper_trade_exit_reason",
+        ),
+        # R-A outcome embargo: reflections only exist for resolved trades.
+        CheckConstraint(
+            "reflection IS NULL OR exit_reason IS NOT NULL",
+            name="ck_paper_trade_reflection_after_exit",
         ),
         # Partial unique index — one pending/open position per symbol (design
         # D1). Closed/expired rows fall out, so a symbol can be re-traded later.

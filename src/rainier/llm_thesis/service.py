@@ -374,6 +374,25 @@ async def generate_thesis(
     except Exception:
         log.warning("thesis_calibration_load_failed symbol=%s", symbol, exc_info=True)
 
+    # R-A: append the rolling last-K post-exit reflections to the calibration
+    # section. Same strictly-before discipline (a reflection for a trade exited
+    # on day D is written end-of-day D — a day-D scan must not see it) and the
+    # same best-effort isolation: a load failure costs the block, not the
+    # thesis. Like the calibration text this is invisible to compute_input_hash,
+    # so PROMPT_VERSION ("v3") busts the Tier-1 cache instead.
+    try:
+        from rainier.paper.reflection import reflection_prompt_section
+
+        reflections_block = reflection_prompt_section(scan_date)
+        if reflections_block:
+            calibration_section = (
+                f"{calibration_section}\n\n{reflections_block}"
+                if calibration_section
+                else reflections_block
+            )
+    except Exception:
+        log.warning("thesis_reflections_load_failed symbol=%s", symbol, exc_info=True)
+
     user_prompt = build_user_message(
         symbol=symbol,
         scan_date=pack.scan_date,

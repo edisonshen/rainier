@@ -3,7 +3,7 @@
 Covers (TASK-PLAN acceptance):
   1. Schema: `paper_trade.reflection TEXT` + CHECK (reflection IS NULL OR
      exit_reason IS NOT NULL) — the outcome embargo at the schema level.
-     Additive migration 0008 on $LEGACY_DATABASE_URL.
+     Additive migration 0009 on $LEGACY_DATABASE_URL.
   2. Generation: closed trades with reflection IS NULL and exit_date <= as_of,
      bounded to the trailing 30 days; one LLM call per trade; idempotent;
      LLM failure -> reflection stays NULL (retried next run, never blocks).
@@ -29,9 +29,9 @@ from sqlalchemy.exc import IntegrityError
 from rainier.core.models import PaperTrade
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATION_0008_UP = REPO_ROOT / "migrations" / "0008_paper_reflection.sql"
-MIGRATION_0008_DOWN = (
-    REPO_ROOT / "migrations" / "0008_paper_reflection_downgrade.sql"
+MIGRATION_0009_UP = REPO_ROOT / "migrations" / "0009_paper_reflection.sql"
+MIGRATION_0009_DOWN = (
+    REPO_ROOT / "migrations" / "0009_paper_reflection_downgrade.sql"
 )
 
 
@@ -122,7 +122,7 @@ def _mk_trade(
 
 
 # ---------------------------------------------------------------------------
-# 1. Schema — CHECK embargo on a real Postgres (migration 0008 applied by
+# 1. Schema — CHECK embargo on a real Postgres (migration 0009 applied by
 #    the pg_legacy_engine fixture)
 # ---------------------------------------------------------------------------
 
@@ -162,16 +162,16 @@ def test_check_accepts_reflection_on_closed_row(pg_legacy_session):
     assert got == "clean two-sentence post-mortem"
 
 
-def test_migration_0008_idempotent_reapply(pg_legacy_engine):
-    # The fixture already applied 0008 once; a re-apply must be a no-op.
-    sql = MIGRATION_0008_UP.read_text()
+def test_migration_0009_idempotent_reapply(pg_legacy_engine):
+    # The fixture already applied 0009 once; a re-apply must be a no-op.
+    sql = MIGRATION_0009_UP.read_text()
     with pg_legacy_engine.begin() as conn:
         conn.execute(text(sql))
 
 
-def test_migration_0008_downgrade_then_up_roundtrip(pg_legacy_engine):
-    down = MIGRATION_0008_DOWN.read_text()
-    up = MIGRATION_0008_UP.read_text()
+def test_migration_0009_downgrade_then_up_roundtrip(pg_legacy_engine):
+    down = MIGRATION_0009_DOWN.read_text()
+    up = MIGRATION_0009_UP.read_text()
     with pg_legacy_engine.begin() as conn:
         conn.execute(text(down))
     cols = {

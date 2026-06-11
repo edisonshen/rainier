@@ -11,7 +11,11 @@ from __future__ import annotations
 # calibration text is INVISIBLE to compute_input_hash (it hashes only the
 # EvidencePack + image), so the Tier-1 cache — keyed on prompt_version — would
 # otherwise serve a pre-calibration thesis. Bumping the version busts Tier-1.
-PROMPT_VERSION = "v2"
+# v3 (R-A): the rolling last-K=10 post-exit trade reflections are appended to
+# the calibration section — same Tier-1-bust rationale. Bump IN LOCKSTEP with
+# core/config.py LLMThesisConfig.prompt_version and settings.yaml
+# llm_thesis.prompt_version (the runtime cache key uses the config value).
+PROMPT_VERSION = "v3"
 
 OUTPUT_SCHEMA = """{
   "verdict": "setup_long" | "watch" | "no_setup",
@@ -97,11 +101,13 @@ def build_user_message(
     `signal_renders` is the list of `signal.render_for_prompt(value)` strings for
     every enabled signal that produced a non-None value. Order is REGISTRY order.
 
-    `calibration_section` (D7a) is a bounded, pre-rendered block describing how
-    prior theses graded out (unbiased fixed-horizon headline + labeled realized
-    supplementary). Empty string = nothing to inject (Phase-0 / fresh DB). NOTE:
-    this text does NOT enter `compute_input_hash` (Tier-2), so PROMPT_VERSION is
-    bumped to bust the Tier-1 cache whenever this block's shape changes.
+    `calibration_section` (D7a + R-A) is a bounded, pre-rendered block describing
+    how prior theses graded out (unbiased fixed-horizon headline + labeled
+    realized supplementary), followed by the last K=10 post-exit trade
+    reflections (R-A). Empty string = nothing to inject (Phase-0 / fresh DB).
+    NOTE: this text does NOT enter `compute_input_hash` (Tier-2), so
+    PROMPT_VERSION is bumped to bust the Tier-1 cache whenever this block's
+    shape changes.
     """
     body = (
         f"Symbol: {symbol}\n"
