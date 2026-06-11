@@ -287,3 +287,34 @@ def test_f16_split_freeze_closed_immutable(pg_legacy_session):
     update_open_positions(as_of=date(2026, 1, 8))
     after = _get(s, pid)
     assert (after.entry_price, after.exit_price, after.pnl, after.shares) == booked_tuple
+
+
+# --------------------------- Zero-share guard ---------------------------
+# TASK-PLAN qu100-miss-sweep-6b63 acceptance 9: a T+1 open > $10k/share would
+# floor shares to 0 — never open a 0-share position. Skip reason
+# `zero_share_price` + status=expired.
+
+
+def test_zero_share_guard_expires_and_records_skip(pg_legacy_session):
+    s = pg_legacy_session
+    pid = _mk_pending(s, 1, "BRKA", date(2026, 1, 5), stop=5000, target=20000)
+    _price(s, "BRKA", date(2026, 1, 6), 12000, 12500, 11800, 12100)  # T+1 open > $10k
+    res = fill_pending_positions(as_of=date(2026, 1, 6))
+    assert res == {"filled": 0, "expired": 1}
+    p = _get(s, pid)
+    assert p.status == "expired"
+    assert p.shares is None and p.entry_price is None  # never a 0-share fill
+    skips = s.execute(select(PaperSkip).where(PaperSkip.symbol == "BRKA")).scalars().all()
+    assert len(skips) == 1 and skips[0].reason == "zero_share_price"
+
+
+def test_zero_share_boundary_open_at_exactly_10k_fills(pg_legacy_session):
+    s = pg_legacy_session
+    pid = _mk_pending(s, 1, "BRKA", date(2026, 1, 5), stop=5000, target=20000)
+    _price(s, "BRKA", date(2026, 1, 6), 10000.0, 10500, 9800, 10100)
+    res = fill_pending_positions(as_of=date(2026, 1, 6))
+    assert res == {"filled": 1, "expired": 0}
+    p = _get(s, pid)
+    assert p.status == "open" and p.shares == 1
+    assert p.allocated_amount == pytest.approx(10000.0)
+    assert p.residual_cash == pytest.approx(0.0)

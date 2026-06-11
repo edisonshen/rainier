@@ -80,7 +80,7 @@ def test_paper_skip_orm_shape_and_reason_set():
     sqltext = " ".join(str(c.sqltext) for c in checks)
     for reason in (
         "symbol_already_active", "missing_levels", "missing_screened_record",
-        "gap_invalidated", "same_symbol_lower_conviction",
+        "gap_invalidated", "same_symbol_lower_conviction", "zero_share_price",
     ):
         assert reason in sqltext, f"reason {reason} missing from CHECK"
 
@@ -261,6 +261,74 @@ def test_0007_paper_calibration_downgrade_drops_only_its_table(pg_legacy_engine)
     # 0005 tables + FK targets untouched.
     assert {"paper_trade", "paper_skip", "paper_report_snapshot",
             "analysis_results", "screened_stocks"} <= tables
+
+
+@pytest.mark.requires_postgres
+def test_0008_zero_share_reason_accepted(pg_legacy_engine):
+    """0008 (applied by the fixture) extends ck_paper_skip_reason with
+    `zero_share_price` (TASK-PLAN qu100-miss-sweep-6b63 acceptance 9)."""
+    with pg_legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO analysis_results (id, llm_model, prompt_template) "
+                "VALUES (201, 'm', 't') ON CONFLICT DO NOTHING"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO paper_skip (thesis_id, symbol, scan_date, reason) "
+                "VALUES (201, 'BRKA', '2026-01-06', 'zero_share_price')"
+            )
+        )
+    with pg_legacy_engine.connect() as conn:
+        n = conn.execute(
+            text("SELECT count(*) FROM paper_skip WHERE reason='zero_share_price'")
+        ).scalar()
+    assert n == 1
+
+
+@pytest.mark.requires_postgres
+def test_0008_downgrade_restores_old_constraint(pg_legacy_engine):
+    """0008 downgrade removes zero_share_price rows + restores the 5-reason
+    CHECK; re-applying 0008 re-accepts the new reason (idempotent)."""
+    from pathlib import Path
+
+    mig_dir = Path(__file__).resolve().parents[2] / "migrations"
+    with pg_legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO paper_skip (thesis_id, symbol, scan_date, reason) "
+                "VALUES (202, 'BRKA', '2026-01-06', 'zero_share_price')"
+            )
+        )
+    with pg_legacy_engine.begin() as conn:
+        conn.execute(text((mig_dir / "0008_paper_skip_zero_share_downgrade.sql").read_text()))
+    with pg_legacy_engine.begin() as conn:
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO paper_skip (thesis_id, symbol, scan_date, reason) "
+                    "VALUES (203, 'BRKA', '2026-01-06', 'zero_share_price')"
+                )
+            )
+    # Old reasons still pass post-downgrade.
+    with pg_legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO paper_skip (thesis_id, symbol, scan_date, reason) "
+                "VALUES (204, 'BRKA', '2026-01-06', 'gap_invalidated')"
+            )
+        )
+    # Re-apply 0008 → new reason accepted again.
+    with pg_legacy_engine.begin() as conn:
+        conn.execute(text((mig_dir / "0008_paper_skip_zero_share.sql").read_text()))
+    with pg_legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO paper_skip (thesis_id, symbol, scan_date, reason) "
+                "VALUES (205, 'BRKA', '2026-01-06', 'zero_share_price')"
+            )
+        )
 
 
 @pytest.mark.requires_postgres

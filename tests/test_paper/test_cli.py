@@ -1,4 +1,4 @@
-"""Step 8 — `rainier paper` CLI (TEST-SPEC §H5). No DB for the Phase-3 guard."""
+"""Step 8 — `rainier paper` CLI (TEST-SPEC §H5). No-DB registration checks."""
 
 from __future__ import annotations
 
@@ -7,13 +7,15 @@ from click.testing import CliRunner
 from rainier.cli import cli
 
 
-def test_h5_weekly_regenerate_is_phase3_error():
+def test_weekly_flags_registered():
+    """Phase 3 ships --week / --week --regenerate (the old guard error is
+    gone); behavior is covered in test_weekly_sweep.py — here just
+    registration."""
     runner = CliRunner()
-    result = runner.invoke(
-        cli, ["paper", "report", "--date", "2026-01-09", "--week", "--regenerate"]
-    )
-    assert result.exit_code != 0
-    assert "Phase 3" in result.output or "not implemented" in result.output
+    result = runner.invoke(cli, ["paper", "report", "--help"])
+    assert result.exit_code == 0
+    assert "--week" in result.output
+    assert "--regenerate" in result.output
 
 
 def test_paper_group_registered():
