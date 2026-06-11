@@ -53,9 +53,14 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
     )
     monkeypatch.setattr("rainier.alerts.discord.send_eval_report", lambda **k: None)
 
-    # R-D close-side chart capture (step v addendum, unconditional).
-    def fake_close_charts(*, as_of):
+    # R-D close-side chart capture (step v addendum, unconditional). The
+    # scheduler must thread the FRESH settings' chart_lookback_days through
+    # (codex P2: never the process-cached singleton mid-daemon).
+    seen_windows: list = []
+
+    def fake_close_charts(*, as_of, window=None):
         calls.append("close_charts")
+        seen_windows.append(window)
         return 0
 
     monkeypatch.setattr(
@@ -116,6 +121,9 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
     # exits are booked (update) and before the daily report goes out.
     assert calls.index("update") < calls.index("close_charts")
     assert calls.index("close_charts") < calls.index("report")
+    # ... and the window is the fresh-settings value (117 is deliberately NOT
+    # the 120 config default — proves it came from load_settings_fresh()).
+    assert seen_windows == [117]
 
 
 class _FakeDiscord:
@@ -132,6 +140,9 @@ class _FakeLLMThesis:
     model = "test-model"
     # The operator's LLM kill switch — reflections (R-A) gate on it too.
     enabled = True
+    # Deliberately NOT the 120 default: G1 asserts this exact value reaches
+    # capture_trade_close_charts, proving the fresh-settings threading.
+    chart_lookback_days = 117
 
 
 class _FakeSettings:

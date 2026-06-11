@@ -204,9 +204,16 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
     # every trade closed today + set paper_trade.chart_id. Runs after the
     # exits are booked (step iii) and before the daily report goes out.
     # Unconditional (every day; idempotent sha-dedup) but non-fatal — a
-    # render failure must never block the daily report.
+    # render failure must never block the daily report. The window comes from
+    # THIS run's `load_settings_fresh()` (not the process-cached singleton) so
+    # a chart_lookback_days YAML edit takes effect without a daemon restart —
+    # the same fresh-settings discipline as the other scheduled paper steps.
     try:
-        await asyncio.to_thread(run_paper_close_charts, eval_date)
+        await asyncio.to_thread(
+            run_paper_close_charts,
+            eval_date,
+            settings.llm_thesis.chart_lookback_days,
+        )
     except Exception as exc:
         log.error("daily_close_charts_failed", error=str(exc))
 
@@ -276,16 +283,19 @@ def run_paper_daily_steps(eval_date) -> None:
     paper_positions.update_open_positions(as_of=eval_date)
 
 
-def run_paper_close_charts(eval_date) -> None:
+def run_paper_close_charts(eval_date, window: int | None = None) -> None:
     """Paper step (v) addendum (R-D): close-side chart capture.
 
     Renders + persists an annotated archive chart for every paper trade
     closed on ``eval_date`` and points ``paper_trade.chart_id`` at it.
     Idempotent (sha dedup / append-only supersession in the persist path).
+    ``window`` is the freshly-loaded ``chart_lookback_days`` from the caller's
+    `load_settings_fresh()`; ``None`` falls back to the process-cached config
+    (codex: the scheduled path must pass it so YAML edits apply live).
     """
     from rainier.paper.chart_archive import capture_trade_close_charts
 
-    n = capture_trade_close_charts(as_of=eval_date)
+    n = capture_trade_close_charts(as_of=eval_date, window=window)
     log.info("daily_close_charts_done", charts=n)
 
 

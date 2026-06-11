@@ -788,8 +788,9 @@ def test_run_paper_close_charts_calls_capture(monkeypatch):
 
     called: dict = {}
 
-    def fake_capture(*, as_of):
+    def fake_capture(*, as_of, window=None):
         called["as_of"] = as_of
+        called["window"] = window
         return 2
 
     monkeypatch.setattr(
@@ -797,6 +798,12 @@ def test_run_paper_close_charts_calls_capture(monkeypatch):
     )
     service.run_paper_close_charts(AS_OF)
     assert called["as_of"] == AS_OF
+    assert called["window"] is None  # no explicit window → capture's config fallback
+
+    # The scheduled path passes the freshly-loaded chart_lookback_days through
+    # (codex P2: must NOT re-read the process-cached singleton mid-daemon).
+    service.run_paper_close_charts(AS_OF, 90)
+    assert called["window"] == 90
 
 
 # ---------------------------------------------------------------------------
