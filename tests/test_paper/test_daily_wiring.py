@@ -78,18 +78,30 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
         "rainier.paper.calibration.persist_calibration", lambda *a, **k: None
     )
 
+    # R-A reflections — run AFTER step (v) (the report/chart-capture step), so
+    # the close-side chart exists by reflection time once chart-archive lands.
+    def fake_reflections(as_of, **kw):
+        calls.append("reflections")
+        return {"written": 0, "failed": 0}
+
+    monkeypatch.setattr(
+        "rainier.paper.reflection.generate_reflections", fake_reflections
+    )
+
     # Avoid the yesterday-rows DB fetch.
     monkeypatch.setattr(service, "load_settings_fresh", lambda: _FakeSettings())
 
     asyncio.run(service.run_daily_eval("2026-01-09"))
 
     # ingest precedes fill (G2); fill precedes update; update precedes horizon
-    # eval; horizon precedes the paper report; report precedes calibration
-    # (step vi reuses the report's MTM figure — G1 authoritative order).
+    # eval; horizon precedes the paper report; report precedes reflections
+    # (R-A runs after step (v)); report precedes calibration (step vi reuses
+    # the report's MTM figure — G1 authoritative order).
     assert calls.index("ingest") < calls.index("fill")
     assert calls.index("fill") < calls.index("update")
     assert calls.index("update") < calls.index("horizon")
     assert calls.index("horizon") < calls.index("report")
+    assert calls.index("report") < calls.index("reflections")
     assert calls.index("report") < calls.index("calibration")
 
 
@@ -104,6 +116,7 @@ class _FakeAlerts:
 
 class _FakeLLMThesis:
     learned_time_stop_days = None
+    model = "test-model"
 
 
 class _FakeSettings:
@@ -150,6 +163,9 @@ def test_g3_horizon_eval_still_runs(monkeypatch):
     )
     monkeypatch.setattr(
         "rainier.paper.calibration.persist_calibration", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "rainier.paper.reflection.generate_reflections", lambda *a, **k: {}
     )
     monkeypatch.setattr(service, "load_settings_fresh", lambda: _FakeSettings())
 
