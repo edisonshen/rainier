@@ -197,17 +197,16 @@ def build_archive_figure(
                 font=dict(family=_CHART_FONT, size=10, color=color),
             )
 
-        _point(
-            trade.entry_date, trade.entry_price,
-            f"Entry {trade.entry_price:.2f}" if trade.entry_price else "",
-            "#26a69a",
-        )
+        if trade.entry_price is not None:
+            _point(
+                trade.entry_date, trade.entry_price,
+                f"Entry {trade.entry_price:.2f}", "#26a69a",
+            )
         if trade.exit_price is not None:
             reason = f" ({trade.exit_reason})" if trade.exit_reason else ""
             _point(
                 trade.exit_date, trade.exit_price,
-                f"Exit {trade.exit_price:.2f}{reason}",
-                "#FF8A65",
+                f"Exit {trade.exit_price:.2f}{reason}", "#FF8A65",
             )
     return fig
 
@@ -381,11 +380,17 @@ def capture_trade_close_charts(
     """
     window = _archive_window(window)
     with get_session() as session:
+        # Ascending id order: if two closed trades of one symbol ever share an
+        # exit_date (re-trade edge), the LAST one captured is the highest id —
+        # the same trade `regenerate_chart` picks — so the stored current
+        # chart and a re-render agree.
         trades = session.execute(
-            select(PaperTrade.id, PaperTrade.symbol).where(
+            select(PaperTrade.id, PaperTrade.symbol)
+            .where(
                 PaperTrade.status == "closed",
                 PaperTrade.exit_date == as_of,
             )
+            .order_by(PaperTrade.id)
         ).all()
 
     captured = 0
@@ -445,13 +450,22 @@ def regenerate_chart(
 
     overlay: TradeOverlay | None = None
     with get_session() as session:
-        trade = session.execute(
-            select(PaperTrade).where(
-                PaperTrade.symbol == symbol,
-                PaperTrade.status == "closed",
-                PaperTrade.exit_date == as_of,
+        # Highest id wins on the multiple-closed-trades edge — mirrors the
+        # capture loop's ascending order (its last persist is the current row).
+        trade = (
+            session.execute(
+                select(PaperTrade)
+                .where(
+                    PaperTrade.symbol == symbol,
+                    PaperTrade.status == "closed",
+                    PaperTrade.exit_date == as_of,
+                )
+                .order_by(PaperTrade.id.desc())
+                .limit(1)
             )
-        ).scalar_one_or_none()
+            .scalars()
+            .first()
+        )
         if trade is not None:
             overlay = TradeOverlay.from_trade(trade)
 
