@@ -311,6 +311,29 @@ async def run_research_job(eval_date_iso: str | None = None) -> None:
 
     log.info("research_job_emitted", count=len(insights))
 
+    # Phase 3 — weekly missed-winner sweep (design §5(4), coverage diagnostic
+    # only). Own try/except so a sweep failure never kills the research report
+    # (and vice versa). Discord delivery inside the sweep is already non-fatal.
+    try:
+        from rainier.paper.ingest import _yfinance_fetch_fn
+        from rainier.paper.sweep import sweep_missed_winners
+
+        settings = await asyncio.to_thread(load_settings_fresh)
+        payload = await asyncio.to_thread(
+            lambda: sweep_missed_winners(
+                as_of=eval_date,
+                fetch_fn=_yfinance_fetch_fn,
+                discord_config=settings.alerts.discord,
+            )
+        )
+        log.info(
+            "research_miss_sweep_done",
+            missed=len(payload["missed_winners"]),
+            dodged=payload["dodged_losers"]["count"],
+        )
+    except Exception as exc:
+        log.error("research_miss_sweep_failed", error=str(exc))
+
     try:
         settings = await asyncio.to_thread(load_settings_fresh)
         await asyncio.to_thread(

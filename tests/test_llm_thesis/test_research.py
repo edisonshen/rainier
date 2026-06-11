@@ -283,6 +283,10 @@ def test_insight_kinds_and_severities_are_complete():
         # Phase 2 (D6 / D7c).
         "time_stop_discovered",
         "paper_lessons",
+        # Phase 3 (D8): weekly missed-winner sweep — emitted by
+        # paper.sweep.sweep_missed_winners (the run_research_job sweep step),
+        # not by a run_research check.
+        "missed_winner",
     }
     assert set(SEVERITIES) == {"info", "warn", "critical"}
 
@@ -770,7 +774,10 @@ def test_run_research_runs_all_checks_and_collects_emissions():
         out = run_research(eval_date=date(2026, 5, 7))
 
     assert len(out) == 8
-    assert {r.kind for r in out} == set(INSIGHT_KINDS)
+    # Every kind EXCEPT missed_winner comes from a run_research check;
+    # missed_winner is emitted by the Phase-3 sweep step (paper.sweep) inside
+    # run_research_job, outside this orchestrator.
+    assert {r.kind for r in out} == set(INSIGHT_KINDS) - {"missed_winner"}
 
 
 def test_run_research_isolates_failures():

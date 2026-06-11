@@ -492,6 +492,51 @@ def test_sweep_emits_one_insight_per_week_and_persists_snapshot(
     assert "survivorship" in disclosure
 
 
+def test_weekly_discord_failure_never_leaks_webhook_token(caplog):
+    """httpx.HTTPStatusError.__str__ embeds the request URL, and a Discord
+    webhook URL carries its secret token. The weekly send's failure log must
+    carry status + exception class only — never str(exc) or a traceback.
+    Regression for codex [P1] 2026-06-09 (commit 96fbd13)."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    import httpx
+
+    from rainier.paper.sweep import send_weekly_paper_report
+
+    secret = "WEEKLYtokenSECRET777"
+    url = f"https://discord.com/api/webhooks/424242/{secret}"
+
+    class _Cfg:
+        enabled = True
+        webhook_url = url
+
+    # Reproduce the real leak vector: raise_for_status() auto-generates a
+    # message embedding the request URL (which carries the token).
+    req = httpx.Request("POST", url)
+    resp = httpx.Response(401, request=req)
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        err = e
+    assert secret in str(err)  # the leak vector exists in the exception
+
+    with caplog.at_level(logging.INFO, logger="rainier.paper.sweep"):
+        with patch("rainier.alerts.discord.httpx.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                raise_for_status=MagicMock(side_effect=err)
+            )
+            ok = send_weekly_paper_report({}, _Cfg())
+
+    assert ok is False
+    fmt = logging.Formatter()
+    blob = "\n".join(fmt.format(r) for r in caplog.records)
+    assert secret not in blob, "webhook token leaked into logs"
+    assert "webhooks/424242" not in blob
+    assert "weekly_sweep_discord_failed" in blob
+    assert "401" in blob and "HTTPStatusError" in blob
+
+
 # ---------------------------------------------------------------------------
 # CLI: --week snapshot re-render vs --week --regenerate (validation, separate)
 # ---------------------------------------------------------------------------

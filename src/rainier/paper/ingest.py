@@ -245,6 +245,59 @@ def screened_symbols(as_of: date) -> list[str]:
     return sorted({r[0] for r in rows})
 
 
+def get_current_qu100_cohort(as_of: date) -> list[dict[str, Any]]:
+    """The current QU100 cohort at-or-before ``as_of`` (shared API — the weekly
+    miss-sweep uses it now; PR 5 reuses it for the daily ingest universe).
+
+    Selection (TASK-PLAN qu100-miss-sweep-6b63 acceptance 1): within
+    ``ranking_type='top100'`` pick the latest ``data_date <= as_of``, then the
+    latest ``captured_at`` within that data_date (the freshest capture batch of
+    the day — a backfill that stamped older data_dates with the same
+    captured_at can't win because data_date filters first). Live runs pass
+    today; ``--regenerate`` passes the report's date and gets the historical
+    cohort. Do NOT use the all-history CLI ``qu100`` selector (every symbol
+    ever seen) — this is the point-in-time membership.
+
+    Returns ``[{symbol, rank, data_date, captured_at}]`` ordered by rank;
+    ``[]`` when no top100 snapshot exists at-or-before ``as_of``.
+    """
+    from rainier.core.models import MoneyFlowSnapshot
+
+    with get_session() as session:
+        max_dd = session.execute(
+            select(func.max(MoneyFlowSnapshot.data_date)).where(
+                MoneyFlowSnapshot.ranking_type == "top100",
+                MoneyFlowSnapshot.data_date <= as_of,
+            )
+        ).scalar()
+        if max_dd is None:
+            return []
+        max_cap = session.execute(
+            select(func.max(MoneyFlowSnapshot.captured_at)).where(
+                MoneyFlowSnapshot.ranking_type == "top100",
+                MoneyFlowSnapshot.data_date == max_dd,
+            )
+        ).scalar()
+        rows = session.execute(
+            select(
+                MoneyFlowSnapshot.symbol,
+                MoneyFlowSnapshot.rank,
+                MoneyFlowSnapshot.data_date,
+                MoneyFlowSnapshot.captured_at,
+            )
+            .where(
+                MoneyFlowSnapshot.ranking_type == "top100",
+                MoneyFlowSnapshot.data_date == max_dd,
+                MoneyFlowSnapshot.captured_at == max_cap,
+            )
+            .order_by(MoneyFlowSnapshot.rank)
+        ).all()
+    return [
+        {"symbol": r[0], "rank": int(r[1]), "data_date": r[2], "captured_at": r[3]}
+        for r in rows
+    ]
+
+
 def _yfinance_fetch_fn(symbols: list[str], start: date, end: date) -> dict[str, list[Bar]]:
     """Production fetch: yfinance → per-symbol long-form bars (NaN → None)."""
     import pandas as pd

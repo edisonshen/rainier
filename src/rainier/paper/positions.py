@@ -421,6 +421,20 @@ def fill_pending_positions(
                 continue
 
             shares = int(math.floor(NOTIONAL_USD / open_px))
+
+            # Zero-share guard (TASK-PLAN qu100-miss-sweep-6b63 acceptance 9):
+            # a T+1 open above the $10k notional floors shares to 0 — never
+            # book a 0-share position (it would hold the symbol's active slot
+            # while tracking nothing). Expire + skip `zero_share_price`.
+            if shares == 0:
+                if _expire_locked(session, it["id"]):
+                    _record_skip(
+                        it["thesis_id"], it["symbol"], it["scan_date"],
+                        "zero_share_price",
+                    )
+                    expired += 1
+                continue
+
             allocated = shares * open_px
             residual = NOTIONAL_USD - allocated
             res = session.execute(

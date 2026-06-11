@@ -218,20 +218,23 @@ def _count_same_bar_exits(session, as_of: date) -> int:
     return n
 
 
-def persist_daily_snapshot(as_of: date, payload: dict[str, Any]) -> None:
-    """Upsert one (daily, as_of_date) snapshot row (H2/H4)."""
+def persist_snapshot(report_type: str, as_of: date, payload: dict[str, Any]) -> None:
+    """Upsert one (report_type, as_of_date) snapshot row (H2/H4)."""
     with get_session() as session:
         stmt = (
             pg_insert(PaperReportSnapshot)
-            .values(
-                report_type=REPORT_TYPE_DAILY, as_of_date=as_of, payload=payload
-            )
+            .values(report_type=report_type, as_of_date=as_of, payload=payload)
             .on_conflict_do_update(
                 constraint="uq_paper_report_snapshot_type_date",
                 set_={"payload": payload},
             )
         )
         session.execute(stmt)
+
+
+def persist_daily_snapshot(as_of: date, payload: dict[str, Any]) -> None:
+    """Upsert one (daily, as_of_date) snapshot row (H2/H4)."""
+    persist_snapshot(REPORT_TYPE_DAILY, as_of, payload)
 
 
 def load_snapshot(report_type: str, as_of: date) -> dict[str, Any] | None:
