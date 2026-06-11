@@ -1211,7 +1211,6 @@ PAPER_LESSONS_SUBJECT = "paper_pnl"
 # fewer than 200 usable bars → unknown (NEVER a partial-window SMA).
 REGIME_SYMBOL = "SPY"
 REGIME_SMA_WINDOW = 200
-REGIMES: tuple[str, ...] = ("bull", "bear", "unknown")
 
 
 def compute_market_regime(*, as_of: date) -> str:

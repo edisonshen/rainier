@@ -311,9 +311,11 @@ async def run_research_job(eval_date_iso: str | None = None) -> None:
     Discord research-report.
 
     Triggered Friday 09:00 PT. The job:
-      1. mark_stale() — flips pending insights >30 days old to status=stale.
-      2. run_research(eval_date=today, days=30) — runs all 6 check classes.
-      3. send_research_report() — posts a Discord summary of pending
+      1. ensure_spy_history() — one-time SPY backfill so the lessons regime
+         tag (R-C) has 200-SMA coverage; no-op once covered, non-fatal.
+      2. mark_stale() — flips pending insights >30 days old to status=stale.
+      3. run_research(eval_date=today, days=30) — runs all 6 check classes.
+      4. send_research_report() — posts a Discord summary of pending
          warn/critical insights.
 
     eval_date_iso lets CLI / replay callers override "today".
