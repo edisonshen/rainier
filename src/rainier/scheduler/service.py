@@ -213,13 +213,19 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
     # the trailing 30 days that has none yet. Runs AFTER step (v) (the report/
     # chart-capture step) so the close-side chart exists by reflection time once
     # the chart-archive lands; pre-archive schemas take the text-only path.
+    # Gated on the operator's LLM kill switch (`llm_thesis.enabled`): the whole
+    # feedback loop spends through that one flag, so flipping it off must stop
+    # reflection LLM calls too, not just thesis generation.
     # Non-fatal: a failure leaves reflections NULL, retried tomorrow.
-    try:
-        await asyncio.to_thread(
-            run_paper_reflections, eval_date, settings.llm_thesis.model
-        )
-    except Exception as exc:
-        log.error("daily_paper_reflections_failed", error=str(exc))
+    if settings.llm_thesis.enabled:
+        try:
+            await asyncio.to_thread(
+                run_paper_reflections, eval_date, settings.llm_thesis.model
+            )
+        except Exception as exc:
+            log.error("daily_paper_reflections_failed", error=str(exc))
+    else:
+        log.info("daily_paper_reflections_skipped reason=llm_thesis_disabled")
 
     # Step (vi): D7a calibration block — compute the unbiased fixed-horizon
     # headline + labeled realized supplementary and persist it for tomorrow's

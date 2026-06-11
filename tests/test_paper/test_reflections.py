@@ -310,6 +310,37 @@ def test_generation_selection_bounds(pg_legacy_session):
     assert "NOW" in stub.calls[0]["user_prompt"]
 
 
+def test_generation_caps_llm_calls_per_run(pg_legacy_session):
+    """Spend bound: a cold-start backlog drains max_per_run per night,
+    oldest exit first; the deferred remainder is re-selected next run."""
+    from rainier.paper.reflection import generate_reflections
+
+    for i in range(3):
+        _mk_trade(
+            pg_legacy_session,
+            symbol=f"C{i:02d}",
+            exit_date=AS_OF - timedelta(days=5 - i),  # C00 oldest
+        )
+    stub = _StubLLM()
+    stats = generate_reflections(
+        AS_OF, model="test-model", llm_fn=stub, max_per_run=2
+    )
+    assert stats["written"] == 2
+    assert stats["deferred"] == 1
+    assert len(stub.calls) == 2  # the cap bounds LLM spend
+    prompts = "\n".join(c["user_prompt"] for c in stub.calls)
+    assert "C00" in prompts and "C01" in prompts  # oldest-first drain
+    assert "C02" not in prompts
+    # Next run picks up the deferred trade — nothing is lost.
+    stub2 = _StubLLM()
+    stats2 = generate_reflections(
+        AS_OF, model="test-model", llm_fn=stub2, max_per_run=2
+    )
+    assert stats2["written"] == 1
+    assert stats2["deferred"] == 0
+    assert "C02" in stub2.calls[0]["user_prompt"]
+
+
 def test_generation_truncates_overlong_reply(pg_legacy_session):
     from rainier.paper.reflection import (
         REFLECTION_MAX_CHARS,

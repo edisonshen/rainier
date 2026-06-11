@@ -70,6 +70,17 @@ REFLECTION_MAX_CHARS = 1000
 # Per-reflection cap when rendering into the prompt section (keeps the whole
 # K=10 block bounded at a few KB).
 REFLECTION_RENDER_CHARS = 280
+# Per-run cap on LLM calls — bounds a cold-start backlog (30-day window x N
+# trades/day) to a fixed nightly spend; the overflow drains on later runs
+# (selection is oldest-first + reflection-IS-NULL, so nothing is lost).
+REFLECTION_MAX_PER_RUN = 25
+# Original-thesis excerpt bound in the per-trade prompt.
+REFLECTION_THESIS_EXCERPT_CHARS = 600
+# Completion bounds: 2-3 sentences fit comfortably in 300 tokens; the timeout
+# keeps one hung provider call from stalling the nightly pipeline (which runs
+# the batch serially before step (vi) calibration).
+REFLECTION_LLM_MAX_TOKENS = 300
+REFLECTION_LLM_TIMEOUT_S = 120
 
 REFLECTION_SYSTEM_PROMPT = """You are reviewing ONE closed paper trade after the fact.
 Write a 2-3 sentence post-mortem in plain text (no JSON, no preamble, no headers):
@@ -123,6 +134,8 @@ def _default_llm_fn(
             {"role": "user", "content": content_parts},
         ],
         temperature=0.2,
+        max_tokens=REFLECTION_LLM_MAX_TOKENS,
+        timeout=REFLECTION_LLM_TIMEOUT_S,
     )
     return resp["choices"][0]["message"]["content"]
 
@@ -258,6 +271,7 @@ def generate_reflections(
     *,
     model: str,
     llm_fn: LLMFn | None = None,
+    max_per_run: int = REFLECTION_MAX_PER_RUN,
 ) -> dict[str, int]:
     """Write a post-exit reflection for every eligible closed trade.
 
@@ -266,10 +280,24 @@ def generate_reflections(
     never rewrites text. A per-trade failure logs and continues — the trade is
     naturally retried on the next run.
 
-    Returns {"candidates", "written", "failed"} counts.
+    `max_per_run` caps LLM spend per invocation: a cold-start backlog is
+    processed oldest-first, `max_per_run` per night, until drained (deferred
+    trades stay reflection-IS-NULL so they are re-selected next run).
+
+    Returns {"candidates", "written", "failed", "deferred"} counts.
     """
     fn = llm_fn or _default_llm_fn
     candidates = select_reflection_candidates(as_of)
+    deferred = max(0, len(candidates) - max_per_run)
+    if deferred:
+        log.info(
+            "reflections_capped as_of=%s candidates=%s max_per_run=%s deferred=%s",
+            as_of.isoformat(),
+            len(candidates),
+            max_per_run,
+            deferred,
+        )
+        candidates = candidates[:max_per_run]
     written = 0
     failed = 0
 
@@ -315,13 +343,19 @@ def generate_reflections(
             )
 
     log.info(
-        "reflections_generated as_of=%s candidates=%s written=%s failed=%s",
+        "reflections_generated as_of=%s candidates=%s written=%s failed=%s deferred=%s",
         as_of.isoformat(),
         len(candidates),
         written,
         failed,
+        deferred,
     )
-    return {"candidates": len(candidates), "written": written, "failed": failed}
+    return {
+        "candidates": len(candidates),
+        "written": written,
+        "failed": failed,
+        "deferred": deferred,
+    }
 
 
 # ---------------------------------------------------------------------------

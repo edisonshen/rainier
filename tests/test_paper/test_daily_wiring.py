@@ -102,7 +102,7 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
     assert calls.index("update") < calls.index("horizon")
     assert calls.index("horizon") < calls.index("report")
     assert calls.index("report") < calls.index("reflections")
-    assert calls.index("report") < calls.index("calibration")
+    assert calls.index("reflections") < calls.index("calibration")
 
 
 class _FakeDiscord:
@@ -117,6 +117,8 @@ class _FakeAlerts:
 class _FakeLLMThesis:
     learned_time_stop_days = None
     model = "test-model"
+    # The operator's LLM kill switch — reflections (R-A) gate on it too.
+    enabled = True
 
 
 class _FakeSettings:
@@ -124,9 +126,16 @@ class _FakeSettings:
     llm_thesis = _FakeLLMThesis()
 
 
-def test_g3_horizon_eval_still_runs(monkeypatch):
-    ran = {"horizon": False}
+class _FakeLLMThesisDisabled(_FakeLLMThesis):
+    enabled = False
 
+
+class _FakeSettingsLLMOff(_FakeSettings):
+    llm_thesis = _FakeLLMThesisDisabled()
+
+
+def _patch_daily_eval_steps(monkeypatch, *, settings=None) -> None:
+    """Stub every run_daily_eval step except reflections/calibration tracking."""
     monkeypatch.setattr("rainier.paper.ingest.ingest_prices", lambda *a, **k: {})
     monkeypatch.setattr("rainier.paper.ingest.active_symbols", lambda: [])
     monkeypatch.setattr("rainier.paper.ingest.screened_symbols", lambda d: [])
@@ -136,13 +145,8 @@ def test_g3_horizon_eval_still_runs(monkeypatch):
     monkeypatch.setattr(
         "rainier.paper.positions.update_open_positions", lambda **k: {}
     )
-
-    def fake_evaluate_horizon(eval_date, horizon):
-        ran["horizon"] = True
-        return 0
-
     monkeypatch.setattr(
-        "rainier.llm_thesis.eval.evaluate_horizon", fake_evaluate_horizon
+        "rainier.llm_thesis.eval.evaluate_horizon", lambda *a, **k: 0
     )
     monkeypatch.setattr(
         "rainier.llm_thesis.eval.compute_verdict_hit_rate", lambda *a, **k: {}
@@ -165,9 +169,70 @@ def test_g3_horizon_eval_still_runs(monkeypatch):
         "rainier.paper.calibration.persist_calibration", lambda *a, **k: None
     )
     monkeypatch.setattr(
+        service, "load_settings_fresh", lambda: settings or _FakeSettings()
+    )
+
+
+def test_g3_horizon_eval_still_runs(monkeypatch):
+    ran = {"horizon": False}
+
+    _patch_daily_eval_steps(monkeypatch)
+
+    def fake_evaluate_horizon(eval_date, horizon):
+        ran["horizon"] = True
+        return 0
+
+    monkeypatch.setattr(
+        "rainier.llm_thesis.eval.evaluate_horizon", fake_evaluate_horizon
+    )
+    monkeypatch.setattr(
         "rainier.paper.reflection.generate_reflections", lambda *a, **k: {}
     )
-    monkeypatch.setattr(service, "load_settings_fresh", lambda: _FakeSettings())
 
     asyncio.run(service.run_daily_eval("2026-01-09"))
     assert ran["horizon"] is True
+
+
+def test_reflections_skipped_when_llm_thesis_disabled(monkeypatch):
+    """R-A spend gate: `llm_thesis.enabled = false` (the operator's LLM kill
+    switch) must stop reflection LLM calls, not just thesis generation."""
+    _patch_daily_eval_steps(monkeypatch, settings=_FakeSettingsLLMOff())
+
+    called = {"reflections": False}
+
+    def fake_reflections(*a, **kw):
+        called["reflections"] = True
+        return {}
+
+    monkeypatch.setattr(
+        "rainier.paper.reflection.generate_reflections", fake_reflections
+    )
+
+    asyncio.run(service.run_daily_eval("2026-01-09"))
+    assert called["reflections"] is False
+
+
+def test_reflections_failure_does_not_block_calibration(monkeypatch):
+    """A raising reflections step is non-fatal: step (vi) calibration still
+    runs (the daily eval's per-step isolation contract)."""
+    _patch_daily_eval_steps(monkeypatch)
+
+    ran = {"calibration": False}
+
+    def fake_calib_compute(as_of):
+        ran["calibration"] = True
+        return {}
+
+    monkeypatch.setattr(
+        "rainier.paper.calibration.compute_calibration_payload", fake_calib_compute
+    )
+
+    def broken_reflections(*a, **kw):
+        raise RuntimeError("reflections blew up")
+
+    monkeypatch.setattr(
+        "rainier.paper.reflection.generate_reflections", broken_reflections
+    )
+
+    asyncio.run(service.run_daily_eval("2026-01-09"))
+    assert ran["calibration"] is True
