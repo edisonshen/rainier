@@ -119,6 +119,15 @@ def test_regime_bear_close_below_sma(pg_legacy_session):
     assert compute_market_regime(as_of=AS_OF) == "bear"
 
 
+def test_regime_boundary_close_equal_sma_is_bear(pg_legacy_session):
+    from rainier.llm_thesis.research import compute_market_regime
+
+    # Boundary: 200 identical closes → latest == SMA exactly. Bull requires
+    # close STRICTLY above the SMA, so equality classifies as bear.
+    _seed_spy(pg_legacy_session, [100.0] * 200)
+    assert compute_market_regime(as_of=AS_OF) == "bear"
+
+
 def test_regime_unknown_under_200_bars(pg_legacy_session):
     from rainier.llm_thesis.research import compute_market_regime
 
@@ -289,3 +298,36 @@ def test_research_job_ensures_spy_history_before_research(monkeypatch):
     asyncio.run(service.run_research_job(eval_date_iso=AS_OF.isoformat()))
     # SPY coverage must be ensured BEFORE the checks compute the regime.
     assert events == ["ensure", "research", "report"]
+
+
+def test_research_job_survives_spy_ensure_failure(monkeypatch):
+    """yfinance down on Friday → ensure_spy_history raises → the research job
+    logs and continues (lessons degrade to regime=unknown, never a crash)."""
+    from rainier.alerts import discord as discord_mod
+    from rainier.llm_thesis import research as research_mod
+    from rainier.paper import ingest as ingest_mod
+    from rainier.scheduler import service
+
+    events: list[str] = []
+
+    def boom(**kw):
+        raise RuntimeError("yfinance unreachable")
+
+    monkeypatch.setattr(ingest_mod, "ensure_spy_history", boom)
+    monkeypatch.setattr(research_mod, "mark_stale", lambda days: 0)
+    monkeypatch.setattr(
+        research_mod,
+        "run_research",
+        lambda **kw: events.append("research") or [],
+    )
+    monkeypatch.setattr(
+        discord_mod, "send_research_report", lambda **kw: events.append("report")
+    )
+    monkeypatch.setattr(
+        service,
+        "load_settings_fresh",
+        lambda: SimpleNamespace(alerts=SimpleNamespace(discord=None)),
+    )
+
+    asyncio.run(service.run_research_job(eval_date_iso=AS_OF.isoformat()))
+    assert events == ["research", "report"]

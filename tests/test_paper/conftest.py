@@ -35,6 +35,11 @@ MIGRATION_0008_DOWN = (
 # full-entity PaperTrade ORM reads (positions.py et al) see the column.
 MIGRATION_0009_UP = REPO_ROOT / "migrations" / "0009_paper_reflection.sql"
 MIGRATION_0009_DOWN = REPO_ROOT / "migrations" / "0009_paper_reflection_downgrade.sql"
+# research_insights (0003, self-contained + idempotent) — the lessons tests
+# (check_paper_lessons → emit_insight) round-trip ResearchInsight rows. Without
+# this the tests only pass when a prior suite left the table in `public`
+# (search_path fallback) — an order-dependent pass on a fresh test DB.
+MIGRATION_0003_UP = REPO_ROOT / "migrations" / "0003_llm_thesis_pr3.sql"
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -261,6 +266,7 @@ def pg_legacy_engine(request):
     _apply_sql(engine, MIGRATION_0007_UP)  # D7a paper_calibration
     _apply_sql(engine, MIGRATION_0008_UP)  # Phase 3 zero_share_price skip reason
     _apply_sql(engine, MIGRATION_0009_UP)  # R-A paper_trade.reflection
+    _apply_sql(engine, MIGRATION_0003_UP)  # research_insights (lessons tests)
 
     from rainier.core import config, database
 
