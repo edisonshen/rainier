@@ -200,6 +200,16 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
     except Exception as exc:
         log.error("daily_eval_discord_failed", error=str(exc))
 
+    # Step (v) addendum (R-D chart archive): archive an annotated chart for
+    # every trade closed today + set paper_trade.chart_id. Runs after the
+    # exits are booked (step iii) and before the daily report goes out.
+    # Unconditional (every day; idempotent sha-dedup) but non-fatal — a
+    # render failure must never block the daily report.
+    try:
+        await asyncio.to_thread(run_paper_close_charts, eval_date)
+    except Exception as exc:
+        log.error("daily_close_charts_failed", error=str(exc))
+
     # Step (v): paper-book daily report — compute, persist the snapshot, push to
     # Discord. Runs after the horizon eval per the authoritative order. Non-fatal.
     try:
@@ -264,6 +274,19 @@ def run_paper_daily_steps(eval_date) -> None:
         as_of=eval_date, learned_time_stop_days=learned_ts
     )
     paper_positions.update_open_positions(as_of=eval_date)
+
+
+def run_paper_close_charts(eval_date) -> None:
+    """Paper step (v) addendum (R-D): close-side chart capture.
+
+    Renders + persists an annotated archive chart for every paper trade
+    closed on ``eval_date`` and points ``paper_trade.chart_id`` at it.
+    Idempotent (sha dedup / append-only supersession in the persist path).
+    """
+    from rainier.paper.chart_archive import capture_trade_close_charts
+
+    n = capture_trade_close_charts(as_of=eval_date)
+    log.info("daily_close_charts_done", charts=n)
 
 
 def run_paper_daily_report(eval_date, discord_config) -> None:

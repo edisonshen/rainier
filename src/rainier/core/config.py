@@ -323,6 +323,10 @@ class LLMThesisConfig(BaseModel):
     # baseline until Phase 2's discover_time_stop sets a value). The mechanism
     # ships in Phase 0+1; the value stays None here.
     learned_time_stop_days: int | None = None
+    # R-D chart archive: trailing daily-bar window for archive chart renders
+    # (design Appendix C: default 120; 90 acceptable). The thesis-path 60-bar
+    # render is NOT governed by this — only the new paper/chart_archive path.
+    chart_lookback_days: int = 120
 
 
 class NotifyConfig(BaseModel):

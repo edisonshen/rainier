@@ -237,6 +237,17 @@ class ChartImage(Base):
     The partial unique index on ``(symbol, scan_date, sha256)`` (declared in
     migrations/0004_llm_thesis_pr5.sql) makes the persist path idempotent —
     two re-runs that produce identical PNG bytes collapse to one row.
+
+    R-D chart archive (migration 0010): ``source`` ('thesis' / 'trade_close' /
+    'miss_sweep'), ``as_of_date``, and ``superseded_by`` give archive rows an
+    append-only logical identity ``(symbol, as_of_date, source)``; the CURRENT
+    row is the one with ``superseded_by IS NULL`` (partial unique
+    ``idx_chart_images_logical``). Thesis rows stay OUTSIDE that contract:
+    ``as_of_date`` is NULL for ``source='thesis'`` forever (existing backfilled
+    + future persists) — NULLs never collide in the partial unique, so the
+    up-to-4-renders/day thesis pattern is unaffected. Archive rows keep
+    ``scan_date`` NULL (they live on ``as_of_date``) so a flip-flop re-render
+    can never collide with a superseded row in the 0004 partial unique.
     """
 
     __tablename__ = "chart_images"
@@ -259,6 +270,14 @@ class ChartImage(Base):
     scan_date: Mapped[date | None] = mapped_column(Date, index=True)
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
+    # R-D archive columns (0010). source/as_of_date are nullable because the
+    # 3-step supersession staging inserts them NULL and promotes in-transaction;
+    # thesis rows keep as_of_date NULL permanently.
+    source: Mapped[str | None] = mapped_column(String(20))
+    as_of_date: Mapped[date | None] = mapped_column(Date)
+    superseded_by: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("chart_images.id")
+    )
 
     stock: Mapped[Stock] = relationship(
         back_populates="chart_images",
@@ -277,6 +296,17 @@ class ChartImage(Base):
             "sha256",
             unique=True,
             postgresql_where="sha256 IS NOT NULL",
+        ),
+        # R-D logical identity (0010): one CURRENT archive row per
+        # (symbol, as_of_date, source). Thesis rows (as_of_date NULL) and
+        # staged rows (source NULL) never collide — NULLS DISTINCT default.
+        Index(
+            "idx_chart_images_logical",
+            "symbol",
+            "as_of_date",
+            "source",
+            unique=True,
+            postgresql_where="superseded_by IS NULL",
         ),
     )
 
@@ -655,6 +685,11 @@ class PaperTrade(Base):
     # Written once by paper/reflection.py (NULL-only update, idempotent); the
     # last K feed the thesis prompt's calibration section.
     reflection: Mapped[str | None] = mapped_column(Text)
+    # R-D chart archive (0010): the trade's CURRENT close chart. Moves to the
+    # new row on supersession; superseded charts stay readable by id forever.
+    chart_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("chart_images.id")
+    )
 
     __table_args__ = (
         UniqueConstraint("thesis_id", name="uq_paper_trade_thesis_id"),

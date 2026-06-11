@@ -334,6 +334,10 @@ def test_appearances_dedup_is_cohort_consistent(pg_legacy_session):
 def _chart_rows(session, symbol: str):
     from rainier.core.models import ChartImage
 
+    # The production code writes through its own sessions; expire this
+    # session's identity map so the re-read sees committed DB state, not
+    # cached instances.
+    session.expire_all()
     return (
         session.execute(
             select(ChartImage).where(ChartImage.symbol == symbol).order_by(ChartImage.id)
