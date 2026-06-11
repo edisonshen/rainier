@@ -238,27 +238,32 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
 
 
 def run_paper_daily_steps(eval_date) -> None:
-    """Paper steps (i)-(iii): ingest (active ∪ screened) → fill → update.
+    """Paper steps (i)-(iii): ingest (SPY ∪ active ∪ screened) → fill → update.
 
     Ingest MUST precede fill/update or a pending's T+1 open would be absent
     (G2). Each step is its own DB-driven, idempotent operation.
     """
-    from rainier.paper.ingest import (
-        _yfinance_fetch_fn,
-        active_symbols,
-        ingest_prices,
-        screened_symbols,
-    )
-    from rainier.paper.positions import fill_pending_positions, update_open_positions
+    from rainier.paper import ingest as paper_ingest
+    from rainier.paper import positions as paper_positions
 
     settings = load_settings_fresh()
     learned_ts = settings.llm_thesis.learned_time_stop_days
 
-    symbols = sorted(set(active_symbols()) | set(screened_symbols(eval_date)))
-    if symbols:
-        ingest_prices(symbols, as_of=eval_date, fetch_fn=_yfinance_fetch_fn)
-    fill_pending_positions(as_of=eval_date, learned_time_stop_days=learned_ts)
-    update_open_positions(as_of=eval_date)
+    # SPY is always in the daily window: it feeds the market-regime tag on
+    # weekly lessons (R-C). `ensure_spy_history` (research job) does the
+    # one-time deep backfill; this daily 10-day window keeps it fresh.
+    symbols = sorted(
+        {"SPY"}
+        | set(paper_ingest.active_symbols())
+        | set(paper_ingest.screened_symbols(eval_date))
+    )
+    paper_ingest.ingest_prices(
+        symbols, as_of=eval_date, fetch_fn=paper_ingest._yfinance_fetch_fn
+    )
+    paper_positions.fill_pending_positions(
+        as_of=eval_date, learned_time_stop_days=learned_ts
+    )
+    paper_positions.update_open_positions(as_of=eval_date)
 
 
 def run_paper_daily_report(eval_date, discord_config) -> None:
@@ -323,6 +328,21 @@ async def run_research_job(eval_date_iso: str | None = None) -> None:
     )
 
     log.info("research_job_starting", eval_date=eval_date.isoformat())
+
+    # R-C: the lessons regime tag needs ≥200 usable SPY closes. Ensure the
+    # one-time deep backfill ran BEFORE the checks compute the regime — a pure
+    # no-op once coverage exists (the daily ingest keeps SPY fresh). Non-fatal:
+    # on failure the lesson degrades to regime=unknown, never crashes the job.
+    try:
+        from rainier.paper import ingest as paper_ingest
+
+        await asyncio.to_thread(
+            lambda: paper_ingest.ensure_spy_history(
+                as_of=eval_date, fetch_fn=paper_ingest._yfinance_fetch_fn
+            )
+        )
+    except Exception as exc:
+        log.error("research_spy_ensure_failed", error=str(exc))
 
     try:
         stale_count = await asyncio.to_thread(mark_stale, 30)

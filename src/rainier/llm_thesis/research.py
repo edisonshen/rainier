@@ -1205,6 +1205,51 @@ def discover_time_stop(
 
 PAPER_LESSONS_SUBJECT = "paper_pnl"
 
+# R-C — coarse market-regime tag stamped on each weekly lesson, so a lesson
+# learned in one regime isn't blindly applied in another. SPY close vs its
+# 200-day SMA on the lesson's as-of date: strictly above → bull, else bear;
+# fewer than 200 usable bars → unknown (NEVER a partial-window SMA).
+REGIME_SYMBOL = "SPY"
+REGIME_SMA_WINDOW = 200
+REGIMES: tuple[str, ...] = ("bull", "bear", "unknown")
+
+
+def compute_market_regime(*, as_of: date) -> str:
+    """Classify the market regime on ``as_of``: SPY close vs its 200-day SMA.
+
+    Reads the last ``REGIME_SMA_WINDOW`` usable SPY closes at-or-before
+    ``as_of`` from `stock_prices` (legacy engine — same store the paper
+    ingest writes). Returns:
+
+    * ``"bull"``    — latest close strictly above the 200-bar SMA
+    * ``"bear"``    — latest close at-or-below the 200-bar SMA
+    * ``"unknown"`` — fewer than 200 usable bars (no partial-window SMA;
+      `ensure_spy_history` backfills coverage so this is transient)
+    """
+    from rainier.core.models import StockPrice
+
+    # Bars are stored at the canonical 00:00 UTC instant of their trading
+    # date (paper.ingest.canonical_instant), so <= this instant includes the
+    # as-of bar and excludes anything after it.
+    instant = datetime(as_of.year, as_of.month, as_of.day, tzinfo=timezone.utc)
+    with get_session() as session:
+        closes = session.execute(
+            select(StockPrice.close)
+            .where(
+                StockPrice.symbol == REGIME_SYMBOL,
+                StockPrice.date <= instant,
+                StockPrice.close.isnot(None),
+            )
+            .order_by(StockPrice.date.desc())
+            .limit(REGIME_SMA_WINDOW)
+        ).scalars().all()
+
+    if len(closes) < REGIME_SMA_WINDOW:
+        return "unknown"
+    latest = float(closes[0])  # newest first (date desc)
+    sma = sum(float(c) for c in closes) / len(closes)
+    return "bull" if latest > sma else "bear"
+
 
 def check_paper_lessons(
     *,
@@ -1217,7 +1262,9 @@ def check_paper_lessons(
 
     Summarizes realized win-rate, exit-reason mix, and the best/worst closed
     trade so the operator (and later the prompt) can see what the paper book
-    actually did. No weight-tuning here (that is D7b, deferred)."""
+    actually did. Stamped with the coarse market-regime tag (R-C: SPY vs
+    200-day SMA → bull/bear/unknown) in both the evidence payload and the
+    rendered rationale. No weight-tuning here (that is D7b, deferred)."""
     from rainier.core.models import PaperTrade
 
     anchor = eval_date if eval_date is not None else date.today()
@@ -1256,7 +1303,13 @@ def check_paper_lessons(
     best = max(rows, key=lambda r: r["return_pct"])
     worst = min(rows, key=lambda r: r["return_pct"])
 
+    # R-C: stamp the lesson with the market regime on its as-of date so the
+    # operator can weigh cross-regime advice. Degrades to "unknown" when SPY
+    # coverage is short — never blocks the lesson itself.
+    regime = compute_market_regime(as_of=anchor)
+
     evidence = {
+        "regime": regime,
         "days": days,
         "n_closed": n,
         "win_rate": wins / n,
@@ -1267,6 +1320,7 @@ def check_paper_lessons(
     }
     mix_str = ", ".join(f"{kk}:{vv}" for kk, vv in sorted(reason_mix.items()))
     rationale = (
+        f"[regime: {regime}] "
         f"Paper book closed {n} trades over {days}d: win-rate {wins / n:.0%}, "
         f"realized ${total_pnl:,.2f}. Exit mix [{mix_str}]. "
         f"Best {best['symbol']} {best['return_pct']:+.2%}; "
