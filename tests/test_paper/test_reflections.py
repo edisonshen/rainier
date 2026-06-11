@@ -465,14 +465,83 @@ def test_render_reflections_section_empty_is_blank():
     assert render_reflections_section([]) == ""
 
 
-def test_reflection_prompt_section_appended_in_generate_thesis_path():
-    """The service appends the reflections block to the calibration section."""
-    import inspect as _inspect
+@pytest.mark.asyncio
+async def test_reflections_block_lands_in_thesis_user_prompt(monkeypatch):
+    """generate_thesis appends the reflections block to the LLM user prompt."""
+    import json
+    from unittest.mock import patch
 
-    from rainier.llm_thesis import service as thesis_service
+    from rainier.core.config import LLMThesisConfig, Settings
+    from rainier.llm_thesis.schemas import EvidencePack
+    from rainier.llm_thesis.service import generate_thesis
 
-    src = _inspect.getsource(thesis_service.generate_thesis)
-    assert "reflection" in src  # R-A wired into the thesis prompt build
+    monkeypatch.setattr(
+        "rainier.paper.calibration.load_latest_calibration",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "rainier.paper.reflection.load_recent_reflections",
+        lambda *a, **k: [
+            {
+                "symbol": "RFL",
+                "exit_date": "2026-06-05",
+                "exit_reason": "target",
+                "return_pct": 0.08,
+                "reflection": "Breakout ran straight to target; thesis held.",
+            }
+        ],
+    )
+
+    valid = json.dumps(
+        {
+            "verdict": "setup_long",
+            "setup_quality": 7,
+            "llm_confidence": 7,
+            "paragraph_radar": "r",
+            "paragraph_evidence": "e",
+            "paragraph_invalidation": "i",
+            "risks": [],
+            "watch_items": [],
+            "evidence_used": ["pattern"],
+            "signals_used": [],
+            "patterns_in_chart_not_in_indicators": "none",
+        }
+    )
+    pack = EvidencePack(
+        symbol="NVDA",
+        scan_date="2026-06-08",
+        session_name="close",
+        candidate={"rank": 5},
+        signals={},
+    )
+    settings = Settings(database_url="postgresql://test:test@localhost/test")
+    settings.llm_thesis = LLMThesisConfig(model="test-model", prompt_version="v3")
+
+    captured: dict = {}
+
+    def fake_call_llm(*, model, system_prompt, user_prompt, image_bytes):
+        captured["user_prompt"] = user_prompt
+        return valid, 10, 20
+
+    with patch(
+        "rainier.llm_thesis.service._tier1_lookup", return_value=None
+    ), patch(
+        "rainier.llm_thesis.service._call_llm", side_effect=fake_call_llm
+    ), patch(
+        "rainier.llm_thesis.service._persist_thesis", return_value=1
+    ):
+        thesis, _cost, _rid = await generate_thesis(
+            symbol="NVDA",
+            scan_date=date(2026, 6, 8),
+            session_name="close",
+            evidence_provider=lambda: (pack, [], None),
+            settings=settings,
+            max_usd_remaining=1.0,
+        )
+    assert thesis is not None
+    assert "Recent trade reflections" in captured["user_prompt"]
+    assert "RFL" in captured["user_prompt"]
+    assert "thesis held" in captured["user_prompt"]
 
 
 # ---------------------------------------------------------------------------

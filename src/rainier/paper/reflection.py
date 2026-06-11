@@ -43,9 +43,22 @@ from typing import Any, Protocol
 
 from sqlalchemy import text as sql_text
 
-from rainier.core.database import get_session
+from rainier.core import database
 
 log = logging.getLogger(__name__)
+
+
+def _get_session():
+    """Late-bound `core.database.get_session`.
+
+    Resolved at CALL time through the module attribute, never captured at
+    import time: this module is imported lazily from `generate_thesis`, so its
+    first import can happen inside a test's
+    `patch("rainier.core.database.get_session")` window — a `from ... import
+    get_session` would freeze that ephemeral mock into this namespace forever
+    (observed as cross-suite test pollution).
+    """
+    return database.get_session()
 
 # Rolling number of reflections injected into the thesis prompt (task plan K).
 REFLECTION_PROMPT_K = 10
@@ -217,7 +230,7 @@ def select_reflection_candidates(as_of: date) -> list[dict[str, Any]]:
     Oldest exit first so a backlog drains deterministically.
     """
     cutoff = as_of - timedelta(days=REFLECTION_LOOKBACK_DAYS)
-    with get_session() as session:
+    with _get_session() as session:
         rows = session.execute(
             sql_text(
                 "SELECT pt.id, pt.symbol, pt.pattern_type, pt.verdict, "
@@ -261,13 +274,13 @@ def generate_reflections(
     failed = 0
 
     # One feature probe per run (schema doesn't change mid-batch).
-    with get_session() as session:
+    with _get_session() as session:
         has_chart_col = _chart_id_column_exists(session)
 
     for t in candidates:
         trade_id = int(t["id"])
         try:
-            with get_session() as session:
+            with _get_session() as session:
                 image_bytes = _load_chart_bytes(session, trade_id, has_chart_col)
             t["has_chart"] = image_bytes is not None
             reply = fn(
@@ -281,7 +294,7 @@ def generate_reflections(
                 raise ValueError("empty reflection from LLM")
             # NULL-only update: never rewrites, race-safe, and the schema CHECK
             # (exit_reason IS NOT NULL) backstops the embargo.
-            with get_session() as session:
+            with _get_session() as session:
                 result = session.execute(
                     sql_text(
                         "UPDATE paper_trade SET reflection = :r "
@@ -325,7 +338,7 @@ def load_recent_reflections(
     scan on day D must never see a reflection for a trade that exited on day D
     (it is written end-of-day D, after the scan).
     """
-    with get_session() as session:
+    with _get_session() as session:
         rows = session.execute(
             sql_text(
                 "SELECT symbol, exit_date, exit_reason, return_pct, reflection "
