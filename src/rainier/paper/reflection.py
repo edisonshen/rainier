@@ -209,8 +209,8 @@ def _fmt(v: Any, spec: str = "") -> str:
 def _build_reflection_prompt(t: dict[str, Any]) -> str:
     """Per-trade user prompt: the booked facts + the original thesis case."""
     thesis = (t.get("thesis_reasoning") or "").strip()
-    if len(thesis) > 600:
-        thesis = thesis[:600] + "…"
+    if len(thesis) > REFLECTION_THESIS_EXCERPT_CHARS:
+        thesis = thesis[:REFLECTION_THESIS_EXCERPT_CHARS] + "…"
     return_pct = t.get("return_pct")
     lines = [
         f"Symbol: {t['symbol']}",
@@ -322,10 +322,13 @@ def generate_reflections(
                 raise ValueError("empty reflection from LLM")
             # NULL-only update: never rewrites, race-safe, and the schema CHECK
             # (exit_reason IS NOT NULL) backstops the embargo.
+            # updated_at is set explicitly: the ORM-level onupdate does not
+            # fire for raw-SQL UPDATEs, and change-detection consumers read it.
             with _get_session() as session:
                 result = session.execute(
                     sql_text(
-                        "UPDATE paper_trade SET reflection = :r "
+                        "UPDATE paper_trade "
+                        "SET reflection = :r, updated_at = NOW() "
                         "WHERE id = :id AND reflection IS NULL "
                         "  AND exit_reason IS NOT NULL"
                     ),
@@ -400,9 +403,12 @@ def render_reflections_section(rows: list[dict[str, Any]]) -> str:
     """Bounded, labeled prompt block. "" when there is nothing to show."""
     if not rows:
         return ""
+    # "reflected closed trades", not "closed trades": trades whose reflection
+    # generation permanently failed (or aged out of the lookback window) are
+    # absent, so the sample the model sees is reflected-only — say so.
     lines = [
-        f"--- Recent trade reflections (last {len(rows)} closed trades, "
-        "post-exit post-mortems) ---"
+        f"--- Recent trade reflections (last {len(rows)} reflected closed "
+        "trades, post-exit post-mortems) ---"
     ]
     for r in rows:
         body = (r.get("reflection") or "").replace("\n", " ").strip()

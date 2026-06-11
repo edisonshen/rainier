@@ -357,9 +357,112 @@ def test_generation_truncates_overlong_reply(pg_legacy_session):
     assert len(got) <= REFLECTION_MAX_CHARS
 
 
+def test_generation_continues_batch_after_one_failure(pg_legacy_session):
+    """Per-trade isolation: one failing LLM call never blocks the batch."""
+    from rainier.paper.reflection import generate_reflections
+
+    _mk_trade(pg_legacy_session, symbol="BAD", exit_date=AS_OF - timedelta(days=2))
+    ok_tid = _mk_trade(pg_legacy_session, symbol="GOOD", exit_date=AS_OF)
+
+    class _FailFirst(_StubLLM):
+        def __call__(self, **kw):
+            super().__call__(**kw)
+            if len(self.calls) == 1:
+                raise RuntimeError("llm unavailable")
+            return self.reply
+
+    stub = _FailFirst(reply="second trade reflected fine")
+    stats = generate_reflections(AS_OF, model="test-model", llm_fn=stub)
+    assert stats == {"candidates": 2, "written": 1, "failed": 1, "deferred": 0}
+    got = pg_legacy_session.execute(
+        text("SELECT reflection FROM paper_trade WHERE id = :id"), {"id": ok_tid}
+    ).scalar()
+    assert got == "second trade reflected fine"
+
+
+def test_generation_empty_reply_counts_failed(pg_legacy_session):
+    """Whitespace-only LLM reply -> failed, reflection stays NULL (no
+    placeholder write that would block the natural retry)."""
+    from rainier.paper.reflection import generate_reflections
+
+    tid = _mk_trade(pg_legacy_session, symbol="AAA")
+    stub = _StubLLM(reply="   ")
+    stats = generate_reflections(AS_OF, model="test-model", llm_fn=stub)
+    assert stats["written"] == 0
+    assert stats["failed"] == 1
+    got = pg_legacy_session.execute(
+        text("SELECT reflection FROM paper_trade WHERE id = :id"), {"id": tid}
+    ).scalar()
+    assert got is None
+
+
+def test_generation_selects_at_lookback_boundary(pg_legacy_session):
+    """exit_date == as_of - LOOKBACK days is inside the window (inclusive)."""
+    from rainier.paper.reflection import (
+        REFLECTION_LOOKBACK_DAYS,
+        generate_reflections,
+    )
+
+    _mk_trade(
+        pg_legacy_session,
+        symbol="EDG",
+        exit_date=AS_OF - timedelta(days=REFLECTION_LOOKBACK_DAYS),
+    )
+    stub = _StubLLM()
+    stats = generate_reflections(AS_OF, model="test-model", llm_fn=stub)
+    assert stats["written"] == 1
+    assert "EDG" in stub.calls[0]["user_prompt"]
+
+
+def test_generation_bumps_updated_at(pg_legacy_session):
+    """Raw-SQL reflection write must advance updated_at (the ORM onupdate
+    does not fire for raw UPDATEs; change-detection consumers read it)."""
+    from rainier.paper.reflection import generate_reflections
+
+    tid = _mk_trade(pg_legacy_session, symbol="AAA")
+    pg_legacy_session.execute(
+        text(
+            "UPDATE paper_trade SET updated_at = NOW() - interval '1 day' "
+            "WHERE id = :id"
+        ),
+        {"id": tid},
+    )
+    pg_legacy_session.commit()
+    before = pg_legacy_session.execute(
+        text("SELECT updated_at FROM paper_trade WHERE id = :id"), {"id": tid}
+    ).scalar()
+    generate_reflections(AS_OF, model="test-model", llm_fn=_StubLLM())
+    after = pg_legacy_session.execute(
+        text("SELECT updated_at FROM paper_trade WHERE id = :id"), {"id": tid}
+    ).scalar()
+    assert after > before
+
+
 # ---------------------------------------------------------------------------
 # 2. Generation — feature-detected chart attachment
 # ---------------------------------------------------------------------------
+
+
+def test_chart_probe_degrades_to_false_on_error():
+    """The pg_attribute probe swallows any failure -> False (text-only path)."""
+    from unittest.mock import Mock
+
+    from rainier.paper.reflection import _chart_id_column_exists
+
+    broken = Mock()
+    broken.execute.side_effect = RuntimeError("no pg_attribute here")
+    assert _chart_id_column_exists(broken) is False
+
+
+def test_chart_fetch_degrades_to_none_on_error():
+    """A failing chart fetch returns None (text-only), never raises."""
+    from unittest.mock import Mock
+
+    from rainier.paper.reflection import _load_chart_bytes
+
+    broken = Mock()
+    broken.execute.side_effect = RuntimeError("chart_images missing")
+    assert _load_chart_bytes(broken, 1, has_chart_col=True) is None
 
 
 def test_chart_column_absent_text_only_no_crash(pg_legacy_session):
@@ -496,32 +599,16 @@ def test_render_reflections_section_empty_is_blank():
     assert render_reflections_section([]) == ""
 
 
-@pytest.mark.asyncio
-async def test_reflections_block_lands_in_thesis_user_prompt(monkeypatch):
-    """generate_thesis appends the reflections block to the LLM user prompt."""
+async def _run_thesis_capture(monkeypatch) -> tuple:
+    """Drive generate_thesis with stubbed LLM/cache/persist; return
+    (thesis, captured_user_prompt). Calibration/reflection loaders are
+    monkeypatched by the caller BEFORE calling this."""
     import json
     from unittest.mock import patch
 
     from rainier.core.config import LLMThesisConfig, Settings
     from rainier.llm_thesis.schemas import EvidencePack
     from rainier.llm_thesis.service import generate_thesis
-
-    monkeypatch.setattr(
-        "rainier.paper.calibration.load_latest_calibration",
-        lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        "rainier.paper.reflection.load_recent_reflections",
-        lambda *a, **k: [
-            {
-                "symbol": "RFL",
-                "exit_date": "2026-06-05",
-                "exit_reason": "target",
-                "return_pct": 0.08,
-                "reflection": "Breakout ran straight to target; thesis held.",
-            }
-        ],
-    )
 
     valid = json.dumps(
         {
@@ -569,10 +656,79 @@ async def test_reflections_block_lands_in_thesis_user_prompt(monkeypatch):
             settings=settings,
             max_usd_remaining=1.0,
         )
+    return thesis, captured["user_prompt"]
+
+
+_RFL_ROW = {
+    "symbol": "RFL",
+    "exit_date": "2026-06-05",
+    "exit_reason": "target",
+    "return_pct": 0.08,
+    "reflection": "Breakout ran straight to target; thesis held.",
+}
+
+
+@pytest.mark.asyncio
+async def test_reflections_block_lands_in_thesis_user_prompt(monkeypatch):
+    """generate_thesis appends the reflections block to the LLM user prompt."""
+    monkeypatch.setattr(
+        "rainier.paper.calibration.load_latest_calibration",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "rainier.paper.reflection.load_recent_reflections",
+        lambda *a, **k: [_RFL_ROW],
+    )
+    thesis, user_prompt = await _run_thesis_capture(monkeypatch)
     assert thesis is not None
-    assert "Recent trade reflections" in captured["user_prompt"]
-    assert "RFL" in captured["user_prompt"]
-    assert "thesis held" in captured["user_prompt"]
+    assert "Recent trade reflections" in user_prompt
+    assert "RFL" in user_prompt
+    assert "thesis held" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_thesis_survives_reflections_load_failure(monkeypatch):
+    """Best-effort isolation: a raising reflections loader costs the block,
+    never the thesis (the daily scan must not crash on a reflections bug)."""
+
+    def _boom(*a, **k):
+        raise RuntimeError("reflections DB unavailable")
+
+    monkeypatch.setattr(
+        "rainier.paper.calibration.load_latest_calibration",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "rainier.paper.reflection.load_recent_reflections", _boom
+    )
+    thesis, user_prompt = await _run_thesis_capture(monkeypatch)
+    assert thesis is not None
+    assert "Recent trade reflections" not in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_reflections_appended_after_calibration_block(monkeypatch):
+    """With both blocks present, calibration text survives and the
+    reflections block is appended after it (the join branch)."""
+    monkeypatch.setattr(
+        "rainier.paper.calibration.load_latest_calibration",
+        lambda *a, **k: object(),
+    )
+    monkeypatch.setattr(
+        "rainier.paper.calibration.render_calibration_section",
+        lambda *a, **k: "CALIB-BLOCK-SENTINEL",
+    )
+    monkeypatch.setattr(
+        "rainier.paper.reflection.load_recent_reflections",
+        lambda *a, **k: [_RFL_ROW],
+    )
+    thesis, user_prompt = await _run_thesis_capture(monkeypatch)
+    assert thesis is not None
+    assert "CALIB-BLOCK-SENTINEL" in user_prompt
+    assert "Recent trade reflections" in user_prompt
+    assert user_prompt.index("CALIB-BLOCK-SENTINEL") < user_prompt.index(
+        "Recent trade reflections"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +761,8 @@ def test_prompt_version_config_default_tracks_module():
 
 
 def test_input_hash_unaffected_by_reflections_text():
+    import inspect
+
     from rainier.llm_thesis.schemas import EvidencePack, compute_input_hash
 
     pack = EvidencePack(
@@ -614,7 +772,11 @@ def test_input_hash_unaffected_by_reflections_text():
         candidate={"rank": 5},
         signals={},
     )
-    # The reflections block lives in prompt text, never in the pack — identical
-    # packs hash identically regardless of any reflections rendered.
-    assert compute_input_hash(pack, b"img") == compute_input_hash(pack, b"img")
+    # Structural guarantee: the Tier-2 hash is computed from the EvidencePack +
+    # image bytes ONLY — prompt text (calibration/reflections blocks) cannot
+    # enter it because the function takes no prompt-text parameter and the pack
+    # carries no reflection field. (PROMPT_VERSION busts Tier-1 instead.)
+    params = list(inspect.signature(compute_input_hash).parameters)
+    assert params == ["pack", "image_bytes"]
     assert "reflection" not in pack.model_dump()
+    assert compute_input_hash(pack, b"img") == compute_input_hash(pack, b"img")

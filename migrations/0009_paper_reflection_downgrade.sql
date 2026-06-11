@@ -15,3 +15,10 @@ ALTER TABLE paper_trade
 ALTER TABLE paper_trade DROP COLUMN IF EXISTS reflection;
 
 COMMIT;
+
+-- DATA LOSS WARNING: dropping the column destroys all LLM-generated
+-- reflection text permanently. Re-applying 0008 only regenerates trades
+-- exited within the trailing 30-day generation window (and at fresh LLM
+-- cost); older reflections are unrecoverable. To snapshot first:
+--   \copy (SELECT id, reflection FROM paper_trade WHERE reflection IS NOT NULL)
+--     TO 'paper_trade_reflection_backup.csv' CSV HEADER
