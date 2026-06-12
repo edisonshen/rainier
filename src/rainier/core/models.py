@@ -693,9 +693,11 @@ class PaperSkip(Base):
     __table_args__ = (
         UniqueConstraint("thesis_id", name="uq_paper_skip_thesis_id"),
         CheckConstraint(
+            # zero_share_price: T+1 open > $10k notional floors shares to 0
+            # (Phase 3 zero-share fill guard; migration 0008 for existing DBs).
             "reason IN ('symbol_already_active','missing_levels',"
             "'missing_screened_record','gap_invalidated',"
-            "'same_symbol_lower_conviction')",
+            "'same_symbol_lower_conviction','zero_share_price')",
             name="ck_paper_skip_reason",
         ),
     )

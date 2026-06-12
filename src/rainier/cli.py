@@ -1922,7 +1922,7 @@ def paper_update(as_of_iso):
 
 @paper_group.command(name="report")
 @click.option("--date", "as_of_iso", default=None, help="Report as-of date (YYYY-MM-DD)")
-@click.option("--week", is_flag=True, help="Render the weekly snapshot (Phase 3)")
+@click.option("--week", is_flag=True, help="Weekly missed-winner report (Phase 3)")
 @click.option(
     "--regenerate",
     is_flag=True,
@@ -1932,7 +1932,9 @@ def paper_report(as_of_iso, week, regenerate):
     """Render a paper-book report.
 
     Plain (default) re-renders from the persisted ``paper_report_snapshot`` only.
-    ``--regenerate`` recomputes the DAILY report from raw inputs and upserts.
+    ``--regenerate`` recomputes from raw inputs and upserts — for ``--week``
+    that's money_flow_snapshots/stock_prices/screened_stocks/analysis_results/
+    paper_trade (never the mutable ResearchInsight queue).
     """
     from datetime import date as _date
 
@@ -1948,18 +1950,27 @@ def paper_report(as_of_iso, week, regenerate):
     as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
 
     if week:
+        from rainier.paper.sweep import (
+            compute_weekly_payload,
+            persist_weekly_snapshot,
+            render_weekly_payload,
+        )
+
         if regenerate:
-            # Weekly regeneration is Phase 3 (miss-sweep). Fail clearly, not
-            # silently wrong (H5).
-            raise click.ClickException(
-                "weekly --regenerate is not implemented yet (Phase 3 miss-sweep)."
-            )
+            # Recompute from the raw period inputs (historical as_of selects
+            # the historical cohort: max data_date <= as_of). No price ingest,
+            # no insight emission, no Discord — just compute + upsert + render.
+            payload = compute_weekly_payload(as_of)
+            persist_weekly_snapshot(as_of, payload)
+            click.echo(render_weekly_payload(payload))
+            return
         payload = load_snapshot(REPORT_TYPE_WEEKLY, as_of)
         if payload is None:
             raise click.ClickException(
-                f"No weekly snapshot for {as_of}."
+                f"No weekly snapshot for {as_of}. "
+                "Run with --regenerate to compute one."
             )
-        click.echo(render_payload(payload))
+        click.echo(render_weekly_payload(payload))
         return
 
     if regenerate:

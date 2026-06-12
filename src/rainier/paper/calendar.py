@@ -35,6 +35,23 @@ class TradingCalendar:
             nxt += timedelta(days=1)
         return nxt
 
+    def prev_session(self, d: date) -> date:
+        """The last trading session strictly before ``d`` (Monday→Friday)."""
+        prev = d - timedelta(days=1)
+        while not self.is_session(prev):
+            prev -= timedelta(days=1)
+        return prev
+
+    def sub_sessions(self, end: date, n: int) -> date:
+        """The session ``n`` trading days before ``end`` (n=0 → end itself
+        if it's a session, else the previous session). Mirror of add_sessions."""
+        cur = end
+        if not self.is_session(cur):
+            cur = self.prev_session(cur)
+        for _ in range(n):
+            cur = self.prev_session(cur)
+        return cur
+
     def sessions_between(self, start: date, end: date) -> list[date]:
         """Trading sessions in ``[start, end]`` inclusive, ascending."""
         out: list[date] = []

@@ -311,6 +311,41 @@ async def run_research_job(eval_date_iso: str | None = None) -> None:
 
     log.info("research_job_emitted", count=len(insights))
 
+    # Phase 3 — weekly missed-winner sweep (design §5(4), coverage diagnostic
+    # only). Own try/except so a sweep failure never kills the research report
+    # (and vice versa). Discord delivery inside the sweep is already non-fatal.
+    try:
+        from rainier.paper.ingest import _yfinance_fetch_fn
+        from rainier.paper.sweep import sweep_missed_winners
+
+        settings = await asyncio.to_thread(load_settings_fresh)
+        payload = await asyncio.to_thread(
+            lambda: sweep_missed_winners(
+                as_of=eval_date,
+                fetch_fn=_yfinance_fetch_fn,
+                discord_config=settings.alerts.discord,
+            )
+        )
+        log.info(
+            "research_miss_sweep_done",
+            missed=len(payload["missed_winners"]),
+            dodged=payload["dodged_losers"]["count"],
+        )
+    except Exception as exc:
+        # Never log str(exc) here: this try block loads the Discord config —
+        # a pydantic ValidationError from load_settings_fresh() embeds
+        # input_value=... which can carry the token-bearing webhook URL, and
+        # any exception escaping the sweep would be stringified one frame up
+        # from the send (codex [P1] 2026-06-09, commit 96fbd13). Status +
+        # class only.
+        from rainier.alerts.discord import _http_status
+
+        log.error(
+            "research_miss_sweep_failed",
+            status=_http_status(exc),
+            error_type=type(exc).__name__,
+        )
+
     try:
         settings = await asyncio.to_thread(load_settings_fresh)
         await asyncio.to_thread(

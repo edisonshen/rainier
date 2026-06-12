@@ -73,6 +73,10 @@ INSIGHT_KINDS: tuple[str, ...] = (
     # Phase 2 (D7c): weekly human-readable lessons from the paper-trade record.
     # info/noop — feedable into the prompt later.
     "paper_lessons",
+    # Phase 3 (D8 / §5(4)): weekly missed-winner sweep. One insight per as-of
+    # ISO week (info/noop); the durable record is the weekly
+    # paper_report_snapshot — this row is only the action-queue echo.
+    "missed_winner",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "warn", "critical")

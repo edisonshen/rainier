@@ -26,6 +26,11 @@ MIGRATION_DOWN = REPO_ROOT / "migrations" / "0005_paper_tracker_downgrade.sql"
 # schema so calibration compute/persist tests have the table.
 MIGRATION_0007_UP = REPO_ROOT / "migrations" / "0007_paper_calibration.sql"
 MIGRATION_0007_DOWN = REPO_ROOT / "migrations" / "0007_paper_calibration_downgrade.sql"
+# Phase 3 (miss-sweep): extends ck_paper_skip_reason with `zero_share_price`.
+MIGRATION_0008_UP = REPO_ROOT / "migrations" / "0008_paper_skip_zero_share.sql"
+MIGRATION_0008_DOWN = (
+    REPO_ROOT / "migrations" / "0008_paper_skip_zero_share_downgrade.sql"
+)
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -103,6 +108,45 @@ CREATE TABLE IF NOT EXISTS stock_prices (
     volume  BIGINT,
     PRIMARY KEY (id, date),
     CONSTRAINT uq_stock_price_symbol_date UNIQUE (symbol, date)
+);
+
+-- Mirror the MoneyFlowSnapshot ORM (models.py) for the Phase-3 miss-sweep
+-- cohort selector (`get_current_qu100_cohort` reads data_date / ranking_type /
+-- captured_at / rank). ORM inserts emit ALL columns, so all must exist.
+CREATE TABLE IF NOT EXISTS money_flow_snapshots (
+    id              BIGSERIAL,
+    captured_at     TIMESTAMP WITH TIME ZONE NOT NULL,
+    capture_session VARCHAR(20) NOT NULL,
+    data_date       DATE NOT NULL,
+    view_type       VARCHAR(10) NOT NULL DEFAULT 'daily',
+    ranking_type    VARCHAR(10) NOT NULL,
+    symbol          VARCHAR(10) NOT NULL REFERENCES stocks (symbol),
+    rank            INTEGER NOT NULL,
+    daily_change    INTEGER,
+    sector          VARCHAR(100),
+    industry        VARCHAR(200),
+    long_short      VARCHAR(50),
+    raw_data        JSONB,
+    PRIMARY KEY (id, captured_at)
+);
+
+-- Mirror the ResearchInsight ORM (models.py) for the Phase-3 missed_winner
+-- insight emission (emit_insight UPSERTs pending rows by (kind, subject)).
+CREATE TABLE IF NOT EXISTS research_insights (
+    id               SERIAL PRIMARY KEY,
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    kind             VARCHAR(40) NOT NULL,
+    severity         VARCHAR(10) NOT NULL,
+    subject          VARCHAR(100) NOT NULL,
+    evidence         JSONB,
+    action           JSONB,
+    rationale        TEXT,
+    recurrence_count INTEGER NOT NULL DEFAULT 1,
+    status           VARCHAR(20) NOT NULL DEFAULT 'pending',
+    decided_at       TIMESTAMP WITH TIME ZONE,
+    decided_by       VARCHAR(200),
+    applied_change   JSONB
 );
 
 -- Mirror the ThesisEvaluation ORM (models.py) enough for the D7a calibration
@@ -211,6 +255,7 @@ def pg_legacy_engine(request):
         conn.execute(text(_PREREQ_DDL))
     _apply_sql(engine, MIGRATION_UP)
     _apply_sql(engine, MIGRATION_0007_UP)  # D7a paper_calibration
+    _apply_sql(engine, MIGRATION_0008_UP)  # Phase 3 zero_share_price skip reason
 
     from rainier.core import config, database
 
