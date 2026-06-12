@@ -209,6 +209,24 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
     except Exception as exc:
         log.error("daily_paper_report_failed", error=str(exc))
 
+    # R-A: post-exit reflections — one LLM post-mortem per trade closed within
+    # the trailing 30 days that has none yet. Runs AFTER step (v) (the report/
+    # chart-capture step) so the close-side chart exists by reflection time once
+    # the chart-archive lands; pre-archive schemas take the text-only path.
+    # Gated on the operator's LLM kill switch (`llm_thesis.enabled`): the whole
+    # feedback loop spends through that one flag, so flipping it off must stop
+    # reflection LLM calls too, not just thesis generation.
+    # Non-fatal: a failure leaves reflections NULL, retried tomorrow.
+    if settings.llm_thesis.enabled:
+        try:
+            await asyncio.to_thread(
+                run_paper_reflections, eval_date, settings.llm_thesis.model
+            )
+        except Exception as exc:
+            log.error("daily_paper_reflections_failed", error=str(exc))
+    else:
+        log.info("daily_paper_reflections_skipped reason=llm_thesis_disabled")
+
     # Step (vi): D7a calibration block — compute the unbiased fixed-horizon
     # headline + labeled realized supplementary and persist it for tomorrow's
     # thesis prompt. Runs AFTER the daily report (it reuses the report's
@@ -254,6 +272,17 @@ def run_paper_daily_report(eval_date, discord_config) -> None:
     payload = compute_daily_payload(eval_date)
     persist_daily_snapshot(eval_date, payload)
     send_daily_paper_report(payload, discord_config)
+
+
+def run_paper_reflections(eval_date, model: str) -> None:
+    """R-A: write post-exit reflections for newly closed trades.
+
+    Selection is DB-driven (`reflection IS NULL`, trailing 30 days), so a
+    failed day is naturally retried on the next run. Idempotent.
+    """
+    from rainier.paper.reflection import generate_reflections
+
+    generate_reflections(eval_date, model=model)
 
 
 def run_paper_calibration(eval_date) -> None:

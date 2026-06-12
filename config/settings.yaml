@@ -168,9 +168,10 @@ llm_thesis:
   enabled: true
   model: "claude-sonnet-4-6"
   max_usd_per_scan: 1.0
-  # v2: D7a calibration block. This runtime value is what builds the Tier-1
-  # cache key (not prompt.PROMPT_VERSION) — keep it == the module constant.
-  prompt_version: "v2"
+  # v2: D7a calibration block. v3: R-A last-K reflections block. This runtime
+  # value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION) —
+  # keep it == the module constant.
+  prompt_version: "v3"
   enabled_sessions:
     - afternoon
     - close

@@ -31,6 +31,10 @@ MIGRATION_0008_UP = REPO_ROOT / "migrations" / "0008_paper_skip_zero_share.sql"
 MIGRATION_0008_DOWN = (
     REPO_ROOT / "migrations" / "0008_paper_skip_zero_share_downgrade.sql"
 )
+# R-A: paper_trade.reflection + outcome-embargo CHECK. Applied on top of 0005 so
+# full-entity PaperTrade ORM reads (positions.py et al) see the column.
+MIGRATION_0009_UP = REPO_ROOT / "migrations" / "0009_paper_reflection.sql"
+MIGRATION_0009_DOWN = REPO_ROOT / "migrations" / "0009_paper_reflection_downgrade.sql"
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -256,6 +260,7 @@ def pg_legacy_engine(request):
     _apply_sql(engine, MIGRATION_UP)
     _apply_sql(engine, MIGRATION_0007_UP)  # D7a paper_calibration
     _apply_sql(engine, MIGRATION_0008_UP)  # Phase 3 zero_share_price skip reason
+    _apply_sql(engine, MIGRATION_0009_UP)  # R-A paper_trade.reflection
 
     from rainier.core import config, database
 
