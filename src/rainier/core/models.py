@@ -807,6 +807,47 @@ class PaperCalibration(Base):
     )
 
 
+class QU100DailyFeatures(Base):
+    """R-E — one JSONB feature row per QU100 member per day (design Appendix B).
+
+    ``features`` is JSONB (``{vwap, sma5, sma22, sma44, sma60, fractal,
+    volume, vrvp: {...}, price_basis, feature_version, data_gap?}``) so new
+    attributes ship without a table migration; the dataset joins against
+    trades and misses for learning. ``rank`` is denormalized: that day's rank
+    from the latest capture of the day (same dedup rule as the appearance
+    query). Written by the daily feature step (``paper/features.py``) with an
+    idempotent upsert on UNIQUE(symbol, data_date, ranking_type);
+    ``ranking_type`` future-proofs the key.
+
+    Plain Postgres table, NOT a hypertable (D10): ~100 rows/day, and a
+    hypertable would block the unique constraint. Created in
+    migrations/0011_qu100_daily_features.sql.
+    """
+
+    __tablename__ = "qu100_daily_features"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False)
+    data_date: Mapped[date] = mapped_column(Date, nullable=False)
+    ranking_type: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="top100", server_default="top100"
+    )
+    rank: Mapped[int | None] = mapped_column(Integer)
+    features: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol",
+            "data_date",
+            "ranking_type",
+            name="uq_qu100_daily_features_symbol_date_ranking",
+        ),
+    )
+
+
 # Tables to convert to TimescaleDB hypertables
 HYPERTABLES = {
     "money_flow_snapshots": "captured_at",

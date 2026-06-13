@@ -255,10 +255,25 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
 
 
 def run_paper_daily_steps(eval_date) -> None:
-    """Paper steps (i)-(iii): ingest (SPY ∪ active ∪ screened) → fill → update.
+    """Paper steps (i)-(iii): ingest (SPY ∪ active ∪ screened ∪ cohort) → R-E
+    features → fill → update.
 
     Ingest MUST precede fill/update or a pending's T+1 open would be absent
     (G2). Each step is its own DB-driven, idempotent operation.
+
+    R-E additions (design Appendix C):
+      * D9 scope change — the daily ingest covers the FULL current QU100
+        cohort (~100 symbols), not just active ∪ top-50, so the feature step
+        has bars for every member.
+      * The feature step runs immediately after ingest, consuming the
+        ingest's changed (symbol, date) set so split-corrected rows recompute
+        in the SAME run. It is FAILURE-ISOLATED: neither a cohort-selector
+        error, a cohort-only ingest error, nor a feature-step error may ever
+        block ingest/fill/exit/eval/report — all three are caught here. The
+        cohort-ONLY symbols ingest in a SEPARATE second call so the
+        trading-critical ingest (SPY ∪ active ∪ screened) keeps its pre-R-E
+        blast radius: a bad cohort symbol or a failed extra yfinance batch can
+        starve only the feature dataset, never a pending fill or exit.
     """
     from rainier.paper import ingest as paper_ingest
     from rainier.paper import positions as paper_positions
@@ -266,17 +281,55 @@ def run_paper_daily_steps(eval_date) -> None:
     settings = load_settings_fresh()
     learned_ts = settings.llm_thesis.learned_time_stop_days
 
-    # SPY is always in the daily window: it feeds the market-regime tag on
-    # weekly lessons (R-C). `ensure_spy_history` (research job) does the
-    # one-time deep backfill; this daily 10-day window keeps it fresh.
-    symbols = sorted(
+    # Cohort selection is best-effort: on failure, ingest still covers
+    # SPY ∪ active ∪ screened and the feature step degrades to recompute-only.
+    try:
+        cohort = paper_ingest.get_current_qu100_cohort(eval_date)
+    except Exception as exc:
+        log.error("daily_cohort_select_failed", error=str(exc))
+        cohort = []
+
+    # Trading-critical ingest: SPY ∪ active ∪ screened ONLY (pre-R-E blast
+    # radius — a failure here propagates, exactly as before the D9 scope
+    # change). SPY feeds the market-regime tag on weekly lessons (R-C);
+    # `ensure_spy_history` (research job) does the one-time deep backfill,
+    # this daily window keeps it fresh.
+    trading_symbols = sorted(
         {"SPY"}
         | set(paper_ingest.active_symbols())
         | set(paper_ingest.screened_symbols(eval_date))
     )
-    paper_ingest.ingest_prices(
-        symbols, as_of=eval_date, fetch_fn=paper_ingest._yfinance_fetch_fn
-    )
+    ingest_result = {"upserted": 0, "changed": []}
+    if trading_symbols:
+        ingest_result = paper_ingest.ingest_prices(
+            trading_symbols, as_of=eval_date, fetch_fn=paper_ingest._yfinance_fetch_fn
+        )
+
+    # Cohort-ONLY extras ingest in a SEPARATE, failure-isolated call (D9):
+    # a cohort-only fetch/ingest error degrades feature coverage but can
+    # never block the trading steps below.
+    cohort_extra = sorted({m["symbol"] for m in cohort} - set(trading_symbols))
+    cohort_changed: list = []
+    try:
+        if cohort_extra:
+            extra_result = paper_ingest.ingest_prices(
+                cohort_extra, as_of=eval_date, fetch_fn=paper_ingest._yfinance_fetch_fn
+            )
+            cohort_changed = list(extra_result.get("changed", ()))
+    except Exception as exc:
+        log.error("daily_cohort_ingest_failed", error=str(exc))
+
+    changed = list(ingest_result.get("changed", ())) + cohort_changed
+
+    # R-E feature snapshot — failure-isolated (an exception here can never
+    # block the trading steps below).
+    try:
+        from rainier.paper.features import run_daily_feature_step
+
+        run_daily_feature_step(eval_date, changed=changed, cohort=cohort)
+    except Exception as exc:
+        log.error("daily_feature_step_failed", error=str(exc))
+
     paper_positions.fill_pending_positions(
         as_of=eval_date, learned_time_stop_days=learned_ts
     )

@@ -111,10 +111,13 @@ def test_b4_db_one_row_per_trading_date(pg_legacy_session):
     for d in days:
         bars.append(_bar(datetime(d.year, d.month, d.day, 13, 30, tzinfo=timezone.utc)))
         bars.append(_bar(datetime(d.year, d.month, d.day, 20, 0, tzinfo=timezone.utc)))
-    _ingest(["AAA"], as_of, {"AAA": bars})
+    res = _ingest(["AAA"], as_of, {"AAA": bars})
     pg_legacy_session.expire_all()
     rows = _count_rows(pg_legacy_session, "AAA")
     assert len(rows) == 5  # one per trading day, not 10
+    # The changed SET reports each collapsed (symbol, trading_date) once,
+    # even though upsert ran twice per date.
+    assert sorted(res["changed"]) == [("AAA", d) for d in days]
 
 
 def test_b5_upsert_overwrites_adjusted_together(pg_legacy_session):
@@ -172,6 +175,42 @@ def test_b5_null_row_treated_as_gap_and_healed(pg_legacy_session):
     r1 = _count_rows(pg_legacy_session, "AAA")
     assert len(r1) == 1  # still one row per (symbol, date)
     assert (r1[0].open, r1[0].close, r1[0].volume) == (100, 105, 5000)  # healed
+
+
+def test_b8_changed_set_returned_for_refetched_symbols(pg_legacy_session):
+    """R-E recompute contract — `changed` = ALL upserted (symbol, date) pairs
+    for re-fetched symbols (no value-diffing; over-trigger is fine because
+    recompute is idempotent)."""
+    as_of = date(2026, 1, 9)
+    days = [date(2026, 1, 5 + i) for i in range(5)]
+    res = _ingest(
+        ["AAA"], as_of, {"AAA": [_bar(d) for d in days]}, window_days=5
+    )
+    assert set(res["changed"]) == {("AAA", d) for d in days}
+    assert res["upserted"] == len(res["changed"]) == 5
+
+
+def test_b8_changed_set_includes_reconfirmed_dates(pg_legacy_session):
+    """A gap on ONE date re-fetches the whole window — every upserted pair for
+    that symbol lands in `changed`, including dates that merely re-confirmed
+    (split self-heal can touch any of them)."""
+    as_of = date(2026, 1, 9)
+    days = [date(2026, 1, 5 + i) for i in range(5)]
+    _ingest(["AAA"], as_of, {"AAA": [_bar(d) for d in days[:3]]}, window_days=5)
+    res = _ingest(
+        ["AAA"], as_of, {"AAA": [_bar(d) for d in days]}, window_days=5
+    )
+    assert set(res["changed"]) == {("AAA", d) for d in days}  # all 5, not 2
+
+
+def test_b8_changed_set_empty_when_no_gaps(pg_legacy_session):
+    as_of = date(2026, 1, 9)
+    days = [date(2026, 1, 5 + i) for i in range(5)]
+    _ingest(["AAA"], as_of, {"AAA": [_bar(d) for d in days]}, window_days=5)
+    res = _ingest(
+        ["AAA"], as_of, {"AAA": [_bar(d) for d in days]}, window_days=5
+    )
+    assert res["changed"] == []
 
 
 def test_b6_universe_active_and_screened(pg_legacy_session):

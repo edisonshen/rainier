@@ -45,6 +45,12 @@ MIGRATION_0003_UP = REPO_ROOT / "migrations" / "0003_llm_thesis_pr3.sql"
 # so full-entity PaperTrade ORM reads see paper_trade.chart_id.
 MIGRATION_0010_UP = REPO_ROOT / "migrations" / "0010_chart_archive.sql"
 MIGRATION_0010_DOWN = REPO_ROOT / "migrations" / "0010_chart_archive_downgrade.sql"
+# R-E (PR 5): qu100_daily_features — the daily feature-snapshot table the
+# feature step upserts into (and the wiring/persist tests read back).
+MIGRATION_0011_UP = REPO_ROOT / "migrations" / "0011_qu100_daily_features.sql"
+MIGRATION_0011_DOWN = (
+    REPO_ROOT / "migrations" / "0011_qu100_daily_features_downgrade.sql"
+)
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -303,6 +309,7 @@ def pg_legacy_engine(request):
     # existence so a green run can never silently skip it.
     if MIGRATION_0010_UP.exists():
         _apply_sql(engine, MIGRATION_0010_UP)
+    _apply_sql(engine, MIGRATION_0011_UP)  # R-E qu100_daily_features
 
     from rainier.core import config, database
 
