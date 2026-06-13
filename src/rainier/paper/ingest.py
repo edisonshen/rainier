@@ -215,6 +215,66 @@ def ingest_prices(
 
 
 # ---------------------------------------------------------------------------
+# R-C — SPY ensure-history (regime 200-SMA coverage)
+# ---------------------------------------------------------------------------
+
+# The regime tag (llm_thesis.research.compute_market_regime) needs 200 usable
+# SPY closes; the default 10-day ingest window can never build that, so a
+# one-time deeper backfill is required. 250 sessions ≈ one trading year —
+# comfortably past the 200-bar SMA window.
+REGIME_MIN_BARS = 200
+REGIME_BACKFILL_WINDOW_DAYS = 250
+
+
+def ensure_spy_history(
+    *,
+    as_of: date,
+    fetch_fn: FetchFn,
+    min_bars: int = REGIME_MIN_BARS,
+    window_days: int = REGIME_BACKFILL_WINDOW_DAYS,
+    calendar: TradingCalendar | None = None,
+) -> dict[str, Any]:
+    """One-time SPY history backfill so the regime 200-SMA can be computed.
+
+    Counts usable SPY closes at-or-before ``as_of``; with ``min_bars`` or more
+    this is a pure no-op (no fetch). Below that, runs the standard gap-aware
+    ``ingest_prices`` over a ``window_days``-session window (≥ 250 — the
+    default 10-day daily window can never feed a 200-SMA). After the one-time
+    backfill, the daily paper ingest (which includes SPY) keeps it fresh.
+
+    Returns ``{"upserted": n, "backfilled": bool}``.
+    """
+    instant = canonical_instant(as_of)
+    with get_session() as session:
+        n_bars = session.execute(
+            select(func.count())
+            .select_from(StockPrice)
+            .where(
+                StockPrice.symbol == "SPY",
+                StockPrice.date <= instant,
+                StockPrice.close.isnot(None),
+            )
+        ).scalar_one()
+
+    if n_bars >= min_bars:
+        log.info("spy_history_ok bars=%d", n_bars)
+        return {"upserted": 0, "backfilled": False}
+
+    log.info(
+        "spy_history_backfill bars=%d min_bars=%d window_days=%d",
+        n_bars, min_bars, window_days,
+    )
+    res = ingest_prices(
+        ["SPY"],
+        as_of=as_of,
+        fetch_fn=fetch_fn,
+        window_days=window_days,
+        calendar=calendar,
+    )
+    return {"upserted": res["upserted"], "backfilled": True}
+
+
+# ---------------------------------------------------------------------------
 # Universe selectors
 # ---------------------------------------------------------------------------
 
