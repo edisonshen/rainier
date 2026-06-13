@@ -146,20 +146,25 @@ def ingest_prices(
     fetch_fn: FetchFn,
     window_days: int = 10,
     calendar: TradingCalendar | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Gap-aware ingest for ``symbols`` over the recent ``window_days`` window.
 
-    Returns ``{"upserted": n}``. Idempotent: a re-run with no new bars upserts
-    bars that re-confirm existing rows but adds no NEW (symbol, date) pairs.
+    Returns ``{"upserted": n, "changed": [(symbol, date), ...]}``. ``changed``
+    is the R-E recompute contract (design Appendix C): ALL upserted
+    ``(symbol, trading_date)`` pairs for re-fetched symbols — no value-diffing,
+    so re-confirmed bars over-trigger recompute, which is acceptable because
+    the feature recompute is idempotent. Idempotent: a re-run with no new bars
+    upserts bars that re-confirm existing rows but adds no NEW (symbol, date)
+    pairs.
     """
     cal = calendar or DEFAULT_CALENDAR
     if not symbols:
-        return {"upserted": 0}
+        return {"upserted": 0, "changed": []}
 
     symbols = sorted(set(symbols))
     window = _recent_window(as_of, window_days, cal)
     if not window:
-        return {"upserted": 0}
+        return {"upserted": 0, "changed": []}
     start, end = window[0], window[-1]
     window_set = set(window)
 
@@ -175,7 +180,7 @@ def ingest_prices(
 
     if not gaps:
         log.info("ingest_no_gaps symbols=%d", len(symbols))
-        return {"upserted": 0}
+        return {"upserted": 0, "changed": []}
 
     # Re-fetch the whole recent window for symbols that have ANY gap, so split
     # adjustments to already-present dates self-heal too.
@@ -183,6 +188,7 @@ def ingest_prices(
     fetched = fetch_fn(fetch_symbols, start, end)
 
     upserted = 0
+    changed: list[tuple[str, date]] = []
     with get_session() as session:
         # Ensure parent `stocks` rows exist (FK on stock_prices.symbol).
         existing_stocks = {
@@ -209,9 +215,14 @@ def ingest_prices(
                     continue
                 _upsert_bar(session, sym, bar)
                 upserted += 1
+                changed.append((sym, td))
 
+    # Dedup (order-preserving): two intraday source bars collapse to ONE
+    # (symbol, trading_date) row, so the changed SET reports each pair once
+    # even when `upserted` counted both writes.
+    changed = list(dict.fromkeys(changed))
     log.info("ingest_done symbols=%d upserted=%d", len(fetch_symbols), upserted)
-    return {"upserted": upserted}
+    return {"upserted": upserted, "changed": changed}
 
 
 # ---------------------------------------------------------------------------

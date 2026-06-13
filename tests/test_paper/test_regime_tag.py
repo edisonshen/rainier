@@ -239,14 +239,20 @@ def test_daily_ingest_includes_spy(monkeypatch):
     from rainier.paper import positions as positions_mod
     from rainier.scheduler import service
 
-    captured: dict = {}
+    captured: dict = {"symbols": []}
 
     monkeypatch.setattr(ingest_mod, "active_symbols", lambda: ["AAA"])
     monkeypatch.setattr(ingest_mod, "screened_symbols", lambda as_of: ["BBB"])
+    # R-E split-ingest: trading ingest (SPY ∪ active ∪ screened) + a separate
+    # cohort-extras ingest. Empty cohort here → only the trading call fires;
+    # accumulate across calls so the assertion sees the SPY-bearing one.
+    monkeypatch.setattr(
+        ingest_mod, "get_current_qu100_cohort", lambda as_of: []
+    )
 
     def fake_ingest(symbols, *, as_of, fetch_fn, **kw):
-        captured["symbols"] = list(symbols)
-        return {"upserted": 0}
+        captured["symbols"].extend(symbols)
+        return {"upserted": 0, "changed": []}
 
     monkeypatch.setattr(ingest_mod, "ingest_prices", fake_ingest)
     monkeypatch.setattr(
@@ -254,6 +260,12 @@ def test_daily_ingest_includes_spy(monkeypatch):
     )
     monkeypatch.setattr(
         positions_mod, "update_open_positions", lambda **kw: {"updated": 0}
+    )
+    # R-E feature step is failure-isolated in the caller; stub it so the test
+    # exercises the ingest wiring without touching the feature DB.
+    monkeypatch.setattr(
+        "rainier.paper.features.run_daily_feature_step",
+        lambda *a, **k: {"computed": 0, "recomputed": 0, "failed": 0},
     )
     monkeypatch.setattr(
         service,
