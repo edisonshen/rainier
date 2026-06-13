@@ -481,21 +481,27 @@ def test_chart_column_present_attaches_image(pg_legacy_engine, pg_legacy_session
     from rainier.paper.reflection import generate_reflections
 
     with pg_legacy_engine.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS chart_images ("
-                " id SERIAL PRIMARY KEY, image_bytes BYTEA)"
-            )
-        )
+        # chart_images + paper_trade.chart_id are created by the R-D archive
+        # migration (0010), applied by the pg_legacy_engine fixture. Guard the
+        # column add so this test still runs against a pre-0010 schema.
         conn.execute(
             text("ALTER TABLE paper_trade ADD COLUMN IF NOT EXISTS chart_id BIGINT")
         )
+        conn.execute(
+            text(
+                "INSERT INTO stocks (symbol) VALUES ('AAA') "
+                "ON CONFLICT (symbol) DO NOTHING"
+            )
+        )
     tid = _mk_trade(pg_legacy_session, symbol="AAA")
+    # chart_images carries a NOT NULL symbol FK under the real (R-D) schema, so
+    # supply it; the test only cares that image_bytes flows to the LLM.
     chart_id = pg_legacy_session.execute(
         text(
-            "INSERT INTO chart_images (image_bytes) VALUES (:b) RETURNING id"
+            "INSERT INTO chart_images (symbol, image_bytes) "
+            "VALUES (:s, :b) RETURNING id"
         ),
-        {"b": b"\x89PNG-fake-bytes"},
+        {"s": "AAA", "b": b"\x89PNG-fake-bytes"},
     ).scalar()
     pg_legacy_session.execute(
         text("UPDATE paper_trade SET chart_id = :c WHERE id = :id"),
