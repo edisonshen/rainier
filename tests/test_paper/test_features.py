@@ -447,20 +447,11 @@ class TestCohortSelector:
     def test_empty_db_returns_empty(self, pg_legacy_session):
         assert get_current_qu100_cohort(self.AS_OF) == []
 
-    def test_repeated_symbol_in_one_capture_dedups_to_best_rank(
-        self, pg_legacy_session
-    ):
-        # Defensive dedup — a single capture repeating a symbol across ranks
-        # yields ONE cohort entry, and rank order keeps the best rank's row.
-        _seed_snapshot(pg_legacy_session, "AAA", 1, self.AS_OF, self.T2)
-        _seed_snapshot(pg_legacy_session, "AAA", 5, self.AS_OF, self.T2)
-        _seed_snapshot(pg_legacy_session, "BBB", 2, self.AS_OF, self.T2)
-        pg_legacy_session.commit()
-
-        cohort = get_current_qu100_cohort(self.AS_OF)
-        assert [(m["symbol"], m["rank"]) for m in cohort] == [
-            ("AAA", 1), ("BBB", 2),
-        ]
+    # NOTE: a "defensive symbol-dedup" case was dropped in the re-derive — the
+    # spec (acceptance 6) reuses the shared get_current_qu100_cohort (PR #138),
+    # which orders by rank without per-symbol dedup, rather than the worker's
+    # own selector. The captured top100 ranking is unique per symbol per
+    # capture, so the case is not a real-data scenario.
 
 
 @pytest.mark.requires_postgres
