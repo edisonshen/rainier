@@ -1988,6 +1988,95 @@ def paper_report(as_of_iso, week, regenerate):
     click.echo(render_payload(payload))
 
 
+@paper_group.command(name="appearances")
+@click.argument("symbol")
+@click.option(
+    "--as-of", "as_of_iso", default=None, help="As-of date (YYYY-MM-DD, default today)"
+)
+@click.option(
+    "--window",
+    default=None,
+    type=int,
+    help="Trailing trading-session window (default: chart_lookback_days config)",
+)
+@click.option(
+    "--all-sessions",
+    is_flag=True,
+    help="Every intraday top100 capture (default: one row/day, latest capture)",
+)
+@click.pass_context
+def paper_appearances(ctx, symbol, as_of_iso, window, all_sessions):
+    """Days SYMBOL was in the QU100 top-100 (and its rank each day)."""
+    from datetime import date as _date
+
+    from rainier.paper.ingest import get_qu100_appearances
+
+    symbol = symbol.strip().upper()
+    as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
+    if window is None:
+        window = ctx.obj["settings"].llm_thesis.chart_lookback_days
+
+    apps = get_qu100_appearances(
+        symbol, as_of=as_of, window=window, all_sessions=all_sessions
+    )
+    if not apps:
+        click.echo(
+            f"No QU100 top-100 appearances for {symbol} in the last "
+            f"{window} sessions ending {as_of}."
+        )
+        return
+    for a in apps:
+        line = f"{a.data_date}  #{a.rank}"
+        if all_sessions:
+            line += f"  {a.capture_session}  {a.captured_at.isoformat()}"
+        click.echo(line)
+
+
+@paper_group.command(name="chart")
+@click.argument("symbol")
+@click.option(
+    "--as-of", "as_of_iso", default=None, help="As-of date (YYYY-MM-DD, default today)"
+)
+@click.option(
+    "--window",
+    default=None,
+    type=int,
+    help="Daily-bar window (default: chart_lookback_days config)",
+)
+@click.option(
+    "--out",
+    "out_path",
+    default=None,
+    help="Output PNG path (default ./<SYMBOL>_<as-of>.png)",
+)
+@click.pass_context
+def paper_chart(ctx, symbol, as_of_iso, window, out_path):
+    """Render-on-demand archive chart (zero stored pixels, design App. C).
+
+    Rebuilds the annotated chart for SYMBOL at --as-of from stored inputs
+    (stock_prices + money_flow_snapshots + paper_trade). On unchanged data
+    this reproduces a stored trade-close chart byte-identically.
+    """
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from rainier.paper.chart_archive import regenerate_chart
+
+    symbol = symbol.strip().upper()
+    as_of = _date.fromisoformat(as_of_iso) if as_of_iso else _date.today()
+    if window is None:
+        window = ctx.obj["settings"].llm_thesis.chart_lookback_days
+
+    try:
+        png, sha = regenerate_chart(symbol, as_of=as_of, window=window)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    out = _Path(out_path) if out_path else _Path(f"{symbol}_{as_of}.png")
+    out.write_bytes(png)
+    click.echo(f"Wrote {out} ({len(png):,} bytes, sha256 {sha[:12]})")
+
+
 # ---------------------------------------------------------------------------
 # Feature store commands
 # ---------------------------------------------------------------------------

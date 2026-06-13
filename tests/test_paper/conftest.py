@@ -40,6 +40,11 @@ MIGRATION_0009_DOWN = REPO_ROOT / "migrations" / "0009_paper_reflection_downgrad
 # this the tests only pass when a prior suite left the table in `public`
 # (search_path fallback) — an order-dependent pass on a fresh test DB.
 MIGRATION_0003_UP = REPO_ROOT / "migrations" / "0003_llm_thesis_pr3.sql"
+# R-D chart archive (task qu100-chart-archive-77f3): chart_images
+# source/as_of_date/superseded_by + paper_trade.chart_id. Applied on top of 0005
+# so full-entity PaperTrade ORM reads see paper_trade.chart_id.
+MIGRATION_0010_UP = REPO_ROOT / "migrations" / "0010_chart_archive.sql"
+MIGRATION_0010_DOWN = REPO_ROOT / "migrations" / "0010_chart_archive_downgrade.sql"
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -119,9 +124,34 @@ CREATE TABLE IF NOT EXISTS stock_prices (
     CONSTRAINT uq_stock_price_symbol_date UNIQUE (symbol, date)
 );
 
+-- Mirror the ChartImage ORM (models.py) at its PRE-0010 shape (0001 create +
+-- 0004 additive columns/indexes) so migration 0010's additive step stays under
+-- test. chart_images has no CREATE TABLE migration (it predates the numbered
+-- migrations; prod got it via `db init` create_all).
+CREATE TABLE IF NOT EXISTS chart_images (
+    id              SERIAL PRIMARY KEY,
+    symbol          VARCHAR(10) NOT NULL REFERENCES stocks (symbol),
+    captured_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    timeframe_days  INTEGER DEFAULT 120,
+    file_path       VARCHAR(500),
+    file_size_bytes INTEGER,
+    image_bytes     BYTEA,
+    sha256          VARCHAR(64),
+    scan_date       DATE,
+    width           INTEGER,
+    height          INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_chart_images_sha256 ON chart_images (sha256);
+CREATE INDEX IF NOT EXISTS ix_chart_images_scan_date ON chart_images (scan_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chart_image_symbol_scan_sha
+    ON chart_images (symbol, scan_date, sha256)
+    WHERE sha256 IS NOT NULL;
+
 -- Mirror the MoneyFlowSnapshot ORM (models.py) for the Phase-3 miss-sweep
 -- cohort selector (`get_current_qu100_cohort` reads data_date / ranking_type /
--- captured_at / rank). ORM inserts emit ALL columns, so all must exist.
+-- captured_at / rank) AND the R-D appearance-query tests. ORM inserts emit ALL
+-- columns, so all must exist. Plain table here (prod is a TimescaleDB
+-- hypertable; the composite PK is the only hypertable-specific shape, preserved).
 CREATE TABLE IF NOT EXISTS money_flow_snapshots (
     id              BIGSERIAL,
     captured_at     TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -267,6 +297,12 @@ def pg_legacy_engine(request):
     _apply_sql(engine, MIGRATION_0008_UP)  # Phase 3 zero_share_price skip reason
     _apply_sql(engine, MIGRATION_0009_UP)  # R-A paper_trade.reflection
     _apply_sql(engine, MIGRATION_0003_UP)  # research_insights (lessons tests)
+    # R-D chart archive. `exists()` guard keeps the rest of the paper suite
+    # runnable during the tdd-red phase before the migration file lands;
+    # test_chart_archive.py::test_migration_0010_files_exist pins the file's
+    # existence so a green run can never silently skip it.
+    if MIGRATION_0010_UP.exists():
+        _apply_sql(engine, MIGRATION_0010_UP)
 
     from rainier.core import config, database
 
@@ -297,6 +333,50 @@ def pg_legacy_session(pg_legacy_engine):
     finally:
         sess.rollback()
         sess.close()
+
+
+# --------------------------------------------------------------------------
+# Migration 0010 (R-D chart archive) fixtures — PRE-0010 state so the
+# migration's backfill / index creation / idempotency / downgrade run under
+# test. Own disposable schema; teardown can never reach shared `public`.
+# --------------------------------------------------------------------------
+
+_CHART_MIG_SCHEMA = "rainier_chartmig_test"
+
+
+@pytest.fixture
+def pg_chart_mig_engine(request):
+    """Ephemeral Postgres at the PRE-0010 schema state (prereqs + 0005 only).
+
+    Tests seed pre-existing `chart_images` rows (incl. same-day duplicate
+    thesis charts), then apply 0010 themselves and assert backfill/index/
+    downgrade behavior. The legacy `core.database` singleton is NOT bound —
+    these tests drive raw SQL/ORM sessions against the returned engine.
+    """
+    url = _resolve_pg_url(request)
+    admin = create_engine(url, future=True)
+    with admin.begin() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {_CHART_MIG_SCHEMA} CASCADE"))
+        conn.execute(text(f"CREATE SCHEMA {_CHART_MIG_SCHEMA}"))
+    admin.dispose()
+
+    engine = create_engine(
+        url,
+        future=True,
+        connect_args={"options": f"-csearch_path={_CHART_MIG_SCHEMA},public"},
+    )
+    engine.rainier_schema = _CHART_MIG_SCHEMA  # type: ignore[attr-defined]
+    with engine.begin() as conn:
+        conn.execute(text(_PREREQ_DDL))
+    _apply_sql(engine, MIGRATION_UP)  # 0005: paper_trade (0010 alters it)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        admin = create_engine(url, future=True)
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {_CHART_MIG_SCHEMA} CASCADE"))
+        admin.dispose()
 
 
 # --------------------------------------------------------------------------

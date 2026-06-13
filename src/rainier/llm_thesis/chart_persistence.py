@@ -40,8 +40,16 @@ def persist_chart_image(
     sha256: str,
     width: int = 1280,
     height: int = 800,
+    timeframe_days: int = 120,
 ) -> int | None:
     """Insert (or reuse) a ChartImage row for this (symbol, scan_date, sha256).
+
+    R-D (migration 0010): thesis rows carry ``source='thesis'`` and KEEP
+    ``as_of_date`` NULL forever — they live outside the archive's logical
+    identity ``(symbol, as_of_date, source)`` partial unique, so the
+    up-to-4-renders/day thesis pattern never collides (NULLs are distinct).
+    ``timeframe_days`` follows the caller's actual render window (the 120
+    default is the thesis-path constant; the archive path passes its own).
 
     Returns the row id, or ``None`` on persistence failure. The SELECT before
     INSERT is a deliberate two-step on the partial unique index: Postgres'
@@ -81,7 +89,10 @@ def persist_chart_image(
                     file_size_bytes=len(image_bytes),
                     width=int(width),
                     height=int(height),
-                    timeframe_days=120,
+                    timeframe_days=int(timeframe_days),
+                    # R-D: thesis source, as_of_date stays NULL (outside the
+                    # archive logical-identity contract — see docstring).
+                    source="thesis",
                 )
                 .returning(ChartImage.id)
             )

@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -305,6 +305,44 @@ def screened_symbols(as_of: date) -> list[str]:
     return sorted({r[0] for r in rows})
 
 
+# ---------------------------------------------------------------------------
+# QU100 per-day dedup + cohort/appearance queries
+# ---------------------------------------------------------------------------
+
+
+def top100_latest_capture_subquery(
+    start: date | None = None, end: date | None = None
+):
+    """THE per-day dedup rule for QU100 snapshots, as a reusable subquery:
+    for each ``data_date`` carrying ``ranking_type='top100'`` rows, the latest
+    ``captured_at`` — i.e. the freshest capture batch of the day (4 intraday
+    captures collapse to one). ``data_date`` groups first, so a backfill that
+    stamped older data_dates with one shared ``captured_at`` can't win.
+
+    SINGLE SOURCE OF TRUTH (TASK-PLAN acceptance 2): both
+    ``get_qu100_appearances`` and ``get_current_qu100_cohort`` below derive
+    their day-level dedup from this helper — the rule is never implemented
+    twice.
+
+    Columns: ``data_date``, ``max_captured_at``.
+    """
+    from rainier.core.models import MoneyFlowSnapshot
+
+    q = (
+        select(
+            MoneyFlowSnapshot.data_date.label("data_date"),
+            func.max(MoneyFlowSnapshot.captured_at).label("max_captured_at"),
+        )
+        .where(MoneyFlowSnapshot.ranking_type == "top100")
+        .group_by(MoneyFlowSnapshot.data_date)
+    )
+    if start is not None:
+        q = q.where(MoneyFlowSnapshot.data_date >= start)
+    if end is not None:
+        q = q.where(MoneyFlowSnapshot.data_date <= end)
+    return q.subquery()
+
+
 def get_current_qu100_cohort(as_of: date) -> list[dict[str, Any]]:
     """The current QU100 cohort at-or-before ``as_of`` (shared API — the weekly
     miss-sweep uses it now; PR 5 reuses it for the daily ingest universe).
@@ -354,6 +392,90 @@ def get_current_qu100_cohort(as_of: date) -> list[dict[str, Any]]:
         ).all()
     return [
         {"symbol": r[0], "rank": int(r[1]), "data_date": r[2], "captured_at": r[3]}
+        for r in rows
+    ]
+
+
+class QU100Appearance(NamedTuple):
+    """One QU100 top-100 appearance of a symbol on a trading day."""
+
+    data_date: date
+    rank: int
+    capture_session: str
+    captured_at: datetime
+
+
+def get_qu100_appearances(
+    symbol: str,
+    *,
+    as_of: date,
+    window: int = 120,
+    all_sessions: bool = False,
+    calendar: TradingCalendar | None = None,
+) -> list[QU100Appearance]:
+    """Days ``symbol`` was in the QU100 top-100 (with rank), trailing window.
+
+    Appearances with ``data_date <= as_of`` inside the trailing ``window``
+    TRADING sessions ending at ``as_of`` — the ``as_of`` contract makes
+    historical chart re-renders faithful (a re-render never sees a later
+    appearance). Default: per-day dedup via the day's latest top100 capture
+    batch (`top100_latest_capture_subquery`) → one ``(data_date, rank)`` per
+    day, consistent with the day's cohort. ``all_sessions=True`` returns every
+    intraday top100 capture row instead (rank moves within the day).
+
+    Ascending by ``data_date`` (then ``captured_at`` for all_sessions).
+    """
+    from rainier.core.models import MoneyFlowSnapshot
+
+    cal = calendar or DEFAULT_CALENDAR
+    sessions = _recent_window(as_of, window, cal)
+    if not sessions:
+        return []
+    start = sessions[0]
+
+    with get_session() as session:
+        if all_sessions:
+            rows = session.execute(
+                select(
+                    MoneyFlowSnapshot.data_date,
+                    MoneyFlowSnapshot.rank,
+                    MoneyFlowSnapshot.capture_session,
+                    MoneyFlowSnapshot.captured_at,
+                )
+                .where(
+                    MoneyFlowSnapshot.ranking_type == "top100",
+                    MoneyFlowSnapshot.symbol == symbol,
+                    MoneyFlowSnapshot.data_date >= start,
+                    MoneyFlowSnapshot.data_date <= as_of,
+                )
+                .order_by(
+                    MoneyFlowSnapshot.data_date, MoneyFlowSnapshot.captured_at
+                )
+            ).all()
+        else:
+            latest = top100_latest_capture_subquery(start=start, end=as_of)
+            rows = session.execute(
+                select(
+                    MoneyFlowSnapshot.data_date,
+                    MoneyFlowSnapshot.rank,
+                    MoneyFlowSnapshot.capture_session,
+                    MoneyFlowSnapshot.captured_at,
+                )
+                .join(
+                    latest,
+                    (MoneyFlowSnapshot.data_date == latest.c.data_date)
+                    & (MoneyFlowSnapshot.captured_at == latest.c.max_captured_at),
+                )
+                .where(
+                    MoneyFlowSnapshot.ranking_type == "top100",
+                    MoneyFlowSnapshot.symbol == symbol,
+                )
+                .order_by(MoneyFlowSnapshot.data_date)
+            ).all()
+    return [
+        QU100Appearance(
+            data_date=r[0], rank=int(r[1]), capture_session=r[2], captured_at=r[3]
+        )
         for r in rows
     ]
 
