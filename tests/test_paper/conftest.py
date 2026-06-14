@@ -69,6 +69,11 @@ MIGRATION_0011_UP = REPO_ROOT / "migrations" / "0011_qu100_daily_features.sql"
 MIGRATION_0011_DOWN = (
     REPO_ROOT / "migrations" / "0011_qu100_daily_features_downgrade.sql"
 )
+# WS B (P0 batch): screened_stocks.bearish_invalidation_level +
+# paper_reclaim_queue. Applied on top of 0005 so reclaim-path tests have the
+# column + table.
+MIGRATION_0012_UP = REPO_ROOT / "migrations" / "0012_reclaim_queue.sql"
+MIGRATION_0012_DOWN = REPO_ROOT / "migrations" / "0012_reclaim_queue_downgrade.sql"
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -339,6 +344,7 @@ def pg_legacy_engine(request):
         if MIGRATION_0010_UP.exists():
             _apply_sql(engine, MIGRATION_0010_UP)
         _apply_sql(engine, MIGRATION_0011_UP)  # R-E qu100_daily_features
+        _apply_sql(engine, MIGRATION_0012_UP)  # WS B reclaim queue + column
 
         from rainier.core import config, database
 

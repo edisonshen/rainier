@@ -335,6 +335,29 @@ def run_paper_daily_steps(eval_date) -> None:
     )
     paper_positions.update_open_positions(as_of=eval_date)
 
+    # WS B — reconsider invalidated bull-traps. Failure-isolated: a reclaim
+    # error must never block the trading steps above (they already ran). Detect
+    # + enqueue is mandatory; spawning a fresh thesis is gated on config AND the
+    # post-reclaim audit (default detection-only).
+    try:
+        from rainier.paper import reclaim as paper_reclaim
+
+        pcfg = settings.paper
+        paper_reclaim.detect_and_enqueue_reclaims(
+            eval_date=eval_date,
+            window_days=pcfg.reclaim_window_days,
+            dedup_days=pcfg.reclaim_dedup_days,
+        )
+        paper_reclaim.process_reclaim_queue(
+            eval_date=eval_date,
+            auto_thesis=pcfg.reclaim_auto_thesis,
+            audit_horizon_days=pcfg.reclaim_audit_horizon_days,
+            audit_min_events=pcfg.reclaim_audit_min_events,
+            spawn_fn=None,
+        )
+    except Exception as exc:
+        log.error("daily_reclaim_step_failed", error=str(exc))
+
 
 def run_paper_close_charts(eval_date, window: int | None = None) -> None:
     """Paper step (v) addendum (R-D): close-side chart capture.

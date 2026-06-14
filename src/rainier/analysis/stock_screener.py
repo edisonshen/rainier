@@ -585,6 +585,20 @@ def _to_candidate(
     if bp and bp.breakout_idx is not None and total_bars:
         bars_since = int(total_bars) - 1 - bp.breakout_idx
 
+    # WS B: capture the trap-high invalidation level ONLY for an exact
+    # `false_breakout` (NOT `false_breakout_hs`, whose key_points carry no
+    # `false_high`). This is `false_high`, not `stop_loss` (which sits a buffer
+    # above it). A later close above this level invalidates the bear setup.
+    bearish_invalidation_level = None
+    if (
+        bp is not None
+        and bp.pattern_type == "false_breakout"
+        and bp.key_points is not None
+    ):
+        false_high = bp.key_points.get("false_high")
+        if false_high is not None:
+            bearish_invalidation_level = float(false_high)
+
     return StockCandidate(
         symbol=result.symbol,
         rank=result.qu100_rank,
@@ -602,6 +616,7 @@ def _to_candidate(
         stop_loss=result.stop_loss,
         target_price=result.target,
         rr_ratio=bp.rr_ratio if bp else None,
+        bearish_invalidation_level=bearish_invalidation_level,
         volume_confirmed=bp.volume_confirmed if bp else False,
         current_price=round(current_price, 2) if current_price else None,
         distance_to_entry_pct=dist_to_entry,

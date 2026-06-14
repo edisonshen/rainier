@@ -25,9 +25,21 @@ class _FakeLLMThesis:
     chart_lookback_days = 120  # R-D close-chart window
 
 
+class _FakePaper:
+    # WS B reclaim config (auto-thesis OFF by default — detection only).
+    watch_buy_shadow = True
+    watch_buy_min_confidence = 5
+    reclaim_dedup_days = 5
+    reclaim_window_days = 20
+    reclaim_auto_thesis = False
+    reclaim_audit_min_events = 10
+    reclaim_audit_horizon_days = 10
+
+
 class _FakeSettings:
     alerts = _FakeAlerts()
     llm_thesis = _FakeLLMThesis()
+    paper = _FakePaper()
 
 
 def _patch_pipeline(
@@ -111,6 +123,22 @@ def _patch_pipeline(
         "rainier.paper.positions.update_open_positions", fake_update
     )
 
+    # WS B — reclaim detect+enqueue then queue-process, after update (post-ingest).
+    def fake_detect(**kw):
+        calls.append("reclaim_detect")
+        return {"detected": 0, "enqueued": 0}
+
+    def fake_process(**kw):
+        calls.append("reclaim_process")
+        return {"gate_passed": 0, "processed": 0, "spawned": 0}
+
+    monkeypatch.setattr(
+        "rainier.paper.reclaim.detect_and_enqueue_reclaims", fake_detect
+    )
+    monkeypatch.setattr(
+        "rainier.paper.reclaim.process_reclaim_queue", fake_process
+    )
+
     # Existing horizon eval (step iv).
     def fake_evaluate_horizon(eval_date, horizon):
         calls.append("horizon")
@@ -187,11 +215,34 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
     assert calls.index("update") < calls.index("horizon")
     assert calls.index("horizon") < calls.index("report")
     assert calls.index("report") < calls.index("calibration")
+    # WS B reclaim runs after the trading steps (post-ingest) — detect then
+    # process — and never blocks the horizon/report/calibration tail.
+    assert calls.index("update") < calls.index("reclaim_detect")
+    assert calls.index("reclaim_detect") < calls.index("reclaim_process")
 
 
 def test_g3_horizon_eval_still_runs(monkeypatch):
     calls, _ = _run(monkeypatch)
     assert "horizon" in calls
+
+
+def test_reclaim_step_failure_never_blocks_trading_tail(monkeypatch):
+    """WS B isolation — a reclaim error must not block horizon/report/calibration."""
+    from rainier.scheduler import service
+
+    calls: list[str] = []
+    captured: dict = {}
+    _patch_pipeline(monkeypatch, calls, captured)
+
+    def boom(**kw):
+        raise RuntimeError("reclaim boom")
+
+    monkeypatch.setattr(
+        "rainier.paper.reclaim.detect_and_enqueue_reclaims", boom
+    )
+    asyncio.run(service.run_daily_eval("2026-01-09"))
+    for step in ("ingest", "fill", "update", "horizon", "report", "calibration"):
+        assert step in calls, f"{step} was blocked by a reclaim failure"
 
 
 def test_g4_feature_step_failure_never_blocks_trading_steps(monkeypatch):
