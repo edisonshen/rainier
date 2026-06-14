@@ -259,6 +259,9 @@ def select_reflection_candidates(as_of: date) -> list[dict[str, Any]]:
                 "  AND pt.exit_date IS NOT NULL "
                 "  AND pt.exit_date <= :as_of "
                 "  AND pt.exit_date >= :cutoff "
+                # WS A isolation: never reflect on shadow trades (no LLM spend on
+                # measurement rows; their outcomes must not reach live prompts).
+                "  AND pt.shadow = false "
                 "ORDER BY pt.exit_date ASC, pt.id ASC"
             ),
             {"as_of": as_of, "cutoff": cutoff},
@@ -382,6 +385,8 @@ def load_recent_reflections(
                 "FROM paper_trade "
                 "WHERE reflection IS NOT NULL "
                 "  AND exit_date IS NOT NULL AND exit_date < :as_of "
+                # WS A isolation: shadow outcomes must never enter live prompts.
+                "  AND shadow = false "
                 "ORDER BY exit_date DESC, id DESC "
                 "LIMIT :k"
             ),

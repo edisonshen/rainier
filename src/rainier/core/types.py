@@ -187,6 +187,12 @@ class StockCandidate:
     rr_ratio: float | None = None
     volume_confirmed: bool = False
 
+    # WS B: trap-high invalidation level for an exact `false_breakout` only
+    # (the pattern's `false_high` key-point). NULL for every other pattern.
+    # Persisted onto screened_stocks so a later close above it can re-enqueue
+    # the symbol for a fresh long thesis.
+    bearish_invalidation_level: float | None = None
+
     # Actionability context (today's price vs pattern levels)
     current_price: float | None = None
     distance_to_entry_pct: float | None = None  # % from current price to entry

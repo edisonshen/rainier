@@ -460,6 +460,15 @@ class ScreenedStockRecord(Base):
     target_price: Mapped[float | None] = mapped_column(Float)
     rr_ratio: Mapped[float | None] = mapped_column(Float)
 
+    # WS B (reclaim queue, migration 0012): the trap-high invalidation level for
+    # an exact `false_breakout` (the pattern's `false_high` key-point — NOT
+    # `stop_loss`, which sits a buffer above it). Persisted ONLY for
+    # `pattern_type == 'false_breakout'`; NULL for every other pattern (incl.
+    # `false_breakout_hs`, which has no `false_high`). A later close above this
+    # level invalidates the bear setup and queues the symbol for a fresh long
+    # thesis. Additive (`ADD COLUMN IF NOT EXISTS`).
+    bearish_invalidation_level: Mapped[float | None] = mapped_column(Float)
+
     # From LLM (nullable — only afternoon/close top-5 get this)
     llm_confidence: Mapped[int | None] = mapped_column(Integer)
     shadow_combined_score: Mapped[float | None] = mapped_column(Float)
@@ -691,6 +700,16 @@ class PaperTrade(Base):
         BigInteger, ForeignKey("chart_images.id")
     )
 
+    # WS A (shadow WATCH-buy, migration 0013): a shadow row is a measurement-only
+    # position opened by a WATCH verdict. It runs through the REAL fill/exit
+    # engine but is EXCLUDED from every live read (book, paper_skip, calibration,
+    # reports, charts, research) and never consumes a LIVE symbol's active slot
+    # (the partial-unique index below is scoped to shadow=false). The live book
+    # is byte-identical whether or not shadow rows exist.
+    shadow: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     __table_args__ = (
         UniqueConstraint("thesis_id", name="uq_paper_trade_thesis_id"),
         CheckConstraint(
@@ -707,13 +726,22 @@ class PaperTrade(Base):
             "reflection IS NULL OR exit_reason IS NOT NULL",
             name="ck_paper_trade_reflection_after_exit",
         ),
-        # Partial unique index — one pending/open position per symbol (design
-        # D1). Closed/expired rows fall out, so a symbol can be re-traded later.
+        # Partial unique index — one pending/open LIVE position per symbol
+        # (design D1). Scoped to shadow=false (WS A) so a shadow position never
+        # consumes a live symbol's active slot. Closed/expired rows fall out, so
+        # a symbol can be re-traded later.
         Index(
             "idx_paper_trade_active_symbol",
             "symbol",
             unique=True,
-            postgresql_where="status IN ('pending', 'open')",
+            postgresql_where="status IN ('pending', 'open') AND shadow = false",
+        ),
+        # The shadow book honors one-active-per-symbol independently (WS A).
+        Index(
+            "idx_paper_trade_active_symbol_shadow",
+            "symbol",
+            unique=True,
+            postgresql_where="status IN ('pending', 'open') AND shadow = true",
         ),
     )
 
@@ -844,6 +872,56 @@ class QU100DailyFeatures(Base):
             "data_date",
             "ranking_type",
             name="uq_qu100_daily_features_symbol_date_ranking",
+        ),
+    )
+
+
+class PaperReclaimQueue(Base):
+    """WS B — durable queue of invalidated bull-traps awaiting re-evaluation.
+
+    A `false_breakout` is a correct bearish setup; it declines as designed. When
+    a later close reclaims the trap high (`bearish_invalidation_level`), the bear
+    thesis is dead and the symbol may be a fresh LONG. The scheduled LLM run only
+    sees today's top-5, so a reclaimed name outside it would be lost — this queue
+    persists it. The daily check (`paper/reclaim.py`) enforces idempotency
+    (UNIQUE(symbol, invalidated_thesis_id)) and once-per-K-days dedup; the
+    audit gate decides whether a fresh thesis is actually spawned.
+
+    Status lifecycle:  queued -> reenqueued -> done | expired
+    Created in migrations/0012_reclaim_queue.sql.
+    """
+
+    __tablename__ = "paper_reclaim_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    invalidated_thesis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_results.id"), nullable=False
+    )
+    invalidation_level: Mapped[float] = mapped_column(Float, nullable=False)
+    reclaim_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reclaim_close: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="queued", server_default="queued",
+        index=True,
+    )
+    invalidated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    reenqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fresh_thesis_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("analysis_results.id")
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol",
+            "invalidated_thesis_id",
+            name="uq_paper_reclaim_symbol_thesis",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'reenqueued', 'done', 'expired')",
+            name="ck_paper_reclaim_status",
         ),
     )
 

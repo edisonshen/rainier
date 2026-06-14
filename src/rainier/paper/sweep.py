@@ -188,6 +188,7 @@ def _held_symbols(session, window_start: date, window_end: date) -> set[str]:
             PaperTrade.status.in_(("open", "closed")),
             PaperTrade.entry_date <= window_end,
             func.coalesce(PaperTrade.exit_date, window_end) >= window_start,
+            PaperTrade.shadow.is_(False),  # WS A isolation: live read only.
         )
         .distinct()
     ).all()

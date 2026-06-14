@@ -63,6 +63,13 @@ def _candidate_row(
         "rr_ratio": (
             float(candidate.rr_ratio) if candidate.rr_ratio is not None else None
         ),
+        # WS B: trap-high invalidation level (exact false_breakout only; NULL
+        # otherwise). A later close above this re-enqueues the symbol.
+        "bearish_invalidation_level": (
+            float(candidate.bearish_invalidation_level)
+            if candidate.bearish_invalidation_level is not None
+            else None
+        ),
     }
 
 
@@ -114,6 +121,11 @@ def persist_screened_stocks(
                     tbl.c.target_price, stmt.excluded.target_price
                 ),
                 "rr_ratio": func.coalesce(tbl.c.rr_ratio, stmt.excluded.rr_ratio),
+                # WS B: backfill the trap-high level on re-persist if NULL.
+                "bearish_invalidation_level": func.coalesce(
+                    tbl.c.bearish_invalidation_level,
+                    stmt.excluded.bearish_invalidation_level,
+                ),
             },
         )
         session.execute(stmt)

@@ -112,7 +112,11 @@ def compute_daily_payload(as_of: date) -> dict[str, Any]:
     trades opened or closed after ``as_of`` (codex).
     """
     with get_session() as session:
-        positions = session.execute(select(PaperTrade)).scalars().all()
+        # WS A isolation: the daily report is a LIVE read — shadow rows must
+        # never surface here.
+        positions = session.execute(
+            select(PaperTrade).where(PaperTrade.shadow.is_(False))
+        ).scalars().all()
 
         counts = {"pending": 0, "open": 0, "closed": 0, "expired": 0}
         realized_pnl = 0.0
@@ -198,7 +202,10 @@ def _count_same_bar_exits(session, as_of: date) -> int:
     from rainier.paper.ingest import canonical_instant
 
     positions = session.execute(
-        select(PaperTrade).where(PaperTrade.exit_date.isnot(None))
+        select(PaperTrade).where(
+            PaperTrade.exit_date.isnot(None),
+            PaperTrade.shadow.is_(False),  # WS A isolation: live read only.
+        )
     ).scalars().all()
     n = 0
     for p in positions:

@@ -13,6 +13,7 @@ Two execution lanes (TEST-SPEC §Engine):
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,23 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _run_suffix() -> str:
+    """A short per-run/per-worker token for throwaway schema names.
+
+    Including the xdist worker id (``PYTEST_XDIST_WORKER``, e.g. ``gw3``) and a
+    random token guarantees two concurrent runs against the SAME shared test DB
+    never collide on a fixed schema name — the old fixed names
+    (``rainier_paper_test``) could clobber each other and, if a run was SIGKILL'd,
+    leak. The token stays within the gc allowlist regex
+    (``^rainier_(paper|chartmig|mig0006)_test(_[a-z0-9]+)*$``): lowercase
+    alphanumerics joined by underscores. ``rainier db gc-test-schemas`` reaps any
+    that still leak.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "").lower()
+    worker = "".join(c for c in worker if c.isalnum()) or "main"
+    return f"{worker}_{secrets.token_hex(3)}"
 MIGRATION_UP = REPO_ROOT / "migrations" / "0005_paper_tracker.sql"
 MIGRATION_DOWN = REPO_ROOT / "migrations" / "0005_paper_tracker_downgrade.sql"
 # Phase 2 (D7a): paper_calibration. Applied on top of 0005 in the same throwaway
@@ -50,6 +68,16 @@ MIGRATION_0010_DOWN = REPO_ROOT / "migrations" / "0010_chart_archive_downgrade.s
 MIGRATION_0011_UP = REPO_ROOT / "migrations" / "0011_qu100_daily_features.sql"
 MIGRATION_0011_DOWN = (
     REPO_ROOT / "migrations" / "0011_qu100_daily_features_downgrade.sql"
+)
+# WS B (P0 batch): screened_stocks.bearish_invalidation_level +
+# paper_reclaim_queue. Applied on top of 0005 so reclaim-path tests have the
+# column + table.
+MIGRATION_0012_UP = REPO_ROOT / "migrations" / "0012_reclaim_queue.sql"
+MIGRATION_0012_DOWN = REPO_ROOT / "migrations" / "0012_reclaim_queue_downgrade.sql"
+# WS A (P0 batch): paper_trade.shadow + shadow-scoped active-symbol indexes.
+MIGRATION_0013_UP = REPO_ROOT / "migrations" / "0013_paper_trade_shadow.sql"
+MIGRATION_0013_DOWN = (
+    REPO_ROOT / "migrations" / "0013_paper_trade_shadow_downgrade.sql"
 )
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
@@ -268,66 +296,83 @@ def _apply_sql(engine, path: Path) -> None:
 # in `public`) stay resolvable. Mirrors the 0006 fixtures. The fixture exposes
 # `engine.rainier_schema` so schema-scoped inspector calls in the 0005 tests can
 # target the right namespace.
-_PAPER_SCHEMA = "rainier_paper_test"
+# Base name; the live schema gets a per-run suffix (see `_run_suffix`) so two
+# concurrent runs against a shared test DB never collide. Both stay within the
+# `rainier db gc-test-schemas` allowlist.
+_PAPER_SCHEMA_BASE = "rainier_paper_test"
 
 
 @pytest.fixture
 def pg_legacy_engine(request):
     """Ephemeral Postgres with prereq tables + the 0005 migration applied.
 
-    Builds everything in a disposable schema (`_PAPER_SCHEMA`) so teardown drops
-    only that schema (never shared `public`) and each run starts clean. Also
-    binds the legacy `core.database` singleton to it so production code under
-    test (ingest / fill / positions) hits this DB. Resets the singleton before
-    and after (PR #115 discipline).
+    Builds everything in a per-run disposable schema so teardown drops only that
+    schema (never shared `public`) and each run starts clean. Also binds the
+    legacy `core.database` singleton to it so production code under test (ingest
+    / fill / positions) hits this DB. Resets the singleton before and after (PR
+    #115 discipline).
+
+    Leak-hardening (WS C): the schema name carries a per-run/per-worker suffix
+    (no fixed-name collisions) and ALL setup (CREATE SCHEMA + DDL + migrations +
+    singleton bind) runs INSIDE the try whose `finally` drops the schema — so a
+    failure partway through setup still reaps the schema instead of leaking it.
     """
     url = _resolve_pg_url(request)
-    # search_path-free admin connection so DROP/CREATE SCHEMA targets the right
-    # namespace regardless of any pinned path.
-    admin = create_engine(url, future=True)
-    with admin.begin() as conn:
-        conn.execute(text(f"DROP SCHEMA IF EXISTS {_PAPER_SCHEMA} CASCADE"))
-        conn.execute(text(f"CREATE SCHEMA {_PAPER_SCHEMA}"))
-    admin.dispose()
-
-    engine = create_engine(
-        url,
-        future=True,
-        connect_args={"options": f"-csearch_path={_PAPER_SCHEMA},public"},
-    )
-    engine.rainier_schema = _PAPER_SCHEMA  # type: ignore[attr-defined]
-    with engine.begin() as conn:
-        conn.execute(text(_PREREQ_DDL))
-    _apply_sql(engine, MIGRATION_UP)
-    _apply_sql(engine, MIGRATION_0007_UP)  # D7a paper_calibration
-    _apply_sql(engine, MIGRATION_0008_UP)  # Phase 3 zero_share_price skip reason
-    _apply_sql(engine, MIGRATION_0009_UP)  # R-A paper_trade.reflection
-    _apply_sql(engine, MIGRATION_0003_UP)  # research_insights (lessons tests)
-    # R-D chart archive. `exists()` guard keeps the rest of the paper suite
-    # runnable during the tdd-red phase before the migration file lands;
-    # test_chart_archive.py::test_migration_0010_files_exist pins the file's
-    # existence so a green run can never silently skip it.
-    if MIGRATION_0010_UP.exists():
-        _apply_sql(engine, MIGRATION_0010_UP)
-    _apply_sql(engine, MIGRATION_0011_UP)  # R-E qu100_daily_features
-
-    from rainier.core import config, database
-
-    config._settings = None
-    database._engine = engine
-    database._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    schema = f"{_PAPER_SCHEMA_BASE}_{_run_suffix()}"
+    engine = None
     try:
+        # search_path-free admin connection so DROP/CREATE SCHEMA targets the
+        # right namespace regardless of any pinned path.
+        admin = create_engine(url, future=True)
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            conn.execute(text(f"CREATE SCHEMA {schema}"))
+        admin.dispose()
+
+        engine = create_engine(
+            url,
+            future=True,
+            connect_args={"options": f"-csearch_path={schema},public"},
+        )
+        engine.rainier_schema = schema  # type: ignore[attr-defined]
+        with engine.begin() as conn:
+            conn.execute(text(_PREREQ_DDL))
+        _apply_sql(engine, MIGRATION_UP)
+        _apply_sql(engine, MIGRATION_0007_UP)  # D7a paper_calibration
+        _apply_sql(engine, MIGRATION_0008_UP)  # Phase 3 zero_share_price skip
+        _apply_sql(engine, MIGRATION_0009_UP)  # R-A paper_trade.reflection
+        _apply_sql(engine, MIGRATION_0003_UP)  # research_insights (lessons tests)
+        # R-D chart archive. `exists()` guard keeps the rest of the paper suite
+        # runnable during the tdd-red phase before the migration file lands;
+        # test_chart_archive.py::test_migration_0010_files_exist pins the file's
+        # existence so a green run can never silently skip it.
+        if MIGRATION_0010_UP.exists():
+            _apply_sql(engine, MIGRATION_0010_UP)
+        _apply_sql(engine, MIGRATION_0011_UP)  # R-E qu100_daily_features
+        _apply_sql(engine, MIGRATION_0012_UP)  # WS B reclaim queue + column
+        _apply_sql(engine, MIGRATION_0013_UP)  # WS A paper_trade.shadow
+
+        from rainier.core import config, database
+
+        config._settings = None
+        database._engine = engine
+        database._session_factory = sessionmaker(
+            bind=engine, expire_on_commit=False
+        )
         yield engine
     finally:
+        from rainier.core import config, database
+
         database._engine = None
         database._session_factory = None
         config._settings = None
-        engine.dispose()
+        if engine is not None:
+            engine.dispose()
         # Drop ONLY the throwaway schema — never shared `public`. A reused
         # `RAINIER_TEST_DATABASE_URL` keeps its real ORM tables intact.
         admin = create_engine(url, future=True)
         with admin.begin() as conn:
-            conn.execute(text(f"DROP SCHEMA IF EXISTS {_PAPER_SCHEMA} CASCADE"))
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
         admin.dispose()
 
 
@@ -348,7 +393,7 @@ def pg_legacy_session(pg_legacy_engine):
 # test. Own disposable schema; teardown can never reach shared `public`.
 # --------------------------------------------------------------------------
 
-_CHART_MIG_SCHEMA = "rainier_chartmig_test"
+_CHART_MIG_SCHEMA_BASE = "rainier_chartmig_test"
 
 
 @pytest.fixture
@@ -359,30 +404,36 @@ def pg_chart_mig_engine(request):
     thesis charts), then apply 0010 themselves and assert backfill/index/
     downgrade behavior. The legacy `core.database` singleton is NOT bound —
     these tests drive raw SQL/ORM sessions against the returned engine.
+
+    Leak-hardening (WS C): per-run schema name; all setup inside the try whose
+    finally drops the schema.
     """
     url = _resolve_pg_url(request)
-    admin = create_engine(url, future=True)
-    with admin.begin() as conn:
-        conn.execute(text(f"DROP SCHEMA IF EXISTS {_CHART_MIG_SCHEMA} CASCADE"))
-        conn.execute(text(f"CREATE SCHEMA {_CHART_MIG_SCHEMA}"))
-    admin.dispose()
-
-    engine = create_engine(
-        url,
-        future=True,
-        connect_args={"options": f"-csearch_path={_CHART_MIG_SCHEMA},public"},
-    )
-    engine.rainier_schema = _CHART_MIG_SCHEMA  # type: ignore[attr-defined]
-    with engine.begin() as conn:
-        conn.execute(text(_PREREQ_DDL))
-    _apply_sql(engine, MIGRATION_UP)  # 0005: paper_trade (0010 alters it)
+    schema = f"{_CHART_MIG_SCHEMA_BASE}_{_run_suffix()}"
+    engine = None
     try:
-        yield engine
-    finally:
-        engine.dispose()
         admin = create_engine(url, future=True)
         with admin.begin() as conn:
-            conn.execute(text(f"DROP SCHEMA IF EXISTS {_CHART_MIG_SCHEMA} CASCADE"))
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            conn.execute(text(f"CREATE SCHEMA {schema}"))
+        admin.dispose()
+
+        engine = create_engine(
+            url,
+            future=True,
+            connect_args={"options": f"-csearch_path={schema},public"},
+        )
+        engine.rainier_schema = schema  # type: ignore[attr-defined]
+        with engine.begin() as conn:
+            conn.execute(text(_PREREQ_DDL))
+        _apply_sql(engine, MIGRATION_UP)  # 0005: paper_trade (0010 alters it)
+        yield engine
+    finally:
+        if engine is not None:
+            engine.dispose()
+        admin = create_engine(url, future=True)
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
         admin.dispose()
 
 
@@ -434,39 +485,42 @@ CREATE TABLE IF NOT EXISTS stocks (
 # `RAINIER_TEST_DATABASE_URL` at a reusable Postgres with the full schema is safe
 # (a CASCADE drop of `public.stocks` would otherwise strip FK constraints from
 # every sibling table that references it). Codex review P2.
-_MIG0006_SCHEMA = "rainier_mig0006_test"
+_MIG0006_SCHEMA_BASE = "rainier_mig0006_test"
 
 
-def _isolated_engine(url: str):
+def _isolated_engine(url: str, schema: str):
     """Engine whose connections resolve names in the disposable 0006 test schema.
 
-    `search_path` puts `_MIG0006_SCHEMA` FIRST, so `create_all` / `init_db()` /
-    the migration's unqualified `stock_prices`/`stocks` all create and resolve
-    there (shadowing any `public` namesakes in a reused DB). `public` stays on
-    the path only as a fallback so the timescaledb extension functions
+    `search_path` puts `schema` FIRST, so `create_all` / `init_db()` / the
+    migration's unqualified `stock_prices`/`stocks` all create and resolve there
+    (shadowing any `public` namesakes in a reused DB). `public` stays on the path
+    only as a fallback so the timescaledb extension functions
     (`create_hypertable`, installed in `public`) remain resolvable. The schema is
     (re)created fresh and dropped CASCADE around the fixture body — CASCADE is
     scoped to throwaway objects only, never the shared `public` ORM tables.
+
+    `schema` carries a per-run/per-worker suffix (WS C) so concurrent runs never
+    collide on a fixed name.
     """
     engine = create_engine(
         url,
         future=True,
-        connect_args={"options": f"-csearch_path={_MIG0006_SCHEMA},public"},
+        connect_args={"options": f"-csearch_path={schema},public"},
     )
     # Recreate the schema fresh using a search_path-free connection so the DROP
     # CASCADE targets the right schema regardless of the pinned path.
     admin = create_engine(url, future=True)
     with admin.begin() as conn:
-        conn.execute(text(f"DROP SCHEMA IF EXISTS {_MIG0006_SCHEMA} CASCADE"))
-        conn.execute(text(f"CREATE SCHEMA {_MIG0006_SCHEMA}"))
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        conn.execute(text(f"CREATE SCHEMA {schema}"))
     admin.dispose()
     return engine
 
 
-def _drop_isolated_schema(url: str) -> None:
+def _drop_isolated_schema(url: str, schema: str) -> None:
     admin = create_engine(url, future=True)
     with admin.begin() as conn:
-        conn.execute(text(f"DROP SCHEMA IF EXISTS {_MIG0006_SCHEMA} CASCADE"))
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
     admin.dispose()
 
 
@@ -502,26 +556,29 @@ def pg_oldshape_engine(request):
     Exposes `engine.rainier_has_timescaledb` (bool) for tests to gate on.
     """
     url = _resolve_pg_url(request)
-    # Isolated schema: setup/teardown CASCADE can't touch shared `public` tables.
-    engine = _isolated_engine(url)
-    has_ts = _try_create_extension(engine)
-    with engine.begin() as conn:
-        conn.execute(text(_STOCKS_ONLY_DDL))
-        conn.execute(text(_OLD_STOCK_PRICES_DDL))
-    if has_ts:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "SELECT create_hypertable('stock_prices', 'date', "
-                    "migrate_data => true, if_not_exists => true)"
-                )
-            )
-    engine.rainier_has_timescaledb = has_ts  # type: ignore[attr-defined]
+    schema = f"{_MIG0006_SCHEMA_BASE}_{_run_suffix()}"
+    engine = None
     try:
+        # Isolated schema: setup/teardown CASCADE can't touch shared `public`.
+        engine = _isolated_engine(url, schema)
+        has_ts = _try_create_extension(engine)
+        with engine.begin() as conn:
+            conn.execute(text(_STOCKS_ONLY_DDL))
+            conn.execute(text(_OLD_STOCK_PRICES_DDL))
+        if has_ts:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "SELECT create_hypertable('stock_prices', 'date', "
+                        "migrate_data => true, if_not_exists => true)"
+                    )
+                )
+        engine.rainier_has_timescaledb = has_ts  # type: ignore[attr-defined]
         yield engine
     finally:
-        engine.dispose()
-        _drop_isolated_schema(url)
+        if engine is not None:
+            engine.dispose()
+        _drop_isolated_schema(url, schema)
 
 
 @pytest.fixture
@@ -532,21 +589,30 @@ def pg_empty_engine(request):
     and resets it before/after (PR #115 discipline).
     """
     url = _resolve_pg_url(request)
-    # Isolated, freshly-(re)created empty schema so init_db() exercises the create
-    # path; teardown CASCADE is scoped to this schema, never shared `public`.
-    engine = _isolated_engine(url)
-    engine.rainier_has_timescaledb = _try_create_extension(engine)  # type: ignore[attr-defined]
-
-    from rainier.core import config, database
-
-    config._settings = None
-    database._engine = engine
-    database._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    schema = f"{_MIG0006_SCHEMA_BASE}_{_run_suffix()}"
+    engine = None
     try:
+        # Isolated, freshly-(re)created empty schema so init_db() exercises the
+        # create path; teardown CASCADE is scoped to this schema, never `public`.
+        engine = _isolated_engine(url, schema)
+        engine.rainier_has_timescaledb = _try_create_extension(  # type: ignore[attr-defined]
+            engine
+        )
+
+        from rainier.core import config, database
+
+        config._settings = None
+        database._engine = engine
+        database._session_factory = sessionmaker(
+            bind=engine, expire_on_commit=False
+        )
         yield engine
     finally:
+        from rainier.core import config, database
+
         database._engine = None
         database._session_factory = None
         config._settings = None
-        engine.dispose()
-        _drop_isolated_schema(url)
+        if engine is not None:
+            engine.dispose()
+        _drop_isolated_schema(url, schema)

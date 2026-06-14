@@ -1726,6 +1726,52 @@ def db_init(ctx):
     click.echo("Database initialized successfully.")
 
 
+@db.command(name="gc-test-schemas")
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Drop the leaked test schemas. Without this, dry-run lists them only.",
+)
+def db_gc_test_schemas(apply: bool) -> None:
+    """Reap leaked throwaway test schemas from the LEGACY database.
+
+    The paper-tracker test fixtures build disposable Postgres schemas
+    (``rainier_paper_test*`` etc). A SIGKILL'd run can leave one behind in the
+    live local TimescaleDB. This lists them (dry-run) and, with ``--apply``,
+    drops only those matching the anchored allowlist regex — NEVER
+    ``public`` / ``market`` / the active schema. Targets the legacy
+    ``core.database`` engine (``LEGACY_DATABASE_URL``), never canonical Neon
+    (the 2026-06-01 two-engine trap).
+    """
+    from rainier.core.database import get_engine
+    from rainier.core.test_schema_gc import gc_test_schemas
+
+    engine = get_engine()
+    result = gc_test_schemas(engine, apply=apply)
+    candidates = result["candidates"]
+    if apply:
+        dropped = result["dropped"]
+        failed = result["failed"]
+        click.echo(f"gc-test-schemas: dropped {len(dropped)} leaked schema(s).")
+        for name in dropped:
+            click.echo(f"  dropped {name}")
+        if failed:
+            for name, err in failed:
+                click.echo(f"  FAILED to drop {name}: {err}", err=True)
+            raise click.ClickException(
+                f"gc-test-schemas: {len(failed)} schema(s) could not be "
+                f"dropped (see above). Resolve the error and re-run --apply."
+            )
+    else:
+        click.echo(
+            f"DRY-RUN gc-test-schemas: would drop {len(candidates)} leaked "
+            f"schema(s). Re-run with --apply to drop."
+        )
+        for name in candidates:
+            click.echo(f"  {name}")
+
+
 @db.command(name="backfill-prices")
 @click.option("--years", default=5, type=int, help="Years of history to fetch")
 @click.option("--batch-size", default=20, type=int, help="Symbols per yfinance batch")
@@ -1883,6 +1929,56 @@ def db_ingest_prices(universe, as_of_iso, window_days):
 @cli.group(name="paper")
 def paper_group() -> None:
     """QU100 paper-trade tracker — open positions, update exits, report."""
+
+
+@paper_group.command(name="shadow-replay")
+@click.option(
+    "--start", "start_iso", required=True, help="Window start (YYYY-MM-DD)"
+)
+@click.option("--end", "end_iso", required=True, help="Window end (YYYY-MM-DD)")
+@click.option(
+    "--thresholds",
+    default="4,5,6",
+    show_default=True,
+    help="Comma-separated WATCH confidence thresholds to sweep.",
+)
+@click.option(
+    "--benchmark", default="SPY", show_default=True, help="Benchmark symbol."
+)
+def paper_shadow_replay(start_iso, end_iso, thresholds, benchmark):
+    """WS A — replay the shadow WATCH-buy book over a window per threshold T.
+
+    Drives the REAL fill/exit engine day by day over historical theses, opening
+    SHADOW positions (excluded from the live book) at each T, and prints the
+    shadow book's return vs cash and vs the benchmark. Use the two review
+    windows (2026-05-29→06-12 and 2026-05-22→06-12) to compare arms.
+
+    NOTE: shadow rows persist in the DB. Run against a throwaway/replay schema
+    or `rainier db gc-test-schemas` afterward — this command does not isolate
+    arms from each other; it is a measurement tool, not a live mutation.
+    """
+    from datetime import date as _date
+
+    from rainier.paper.calendar import DEFAULT_CALENDAR
+    from rainier.paper.replay import replay_threshold
+
+    start = _date.fromisoformat(start_iso)
+    end = _date.fromisoformat(end_iso)
+    ts = [int(t) for t in thresholds.split(",") if t.strip()]
+    days = DEFAULT_CALENDAR.sessions_between(start, end)
+
+    click.echo(f"Shadow replay {start}..{end} ({len(days)} sessions), bench={benchmark}")
+    click.echo(f"{'T':>3} {'fired':>6} {'book%':>8} {'cash%':>7} {'bench%':>8}")
+    for t in ts:
+        arm = replay_threshold(
+            threshold=t, trading_days=days, benchmark_symbol=benchmark
+        )
+        click.echo(
+            f"{arm.threshold:>3} {arm.fired:>6} "
+            f"{arm.book_return_pct * 100:>7.2f}% "
+            f"{arm.cash_return_pct * 100:>6.2f}% "
+            f"{arm.benchmark_return_pct * 100:>7.2f}%"
+        )
 
 
 @paper_group.command(name="open")

@@ -329,6 +329,38 @@ class LLMThesisConfig(BaseModel):
     chart_lookback_days: int = 120
 
 
+class PaperConfig(BaseModel):
+    """Paper-tracker tuning for the P0 batch loop fixes (WS A + WS B).
+
+    All reversible / config-gated. WS A ships shadow-only this PR (no live
+    buy-flip); WS B's auto-thesis stays gated on the post-reclaim audit.
+    """
+
+    # --- WS A: shadow WATCH-buy measurement ---------------------------------
+    # When True, a WATCH verdict with confidence >= watch_buy_min_confidence AND
+    # valid long-shape levels opens a SHADOW paper_trade (flagged, excluded from
+    # every live read) that runs through the real fill/exit engine. The live
+    # book is unchanged. Default ON (measurement); the LIVE flip (A2) is a
+    # separate, gated change and is NOT controlled here.
+    watch_buy_shadow: bool = True
+    # T threshold for shadow WATCH-buys. WATCH confidence maxes at 6.
+    watch_buy_min_confidence: int = 5
+
+    # --- WS B: reconsider invalidated bull-traps ----------------------------
+    # Re-enqueue a reclaimed symbol at most once per this many days (whipsaw
+    # dedup).
+    reclaim_dedup_days: int = 5
+    # Track invalidation over this many days after the bearish thesis.
+    reclaim_window_days: int = 20
+    # Auto-thesis (creating a FRESH long thesis from the queue) is enabled only
+    # when the post-reclaim audit clears: mean forward return > 0 across at least
+    # `reclaim_audit_min_events` historical reclaim events. Below the floor or
+    # <= 0 mean → detection + queue only (the designed fallback).
+    reclaim_auto_thesis: bool = False
+    reclaim_audit_min_events: int = 10
+    reclaim_audit_horizon_days: int = 10
+
+
 class NotifyConfig(BaseModel):
     enabled: bool = True
     subject_prefix: str = "[Rainier]"
@@ -400,6 +432,9 @@ class Settings(BaseSettings):
 
     # LLM thesis (PR1)
     llm_thesis: LLMThesisConfig = LLMThesisConfig()
+
+    # Paper-tracker P0 batch (WS A shadow WATCH-buy + WS B reclaim queue)
+    paper: PaperConfig = PaperConfig()
 
     # Notifications
     notify: NotifyConfig = NotifyConfig()
@@ -478,6 +513,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         if signals is not None:
             thesis_kwargs["signals"] = signals
         kwargs["llm_thesis"] = LLMThesisConfig(**thesis_kwargs)
+    if "paper" in yaml_config:
+        kwargs["paper"] = PaperConfig(**yaml_config["paper"])
     if "notify" in yaml_config:
         kwargs["notify"] = NotifyConfig(**yaml_config["notify"])
     if "stock_screener" in yaml_config:

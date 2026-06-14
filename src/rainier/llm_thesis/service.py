@@ -796,6 +796,7 @@ async def _compute_theses_async(
     # this runs AFTER update_with_thesis + persist_screened_stocks have landed
     # the row. Each insert is in its own get_session() scope; failures here are
     # non-fatal to thesis rendering.
+    paper_theses: list[dict[str, Any]] = []
     try:
         paper_theses = [
             {
@@ -818,5 +819,23 @@ async def _compute_theses_async(
             )
     except Exception:
         log.exception("paper_position_creation_failed scan_date=%s", scan_date)
+
+    # WS A — shadow WATCH-buy (measurement only). A `watch` verdict (conf >= T,
+    # long-shape levels) opens a SHADOW paper_trade through the real engine,
+    # excluded from every live read. Default ON; the live buy-flip (A2) is a
+    # separate, gated change. Failure-isolated and never touches the live book.
+    try:
+        if settings.paper.watch_buy_shadow and paper_theses:
+            from rainier.paper.positions import (
+                create_shadow_positions_for_theses,
+            )
+
+            create_shadow_positions_for_theses(
+                paper_theses,
+                scan_date=scan_date,
+                min_confidence=settings.paper.watch_buy_min_confidence,
+            )
+    except Exception:
+        log.exception("shadow_position_creation_failed scan_date=%s", scan_date)
 
     return out

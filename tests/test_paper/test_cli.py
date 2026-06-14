@@ -22,8 +22,38 @@ def test_paper_group_registered():
     runner = CliRunner()
     result = runner.invoke(cli, ["paper", "--help"])
     assert result.exit_code == 0
-    for sub in ("open", "update", "report"):
+    for sub in ("open", "update", "report", "shadow-replay"):
         assert sub in result.output
+
+
+def test_paper_shadow_replay_invokes_harness_per_threshold(monkeypatch):
+    """WS A — `paper shadow-replay` sweeps the given thresholds through the
+    replay harness and prints one row per arm. Stub the harness so no DB is
+    needed."""
+    from rainier.paper.replay import ReplayArm
+
+    seen = []
+
+    def _fake_replay(*, threshold, trading_days, benchmark_symbol):
+        seen.append(threshold)
+        return ReplayArm(
+            threshold=threshold, fired=1, book_return_pct=0.04,
+            benchmark_return_pct=0.02, cash_return_pct=0.0,
+        )
+
+    monkeypatch.setattr("rainier.paper.replay.replay_threshold", _fake_replay)
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "paper", "shadow-replay",
+            "--start", "2026-05-29", "--end", "2026-06-12",
+            "--thresholds", "4,5,6",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == [4, 5, 6]
+    assert "book%" in result.output
 
 
 def test_db_ingest_prices_registered():

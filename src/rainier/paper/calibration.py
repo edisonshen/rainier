@@ -185,6 +185,7 @@ def compute_calibration_payload(
                 PaperTrade.status == "closed",
                 PaperTrade.exit_date.isnot(None),
                 PaperTrade.exit_date <= as_of,
+                PaperTrade.shadow.is_(False),  # WS A isolation: live read only.
             )
             .order_by(PaperTrade.exit_date.desc(), PaperTrade.id.desc())
             .limit(k)

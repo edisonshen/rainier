@@ -40,7 +40,7 @@ def test_db_group_does_not_shadow_legacy_subcommands():
     result = runner.invoke(cli, ["db", "--help"])
     assert result.exit_code == 0, result.output
 
-    for subcmd in ("init", "backfill-prices", "ping", "migrate"):
+    for subcmd in ("init", "backfill-prices", "ping", "migrate", "gc-test-schemas"):
         assert subcmd in result.output, (
             f"`rainier db --help` is missing `{subcmd}` — likely caused by a "
             f"duplicate `@cli.group() def db()` shadowing the original. "
@@ -53,6 +53,95 @@ def test_db_group_does_not_shadow_legacy_subcommands():
     assert legacy_init.exit_code == 0, legacy_init.output
     legacy_backfill = runner.invoke(cli, ["db", "backfill-prices", "--help"])
     assert legacy_backfill.exit_code == 0, legacy_backfill.output
+
+
+def test_db_gc_test_schemas_dry_run_lists_without_dropping(monkeypatch):
+    """`db gc-test-schemas` (no --apply) lists candidates and never drops.
+
+    Stubs the legacy engine + the gc helper so the test needs no live DB. The
+    command must call the helper with ``apply=False`` and echo each candidate.
+    """
+    from rainier import cli as cli_mod
+
+    calls = {}
+
+    def _fake_get_engine():
+        return object()
+
+    def _fake_gc(engine, *, apply):
+        calls["apply"] = apply
+        return {
+            "candidates": ["rainier_paper_test_ab12"],
+            "dropped": [],
+            "failed": [],
+        }
+
+    import rainier.core.database as db_mod
+    import rainier.core.test_schema_gc as gc_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", _fake_get_engine)
+    monkeypatch.setattr(gc_mod, "gc_test_schemas", _fake_gc)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "gc-test-schemas"])
+    assert result.exit_code == 0, result.output
+    assert calls["apply"] is False
+    assert "DRY-RUN" in result.output
+    assert "rainier_paper_test_ab12" in result.output
+
+
+def test_db_gc_test_schemas_apply_drops(monkeypatch):
+    """`db gc-test-schemas --apply` drops candidates and reports them."""
+    from rainier import cli as cli_mod
+
+    def _fake_get_engine():
+        return object()
+
+    def _fake_gc(engine, *, apply):
+        assert apply is True
+        return {
+            "candidates": ["rainier_paper_test_ab12"],
+            "dropped": ["rainier_paper_test_ab12"],
+            "failed": [],
+        }
+
+    import rainier.core.database as db_mod
+    import rainier.core.test_schema_gc as gc_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", _fake_get_engine)
+    monkeypatch.setattr(gc_mod, "gc_test_schemas", _fake_gc)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "gc-test-schemas", "--apply"])
+    assert result.exit_code == 0, result.output
+    assert "dropped 1" in result.output
+    assert "rainier_paper_test_ab12" in result.output
+
+
+def test_db_gc_test_schemas_apply_surfaces_failures(monkeypatch):
+    """A failed drop makes the command exit non-zero (automation safety)."""
+    from rainier import cli as cli_mod
+
+    def _fake_get_engine():
+        return object()
+
+    def _fake_gc(engine, *, apply):
+        return {
+            "candidates": ["rainier_paper_test_ab12"],
+            "dropped": [],
+            "failed": [("rainier_paper_test_ab12", "boom")],
+        }
+
+    import rainier.core.database as db_mod
+    import rainier.core.test_schema_gc as gc_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", _fake_get_engine)
+    monkeypatch.setattr(gc_mod, "gc_test_schemas", _fake_gc)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "gc-test-schemas", "--apply"])
+    assert result.exit_code != 0
+    assert "FAILED" in result.output
 
 
 def test_db_migrate_help_exposes_downgrade_flag():
