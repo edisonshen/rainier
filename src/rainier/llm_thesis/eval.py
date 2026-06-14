@@ -32,12 +32,27 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from rainier.core.database import get_session
 from rainier.core.models import (
     LLMAnalysisRecord,
+    PaperTrade,
     ScreenedStockRecord,
     StockPrice,
     ThesisEvaluation,
 )
 
 log = logging.getLogger(__name__)
+
+
+def _thesis_opened_long(thesis_id: int) -> bool:
+    """WS A — True iff a (shadow) paper_trade was OPENED for this thesis, i.e.
+    the loop actually took a long action on a WATCH verdict. A pending/expired
+    row that never filled is not an action; only entry_price set counts."""
+    with get_session() as session:
+        row = session.execute(
+            select(PaperTrade.id).where(
+                PaperTrade.thesis_id == thesis_id,
+                PaperTrade.entry_price.isnot(None),
+            )
+        ).first()
+    return row is not None
 
 
 # Horizons we evaluate. Centralized here so callers don't typo strings.
@@ -132,14 +147,20 @@ def _trading_days_back(end: date, n: int) -> date:
     return target.date()
 
 
-def _hit(verdict: str, return_pct: float) -> bool:
+def _hit(verdict: str, return_pct: float, *, acted_long: bool = False) -> bool:
     """Did the thesis direction match the realized return sign?
 
-    setup_long: hit iff return_pct > 0
-    watch / no_setup: hit iff return_pct <= 0 (LLM was right NOT to buy)
+    WS A — split "verdict label" from "action taken". When a WATCH verdict
+    actually OPENED a (shadow) long position (``acted_long=True``), grade it on
+    the TRADE outcome (hit iff return_pct > 0), NOT the abstention rule — the
+    loop bought, so a profitable move IS a win. Without an action, the original
+    abstention grading stands.
+
+    setup_long (or any acted long): hit iff return_pct > 0
+    watch / no_setup (no action): hit iff return_pct <= 0 (right NOT to buy)
     Unknown verdicts default to False so we never silently mark them hits.
     """
-    if verdict == "setup_long":
+    if acted_long or verdict == "setup_long":
         return return_pct > 0
     if verdict in ("watch", "no_setup"):
         return return_pct <= 0
@@ -251,7 +272,10 @@ def evaluate_horizon(
             continue
 
         return_pct = (exit_close - entry_close) / entry_close
-        hit = _hit(verdict, return_pct)
+        # WS A: if this WATCH thesis actually opened a (shadow) long, grade it on
+        # the trade outcome, not the abstention rule (split label from action).
+        acted_long = verdict == "watch" and _thesis_opened_long(row.id)
+        hit = _hit(verdict, return_pct, acted_long=acted_long)
 
         with get_session() as session:
             stmt = (

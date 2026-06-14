@@ -999,7 +999,10 @@ def _load_time_stop_trades(
     trades: list[dict[str, Any]] = []
     with get_session() as session:
         positions = session.execute(
-            select(PaperTrade).where(PaperTrade.entry_date.isnot(None))
+            select(PaperTrade).where(
+                PaperTrade.entry_date.isnot(None),
+                PaperTrade.shadow.is_(False),  # WS A isolation: live read only.
+            )
         ).scalars().all()
         meta = [
             {
@@ -1276,6 +1279,7 @@ def check_paper_lessons(
                 PaperTrade.exit_date.isnot(None),
                 PaperTrade.exit_date >= cutoff,
                 PaperTrade.exit_date <= anchor,
+                PaperTrade.shadow.is_(False),  # WS A isolation: live read only.
             )
         ).scalars().all()
         rows = [

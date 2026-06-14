@@ -389,6 +389,7 @@ def capture_trade_close_charts(
             .where(
                 PaperTrade.status == "closed",
                 PaperTrade.exit_date == as_of,
+                PaperTrade.shadow.is_(False),  # WS A isolation: live read only.
             )
             .order_by(PaperTrade.id)
         ).all()
@@ -459,6 +460,7 @@ def regenerate_chart(
                     PaperTrade.symbol == symbol,
                     PaperTrade.status == "closed",
                     PaperTrade.exit_date == as_of,
+                    PaperTrade.shadow.is_(False),  # WS A isolation: live only.
                 )
                 .order_by(PaperTrade.id.desc())
                 .limit(1)

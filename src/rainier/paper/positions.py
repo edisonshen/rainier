@@ -48,6 +48,18 @@ _SESSION_ORDER = {"afternoon": 0, "close": 1}
 
 _REQUIRED_LEVELS = ("entry_price", "stop_loss", "target_price")
 
+# WS A: bullish pattern allowlist for the shadow WATCH-buy long-shape guard. An
+# exact `false_breakout` is bearish — it must never open a long shadow position.
+_BULLISH_PATTERNS = frozenset(
+    {
+        "w_bottom",
+        "false_breakdown",
+        "false_breakdown_w_bottom",
+        "bull_flag",
+        "hs_bottom",
+    }
+)
+
 # Fixed $10k notional per position (design D2).
 NOTIONAL_USD = 10_000.0
 # A pending position with no fill after this many trading sessions → expired (D3).
@@ -113,15 +125,48 @@ def _persisted_levels(
     ).scalars().first()
 
 
-def _active_position(session, symbol: str) -> PaperTrade | None:
-    """The current pending/open position holding ``symbol``'s active slot, if
-    any (the partial-unique index guarantees at most one)."""
+def _active_position(session, symbol: str, *, shadow: bool = False) -> PaperTrade | None:
+    """The current pending/open position holding ``symbol``'s active slot in the
+    requested book (live vs shadow), if any. Scoped to ``shadow`` so a shadow
+    pick checks shadow slots and a live pick checks live slots — the two books
+    have independent one-active-per-symbol uniqueness (WS A)."""
     return session.execute(
         select(PaperTrade).where(
             PaperTrade.symbol == symbol,
             PaperTrade.status.in_(("pending", "open")),
+            PaperTrade.shadow.is_(shadow),
         )
     ).scalars().first()
+
+
+def _is_watch_buy_signal(
+    verdict: str | None,
+    llm_confidence: int | None,
+    session: str,
+    min_confidence: int,
+) -> bool:
+    """WS A: a `watch` verdict passing the shadow confidence + session gate. The
+    long-shape level guard is applied separately (it needs the persisted row)."""
+    return (
+        verdict == "watch"
+        and session in ACTIONABLE_SESSIONS
+        and llm_confidence is not None
+        and int(llm_confidence) >= min_confidence
+    )
+
+
+def _is_long_shape(levels: dict[str, Any], pattern_type: str | None) -> bool:
+    """WS A long-shape guard: a valid LONG setup has entry below target and stop
+    below entry, and a bullish pattern. An exact `false_breakout` (bearish) is
+    excluded — it would open a level-less / wrong-direction long otherwise."""
+    entry = levels.get("entry_price")
+    stop = levels.get("stop_loss")
+    target = levels.get("target_price")
+    if entry is None or stop is None or target is None:
+        return False
+    if not (stop < entry < target):
+        return False
+    return pattern_type in _BULLISH_PATTERNS
 
 
 def create_positions_for_theses(
@@ -186,7 +231,64 @@ def create_positions_for_theses(
     return {"created": created, "skipped": skipped}
 
 
-def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
+def create_shadow_positions_for_theses(
+    theses: list[dict[str, Any]],
+    *,
+    scan_date: date,
+    min_confidence: int,
+) -> dict[str, int]:
+    """WS A — open SHADOW positions for WATCH verdicts (measurement only).
+
+    A `watch` verdict with ``llm_confidence >= min_confidence`` AND valid
+    long-shape levels (entry<target, stop<entry, bullish pattern) opens a
+    `paper_trade` flagged ``shadow=True``. Shadow rows run through the SAME
+    fill/exit engine but are excluded from every live read and never consume a
+    live symbol's active slot (the partial-unique index is scoped to
+    shadow=false). The live book is untouched by this call.
+
+    Same dedupe rules as the live path (highest conf wins; tie → earliest
+    session), applied within the shadow book. Returns ``{"created", "skipped"}``.
+    """
+    eligible = [
+        t
+        for t in theses
+        if _is_watch_buy_signal(
+            t.get("verdict"),
+            t.get("llm_confidence"),
+            t.get("session_name", ""),
+            min_confidence,
+        )
+    ]
+    if not eligible:
+        return {"created": 0, "skipped": 0}
+
+    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for t in eligible:
+        by_symbol.setdefault(t["symbol"], []).append(t)
+
+    winners: list[dict[str, Any]] = []
+    for _symbol, group in by_symbol.items():
+        group_sorted = sorted(
+            group,
+            key=lambda t: (
+                -int(t["llm_confidence"]),
+                _SESSION_ORDER.get(t.get("session_name", ""), 99),
+                int(t["thesis_id"]),
+            ),
+        )
+        winners.append(group_sorted[0])
+
+    created = 0
+    skipped = len(eligible) - len(winners)
+    for t in winners:
+        if _create_one(t, scan_date, shadow=True):
+            created += 1
+        else:
+            skipped += 1
+    return {"created": created, "skipped": skipped}
+
+
+def _create_one(thesis: dict[str, Any], scan_date: date, *, shadow: bool = False) -> bool:
     """Create one position. Returns True iff a row was inserted; otherwise a
     skip-ledger row is written (or the thesis was already opened — idempotent
     no-op). Runs entirely in its own session scope."""
@@ -211,13 +313,23 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
             }
 
     if levels is None:
-        _record_skip(thesis_id, symbol, scan_date, "missing_screened_record")
+        # Shadow never touches the live skip ledger (a live-read surface, WS A).
+        if not shadow:
+            _record_skip(thesis_id, symbol, scan_date, "missing_screened_record")
         return False
 
     # Any required level NULL → skip missing_levels (guard BEFORE insert so a
     # later C2 backfill + re-run can still create the position, D8).
     if any(levels.get(k) is None for k in _REQUIRED_LEVELS):
-        _record_skip(thesis_id, symbol, scan_date, "missing_levels")
+        if not shadow:
+            _record_skip(thesis_id, symbol, scan_date, "missing_levels")
+        return False
+
+    # WS A long-shape guard: a shadow WATCH-buy must be a valid LONG setup with a
+    # bullish pattern. A level-less or bearish (false_breakout) candidate never
+    # opens. This is the regression that a `watch` on `false_breakout` does NOT
+    # open a shadow position.
+    if shadow and not _is_long_shape(levels, getattr(screened, "pattern_type", None)):
         return False
 
     # Active-symbol resolution (D7 + D10 cross-session). `create_positions_for_
@@ -232,7 +344,7 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
     #     close pick DISPLACES it (expire the old pending, record the old thesis
     #     `same_symbol_lower_conviction`), then fall through to insert the new.
     with get_session() as session:
-        active = _active_position(session, symbol)
+        active = _active_position(session, symbol, shadow=shadow)
         if active is not None:
             # Idempotent re-run: the active row IS this thesis's own position
             # (D5). No skip, no displacement — just a no-op.
@@ -249,14 +361,18 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
             )
             existing_conf = active.llm_confidence
             if not cross_session_pending:
-                _record_skip(thesis_id, symbol, scan_date, "symbol_already_active")
+                if not shadow:
+                    _record_skip(
+                        thesis_id, symbol, scan_date, "symbol_already_active"
+                    )
                 return False
             if existing_conf is not None and existing_conf >= new_conf:
                 # Incumbent out-convicts (or ties → earliest session, i.e. the
                 # already-pending one) → the new pick loses (D10).
-                _record_skip(
-                    thesis_id, symbol, scan_date, "same_symbol_lower_conviction"
-                )
+                if not shadow:
+                    _record_skip(
+                        thesis_id, symbol, scan_date, "same_symbol_lower_conviction"
+                    )
                 return False
             # New pick out-convicts the same-day pending → displace it (only if
             # still pending — a concurrent fill may have opened it meanwhile).
@@ -269,7 +385,7 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
         else:
             displaced_thesis = None
 
-    if displaced_thesis is not None:
+    if displaced_thesis is not None and not shadow:
         _record_skip(
             displaced_thesis, symbol, scan_date, "same_symbol_lower_conviction"
         )
@@ -290,6 +406,7 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
         "pattern_type": getattr(screened, "pattern_type", None),
         "llm_confidence": int(thesis["llm_confidence"]),
         "verdict": thesis.get("verdict"),
+        "shadow": shadow,
         # fill fields stay NULL while pending (D1).
     }
 
@@ -305,7 +422,7 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
             # DO NOTHING conflict it's empty. rowcount is unreliable here (-1 for
             # ON CONFLICT inserts under psycopg), so use the returned row instead.
             inserted = session.execute(stmt).first() is not None
-        if inserted:
+        if inserted and not shadow:
             # D8 retry: a thesis previously skipped (missing_levels/missing_
             # screened_record) that now opens must not linger in the skip ledger.
             _clear_skip(thesis_id)
@@ -313,8 +430,10 @@ def _create_one(thesis: dict[str, Any], scan_date: date) -> bool:
     except IntegrityError:
         # Partial-unique conflict (symbol already active) raced past the
         # pre-check. The txn rolled back cleanly (its own scope); record the
-        # skip and let the batch continue (D7c).
-        _record_skip(thesis_id, symbol, scan_date, "symbol_already_active")
+        # skip and let the batch continue (D7c). Shadow never writes the live
+        # skip ledger.
+        if not shadow:
+            _record_skip(thesis_id, symbol, scan_date, "symbol_already_active")
         return False
 
 

@@ -700,6 +700,16 @@ class PaperTrade(Base):
         BigInteger, ForeignKey("chart_images.id")
     )
 
+    # WS A (shadow WATCH-buy, migration 0013): a shadow row is a measurement-only
+    # position opened by a WATCH verdict. It runs through the REAL fill/exit
+    # engine but is EXCLUDED from every live read (book, paper_skip, calibration,
+    # reports, charts, research) and never consumes a LIVE symbol's active slot
+    # (the partial-unique index below is scoped to shadow=false). The live book
+    # is byte-identical whether or not shadow rows exist.
+    shadow: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     __table_args__ = (
         UniqueConstraint("thesis_id", name="uq_paper_trade_thesis_id"),
         CheckConstraint(
@@ -716,13 +726,22 @@ class PaperTrade(Base):
             "reflection IS NULL OR exit_reason IS NOT NULL",
             name="ck_paper_trade_reflection_after_exit",
         ),
-        # Partial unique index — one pending/open position per symbol (design
-        # D1). Closed/expired rows fall out, so a symbol can be re-traded later.
+        # Partial unique index — one pending/open LIVE position per symbol
+        # (design D1). Scoped to shadow=false (WS A) so a shadow position never
+        # consumes a live symbol's active slot. Closed/expired rows fall out, so
+        # a symbol can be re-traded later.
         Index(
             "idx_paper_trade_active_symbol",
             "symbol",
             unique=True,
-            postgresql_where="status IN ('pending', 'open')",
+            postgresql_where="status IN ('pending', 'open') AND shadow = false",
+        ),
+        # The shadow book honors one-active-per-symbol independently (WS A).
+        Index(
+            "idx_paper_trade_active_symbol_shadow",
+            "symbol",
+            unique=True,
+            postgresql_where="status IN ('pending', 'open') AND shadow = true",
         ),
     )
 

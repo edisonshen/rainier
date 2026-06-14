@@ -74,6 +74,11 @@ MIGRATION_0011_DOWN = (
 # column + table.
 MIGRATION_0012_UP = REPO_ROOT / "migrations" / "0012_reclaim_queue.sql"
 MIGRATION_0012_DOWN = REPO_ROOT / "migrations" / "0012_reclaim_queue_downgrade.sql"
+# WS A (P0 batch): paper_trade.shadow + shadow-scoped active-symbol indexes.
+MIGRATION_0013_UP = REPO_ROOT / "migrations" / "0013_paper_trade_shadow.sql"
+MIGRATION_0013_DOWN = (
+    REPO_ROOT / "migrations" / "0013_paper_trade_shadow_downgrade.sql"
+)
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -345,6 +350,7 @@ def pg_legacy_engine(request):
             _apply_sql(engine, MIGRATION_0010_UP)
         _apply_sql(engine, MIGRATION_0011_UP)  # R-E qu100_daily_features
         _apply_sql(engine, MIGRATION_0012_UP)  # WS B reclaim queue + column
+        _apply_sql(engine, MIGRATION_0013_UP)  # WS A paper_trade.shadow
 
         from rainier.core import config, database
 

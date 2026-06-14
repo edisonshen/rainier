@@ -1931,6 +1931,56 @@ def paper_group() -> None:
     """QU100 paper-trade tracker — open positions, update exits, report."""
 
 
+@paper_group.command(name="shadow-replay")
+@click.option(
+    "--start", "start_iso", required=True, help="Window start (YYYY-MM-DD)"
+)
+@click.option("--end", "end_iso", required=True, help="Window end (YYYY-MM-DD)")
+@click.option(
+    "--thresholds",
+    default="4,5,6",
+    show_default=True,
+    help="Comma-separated WATCH confidence thresholds to sweep.",
+)
+@click.option(
+    "--benchmark", default="SPY", show_default=True, help="Benchmark symbol."
+)
+def paper_shadow_replay(start_iso, end_iso, thresholds, benchmark):
+    """WS A — replay the shadow WATCH-buy book over a window per threshold T.
+
+    Drives the REAL fill/exit engine day by day over historical theses, opening
+    SHADOW positions (excluded from the live book) at each T, and prints the
+    shadow book's return vs cash and vs the benchmark. Use the two review
+    windows (2026-05-29→06-12 and 2026-05-22→06-12) to compare arms.
+
+    NOTE: shadow rows persist in the DB. Run against a throwaway/replay schema
+    or `rainier db gc-test-schemas` afterward — this command does not isolate
+    arms from each other; it is a measurement tool, not a live mutation.
+    """
+    from datetime import date as _date
+
+    from rainier.paper.calendar import DEFAULT_CALENDAR
+    from rainier.paper.replay import replay_threshold
+
+    start = _date.fromisoformat(start_iso)
+    end = _date.fromisoformat(end_iso)
+    ts = [int(t) for t in thresholds.split(",") if t.strip()]
+    days = DEFAULT_CALENDAR.sessions_between(start, end)
+
+    click.echo(f"Shadow replay {start}..{end} ({len(days)} sessions), bench={benchmark}")
+    click.echo(f"{'T':>3} {'fired':>6} {'book%':>8} {'cash%':>7} {'bench%':>8}")
+    for t in ts:
+        arm = replay_threshold(
+            threshold=t, trading_days=days, benchmark_symbol=benchmark
+        )
+        click.echo(
+            f"{arm.threshold:>3} {arm.fired:>6} "
+            f"{arm.book_return_pct * 100:>7.2f}% "
+            f"{arm.cash_return_pct * 100:>6.2f}% "
+            f"{arm.benchmark_return_pct * 100:>7.2f}%"
+        )
+
+
 @paper_group.command(name="open")
 @click.option("--date", "as_of_iso", default=None, help="Fill as-of date (YYYY-MM-DD)")
 @click.pass_context
