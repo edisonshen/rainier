@@ -1726,6 +1726,52 @@ def db_init(ctx):
     click.echo("Database initialized successfully.")
 
 
+@db.command(name="gc-test-schemas")
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Drop the leaked test schemas. Without this, dry-run lists them only.",
+)
+def db_gc_test_schemas(apply: bool) -> None:
+    """Reap leaked throwaway test schemas from the LEGACY database.
+
+    The paper-tracker test fixtures build disposable Postgres schemas
+    (``rainier_paper_test*`` etc). A SIGKILL'd run can leave one behind in the
+    live local TimescaleDB. This lists them (dry-run) and, with ``--apply``,
+    drops only those matching the anchored allowlist regex — NEVER
+    ``public`` / ``market`` / the active schema. Targets the legacy
+    ``core.database`` engine (``LEGACY_DATABASE_URL``), never canonical Neon
+    (the 2026-06-01 two-engine trap).
+    """
+    from rainier.core.database import get_engine
+    from rainier.core.test_schema_gc import gc_test_schemas
+
+    engine = get_engine()
+    result = gc_test_schemas(engine, apply=apply)
+    candidates = result["candidates"]
+    if apply:
+        dropped = result["dropped"]
+        failed = result["failed"]
+        click.echo(f"gc-test-schemas: dropped {len(dropped)} leaked schema(s).")
+        for name in dropped:
+            click.echo(f"  dropped {name}")
+        if failed:
+            for name, err in failed:
+                click.echo(f"  FAILED to drop {name}: {err}", err=True)
+            raise click.ClickException(
+                f"gc-test-schemas: {len(failed)} schema(s) could not be "
+                f"dropped (see above). Resolve the error and re-run --apply."
+            )
+    else:
+        click.echo(
+            f"DRY-RUN gc-test-schemas: would drop {len(candidates)} leaked "
+            f"schema(s). Re-run with --apply to drop."
+        )
+        for name in candidates:
+            click.echo(f"  {name}")
+
+
 @db.command(name="backfill-prices")
 @click.option("--years", default=5, type=int, help="Years of history to fetch")
 @click.option("--batch-size", default=20, type=int, help="Symbols per yfinance batch")
