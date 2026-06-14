@@ -26,12 +26,12 @@ def _seed_thesis(session, tid):
 
 
 def _mk_pending(session, tid, symbol, scan_date, *, stop=90.0, target=120.0,
-                time_stop_days=None):
+                time_stop_days=None, shadow=False):
     _seed_thesis(session, tid)
     p = PaperTrade(
         thesis_id=tid, symbol=symbol, scan_date=scan_date, session_name="close",
         status="pending", planned_entry_price=100.0, stop_loss=stop,
-        target_price=target, time_stop_days=time_stop_days,
+        target_price=target, time_stop_days=time_stop_days, shadow=shadow,
     )
     session.add(p)
     session.commit()
@@ -115,6 +115,48 @@ def test_e1c_fill_validity_guard_gap_past_stop(pg_legacy_session):
     _price(s, "AAA", date(2026, 1, 6), 88, 92, 85, 89)  # open <= stop
     fill_pending_positions(as_of=date(2026, 1, 6))
     assert _get(s, pid).status == "expired"
+
+
+def test_e1c_shadow_gap_does_not_write_live_skip(pg_legacy_session):
+    """WS A isolation regression — a SHADOW pending that gaps past a level must
+    expire WITHOUT writing the live skip ledger (the fill path was leaking
+    `gap_invalidated` skips for shadow rows)."""
+    s = pg_legacy_session
+    pid = _mk_pending(s, 1, "AAA", date(2026, 1, 5), stop=90, target=120,
+                      shadow=True)
+    _price(s, "AAA", date(2026, 1, 6), 125, 130, 124, 128)  # gap past target
+    fill_pending_positions(as_of=date(2026, 1, 6))
+    assert _get(s, pid).status == "expired"
+    skips = s.execute(select(PaperSkip)).scalars().all()
+    assert skips == []
+
+
+def test_zero_share_shadow_does_not_write_live_skip(pg_legacy_session):
+    """WS A isolation regression — a SHADOW pending that floors to 0 shares (open
+    above the $10k notional) must expire WITHOUT a live `zero_share_price`
+    skip."""
+    s = pg_legacy_session
+    # open=10001 < target so it's a valid fill price, but floor(10000/10001)=0.
+    pid = _mk_pending(s, 1, "AAA", date(2026, 1, 5), stop=90, target=20000,
+                      shadow=True)
+    _price(s, "AAA", date(2026, 1, 6), 10001, 10005, 10000, 10002)
+    fill_pending_positions(as_of=date(2026, 1, 6))
+    assert _get(s, pid).status == "expired"
+    skips = s.execute(select(PaperSkip)).scalars().all()
+    assert skips == []
+
+
+def test_e1c_live_gap_still_writes_skip(pg_legacy_session):
+    """Companion: the LIVE path still writes `gap_invalidated` (the shadow guard
+    must not suppress live skips)."""
+    s = pg_legacy_session
+    pid = _mk_pending(s, 1, "AAA", date(2026, 1, 5), stop=90, target=120,
+                      shadow=False)
+    _price(s, "AAA", date(2026, 1, 6), 125, 130, 124, 128)
+    fill_pending_positions(as_of=date(2026, 1, 6))
+    assert _get(s, pid).status == "expired"
+    skips = s.execute(select(PaperSkip)).scalars().all()
+    assert len(skips) == 1 and skips[0].reason == "gap_invalidated"
 
 
 def test_e2_sizing_residual(pg_legacy_session):

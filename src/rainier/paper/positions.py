@@ -490,6 +490,9 @@ def fill_pending_positions(
                 "id": p.id, "thesis_id": p.thesis_id, "symbol": p.symbol,
                 "scan_date": _as_date(p.scan_date), "stop_loss": p.stop_loss,
                 "target_price": p.target_price,
+                # WS A: carry shadow so the fill path never writes the live skip
+                # ledger for a shadow row (isolation invariant — same as create).
+                "shadow": bool(p.shadow),
             }
             for p in pending
         ]
@@ -532,10 +535,12 @@ def fill_pending_positions(
             # Fill-validity guard (E1c): open gapped past a level → expired.
             if open_px >= it["target_price"] or open_px <= it["stop_loss"]:
                 if _expire_locked(session, it["id"]):
-                    _record_skip(
-                        it["thesis_id"], it["symbol"], it["scan_date"],
-                        "gap_invalidated",
-                    )
+                    # WS A isolation: shadow never writes the live skip ledger.
+                    if not it["shadow"]:
+                        _record_skip(
+                            it["thesis_id"], it["symbol"], it["scan_date"],
+                            "gap_invalidated",
+                        )
                     expired += 1
                 continue
 
@@ -547,10 +552,12 @@ def fill_pending_positions(
             # while tracking nothing). Expire + skip `zero_share_price`.
             if shares == 0:
                 if _expire_locked(session, it["id"]):
-                    _record_skip(
-                        it["thesis_id"], it["symbol"], it["scan_date"],
-                        "zero_share_price",
-                    )
+                    # WS A isolation: shadow never writes the live skip ledger.
+                    if not it["shadow"]:
+                        _record_skip(
+                            it["thesis_id"], it["symbol"], it["scan_date"],
+                            "zero_share_price",
+                        )
                     expired += 1
                 continue
 
