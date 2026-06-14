@@ -348,6 +348,13 @@ def run_paper_daily_steps(eval_date) -> None:
             window_days=pcfg.reclaim_window_days,
             dedup_days=pcfg.reclaim_dedup_days,
         )
+        # DETECTION-ONLY this PR: `spawn_fn=None` makes process_reclaim_queue a
+        # no-op even if `reclaim_auto_thesis` is flipped on, because the
+        # single-symbol fresh-thesis spawn path is not wired yet (a separate,
+        # gated change). The flag + audit args are passed through so the audit
+        # still runs (and logs gate_passed), but no fresh thesis is created
+        # until a real spawn_fn lands here. Until then, auto-thesis is inert by
+        # design — the queue is surfaced for human review.
         paper_reclaim.process_reclaim_queue(
             eval_date=eval_date,
             auto_thesis=pcfg.reclaim_auto_thesis,
