@@ -513,6 +513,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         if signals is not None:
             thesis_kwargs["signals"] = signals
         kwargs["llm_thesis"] = LLMThesisConfig(**thesis_kwargs)
+    if "paper" in yaml_config:
+        kwargs["paper"] = PaperConfig(**yaml_config["paper"])
     if "notify" in yaml_config:
         kwargs["notify"] = NotifyConfig(**yaml_config["notify"])
     if "stock_screener" in yaml_config:

@@ -87,6 +87,7 @@ def _mk_trade(
     exit_reason: str | None = "target",
     reflection: str | None = None,
     return_pct: float | None = 0.08,
+    shadow: bool = False,
 ) -> int:
     thesis_id = _mk_thesis(session)
     tid = session.execute(
@@ -95,13 +96,14 @@ def _mk_trade(
             "(thesis_id, symbol, scan_date, session_name, status, "
             " planned_entry_price, stop_loss, target_price, pattern_type, "
             " llm_confidence, verdict, entry_date, entry_price, shares, "
-            " exit_date, exit_price, exit_reason, return_pct, pnl, reflection) "
+            " exit_date, exit_price, exit_reason, return_pct, pnl, reflection, "
+            " shadow) "
             "VALUES "
             "(:thesis_id, :symbol, '2026-05-29', 'close', :status, "
             " 100.0, 95.0, 110.0, 'w_bottom', "
             " 7, 'setup_long', :entry_date, 100.0, 100, "
             " :exit_date, :exit_price, :exit_reason, :return_pct, :pnl, "
-            " :reflection) "
+            " :reflection, :shadow) "
             "RETURNING id"
         ),
         {
@@ -115,6 +117,7 @@ def _mk_trade(
             "return_pct": return_pct,
             "pnl": 800.0 if exit_date else None,
             "reflection": reflection,
+            "shadow": shadow,
         },
     ).scalar()
     session.commit()
@@ -308,6 +311,45 @@ def test_generation_selection_bounds(pg_legacy_session):
     assert stats["written"] == 1
     assert len(stub.calls) == 1
     assert "NOW" in stub.calls[0]["user_prompt"]
+
+
+def test_generation_excludes_shadow_trades(pg_legacy_session):
+    """WS A isolation — a closed SHADOW trade must never be a reflection
+    candidate (no LLM spend on measurement rows; outcomes stay out of prompts)."""
+    from rainier.paper.reflection import (
+        generate_reflections,
+        select_reflection_candidates,
+    )
+
+    _mk_trade(pg_legacy_session, symbol="SHD", exit_date=AS_OF, shadow=True)
+    _mk_trade(pg_legacy_session, symbol="LIV", exit_date=AS_OF, shadow=False)
+
+    cands = select_reflection_candidates(AS_OF)
+    symbols = {c["symbol"] for c in cands}
+    assert "SHD" not in symbols and "LIV" in symbols
+
+    stub = _StubLLM()
+    stats = generate_reflections(AS_OF, model="test-model", llm_fn=stub)
+    assert stats["written"] == 1  # only the live trade
+    assert all("SHD" not in c["user_prompt"] for c in stub.calls)
+
+
+def test_load_recent_reflections_excludes_shadow(pg_legacy_session):
+    """WS A isolation — even a shadow row that somehow carries reflection text
+    must not be injected into the live thesis prompt."""
+    from rainier.paper.reflection import load_recent_reflections
+
+    _mk_trade(
+        pg_legacy_session, symbol="SHD", exit_date=AS_OF - timedelta(days=1),
+        reflection="shadow post-mortem", shadow=True,
+    )
+    _mk_trade(
+        pg_legacy_session, symbol="LIV", exit_date=AS_OF - timedelta(days=1),
+        reflection="live post-mortem", shadow=False,
+    )
+    rows = load_recent_reflections(AS_OF, k=10)
+    symbols = {r["symbol"] for r in rows}
+    assert "SHD" not in symbols and "LIV" in symbols
 
 
 def test_generation_caps_llm_calls_per_run(pg_legacy_session):

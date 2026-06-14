@@ -34,3 +34,27 @@ def test_paper_config_env_override_reloads(monkeypatch):
     s = Settings()
     assert s.paper.watch_buy_min_confidence == 6
     assert s.paper.reclaim_auto_thesis is True
+
+
+def test_paper_config_yaml_block_is_parsed(monkeypatch, tmp_path):
+    """The `paper:` YAML block must reach PaperConfig — otherwise the documented
+    kill-switch (`watch_buy_shadow: false`) for the default-ON shadow feature is
+    inert in the scheduler's YAML-reload path."""
+    from rainier.core.config import load_settings
+
+    yaml_path = tmp_path / "settings.yaml"
+    yaml_path.write_text(
+        "paper:\n"
+        "  watch_buy_shadow: false\n"
+        "  watch_buy_min_confidence: 6\n"
+        "  reclaim_window_days: 30\n",
+        encoding="utf-8",
+    )
+    # chdir to a clean tmp dir so the project's real .env doesn't leak in.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PAPER__WATCH_BUY_SHADOW", raising=False)
+    monkeypatch.delenv("PAPER__WATCH_BUY_MIN_CONFIDENCE", raising=False)
+    s = load_settings(config_path=yaml_path)
+    assert s.paper.watch_buy_shadow is False  # kill-switch honored
+    assert s.paper.watch_buy_min_confidence == 6
+    assert s.paper.reclaim_window_days == 30
