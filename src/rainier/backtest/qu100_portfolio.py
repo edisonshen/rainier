@@ -186,6 +186,18 @@ def load_rankings_from_db() -> pd.DataFrame:
 # sessions.
 COVERAGE_MAX_GAP_SESSIONS = 10
 
+# Forward tail required PAST a symbol's last top100 ranking date. The backtests
+# enter on the trading day AFTER a ranking and hold for up to ~10 sessions
+# (plus entry-delay), and run_qu100_portfolio_backtest can hold past the last
+# ranking — so a symbol's prices must extend this many sessions beyond its last
+# ranking for the post-signal entry+hold tail. Clamping coverage exactly at the
+# last ranking date would skip a former member whose price series stops there and
+# silently misprice those trades. ~3 weeks of sessions (entry-delay + max hold +
+# slack). Also makes a weekend/holiday-only ranking window non-degenerate (the
+# tail pushes eff_end onto a real session), so a brand-new Saturday-seen symbol
+# with no bars is correctly flagged uncovered rather than a vacuous pass (codex).
+COVERAGE_FORWARD_TAIL_SESSIONS = 15
+
 # Back-compat alias (kept so existing imports/tests keep resolving). Same value;
 # the edge and interior tolerances are now ONE uniform rule.
 COVERAGE_BOUNDARY_TOLERANCE_DAYS = COVERAGE_MAX_GAP_SESSIONS
@@ -383,9 +395,17 @@ def select_symbols_needing_backfill(
     need = []
     for s in symbols:
         fr, lr = span.get(s, (None, None))
-        # Effective edges: clamp the global window to the symbol's ranked life.
+        # Effective edges: clamp the global window to the symbol's ranked life,
+        # but extend the right edge by the forward tail (entry+hold past the last
+        # ranking) so the post-signal bars the backtest needs are required.
         eff_start = window_start if fr is None else max(window_start, fr)
-        eff_end = window_end if lr is None else min(window_end, lr)
+        if lr is None:
+            eff_end = window_end
+        else:
+            eff_end = min(
+                window_end,
+                cal.add_sessions(lr, COVERAGE_FORWARD_TAIL_SESSIONS),
+            )
         if not _is_covered(
             usable.get(s, set()),
             eff_start,

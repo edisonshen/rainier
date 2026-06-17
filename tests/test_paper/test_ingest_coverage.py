@@ -25,6 +25,7 @@ import pytest
 from sqlalchemy import select, text
 
 from rainier.backtest.qu100_portfolio import (
+    COVERAGE_FORWARD_TAIL_SESSIONS,
     COVERAGE_MAX_GAP_SESSIONS,
     _is_covered,
     _yf_to_long,
@@ -257,20 +258,37 @@ def test_late_entrant_with_gap_after_listing_is_refetched(pg_legacy_session):
     assert "IPOGAP" in need
 
 
-def test_former_member_covered_through_last_ranking_date(pg_legacy_session):
-    # A former constituent that stopped trading after its last ranking date
-    # (delist/rename). It has dense bars from its first to its LAST ranking but
-    # none through today — it must be COVERED, because the sweep consumes it only
-    # through that last ranking date (codex P1). Requiring bars through today
-    # would flag it forever.
+def test_former_member_covered_through_last_ranking_plus_tail(pg_legacy_session):
+    # A former constituent that stopped ranking after last_ranked (delist/rename),
+    # with dense bars from its first ranking through last_ranked PLUS the forward
+    # tail the backtest needs (entry+hold past the signal) — COVERED, not flagged.
+    # The sweep/backtest consume it only through last_ranked + the tail, not today
+    # (codex P1: requiring bars through today would flag it forever).
     first_ranked = date(2022, 6, 1)
     last_ranked = date(2024, 6, 3)
+    tail_end = DEFAULT_CALENDAR.add_sessions(
+        last_ranked, COVERAGE_FORWARD_TAIL_SESSIONS
+    )
     _seed_ranking(pg_legacy_session, "GONE", first_ranked)
     _seed_ranking(pg_legacy_session, "GONE", last_ranked)
-    _seed_dense(pg_legacy_session, "GONE", first_ranked, last_ranked)
+    _seed_dense(pg_legacy_session, "GONE", first_ranked, tail_end)
     pg_legacy_session.expire_all()
     need = select_symbols_needing_backfill(["GONE"], WINDOW_START, WINDOW_END)
     assert "GONE" not in need
+
+
+def test_former_member_missing_forward_tail_is_refetched(pg_legacy_session):
+    # Same former member but prices STOP at last_ranked with no forward tail →
+    # flagged, because the backtest still needs the post-signal entry+hold bars
+    # (codex P1).
+    first_ranked = date(2022, 6, 1)
+    last_ranked = date(2024, 6, 3)
+    _seed_ranking(pg_legacy_session, "NOTAIL", first_ranked)
+    _seed_ranking(pg_legacy_session, "NOTAIL", last_ranked)
+    _seed_dense(pg_legacy_session, "NOTAIL", first_ranked, last_ranked)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["NOTAIL"], WINDOW_START, WINDOW_END)
+    assert "NOTAIL" in need
 
 
 def test_former_member_with_gap_before_last_ranking_is_refetched(pg_legacy_session):
@@ -297,6 +315,21 @@ def test_brand_new_symbol_with_no_bars_is_refetched(pg_legacy_session):
     pg_legacy_session.expire_all()
     need = select_symbols_needing_backfill(["BRANDNEW"], WINDOW_START, WINDOW_END)
     assert "BRANDNEW" in need
+
+
+def test_weekend_only_ranking_with_no_bars_is_refetched(pg_legacy_session):
+    # The scraper stamps data_date = captured_at.date(), so a brand-new symbol
+    # first seen on a Saturday has a non-session ranking date. Without the
+    # forward tail, eff_start == eff_end on a weekend → empty sessions → a vacuous
+    # "covered" pass even with zero bars (codex P1). The forward tail pushes
+    # eff_end onto real sessions, so a no-bars weekend entrant is flagged.
+    saturday = date(2024, 6, 8)  # 2024-06-08 is a Saturday
+    assert saturday.weekday() == 5
+    _seed_cohort(pg_legacy_session, ["WKND"], saturday)
+    # No prices at all.
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["WKND"], WINDOW_START, WINDOW_END)
+    assert "WKND" in need
 
 
 def test_is_covered_empty_present_short_window_false():
