@@ -118,8 +118,37 @@ def test_merge_pattern_weights_deep_merge():
     yaml_overrides = {"pattern_weights": {"bull_flag": 0.75, "m_top": 0.85}}
     champion = {"pattern_weights": {"bull_flag": 0.70}}
     merged = merge_stock_screener_config(yaml_overrides, champion)
-    # champion overrides bull_flag; m_top survives from settings.yaml
-    assert merged["pattern_weights"] == {"bull_flag": 0.70, "m_top": 0.85}
+    # champion overrides bull_flag; m_top survives from settings.yaml; AND every
+    # OTHER default pattern is preserved (seeded from code defaults) so the
+    # final map is the full set, not just the two named here.
+    assert merged["pattern_weights"]["bull_flag"] == 0.70
+    assert merged["pattern_weights"]["m_top"] == 0.85
+    defaults = StockScreenerConfig().pattern_weights
+    assert set(merged["pattern_weights"]) == set(defaults)
+
+
+def test_merge_partial_pattern_weights_keeps_defaults():
+    """A champion that names ONE pattern weight must NOT drop the rest to the
+    0.5 fallback — omitted patterns keep their code-default weight. Guards
+    codex iter-5 P2."""
+    champion = {"pattern_weights": {"bull_flag": 0.10}}
+    merged = merge_stock_screener_config(None, champion)
+    sc = StockScreenerConfig(**merged)
+    defaults = StockScreenerConfig()
+    assert sc.pattern_weights["bull_flag"] == 0.10  # overridden
+    # every other pattern retains its default (not silently absent)
+    for pat, w in defaults.pattern_weights.items():
+        if pat != "bull_flag":
+            assert sc.pattern_weights[pat] == w
+
+
+def test_merge_no_pattern_weights_falls_through_to_default():
+    """When NO layer touches pattern_weights, the merged dict omits the key so
+    pydantic supplies the full default map (no premature seeding)."""
+    merged = merge_stock_screener_config({"buy_threshold": 0.7}, None)
+    assert "pattern_weights" not in merged
+    sc = StockScreenerConfig(**merged)
+    assert sc.pattern_weights == StockScreenerConfig().pattern_weights
 
 
 def test_precedence_unspecified_field_falls_through_to_settings_yaml(

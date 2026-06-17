@@ -226,6 +226,50 @@ def test_run_pattern_audit_defaults_min_history_to_config(monkeypatch, tmp_path)
     assert captured["min_history_bars"] == 80
 
 
+def test_run_pattern_audit_window_days_is_exactly_n_dates(monkeypatch, tmp_path):
+    """An N-day window spans exactly N calendar dates ending at the latest bar:
+    window_start == latest-(N-1), not latest-N. Guards codex iter-5 P3."""
+    import datetime as _dt
+
+    import rainier.paper.pattern_audit as pa
+
+    captured = {}
+
+    def fake_build_corpus(prices, *, config, min_history_bars, window_start, **kw):
+        captured["window_start"] = window_start
+        return pd.DataFrame(columns=list(pa.CORPUS_COLUMNS))
+
+    latest = _dt.date(2026, 6, 16)
+
+    class _Res:
+        def scalar(self):
+            return _dt.datetime(latest.year, latest.month, latest.day)
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, stmt):
+            return _Res()
+
+    monkeypatch.setattr(pa, "build_corpus", fake_build_corpus)
+    monkeypatch.setattr("rainier.core.database.get_session", lambda: _FakeSession())
+    monkeypatch.setattr(
+        "rainier.paper.pattern_replay.load_prices",
+        lambda s, syms, start_date=None: {},
+    )
+
+    pa.run_pattern_audit(
+        config=StockScreenerConfig(), symbols=["AAA"],
+        corpus_dir=tmp_path, window_days=365,
+    )
+    # exactly 365 dates: [latest-364 .. latest]
+    assert captured["window_start"] == latest - _dt.timedelta(days=364)
+
+
 def test_build_corpus_window_start_bounds_as_of(monkeypatch):
     """window_start bounds the AS-OF date: emissions before the cutoff are
     dropped, earlier bars still loaded for lookback/fwd edges. Guards codex

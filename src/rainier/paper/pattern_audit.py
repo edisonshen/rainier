@@ -417,7 +417,9 @@ def run_pattern_audit(
             ).scalar()
             if max_ts is not None:
                 latest = max_ts.date() if hasattr(max_ts, "date") else max_ts
-                window_start = latest - timedelta(days=window_days)
+                # `latest` is itself in-window, so an N-day window spans dates
+                # [latest-(N-1) .. latest] = exactly N calendar dates (not N+1).
+                window_start = latest - timedelta(days=window_days - 1)
                 # Pad the SQL load left by the detector lookback so the earliest
                 # in-window as-of bar still sees its full ~6-month window. Trading
                 # bars → calendar days with a generous 2x factor + slack; trims

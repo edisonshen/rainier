@@ -114,8 +114,25 @@ def merge_stock_screener_config(
     settings.yaml (and, for fields neither file names, to the pydantic
     default). ``pattern_weights`` (the one nested dict) is itself deep-merged so
     a champion that tweaks one pattern weight keeps the rest from settings.yaml.
+
+    ``pattern_weights`` is seeded from the CODE DEFAULT map before either layer
+    applies, so a partial override (settings.yaml or champion sets only a few
+    patterns) keeps the default weight for every omitted pattern. Without the
+    seed, ``StockScreenerConfig(**merged)`` would replace the whole default map
+    with the partial dict, silently re-scoring omitted patterns at the
+    `score_pattern(...).get(..., 0.5)` fallback and shifting live rankings.
     """
+    from rainier.core.config import StockScreenerConfig
+
     merged: dict[str, Any] = {}
+    # Seed the nested weight map from code defaults ONLY when a layer touches it,
+    # so the common "nobody overrides pattern_weights" path still falls through
+    # to the pydantic default (no key emitted).
+    if any("pattern_weights" in (layer or {})
+           for layer in (yaml_overrides, champion_overrides)):
+        default_weights = StockScreenerConfig().pattern_weights
+        merged["pattern_weights"] = dict(default_weights)
+
     for layer in (yaml_overrides or {}, champion_overrides or {}):
         for key, value in layer.items():
             if (
@@ -124,7 +141,8 @@ def merge_stock_screener_config(
                 and isinstance(merged.get(key), dict)
             ):
                 # Deep-merge the nested pattern_weights dict so a partial
-                # champion override does not drop the settings.yaml entries.
+                # override (settings.yaml OR champion) keeps the default/prior
+                # weight for every pattern it does not name.
                 merged[key] = {**merged[key], **value}
             else:
                 merged[key] = value
