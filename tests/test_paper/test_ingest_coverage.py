@@ -229,6 +229,32 @@ def test_split_history_is_refetched(pg_legacy_session):
     assert "SPLIT" in need
 
 
+def test_late_entrant_covered_from_first_ranking_date(pg_legacy_session):
+    # A symbol whose FIRST top100 ranking is well after the global window start
+    # (a recent IPO). It has dense bars from that date onward but none before —
+    # it must be COVERED, not flagged, because the sweep evaluates it only from
+    # when it appears in rankings (codex P1). Pre-listing sessions are not gaps.
+    first_ranked = date(2025, 1, 6)
+    _seed_cohort(pg_legacy_session, ["IPONEW"], first_ranked)
+    _seed_dense(pg_legacy_session, "IPONEW", first_ranked, WINDOW_END)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["IPONEW"], WINDOW_START, WINDOW_END)
+    assert "IPONEW" not in need
+
+
+def test_late_entrant_with_gap_after_listing_is_refetched(pg_legacy_session):
+    # Same late entrant, but a multi-month hole AFTER its first ranking → still
+    # flagged (the per-symbol left boundary doesn't excuse gaps within its
+    # ranked life).
+    first_ranked = date(2024, 1, 3)
+    _seed_cohort(pg_legacy_session, ["IPOGAP"], first_ranked)
+    _seed_dense(pg_legacy_session, "IPOGAP", first_ranked, date(2024, 3, 1))
+    _seed_dense(pg_legacy_session, "IPOGAP", date(2025, 6, 2), WINDOW_END)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["IPOGAP"], WINDOW_START, WINDOW_END)
+    assert "IPOGAP" in need
+
+
 def test_null_ohlc_rows_are_not_coverage(pg_legacy_session):
     # Placeholder rows with NULL OHLC at the boundaries must NOT count as
     # coverage (codex P1) — a covered span built only from NULL rows re-fetches.
@@ -319,10 +345,29 @@ def _seed_cohort(session, symbols: list[str], data_date: date) -> None:
     session.commit()
 
 
+def _seed_ranking(session, symbol: str, data_date: date) -> None:
+    """Add an extra top100 ranking row at ``data_date`` (e.g. an EARLY one so a
+    symbol's first-ranking date predates the current cohort snapshot)."""
+    _seed_stock(session, symbol)
+    session.execute(
+        text(
+            "INSERT INTO money_flow_snapshots "
+            "(captured_at, capture_session, data_date, ranking_type, symbol, rank) "
+            "VALUES (:cap, 'close', :dd, 'top100', :sym, 1)"
+        ),
+        {"cap": _instant(data_date), "dd": data_date, "sym": symbol},
+    )
+    session.commit()
+
+
 def test_cohort_coverage_reports_missing(pg_legacy_session):
     as_of = date(2026, 6, 12)
     _seed_cohort(pg_legacy_session, ["COVD", "GAPS"], as_of)
-    # COVD spans the window densely; GAPS has only a recent sliver.
+    # Both have a long ranked life (first ranked at WINDOW_START), so the
+    # per-symbol left boundary IS the window start. COVD spans it densely; GAPS
+    # has only a recent sliver → GAPS is the only uncovered cohort member.
+    _seed_ranking(pg_legacy_session, "COVD", WINDOW_START)
+    _seed_ranking(pg_legacy_session, "GAPS", WINDOW_START)
     _seed_dense(pg_legacy_session, "COVD", WINDOW_START, as_of)
     _seed_prices(pg_legacy_session, "GAPS", [as_of])
     pg_legacy_session.expire_all()
@@ -333,6 +378,7 @@ def test_cohort_coverage_reports_missing(pg_legacy_session):
 def test_cohort_coverage_all_covered_empty(pg_legacy_session):
     as_of = date(2026, 6, 12)
     _seed_cohort(pg_legacy_session, ["COVD"], as_of)
+    _seed_ranking(pg_legacy_session, "COVD", WINDOW_START)
     _seed_dense(pg_legacy_session, "COVD", WINDOW_START, as_of)
     pg_legacy_session.expire_all()
     assert assert_cohort_coverage(WINDOW_START, as_of, as_of=as_of) == []

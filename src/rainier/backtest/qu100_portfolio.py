@@ -254,6 +254,36 @@ def _symbol_usable_dates(
     return result
 
 
+def _symbol_first_ranking_dates(symbols: list[str]) -> dict[str, date | None]:
+    """Each symbol's earliest top100 ranking date (None if never ranked).
+
+    The miss-sweep evaluates a symbol only from when it first APPEARS in the
+    top100 rankings, so a name that entered after the global sweep start (e.g. a
+    recent IPO) has no pre-listing history to repair — its coverage left boundary
+    is its own first-ranking date, not the global sweep start. Without this a
+    legitimate late entrant would be flagged uncovered (pre-listing sessions
+    counted as gaps) and the command would fail on every run (codex).
+    """
+    if not symbols:
+        return {}
+    with get_session() as db:
+        rows = db.execute(
+            select(
+                MoneyFlowSnapshot.symbol,
+                func.min(MoneyFlowSnapshot.data_date),
+            )
+            .where(
+                MoneyFlowSnapshot.symbol.in_(list(symbols)),
+                MoneyFlowSnapshot.ranking_type == "top100",
+            )
+            .group_by(MoneyFlowSnapshot.symbol)
+        ).all()
+    first: dict[str, date | None] = {s: None for s in symbols}
+    for sym, d in rows:
+        first[sym] = d.date() if hasattr(d, "date") else d
+    return first
+
+
 def _is_covered(
     present: set[date],
     window_start: date,
@@ -315,20 +345,31 @@ def select_symbols_needing_backfill(
     coverage check (``_is_covered``) scans the whole window for the longest run
     of missing usable sessions, catching the recent-sliver (long left run),
     stale-tail (long right run), and split-history (long interior run) cases.
+
+    Per-symbol left boundary: a symbol's effective coverage window starts at
+    ``max(window_start, first_top100_ranking_date)``. A late entrant (e.g. a
+    recent IPO) has no pre-listing history to repair and the sweep evaluates it
+    only from when it appears in rankings, so pre-listing sessions are NOT
+    counted as gaps. The right boundary stays at ``window_end`` (every ranked
+    symbol needs recent prices for forward returns).
     """
     usable = _symbol_usable_dates(list(symbols), window_start, window_end)
+    first_ranked = _symbol_first_ranking_dates(list(symbols))
     cal = calendar or _default_calendar()
-    need = [
-        s
-        for s in symbols
+    need = []
+    for s in symbols:
+        fr = first_ranked.get(s)
+        # Effective left edge: never earlier than the global window, never
+        # earlier than the symbol's first appearance in the rankings.
+        eff_start = window_start if fr is None else max(window_start, fr)
         if not _is_covered(
             usable.get(s, set()),
-            window_start,
+            eff_start,
             window_end,
             max_gap_sessions,
             cal,
-        )
-    ]
+        ):
+            need.append(s)
     return sorted(set(need))
 
 
