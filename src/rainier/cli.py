@@ -1866,6 +1866,7 @@ def db_backfill_prices(years, batch_size, dry_run):
     """
     import math
     import time
+    from datetime import timedelta
 
     import yfinance as yf
     from sqlalchemy import func, select
@@ -1891,6 +1892,11 @@ def db_backfill_prices(years, batch_size, dry_run):
     today = end.date()
     end_date = today if DEFAULT_CALENDAR.is_session(today) else \
         DEFAULT_CALENDAR.prev_session(today)
+    # yfinance `end` is EXCLUSIVE — to actually fetch the bar FOR `end_date`
+    # (e.g. a Saturday run that anchored to Friday must still pull Friday), pass
+    # the day after. Without this the most recent completed session is dropped
+    # and the gap tolerance could mask it (codex).
+    download_end = end_date + timedelta(days=1)
 
     # Two distinct windows, do NOT conflate them:
     #   cov_start (coverage gate) = sweep_start, the EXACT window the miss-sweep
@@ -1962,7 +1968,7 @@ def db_backfill_prices(years, batch_size, dry_run):
                     # capped below the sweep start: a re-selected symbol repairs
                     # its entire history.
                     start=str(download_start),
-                    end=str(end_date),
+                    end=str(download_end),  # exclusive → day after end_date
                     auto_adjust=True,
                     progress=False,
                     threads=True,

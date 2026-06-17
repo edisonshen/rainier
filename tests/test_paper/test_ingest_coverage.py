@@ -231,11 +231,12 @@ def test_split_history_is_refetched(pg_legacy_session):
 
 def test_late_entrant_covered_from_first_ranking_date(pg_legacy_session):
     # A symbol whose FIRST top100 ranking is well after the global window start
-    # (a recent IPO). It has dense bars from that date onward but none before —
-    # it must be COVERED, not flagged, because the sweep evaluates it only from
+    # (a recent IPO) and still ranked through today. Dense bars from that date
+    # onward, none before — COVERED, because the sweep evaluates it only from
     # when it appears in rankings (codex P1). Pre-listing sessions are not gaps.
     first_ranked = date(2025, 1, 6)
-    _seed_cohort(pg_legacy_session, ["IPONEW"], first_ranked)
+    _seed_cohort(pg_legacy_session, ["IPONEW"], WINDOW_END)  # still current
+    _seed_ranking(pg_legacy_session, "IPONEW", first_ranked)
     _seed_dense(pg_legacy_session, "IPONEW", first_ranked, WINDOW_END)
     pg_legacy_session.expire_all()
     need = select_symbols_needing_backfill(["IPONEW"], WINDOW_START, WINDOW_END)
@@ -243,16 +244,46 @@ def test_late_entrant_covered_from_first_ranking_date(pg_legacy_session):
 
 
 def test_late_entrant_with_gap_after_listing_is_refetched(pg_legacy_session):
-    # Same late entrant, but a multi-month hole AFTER its first ranking → still
-    # flagged (the per-symbol left boundary doesn't excuse gaps within its
-    # ranked life).
+    # A late entrant still ranked through today (first 2024-01-03, last = today's
+    # cohort) with a multi-month hole AFTER its first ranking → still flagged
+    # (the per-symbol boundaries don't excuse gaps WITHIN its ranked life).
     first_ranked = date(2024, 1, 3)
-    _seed_cohort(pg_legacy_session, ["IPOGAP"], first_ranked)
+    _seed_cohort(pg_legacy_session, ["IPOGAP"], WINDOW_END)  # still current
+    _seed_ranking(pg_legacy_session, "IPOGAP", first_ranked)
     _seed_dense(pg_legacy_session, "IPOGAP", first_ranked, date(2024, 3, 1))
     _seed_dense(pg_legacy_session, "IPOGAP", date(2025, 6, 2), WINDOW_END)
     pg_legacy_session.expire_all()
     need = select_symbols_needing_backfill(["IPOGAP"], WINDOW_START, WINDOW_END)
     assert "IPOGAP" in need
+
+
+def test_former_member_covered_through_last_ranking_date(pg_legacy_session):
+    # A former constituent that stopped trading after its last ranking date
+    # (delist/rename). It has dense bars from its first to its LAST ranking but
+    # none through today — it must be COVERED, because the sweep consumes it only
+    # through that last ranking date (codex P1). Requiring bars through today
+    # would flag it forever.
+    first_ranked = date(2022, 6, 1)
+    last_ranked = date(2024, 6, 3)
+    _seed_ranking(pg_legacy_session, "GONE", first_ranked)
+    _seed_ranking(pg_legacy_session, "GONE", last_ranked)
+    _seed_dense(pg_legacy_session, "GONE", first_ranked, last_ranked)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["GONE"], WINDOW_START, WINDOW_END)
+    assert "GONE" not in need
+
+
+def test_former_member_with_gap_before_last_ranking_is_refetched(pg_legacy_session):
+    # Same former member but a hole BEFORE its last ranking → still flagged.
+    first_ranked = date(2022, 6, 1)
+    last_ranked = date(2024, 6, 3)
+    _seed_ranking(pg_legacy_session, "GONEGAP", first_ranked)
+    _seed_ranking(pg_legacy_session, "GONEGAP", last_ranked)
+    _seed_dense(pg_legacy_session, "GONEGAP", first_ranked, date(2022, 9, 1))
+    _seed_dense(pg_legacy_session, "GONEGAP", date(2024, 1, 2), last_ranked)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["GONEGAP"], WINDOW_START, WINDOW_END)
+    assert "GONEGAP" in need
 
 
 def test_brand_new_symbol_with_no_bars_is_refetched(pg_legacy_session):

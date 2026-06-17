@@ -257,15 +257,22 @@ def _symbol_usable_dates(
     return result
 
 
-def _symbol_first_ranking_dates(symbols: list[str]) -> dict[str, date | None]:
-    """Each symbol's earliest top100 ranking date (None if never ranked).
+def _symbol_ranking_span(
+    symbols: list[str],
+) -> dict[str, tuple[date | None, date | None]]:
+    """Each symbol's (first, last) top100 ranking date; (None, None) if never.
 
-    The miss-sweep evaluates a symbol only from when it first APPEARS in the
-    top100 rankings, so a name that entered after the global sweep start (e.g. a
-    recent IPO) has no pre-listing history to repair — its coverage left boundary
-    is its own first-ranking date, not the global sweep start. Without this a
-    legitimate late entrant would be flagged uncovered (pre-listing sessions
-    counted as gaps) and the command would fail on every run (codex).
+    These bound the window the sweep ACTUALLY consumes for a symbol:
+      - first (left): the sweep evaluates a symbol only from when it first
+        APPEARS in top100, so a late entrant (recent IPO) has no pre-listing
+        history to repair — left boundary is its own first ranking, not the
+        global sweep start.
+      - last (right): a former constituent that stopped trading after its last
+        ranking (delist/rename/acquisition) is only consumed THROUGH that last
+        ranking date; requiring bars through today would flag it uncovered
+        forever — right boundary is its own last ranking, not the global today.
+    Both prevent the gate from failing every run on legitimate non-current names
+    (codex).
     """
     if not symbols:
         return {}
@@ -274,6 +281,7 @@ def _symbol_first_ranking_dates(symbols: list[str]) -> dict[str, date | None]:
             select(
                 MoneyFlowSnapshot.symbol,
                 func.min(MoneyFlowSnapshot.data_date),
+                func.max(MoneyFlowSnapshot.data_date),
             )
             .where(
                 MoneyFlowSnapshot.symbol.in_(list(symbols)),
@@ -281,10 +289,15 @@ def _symbol_first_ranking_dates(symbols: list[str]) -> dict[str, date | None]:
             )
             .group_by(MoneyFlowSnapshot.symbol)
         ).all()
-    first: dict[str, date | None] = {s: None for s in symbols}
-    for sym, d in rows:
-        first[sym] = d.date() if hasattr(d, "date") else d
-    return first
+    span: dict[str, tuple[date | None, date | None]] = {
+        s: (None, None) for s in symbols
+    }
+    for sym, lo, hi in rows:
+        span[sym] = (
+            lo.date() if hasattr(lo, "date") else lo,
+            hi.date() if hasattr(hi, "date") else hi,
+        )
+    return span
 
 
 def _is_covered(
@@ -355,26 +368,28 @@ def select_symbols_needing_backfill(
     of missing usable sessions, catching the recent-sliver (long left run),
     stale-tail (long right run), and split-history (long interior run) cases.
 
-    Per-symbol left boundary: a symbol's effective coverage window starts at
-    ``max(window_start, first_top100_ranking_date)``. A late entrant (e.g. a
-    recent IPO) has no pre-listing history to repair and the sweep evaluates it
-    only from when it appears in rankings, so pre-listing sessions are NOT
-    counted as gaps. The right boundary stays at ``window_end`` (every ranked
-    symbol needs recent prices for forward returns).
+    Per-symbol boundaries: a symbol's effective coverage window is
+    ``[max(window_start, first_ranking), min(window_end, last_ranking)]``. A late
+    entrant (IPO) has no pre-listing history to repair (left); a former member
+    that stopped trading after its last ranking (delist/rename) is only consumed
+    THROUGH that last ranking (right). The miss-sweep evaluates a symbol only
+    over the sessions it actually appears in rankings, so neither pre-listing nor
+    post-delisting sessions are counted as gaps — without this the gate would
+    fail every run on legitimate non-current names.
     """
     usable = _symbol_usable_dates(list(symbols), window_start, window_end)
-    first_ranked = _symbol_first_ranking_dates(list(symbols))
+    span = _symbol_ranking_span(list(symbols))
     cal = calendar or _default_calendar()
     need = []
     for s in symbols:
-        fr = first_ranked.get(s)
-        # Effective left edge: never earlier than the global window, never
-        # earlier than the symbol's first appearance in the rankings.
+        fr, lr = span.get(s, (None, None))
+        # Effective edges: clamp the global window to the symbol's ranked life.
         eff_start = window_start if fr is None else max(window_start, fr)
+        eff_end = window_end if lr is None else min(window_end, lr)
         if not _is_covered(
             usable.get(s, set()),
             eff_start,
-            window_end,
+            eff_end,
             max_gap_sessions,
             cal,
         ):
