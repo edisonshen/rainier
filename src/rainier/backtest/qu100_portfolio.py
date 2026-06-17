@@ -175,17 +175,21 @@ def load_rankings_from_db() -> pd.DataFrame:
 # masquerade as coverage.
 # ---------------------------------------------------------------------------
 
-# "at/near" a boundary must tolerate weekends/holidays — markets aren't open on a
-# given calendar date every year. A symbol is left/right covered if it has a
-# usable bar within this many calendar days of the boundary.
-COVERAGE_BOUNDARY_TOLERANCE_DAYS = 7
-
-# The largest interior hole (run of consecutive missing TRADING sessions) a
-# covered symbol may have. A real listing trades every session; a hole longer
-# than this means whole stretches of the sweep window have no price, so the
+# The largest hole (run of consecutive missing TRADING sessions) a covered
+# symbol may have ANYWHERE in the coverage window — at the left edge, the right
+# edge, OR the interior. A real listing trades every session; a run longer than
+# this means a whole stretch of the sweep window has no usable price, so the
 # symbol must re-fetch. Measured in trading sessions (not calendar days) so
-# weekends/holidays don't count as a hole. ~2 weeks of sessions.
-COVERAGE_MAX_INTERIOR_GAP_SESSIONS = 10
+# weekends/holidays don't count as a hole, and applied UNIFORMLY to the edges so
+# a stale tail or a late start can't slip through as "covered" the way a
+# separate calendar-day boundary tolerance let them (codex). ~2 weeks of
+# sessions.
+COVERAGE_MAX_GAP_SESSIONS = 10
+
+# Back-compat alias (kept so existing imports/tests keep resolving). Same value;
+# the edge and interior tolerances are now ONE uniform rule.
+COVERAGE_BOUNDARY_TOLERANCE_DAYS = COVERAGE_MAX_GAP_SESSIONS
+COVERAGE_MAX_INTERIOR_GAP_SESSIONS = COVERAGE_MAX_GAP_SESSIONS
 
 
 def sweep_window_start() -> date:
@@ -254,42 +258,39 @@ def _is_covered(
     present: set[date],
     window_start: date,
     window_end: date,
-    tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
-    max_interior_gap_sessions: int = COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
+    max_gap_sessions: int = COVERAGE_MAX_GAP_SESSIONS,
     calendar: "TradingCalendar | None" = None,
 ) -> bool:
-    """True iff ``present`` usable-bar dates fully cover the sweep window.
+    """True iff ``present`` usable-bar dates cover ``[window_start, window_end]``.
 
-    Covered requires ALL of:
-      - left edge: a usable bar at/before (window_start + tolerance)
-      - right edge: a usable bar at/after (window_end - tolerance)
-      - no interior hole: the longest run of consecutive MISSING trading
-        sessions strictly inside the covered span is <= max_interior_gap_sessions
+    ONE uniform rule: over EVERY trading session in the full coverage window,
+    the longest run of consecutive MISSING usable bars must be
+    <= ``max_gap_sessions``. The scan runs across the whole window (not just
+    ``min(present)..max(present)``), so a missing left edge, a missing right
+    edge, AND an interior hole are all measured the same way:
 
-    The interior-hole test is what catches a split history (early + late bars,
-    multi-year hole between) that a min/max span check would wrongly pass. The
-    gap is counted in trading sessions via the calendar so weekends/holidays are
-    not mistaken for a hole, and it is NOT a row-count threshold (a dense count
-    with one big hole still fails; a sparse-but-contiguous set still passes).
+      - recent sliver (no early bars)  -> long run at the LEFT  -> not covered
+      - stale tail   (no recent bars)  -> long run at the RIGHT -> not covered
+      - split history (mid-window hole)-> long run in the MIDDLE-> not covered
+      - dense/contiguous (≤ gap holes) -> covered
+
+    Counting in trading sessions (via the calendar) means weekends/holidays
+    never look like a hole, and a few-session boundary slack is naturally
+    tolerated (a late-by-3-sessions start is a run of 3 ≤ gap). It is NOT a
+    row-count threshold: a dense set with one big hole still fails; a
+    sparse-but-contiguous set still passes.
     """
-    if not present:
-        return False
     cal = calendar or _default_calendar()
-    left_ok = min(present) <= window_start + timedelta(days=tolerance_days)
-    right_ok = max(present) >= window_end - timedelta(days=tolerance_days)
-    if not (left_ok and right_ok):
-        return False
-    # Interior-hole scan over the trading sessions the symbol is expected to have:
-    # from its first usable bar to its last. A run of consecutive sessions with no
-    # usable bar longer than the tolerance means a real stretch is missing.
-    sessions = cal.sessions_between(min(present), max(present))
+    sessions = cal.sessions_between(window_start, window_end)
+    if not sessions:
+        return True  # degenerate window (no trading days) — nothing to cover
     run = 0
     for s in sessions:
         if s in present:
             run = 0
         else:
             run += 1
-            if run > max_interior_gap_sessions:
+            if run > max_gap_sessions:
                 return False
     return True
 
@@ -304,17 +305,16 @@ def select_symbols_needing_backfill(
     symbols: list[str],
     window_start: date,
     window_end: date,
-    tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
-    max_interior_gap_sessions: int = COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
+    max_gap_sessions: int = COVERAGE_MAX_GAP_SESSIONS,
     calendar: "TradingCalendar | None" = None,
 ) -> list[str]:
     """Symbols not fully covering the sweep window (sorted, deduped).
 
     A bare row-count threshold is deliberately NOT used: it can mark a
     split-history or boundary-missing symbol "covered" and re-open the gap. The
-    coverage check (``_is_covered``) keys on both edges AND the largest interior
-    hole, catching the recent-sliver (no left edge), stale-tail (no right edge),
-    and split-history (interior hole) cases.
+    coverage check (``_is_covered``) scans the whole window for the longest run
+    of missing usable sessions, catching the recent-sliver (long left run),
+    stale-tail (long right run), and split-history (long interior run) cases.
     """
     usable = _symbol_usable_dates(list(symbols), window_start, window_end)
     cal = calendar or _default_calendar()
@@ -325,8 +325,7 @@ def select_symbols_needing_backfill(
             usable.get(s, set()),
             window_start,
             window_end,
-            tolerance_days,
-            max_interior_gap_sessions,
+            max_gap_sessions,
             cal,
         )
     ]
@@ -337,16 +336,17 @@ def assert_cohort_coverage(
     window_start: date,
     window_end: date,
     as_of: date,
-    tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
-    max_interior_gap_sessions: int = COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
+    max_gap_sessions: int = COVERAGE_MAX_GAP_SESSIONS,
     calendar: "TradingCalendar | None" = None,
 ) -> list[str]:
     """Current-cohort symbols still NOT covered over the sweep window (sorted).
 
     Scope is the CURRENT cohort (``get_current_qu100_cohort``, ranking_type
     'top100') at ``as_of`` — former constituents outside today's top-100 are out
-    of scope (the sweep evaluates the current cohort). Empty list ⇒ 100%
-    coverage. Callers surface the returned list non-silently (echo/fail).
+    of scope (the sweep evaluates the current cohort). ``window_start`` must be
+    the SWEEP start (what the sweep consumes), NOT a --years-widened fetch start,
+    or a post-start IPO could never be "covered". Empty list ⇒ 100% coverage.
+    Callers surface the returned list non-silently (echo/fail).
     """
     from rainier.paper.ingest import get_current_qu100_cohort
 
@@ -354,8 +354,7 @@ def assert_cohort_coverage(
     if not cohort:
         return []
     return select_symbols_needing_backfill(
-        cohort, window_start, window_end, tolerance_days,
-        max_interior_gap_sessions, calendar,
+        cohort, window_start, window_end, max_gap_sessions, calendar,
     )
 
 

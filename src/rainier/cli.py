@@ -1882,13 +1882,19 @@ def db_backfill_prices(years, batch_size, dry_run):
     end = datetime.now()
     end_date = end.date()
 
-    # The download window must cover what the sweep actually consumes: the
-    # earliest QU100 ranking date. `--years` is only a FLOOR — it can widen the
-    # window but must never cap the repair below the sweep start (the bug that let
-    # a 2026 sliver mask 2022-2025 absence under `--years 1`).
+    # Two distinct windows, do NOT conflate them:
+    #   cov_start (coverage gate) = sweep_start, the EXACT window the miss-sweep
+    #     consumes. Selection + the post-run assertion key on THIS — a symbol is
+    #     judged covered only against what the sweep reads.
+    #   download_start (fetch) = min(sweep_start, years_floor). `--years` is a
+    #     FLOOR that may WIDEN the download earlier (extra history is harmless),
+    #     but the coverage gate must NOT require history older than the sweep —
+    #     else a current constituent that IPOed after years_floor could never be
+    #     "covered" and the gate would raise on every run (codex P1).
     sweep_start = sweep_window_start()
+    cov_start = sweep_start
     years_floor = date(end.year - years, end.month, end.day)
-    window_start = min(sweep_start, years_floor)
+    download_start = min(sweep_start, years_floor)
 
     with get_session() as session:
         qu_symbols = sorted(
@@ -1897,16 +1903,17 @@ def db_backfill_prices(years, batch_size, dry_run):
             ).scalars().all()
         )
 
-    # Coverage (span at BOTH boundaries), NOT presence — qu100_portfolio.
-    missing = select_symbols_needing_backfill(qu_symbols, window_start, end_date)
+    # Coverage over the SWEEP window (cov_start..today), NOT the widened fetch
+    # window — qu100_portfolio.
+    missing = select_symbols_needing_backfill(qu_symbols, cov_start, end_date)
     has_prices = sorted(set(qu_symbols) - set(missing))
 
     click.echo(f"QU100 symbols: {len(qu_symbols)}")
-    click.echo(f"Covered (span both boundaries): {len(has_prices)}")
+    click.echo(f"Covered (sweep window {cov_start}..{end_date}): {len(has_prices)}")
     click.echo(f"Needing backfill (incomplete/absent): {len(missing)}")
     click.echo(
-        f"Date range: {window_start} to {end_date} "
-        f"(sweep start {sweep_start}, --years floor {years_floor})"
+        f"Fetch range: {download_start} to {end_date} "
+        f"(sweep/coverage start {sweep_start}, --years floor {years_floor})"
     )
 
     if dry_run:
@@ -1934,9 +1941,10 @@ def db_backfill_prices(years, batch_size, dry_run):
             try:
                 yf_df = yf.download(
                     " ".join(batch),
-                    # Full sweep window, NOT the --years window: a re-selected
-                    # symbol must repair its entire history.
-                    start=str(window_start),
+                    # Full (possibly --years-widened) download window, never
+                    # capped below the sweep start: a re-selected symbol repairs
+                    # its entire history.
+                    start=str(download_start),
                     end=str(end_date),
                     auto_adjust=True,
                     progress=False,
@@ -1969,7 +1977,7 @@ def db_backfill_prices(years, batch_size, dry_run):
     # blocker: if a cohort symbol stays uncovered after it WAS requested (a
     # genuine upstream omission or a post-start IPO with no earlier history),
     # STOP and raise so the operator examines it — never silently lower the bar.
-    still_missing = assert_cohort_coverage(window_start, end_date, as_of=end_date)
+    still_missing = assert_cohort_coverage(cov_start, end_date, as_of=end_date)
     if still_missing:
         raise click.ClickException(
             f"{len(still_missing)} current-cohort symbol(s) still lack full "

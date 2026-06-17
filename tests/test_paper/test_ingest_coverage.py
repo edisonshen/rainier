@@ -18,15 +18,14 @@ legacy `core.database` singleton the backfill uses).
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import pandas as pd
 import pytest
 from sqlalchemy import select, text
 
 from rainier.backtest.qu100_portfolio import (
-    COVERAGE_BOUNDARY_TOLERANCE_DAYS,
-    COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
+    COVERAGE_MAX_GAP_SESSIONS,
     _is_covered,
     _yf_to_long,
     assert_cohort_coverage,
@@ -51,7 +50,7 @@ WINDOW_END = date(2026, 6, 12)
 # crux of the fix; pin every branch independent of Postgres availability.
 # ---------------------------------------------------------------------------
 
-TOL = COVERAGE_BOUNDARY_TOLERANCE_DAYS
+GAP = COVERAGE_MAX_GAP_SESSIONS
 
 
 def _all_sessions(start: date, end: date) -> set[date]:
@@ -90,26 +89,38 @@ def test_is_covered_split_history_false():
 
 
 def test_is_covered_small_interior_gap_true():
-    # A short gap (<= max interior tolerance) is fine — holidays/data hiccups.
+    # A short gap (<= max gap) is fine — holidays/data hiccups.
     present = _all_sessions(WINDOW_START, WINDOW_END)
     # Drop a handful of consecutive sessions in the middle (within tolerance).
     mid = DEFAULT_CALENDAR.sessions_between(date(2024, 1, 8), date(2024, 1, 12))
-    present -= set(mid)  # 5 sessions ≤ COVERAGE_MAX_INTERIOR_GAP_SESSIONS (10)
-    assert COVERAGE_MAX_INTERIOR_GAP_SESSIONS >= 5
+    present -= set(mid)  # 5 sessions ≤ COVERAGE_MAX_GAP_SESSIONS (10)
+    assert GAP >= 5
     assert _is_covered(present, WINDOW_START, WINDOW_END)
 
 
-def test_is_covered_within_tolerance_true():
-    # Edges a few days inside the window but within boundary tolerance → covered.
-    present = _all_sessions(
-        WINDOW_START + timedelta(days=TOL), WINDOW_END - timedelta(days=TOL)
-    )
+def test_is_covered_small_boundary_slack_true():
+    # Edges a few SESSIONS inside the window (run <= max gap at the edge) →
+    # covered. The edge tolerance is the SAME uniform gap rule as the interior.
+    left = DEFAULT_CALENDAR.add_sessions(WINDOW_START, GAP - 1)
+    right = DEFAULT_CALENDAR.sub_sessions(WINDOW_END, GAP - 1)
+    present = _all_sessions(left, right)
     assert _is_covered(present, WINDOW_START, WINDOW_END)
 
 
-def test_is_covered_just_outside_tolerance_false():
-    # Left edge starts just past tolerance → not left-covered.
-    present = _all_sessions(WINDOW_START + timedelta(days=TOL + 5), WINDOW_END)
+def test_is_covered_week_long_boundary_gap_false():
+    # A run LONGER than max gap at the LEFT edge → not covered. The old
+    # calendar-day boundary tolerance let a ~full-week edge gap slip through as
+    # covered while the interior scan ignored it (codex P2); the uniform
+    # full-window scan now catches it.
+    left = DEFAULT_CALENDAR.add_sessions(WINDOW_START, GAP + 1)
+    present = _all_sessions(left, WINDOW_END)
+    assert not _is_covered(present, WINDOW_START, WINDOW_END)
+
+
+def test_is_covered_stale_tail_within_gap_window_false():
+    # Symmetric to the above but at the RIGHT edge.
+    right = DEFAULT_CALENDAR.sub_sessions(WINDOW_END, GAP + 1)
+    present = _all_sessions(WINDOW_START, right)
     assert not _is_covered(present, WINDOW_START, WINDOW_END)
 
 
@@ -521,3 +532,53 @@ def test_backfill_gate_fails_when_cohort_incomplete(pg_legacy_session, monkeypat
     result = runner.invoke(cli_mod.cli, ["db", "backfill-prices", "--years", "1"])
     assert result.exit_code != 0, result.output
     assert "DROP" in result.output
+
+
+def test_backfill_gate_anchored_at_sweep_start_not_years_floor(
+    pg_legacy_session, monkeypatch
+):
+    """With a large `--years` floor (default 5) the FETCH window widens earlier
+    than the sweep, but the coverage GATE must stay anchored at the sweep start —
+    else a current constituent dense only from the sweep start onward (e.g. one
+    that IPOed after the years_floor) could never be 'covered' and the command
+    would raise every run (codex P1)."""
+    from click.testing import CliRunner
+
+    from rainier import cli as cli_mod
+
+    sweep_start = date(2022, 5, 25)
+    today = date(2026, 6, 12)
+    _seed_cohort(pg_legacy_session, ["IPOX"], today)
+    pg_legacy_session.execute(
+        text(
+            "INSERT INTO money_flow_snapshots "
+            "(captured_at, capture_session, data_date, ranking_type, symbol, rank) "
+            "VALUES (:cap, 'close', :dd, 'top100', 'IPOX', 1)"
+        ),
+        {"cap": _instant(sweep_start), "dd": sweep_start},
+    )
+    pg_legacy_session.commit()
+
+    captured = {}
+
+    def _fake_download(tickers, start=None, end=None, **kwargs):
+        captured["start"] = start
+        # yfinance only has history from the sweep start onward (no earlier data
+        # exists — IPOed near then). Dense from sweep_start → covered vs the
+        # sweep window even though the fetch asked for earlier history.
+        return _build_dense_yf_df(tickers.split(), sweep_start, today)
+
+    import yfinance as yf
+
+    monkeypatch.setattr(yf, "download", _fake_download)
+
+    runner = CliRunner()
+    # --years 5 → years_floor (≈5y before the real today) is earlier than the
+    # sweep start, so the fetch window widens earlier than the sweep.
+    result = runner.invoke(cli_mod.cli, ["db", "backfill-prices", "--years", "5"])
+    # Fetch window widened earlier than the sweep start (download start < sweep).
+    assert captured.get("start") is not None
+    assert captured["start"] < str(sweep_start)
+    # But the gate is anchored at the sweep start → IPOX is covered → exit 0.
+    assert result.exit_code == 0, result.output
+    assert "100% of the current cohort is covered" in result.output
