@@ -372,10 +372,13 @@ def run_pattern_audit(
     corpus_dir: Path | None = None,
     min_history_bars: int | None = None,
     window_days: int | None = DEFAULT_WINDOW_DAYS,
-) -> tuple[pd.DataFrame, pd.DataFrame, Path]:
+) -> tuple[pd.DataFrame, pd.DataFrame, Path, str]:
     """Build the corpus from `stock_prices`, write Parquet, aggregate.
 
-    Returns ``(corpus, aggregate_frame, corpus_path)``. Reads the legacy local
+    Returns ``(corpus, aggregate_frame, corpus_path, window_label)``. The
+    ``window_label`` reports the REQUESTED scan range (window_start..latest),
+    not the first-emission span, so a report whose early window is
+    emission-free still states the true cutoff. Reads the legacy local
     TimescaleDB via `pattern_replay.load_prices`; the regime tag uses the live
     `compute_market_regime` (SPY vs 200-SMA). Deterministic for a fixed DB
     snapshot (explicit ORDER BY symbol, date in the price query).
@@ -408,6 +411,7 @@ def run_pattern_audit(
         # Anchor the window to the latest stored bar (not wall-clock) so a
         # re-run over a fixed DB snapshot is byte-deterministic.
         window_start: date | None = None
+        latest: date | None = None
         load_start: _pd.Timestamp | None = None
         if window_days is not None:
             max_ts = session.execute(
@@ -447,7 +451,19 @@ def run_pattern_audit(
     )
     agg = aggregate_to_frame(corpus)
     path = write_corpus(corpus, corpus_dir)
-    return corpus, agg, path
+
+    # Honest label from the REQUESTED scan range, independent of where the first
+    # emission landed (a left-edge with no actionable pattern must not shrink
+    # the reported window).
+    if window_days is None:
+        window_label = "stock_prices (all history)"
+    elif window_start is not None and latest is not None:
+        window_label = (
+            f"stock_prices {window_start}..{latest} ({window_days}d trailing)"
+        )
+    else:
+        window_label = "stock_prices (no data)"
+    return corpus, agg, path, window_label
 
 
 def _fmt(x: float | None, pct: bool = False) -> str:

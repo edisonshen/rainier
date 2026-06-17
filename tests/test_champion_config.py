@@ -98,6 +98,17 @@ def test_load_champion_unknown_field_raises(tmp_path):
         load_champion_overrides(tmp_path)
 
 
+def test_load_champion_unknown_pattern_weight_key_raises(tmp_path):
+    """A misspelled NESTED pattern_weights key (e.g. `bulll_flag`) fails loudly
+    rather than being kept as a dead key while the real pattern stays at its old
+    weight. Guards codex iter-6 P1."""
+    import pytest
+
+    _write_champion(tmp_path, {"pattern_weights": {"bulll_flag": 0.9}})
+    with pytest.raises(ValueError, match="unknown pattern_weights key"):
+        load_champion_overrides(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # deep-merge precedence: champion wins; unspecified fields fall through to
 # settings.yaml (NOT to code defaults); pattern_weights deep-merges.

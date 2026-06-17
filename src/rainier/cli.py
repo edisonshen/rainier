@@ -744,22 +744,17 @@ def pattern_audit(ctx, symbols, report_path, window_days, window_label):
     win_days = window_days if window_days and window_days > 0 else None
 
     click.echo("Running QU100 pattern forward-return audit over stock_prices...")
-    corpus, agg, corpus_file = run_pattern_audit(
+    corpus, agg, corpus_file, derived_label = run_pattern_audit(
         config=settings.stock_screener, symbols=sym_list, window_days=win_days
     )
     click.echo(f"Corpus: {len(corpus)} emissions → {corpus_file}")
 
-    # Derive an HONEST window label from the actual as-of date range, so the
-    # report header can't claim "1yr" while spanning all history.
-    if window_label is None:
-        if not corpus.empty:
-            lo, hi = corpus["as_of"].min(), corpus["as_of"].max()
-            span = "all history" if win_days is None else f"{win_days}d trailing"
-            window_label = f"stock_prices {lo}..{hi} ({span})"
-        else:
-            window_label = "stock_prices (no emissions)"
+    # Use the REQUESTED-window label from run_pattern_audit (states the true
+    # scan cutoff even when the early window is emission-free); --window-label
+    # only overrides it when given explicitly.
+    label = window_label if window_label is not None else derived_label
 
-    md = render_report_markdown(corpus, agg, window_label=window_label)
+    md = render_report_markdown(corpus, agg, window_label=label)
     out = Path(report_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md)

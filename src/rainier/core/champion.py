@@ -95,6 +95,19 @@ def load_champion_overrides(model_dir: Path | None = None) -> dict[str, Any]:
             f"champion.yaml at {path} has unknown StockScreenerConfig "
             f"field(s): {', '.join(unknown)} (typo? check against settings.yaml)"
         )
+    # Validate NESTED pattern_weights keys too: a misspelled `bulll_flag` would
+    # otherwise be kept as a dead key while the real pattern stays at its old
+    # weight — the same silent no-op the top-level check guards against.
+    pw = overrides.get("pattern_weights")
+    if isinstance(pw, dict):
+        known_patterns = set(StockScreenerConfig().pattern_weights)
+        unknown_pw = sorted(set(pw) - known_patterns)
+        if unknown_pw:
+            raise ValueError(
+                f"champion.yaml at {path} has unknown pattern_weights "
+                f"key(s): {', '.join(unknown_pw)} (typo? check against "
+                f"settings.yaml:stock_screener.pattern_weights)"
+            )
     return overrides
 
 

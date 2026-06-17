@@ -19,7 +19,7 @@ How to read the table:
 
 ## Provenance
 
-- Window: stock_prices 2025-08-20..2026-06-16 (365d trailing)
+- Window: stock_prices 2025-06-17..2026-06-16 (365d trailing)
 - Total emissions: 231366
 - Universe = symbols scraped into `money_flow_snapshots` over history (fixed-universe-over-history; survivorship disclosed).
 - Regime = SPY vs 200-day SMA on the as-of day (bull / bear / unknown). `unknown` = fewer than 200 SPY bars at/before the as-of day; reported, never dropped.

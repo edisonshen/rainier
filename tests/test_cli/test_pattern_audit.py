@@ -42,9 +42,10 @@ def test_pattern_audit_writes_report(tmp_path):
     agg = aggregate_to_frame(corpus)
     report = tmp_path / "report.md"
 
+    label = "stock_prices 2025-06-17..2026-06-16 (365d trailing)"
     with patch(
         "rainier.paper.pattern_audit.run_pattern_audit",
-        return_value=(corpus, agg, tmp_path / "corpus.parquet"),
+        return_value=(corpus, agg, tmp_path / "corpus.parquet", label),
     ) as mock_run:
         runner = CliRunner()
         result = runner.invoke(
@@ -59,3 +60,5 @@ def test_pattern_audit_writes_report(tmp_path):
     body = report.read_text()
     assert "false_breakdown" in body
     assert "pattern forward-return audit" in body.lower()
+    # the REQUESTED-window label (not emission span) reaches the report
+    assert label in body
