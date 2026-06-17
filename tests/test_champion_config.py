@@ -71,6 +71,23 @@ def test_load_champion_missing_file_returns_empty(tmp_path):
     assert load_champion_overrides(tmp_path) == {}
 
 
+def test_load_champion_empty_file_returns_empty(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "champion.yaml").write_text("")
+    assert load_champion_overrides(tmp_path) == {}
+
+
+def test_load_champion_malformed_raises(tmp_path):
+    """A present-but-non-mapping champion.yaml (botched promotion) must fail
+    loudly, not silently boot on stale settings.yaml. Guards codex iter-3 P2."""
+    import pytest
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "champion.yaml").write_text("- not\n- a\n- mapping\n")
+    with pytest.raises(ValueError, match="must be a YAML mapping"):
+        load_champion_overrides(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # deep-merge precedence: champion wins; unspecified fields fall through to
 # settings.yaml (NOT to code defaults); pattern_weights deep-merges.

@@ -63,14 +63,24 @@ def load_champion_overrides(model_dir: Path | None = None) -> dict[str, Any]:
     back to settings.yaml + code defaults, so champion.yaml is strictly
     optional. ``pattern_weights`` is preserved as a nested dict (the one nested
     config field).
+
+    A PRESENT-but-malformed file (a list, scalar, or other non-mapping YAML)
+    raises ``ValueError`` rather than silently falling back: this file is the
+    live screener model, so a botched promotion must fail loudly, not boot the
+    process on stale settings.yaml thresholds as a hard-to-detect no-op.
     """
     path = champion_path(model_dir)
     if not path.exists():
         return {}
     with open(path) as f:
-        raw = yaml.safe_load(f) or {}
-    if not isinstance(raw, dict):
+        raw = yaml.safe_load(f)
+    if raw is None:  # empty file → optional, fall back to settings.yaml
         return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"champion.yaml at {path} must be a YAML mapping of "
+            f"StockScreenerConfig fields, got {type(raw).__name__}"
+        )
     return {k: v for k, v in raw.items() if k not in METADATA_KEYS}
 
 
