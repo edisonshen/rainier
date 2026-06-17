@@ -480,6 +480,24 @@ def run_pattern_audit(
 
         prices = load_prices(session, syms, start_date=load_start)
 
+    # Re-anchor to the latest USABLE bar: `max(StockPrice.date)` can point at a
+    # partial-backfill row that load_prices just dropped, which would make the
+    # reported window_start..latest wrong and silently shift the real left edge.
+    # The SQL load already used the (possibly larger) raw max, so re-deriving
+    # from the cleaned frames only tightens the reported range, never loses data.
+    if window_days is not None and prices:
+        usable_max: date | None = None
+        for df in prices.values():
+            if df.empty:
+                continue
+            last_ts = df.index[-1]
+            last_date = last_ts.date() if hasattr(last_ts, "date") else last_ts
+            if usable_max is None or last_date > usable_max:
+                usable_max = last_date
+        if usable_max is not None:
+            latest = usable_max
+            window_start = latest - timedelta(days=window_days - 1)
+
     corpus = build_corpus(
         prices,
         config=config,

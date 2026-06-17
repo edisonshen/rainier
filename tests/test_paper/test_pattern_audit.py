@@ -285,6 +285,58 @@ def test_run_pattern_audit_window_days_is_exactly_n_dates(monkeypatch, tmp_path)
     assert captured["window_start"] == latest - _dt.timedelta(days=364)
 
 
+def test_run_pattern_audit_reanchors_to_usable_max(monkeypatch, tmp_path):
+    """When the raw max(date) points at a partial bar that load_prices drops,
+    the window re-anchors to the latest USABLE bar (the cleaned frame's max),
+    not the raw max. Guards codex iter-10 P2."""
+    import datetime as _dt
+
+    import rainier.paper.pattern_audit as pa
+
+    captured = {}
+
+    def fake_build_corpus(prices, *, config, min_history_bars, window_start, **kw):
+        captured["window_start"] = window_start
+        return pd.DataFrame(columns=list(pa.CORPUS_COLUMNS))
+
+    raw_max = _dt.date(2026, 6, 16)       # raw max (a partial bar, dropped)
+    usable_max = _dt.date(2026, 6, 12)    # latest USABLE bar after cleaning
+
+    class _Res:
+        def scalar(self):
+            return _dt.datetime(raw_max.year, raw_max.month, raw_max.day)
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, stmt):
+            return _Res()
+
+    # load_prices returns a frame whose last usable date is usable_max.
+    cleaned = _make_ohlcv([100.0] * 5)
+    cleaned.index = pd.date_range(end=usable_max, periods=5, freq="D", tz="UTC")
+
+    monkeypatch.setattr(pa, "build_corpus", fake_build_corpus)
+    monkeypatch.setattr("rainier.core.database.get_session", lambda: _FakeSession())
+    monkeypatch.setattr(
+        "rainier.paper.pattern_replay.load_prices",
+        lambda s, syms, start_date=None: {"AAA": cleaned},
+    )
+
+    _, _, _, label = pa.run_pattern_audit(
+        config=StockScreenerConfig(), symbols=["AAA"],
+        corpus_dir=tmp_path, window_days=365,
+    )
+    # window_start re-anchored off usable_max, not raw_max
+    assert captured["window_start"] == usable_max - _dt.timedelta(days=364)
+    assert str(usable_max) in label
+    assert str(raw_max) not in label
+
+
 def test_build_corpus_window_start_bounds_as_of(monkeypatch):
     """window_start bounds the AS-OF date: emissions before the cutoff are
     dropped, earlier bars still loaded for lookback/fwd edges. Guards codex

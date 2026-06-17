@@ -772,7 +772,9 @@ def pattern_audit(ctx, symbols, report_path, window_days, window_label):
     md = render_report_markdown(corpus, agg, window_label=label)
     out = Path(report_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(md)
+    # Explicit UTF-8: the report carries non-ASCII glyphs (⚠ → —); the locale
+    # default would UnicodeEncodeError on cp1252 / non-UTF-8 CI shells.
+    out.write_text(md, encoding="utf-8")
     click.echo(f"Report → {out}")
 
 

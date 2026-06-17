@@ -59,8 +59,11 @@ def test_pattern_audit_writes_report(tmp_path):
     # a scoped run (--symbols) writes a distinct corpus file, not the canonical
     assert mock_run.call_args.kwargs["corpus_filename"] == "corpus-scoped.parquet"
     assert report.exists()
-    body = report.read_text()
+    # Report is UTF-8 (carries the ⚠ thin-cell glyph); explicit-encoding read
+    # must succeed and find the non-ASCII content. Guards codex iter-10 P2.
+    body = report.read_text(encoding="utf-8")
     assert "false_breakdown" in body
     assert "pattern forward-return audit" in body.lower()
+    assert "⚠" in body  # non-ASCII glyph written + read cleanly
     # the REQUESTED-window label (not emission span) reaches the report
     assert label in body
