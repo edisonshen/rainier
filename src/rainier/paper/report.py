@@ -292,7 +292,12 @@ def send_daily_paper_report(payload: dict[str, Any], discord_config: Any) -> boo
     webhook configured (H6): logs + returns False, never raises."""
     text = render_payload(payload)
     try:
-        from rainier.alerts.discord import send_daily_report
+        # _http_status extracts the HTTP code (404/401/429) WITHOUT the URL;
+        # the webhook URL carries a secret token, so the except below logs
+        # status + exception class only — never str(exc) / log.exception,
+        # which would persist the token into data/qu-scrape.log (P1 leak,
+        # same class fixed in 96fbd13 + the weekly sweep).
+        from rainier.alerts.discord import _http_status, send_daily_report
 
         webhook = getattr(discord_config, "webhook_url", None) if discord_config else None
         if not discord_config or not getattr(discord_config, "enabled", False) or not webhook:
@@ -300,6 +305,10 @@ def send_daily_paper_report(payload: dict[str, Any], discord_config: Any) -> boo
             return False
         send_daily_report(text, discord_config)
         return True
-    except Exception:
-        log.exception("paper_report_discord_failed")
+    except Exception as exc:
+        log.error(
+            "paper_report_discord_failed status=%s error_type=%s",
+            _http_status(exc),
+            type(exc).__name__,
+        )
         return False
