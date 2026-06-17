@@ -359,14 +359,23 @@ def aggregate_to_frame(corpus: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def corpus_path(corpus_dir: Path | None = None) -> Path:
+def corpus_path(corpus_dir: Path | None = None, filename: str | None = None) -> Path:
     base = corpus_dir if corpus_dir is not None else DEFAULT_CORPUS_DIR
-    return base / CORPUS_FILENAME
+    return base / (filename or CORPUS_FILENAME)
 
 
-def write_corpus(corpus: pd.DataFrame, corpus_dir: Path | None = None) -> Path:
-    """Write the corpus to the regenerable Parquet cache."""
-    path = corpus_path(corpus_dir)
+def write_corpus(
+    corpus: pd.DataFrame,
+    corpus_dir: Path | None = None,
+    filename: str | None = None,
+) -> Path:
+    """Write the corpus to the regenerable Parquet cache.
+
+    ``filename`` lets a SCOPED run (filtered symbols / shortened window) write
+    a distinct file so it does not silently clobber the canonical full-universe
+    ``corpus.parquet`` cache that later consumers read.
+    """
+    path = corpus_path(corpus_dir, filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     corpus.to_parquet(path, index=False)
     return path
@@ -399,6 +408,7 @@ def run_pattern_audit(
     corpus_dir: Path | None = None,
     min_history_bars: int | None = None,
     window_days: int | None = DEFAULT_WINDOW_DAYS,
+    corpus_filename: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Path, str]:
     """Build the corpus from `stock_prices`, write Parquet, aggregate.
 
@@ -477,7 +487,7 @@ def run_pattern_audit(
         window_start=window_start,
     )
     agg = aggregate_to_frame(corpus)
-    path = write_corpus(corpus, corpus_dir)
+    path = write_corpus(corpus, corpus_dir, filename=corpus_filename)
 
     # Honest label from the REQUESTED scan range, independent of where the first
     # emission landed (a left-edge with no actionable pattern must not shrink

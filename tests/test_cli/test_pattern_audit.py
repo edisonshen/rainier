@@ -56,6 +56,8 @@ def test_pattern_audit_writes_report(tmp_path):
     mock_run.assert_called_once()
     # symbols parsed into a list and passed through
     assert mock_run.call_args.kwargs["symbols"] == ["AAA", "BBB"]
+    # a scoped run (--symbols) writes a distinct corpus file, not the canonical
+    assert mock_run.call_args.kwargs["corpus_filename"] == "corpus-scoped.parquet"
     assert report.exists()
     body = report.read_text()
     assert "false_breakdown" in body

@@ -743,9 +743,16 @@ def pattern_audit(ctx, symbols, report_path, window_days, window_label):
     # 0 means "all history"; map to None so the corpus spans every date.
     win_days = window_days if window_days and window_days > 0 else None
 
+    # A SCOPED run (filtered symbols or a non-default window) writes a distinct
+    # corpus file so it doesn't silently clobber the canonical full-universe
+    # cache that later consumers read.
+    scoped = sym_list is not None or window_days != 365
+    corpus_filename = "corpus-scoped.parquet" if scoped else None
+
     click.echo("Running QU100 pattern forward-return audit over stock_prices...")
     corpus, agg, corpus_file, derived_label = run_pattern_audit(
-        config=settings.stock_screener, symbols=sym_list, window_days=win_days
+        config=settings.stock_screener, symbols=sym_list, window_days=win_days,
+        corpus_filename=corpus_filename,
     )
     click.echo(f"Corpus: {len(corpus)} emissions → {corpus_file}")
 

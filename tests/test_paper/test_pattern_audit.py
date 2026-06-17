@@ -440,6 +440,24 @@ def test_write_corpus_roundtrips(tmp_path):
     assert back.iloc[0]["pattern_type"] == "false_breakdown"
 
 
+def test_write_corpus_scoped_filename_does_not_clobber_canonical(tmp_path):
+    """A scoped run writes a distinct file, leaving the canonical corpus.parquet
+    untouched. Guards codex iter-8 P3."""
+    canonical = pd.DataFrame([
+        _corpus_row("false_breakdown", "bullish", "bull", fwd_return_5d=0.04),
+    ])
+    write_corpus(canonical, corpus_dir=tmp_path)  # default name
+    scoped = pd.DataFrame([
+        _corpus_row("bull_flag", "bullish", "bear", fwd_return_5d=-0.01),
+    ])
+    out = write_corpus(scoped, corpus_dir=tmp_path, filename="corpus-scoped.parquet")
+    assert out == corpus_path(tmp_path, "corpus-scoped.parquet")
+    assert out != corpus_path(tmp_path)
+    # canonical file is intact, not overwritten by the scoped slice
+    canon_back = pd.read_parquet(corpus_path(tmp_path))
+    assert canon_back.iloc[0]["pattern_type"] == "false_breakdown"
+
+
 def test_render_report_includes_unknown_and_thin_flag():
     corpus = pd.DataFrame([
         _corpus_row("false_breakdown", "bullish", "bull", fwd_return_5d=0.04),
