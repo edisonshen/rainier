@@ -317,12 +317,14 @@ def test_brand_new_symbol_with_no_bars_is_refetched(pg_legacy_session):
     assert "BRANDNEW" in need
 
 
-def test_weekend_only_ranking_with_no_bars_is_refetched(pg_legacy_session):
-    # The scraper stamps data_date = captured_at.date(), so a brand-new symbol
-    # first seen on a Saturday has a non-session ranking date. Without the
-    # forward tail, eff_start == eff_end on a weekend → empty sessions → a vacuous
-    # "covered" pass even with zero bars (codex P1). The forward tail pushes
-    # eff_end onto real sessions, so a no-bars weekend entrant is flagged.
+def test_weekend_ranking_with_completed_sessions_no_bars_is_refetched(
+    pg_legacy_session,
+):
+    # A symbol first ranked on a Saturday data_date (scraper stamps data_date =
+    # captured_at.date()) but whose window_end is far in the future, so its
+    # effective window DOES contain many completed sessions. With zero bars it is
+    # flagged (real completed sessions exist and have no price). The forward tail
+    # plus a future window_end make the window non-degenerate.
     saturday = date(2024, 6, 8)  # 2024-06-08 is a Saturday
     assert saturday.weekday() == 5
     _seed_cohort(pg_legacy_session, ["WKND"], saturday)
@@ -332,18 +334,19 @@ def test_weekend_only_ranking_with_no_bars_is_refetched(pg_legacy_session):
     assert "WKND" in need
 
 
-def test_reversed_window_no_bars_is_refetched(pg_legacy_session):
-    # A symbol first ranked on a weekend data_date that lands AFTER the
-    # last-completed-session window_end → eff_start > eff_end (reversed window).
-    # With zero bars it must still be flagged (it needs its entry bar), NOT a
-    # vacuous "covered" pass (codex P1).
-    saturday = date(2024, 6, 8)  # Saturday
+def test_same_day_entrant_after_last_completed_session_is_covered(pg_legacy_session):
+    # A symbol first ranked AFTER the last-completed-session window_end (a same-
+    # day / weekend entrant whose entry bar is not published yet) has NO completed
+    # session in its window → covered (nothing fetchable yet), NOT a spurious flag
+    # that would fail every intraday run (codex P1). It is picked up on the next
+    # run once its first session completes.
+    saturday = date(2024, 6, 8)  # Saturday — first ranking after window_end
     window_end = date(2024, 6, 7)  # the prior Friday (last completed session)
-    _seed_cohort(pg_legacy_session, ["REV"], saturday)
-    # No prices.
+    _seed_cohort(pg_legacy_session, ["SAMEDAY"], saturday)
+    # No prices yet (the bar does not exist).
     pg_legacy_session.expire_all()
-    need = select_symbols_needing_backfill(["REV"], WINDOW_START, window_end)
-    assert "REV" in need
+    need = select_symbols_needing_backfill(["SAMEDAY"], WINDOW_START, window_end)
+    assert "SAMEDAY" not in need
 
 
 def test_is_covered_empty_present_short_window_false():
@@ -353,9 +356,10 @@ def test_is_covered_empty_present_short_window_false():
     assert not _is_covered(set(), WINDOW_START, short_end)
 
 
-def test_is_covered_reversed_window_empty_present_false():
-    # Pure: a reversed window (start > end) with no bars is not covered.
-    assert not _is_covered(set(), date(2024, 6, 8), date(2024, 6, 7))
+def test_is_covered_reversed_window_empty_present_true():
+    # Pure: a reversed window (start > end → no completed sessions) is vacuously
+    # covered even with no bars — nothing is fetchable yet (codex P1).
+    assert _is_covered(set(), date(2024, 6, 8), date(2024, 6, 7))
 
 
 def test_is_covered_reversed_window_with_bars_true():
@@ -803,3 +807,18 @@ def test_backfill_gate_anchored_at_sweep_start_not_years_floor(
     # But the gate is anchored at the sweep start → IPOX is covered → exit 0.
     assert result.exit_code == 0, result.output
     assert "100% of the historical top100 universe is covered" in result.output
+
+
+def test_backfill_empty_rankings_is_noop(pg_legacy_session):
+    """A fresh/staging DB with no top100 rankings must no-op cleanly (exit 0),
+    not raise from sweep_window_start() — bootstrap/smoke runs of
+    `db backfill-prices` happen before the first scrape (codex P2)."""
+    from click.testing import CliRunner
+
+    from rainier import cli as cli_mod
+
+    # No money_flow_snapshots rows at all.
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "backfill-prices"])
+    assert result.exit_code == 0, result.output
+    assert "Nothing to do" in result.output

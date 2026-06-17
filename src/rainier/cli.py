@@ -1881,22 +1881,34 @@ def db_backfill_prices(years, batch_size, dry_run):
     from rainier.paper.calendar import DEFAULT_CALENDAR
 
     end = datetime.now()
-    # Anchor the right boundary at the last trading session on-or-before today,
-    # not the raw wall-clock date (which may be a weekend/holiday). On a
-    # constituent-change day a brand-new symbol's coverage window would otherwise
-    # be [today, today] and require a same-day bar that yfinance has not
-    # published before the close — a spurious failure (codex). The
-    # COVERAGE_MAX_GAP_SESSIONS tolerance then absorbs an as-yet-unpublished
-    # today bar on a session day. Used for the coverage right edge, the download
-    # end, and the cohort lookup.
     today = end.date()
-    end_date = today if DEFAULT_CALENDAR.is_session(today) else \
-        DEFAULT_CALENDAR.prev_session(today)
-    # yfinance `end` is EXCLUSIVE — to actually fetch the bar FOR `end_date`
-    # (e.g. a Saturday run that anchored to Friday must still pull Friday), pass
-    # the day after. Without this the most recent completed session is dropped
-    # and the gap tolerance could mask it (codex).
+    # Anchor the right boundary at the LAST COMPLETED trading session — the most
+    # recent session whose bar yfinance reliably publishes. Today's session may
+    # be in progress (its bar isn't published until after the close), so step
+    # back to the previous session: requiring an as-yet-unpublished bar would
+    # make every intraday run fail for a same-day top100 entrant (coverage window
+    # [today, today], empty present) (codex). A symbol first ranked after this
+    # boundary has no completed session yet → it's covered (nothing fetchable)
+    # and gets picked up on the next run. Used for the coverage right edge, the
+    # download end, and the cohort lookup.
+    end_date = DEFAULT_CALENDAR.prev_session(today)
+    # yfinance `end` is EXCLUSIVE — pass the day after end_date so its bar is
+    # actually fetched (codex).
     download_end = end_date + timedelta(days=1)
+
+    # Empty rankings: no top100 snapshot yet (fresh/staging DB, pre-first-scrape).
+    # Preserve the old no-op instead of raising from sweep_window_start() — a
+    # bootstrap/smoke run of `db backfill-prices` before any rankings load must
+    # exit cleanly (codex).
+    with get_session() as session:
+        has_top100 = session.execute(
+            select(MoneyFlowSnapshot.symbol)
+            .where(MoneyFlowSnapshot.ranking_type == "top100")
+            .limit(1)
+        ).first()
+    if has_top100 is None:
+        click.echo("No QU100 top100 rankings in the database yet. Nothing to do.")
+        return
 
     # Two distinct windows, do NOT conflate them:
     #   cov_start (coverage gate) = sweep_start, the EXACT window the miss-sweep
