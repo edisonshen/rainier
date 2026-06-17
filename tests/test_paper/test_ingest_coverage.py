@@ -332,11 +332,35 @@ def test_weekend_only_ranking_with_no_bars_is_refetched(pg_legacy_session):
     assert "WKND" in need
 
 
+def test_reversed_window_no_bars_is_refetched(pg_legacy_session):
+    # A symbol first ranked on a weekend data_date that lands AFTER the
+    # last-completed-session window_end → eff_start > eff_end (reversed window).
+    # With zero bars it must still be flagged (it needs its entry bar), NOT a
+    # vacuous "covered" pass (codex P1).
+    saturday = date(2024, 6, 8)  # Saturday
+    window_end = date(2024, 6, 7)  # the prior Friday (last completed session)
+    _seed_cohort(pg_legacy_session, ["REV"], saturday)
+    # No prices.
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["REV"], WINDOW_START, window_end)
+    assert "REV" in need
+
+
 def test_is_covered_empty_present_short_window_false():
     # Pure: a non-degenerate (has sessions) but short window with empty present
     # is never covered, even when the window is ≤ max gap.
     short_end = DEFAULT_CALENDAR.add_sessions(WINDOW_START, 2)
     assert not _is_covered(set(), WINDOW_START, short_end)
+
+
+def test_is_covered_reversed_window_empty_present_false():
+    # Pure: a reversed window (start > end) with no bars is not covered.
+    assert not _is_covered(set(), date(2024, 6, 8), date(2024, 6, 7))
+
+
+def test_is_covered_reversed_window_with_bars_true():
+    # Pure: a reversed/empty window but the symbol HAS a bar → vacuously covered.
+    assert _is_covered({date(2024, 6, 6)}, date(2024, 6, 8), date(2024, 6, 7))
 
 
 def test_null_ohlc_rows_are_not_coverage(pg_legacy_session):

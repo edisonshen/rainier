@@ -338,16 +338,20 @@ def _is_covered(
     row-count threshold: a dense set with one big hole still fails; a
     sparse-but-contiguous set still passes.
 
-    A symbol with NO usable bars over a non-degenerate window is never covered —
-    even a very short window (a name ranked only in the last few sessions): zero
-    prices means the sweep has nothing to read, so it must always re-fetch.
+    A symbol with NO usable bars is never covered — even when the window is
+    degenerate (no sessions, or reversed eff_start > eff_end). That reversed case
+    is reachable: a symbol first ranked on a weekend/holiday data_date that lands
+    AFTER the (last-completed-session) window_end gives eff_start > eff_end. With
+    zero bars it still needs its entry bar fetched, so it must NOT be a vacuous
+    pass (codex). Only a symbol that ALREADY has usable bars is vacuously covered
+    over an empty/reversed window (nothing more is required).
     """
     cal = calendar or _default_calendar()
+    if not present:
+        return False  # zero usable bars → never covered (incl. degenerate window)
     sessions = cal.sessions_between(window_start, window_end)
     if not sessions:
-        return True  # degenerate window (no trading days) — nothing to cover
-    if not present:
-        return False  # window has sessions but zero usable bars → not covered
+        return True  # empty/reversed window but the symbol HAS bars → nothing to add
     run = 0
     for s in sessions:
         if s in present:
