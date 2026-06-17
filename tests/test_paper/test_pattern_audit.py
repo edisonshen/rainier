@@ -137,6 +137,35 @@ def test_build_corpus_attaches_regime_and_fwd_returns():
     pd.testing.assert_frame_equal(corpus, corpus2)
 
 
+def test_build_corpus_memoizes_regime_per_date():
+    """regime_fn is invoked at most once per distinct as_of date — a 1-year ×
+    N-symbol audit must not re-query SPY per emission (the default regime_fn
+    opens a DB session each call)."""
+    prices = [100.0] * 60
+    prices += _false_breakdown_block()
+    prices += [92.5, 93.0] * 11  # forward bars
+    # Two symbols sharing the SAME date index → same dates emitted twice.
+    df = _make_ohlcv(prices)
+    calls: list = []
+
+    def counting_regime(as_of):
+        calls.append(as_of)
+        return "bull"
+
+    corpus = build_corpus(
+        {"AAA": df, "BBB": df},
+        config=_CONFIG,
+        regime_fn=counting_regime,
+        min_history_bars=60,
+    )
+    assert not corpus.empty
+    # Both symbols emit on overlapping dates, but regime_fn fires once per
+    # distinct date — so call count == number of distinct dates, strictly less
+    # than the number of corpus rows when any date repeats across symbols.
+    assert len(calls) == len(set(calls))  # no duplicate-date calls
+    assert len(calls) <= len(corpus)
+
+
 def test_build_corpus_skips_thin_history():
     df = _make_ohlcv([100.0] * 30)  # below the 60-bar floor
     corpus = build_corpus(

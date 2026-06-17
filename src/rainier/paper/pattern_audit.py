@@ -142,6 +142,20 @@ def build_corpus(
     pattern exists as-of ``t`` (matching what the live ranker would consume).
     The result is sorted by ``(symbol, as_of)`` for byte-deterministic output.
     """
+    # The regime for a calendar date is invariant across symbols, but the
+    # default `compute_market_regime` opens a fresh DB session + SPY query per
+    # call. Memoize by date within this run so a 1-year × 100-symbol audit
+    # issues one SPY query per distinct date, not one per emission. Per-run
+    # (local) so an injected `regime_fn` and a fresh DB snapshot are honored.
+    regime_cache: dict[date, str] = {}
+
+    def _regime(as_of_date: date) -> str:
+        cached = regime_cache.get(as_of_date)
+        if cached is None:
+            cached = regime_fn(as_of_date)
+            regime_cache[as_of_date] = cached
+        return cached
+
     rows: list[dict] = []
     for symbol in sorted(prices_by_symbol):
         df = prices_by_symbol[symbol]
@@ -168,7 +182,7 @@ def build_corpus(
                 "status": emission.status,
                 "confidence": emission.confidence,
                 "pattern_contribution": emission.pattern_contribution,
-                "regime": regime_fn(as_of_date),
+                "regime": _regime(as_of_date),
                 "close_at_t": emission.close_at_t,
             }
             for h in HORIZONS:
