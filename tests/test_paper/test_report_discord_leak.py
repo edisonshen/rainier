@@ -15,6 +15,7 @@ regression is silently skipped in non-Postgres lanes.
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 from types import SimpleNamespace
@@ -86,3 +87,33 @@ def test_daily_report_failure_never_leaks_webhook_token(caplog):
     )
     assert secret not in blob, "webhook token leaked into report logs"
     assert "webhooks/123456" not in blob
+
+
+def test_daily_report_import_failure_returns_false_without_raising(caplog):
+    """The lazy ``from rainier.alerts.discord import send_daily_report`` lands
+    in the except block if the module fails to import. The status extractor
+    must NOT depend on a helper imported on that same line, or the except
+    raises ``UnboundLocalError`` and breaks the "returns False, never raises"
+    contract in exactly the failure mode this wrapper exists to absorb."""
+    config = SimpleNamespace(enabled=True, webhook_url="https://discord.com/api/webhooks/1/tok")
+
+    real_import = builtins.__import__
+
+    def _boom(name, *args, **kwargs):
+        if name == "rainier.alerts.discord":
+            raise ImportError("simulated discord import failure")
+        return real_import(name, *args, **kwargs)
+
+    with caplog.at_level(logging.INFO, logger="rainier.paper.report"):
+        with patch.object(builtins, "__import__", _boom):
+            result = send_daily_paper_report(PAYLOAD, config)
+
+    # Contract held: no UnboundLocalError, returns False.
+    assert result is False
+    failed = [
+        r for r in caplog.records if "paper_report_discord_failed" in r.getMessage()
+    ]
+    assert failed, "expected a paper_report_discord_failed log record"
+    # status=None (no HTTP response on an ImportError), error_type=ImportError.
+    assert "ImportError" in failed[0].getMessage()
+    assert "status=None" in failed[0].getMessage()
