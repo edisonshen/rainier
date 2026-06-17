@@ -1844,97 +1844,135 @@ def db_gc_test_schemas(apply: bool) -> None:
 
 
 @db.command(name="backfill-prices")
-@click.option("--years", default=5, type=int, help="Years of history to fetch")
+@click.option(
+    "--years",
+    default=5,
+    type=int,
+    help="Lower-bound years of history (a floor; the fetch never starts LATER "
+    "than the sweep-window start derived from the QU100 rankings).",
+)
 @click.option("--batch-size", default=20, type=int, help="Symbols per yfinance batch")
 @click.option("--dry-run", is_flag=True, help="Show what would be fetched without fetching")
 def db_backfill_prices(years, batch_size, dry_run):
-    """Backfill historical daily OHLCV for all QU100 stocks via yfinance."""
+    """Backfill historical daily OHLCV for all QU100 stocks via yfinance.
+
+    Selection is COVERAGE-based, not presence-based: a symbol is re-fetched
+    unless it already has a bar near BOTH ends of the sweep window (the start
+    derived from the QU100 rankings, and today). A thin recent sliver (the AMZN
+    case) or a stale tail no longer masks a multi-year gap. The download window
+    starts at the sweep-window start so a re-selected symbol repairs its full
+    history — not just the trailing ``--years``. After the run a 100%
+    current-cohort coverage check reports any remaining shortfall loudly.
+    """
     import math
     import time
 
     import yfinance as yf
     from sqlalchemy import func, select
 
+    from rainier.backtest.qu100_portfolio import (
+        _save_prices_to_db,
+        assert_cohort_coverage,
+        select_symbols_needing_backfill,
+        sweep_window_start,
+    )
     from rainier.core.database import get_session
-    from rainier.core.models import MoneyFlowSnapshot, StockPrice
+    from rainier.core.models import MoneyFlowSnapshot
 
     end = datetime.now()
-    start = datetime(end.year - years, end.month, end.day)
+    end_date = end.date()
 
-    # Find QU100 symbols missing price data
+    # The download window must cover what the sweep actually consumes: the
+    # earliest QU100 ranking date. `--years` is only a FLOOR — it can widen the
+    # window but must never cap the repair below the sweep start (the bug that let
+    # a 2026 sliver mask 2022-2025 absence under `--years 1`).
+    sweep_start = sweep_window_start()
+    years_floor = date(end.year - years, end.month, end.day)
+    window_start = min(sweep_start, years_floor)
+
     with get_session() as session:
-        qu_symbols = set(
+        qu_symbols = sorted(
             session.execute(
                 select(func.distinct(MoneyFlowSnapshot.symbol))
             ).scalars().all()
         )
-        symbols_with_prices = set(
-            session.execute(
-                select(func.distinct(StockPrice.symbol)).where(
-                    StockPrice.date >= start.isoformat()
-                )
-            ).scalars().all()
-        )
 
-    missing = sorted(qu_symbols - symbols_with_prices)
-    has_prices = sorted(qu_symbols & symbols_with_prices)
+    # Coverage (span at BOTH boundaries), NOT presence — qu100_portfolio.
+    missing = select_symbols_needing_backfill(qu_symbols, window_start, end_date)
+    has_prices = sorted(set(qu_symbols) - set(missing))
 
     click.echo(f"QU100 symbols: {len(qu_symbols)}")
-    click.echo(f"Already have prices: {len(has_prices)}")
-    click.echo(f"Missing prices: {len(missing)}")
-    click.echo(f"Date range: {start.date()} to {end.date()} ({years} years)")
+    click.echo(f"Covered (span both boundaries): {len(has_prices)}")
+    click.echo(f"Needing backfill (incomplete/absent): {len(missing)}")
+    click.echo(
+        f"Date range: {window_start} to {end_date} "
+        f"(sweep start {sweep_start}, --years floor {years_floor})"
+    )
 
     if dry_run:
         if missing:
             click.echo(f"\nWould fetch: {missing[:50]}{'...' if len(missing) > 50 else ''}")
         return
 
-    if not missing:
-        click.echo("All QU100 symbols have price data. Nothing to do.")
-        return
+    if missing:
+        total_batches = math.ceil(len(missing) / batch_size)
+        click.echo(f"\nFetching {len(missing)} symbols in {total_batches} batches...")
 
-    total_batches = math.ceil(len(missing) / batch_size)
-    click.echo(f"\nFetching {len(missing)} symbols in {total_batches} batches...")
-
-    from rainier.backtest.qu100_portfolio import _save_prices_to_db
-
-    fetched = 0
-    failed = 0
-    for bi in range(0, len(missing), batch_size):
-        batch = missing[bi : bi + batch_size]
-        batch_num = bi // batch_size + 1
-        click.echo(
-            f"  Batch {batch_num}/{total_batches}: {batch[0]}..{batch[-1]} "
-            f"({len(batch)} symbols)"
-        )
-
-        if batch_num > 1:
-            time.sleep(2)
-
-        try:
-            yf_df = yf.download(
-                " ".join(batch),
-                start=str(start.date()),
-                end=str(end.date()),
-                auto_adjust=True,
-                progress=False,
-                threads=True,
+        fetched = 0
+        failed = 0
+        for bi in range(0, len(missing), batch_size):
+            batch = missing[bi : bi + batch_size]
+            batch_num = bi // batch_size + 1
+            click.echo(
+                f"  Batch {batch_num}/{total_batches}: {batch[0]}..{batch[-1]} "
+                f"({len(batch)} symbols)"
             )
-            if not yf_df.empty:
-                if not isinstance(yf_df.columns, pd.MultiIndex) and len(batch) == 1:
-                    yf_df.columns = pd.MultiIndex.from_product(
-                        [yf_df.columns, batch]
-                    )
-                _save_prices_to_db(yf_df, batch)
-                fetched += len(batch)
-            else:
-                failed += len(batch)
-                click.echo("    No data returned for batch")
-        except Exception as exc:
-            failed += len(batch)
-            click.echo(f"    Error: {exc}")
 
-    click.echo(f"\nDone. Fetched: {fetched}, Failed: {failed}")
+            if batch_num > 1:
+                time.sleep(2)
+
+            try:
+                yf_df = yf.download(
+                    " ".join(batch),
+                    # Full sweep window, NOT the --years window: a re-selected
+                    # symbol must repair its entire history.
+                    start=str(window_start),
+                    end=str(end_date),
+                    auto_adjust=True,
+                    progress=False,
+                    threads=True,
+                )
+                if not yf_df.empty:
+                    if not isinstance(yf_df.columns, pd.MultiIndex) and len(batch) == 1:
+                        yf_df.columns = pd.MultiIndex.from_product(
+                            [yf_df.columns, batch]
+                        )
+                    # _save_prices_to_db → _yf_to_long logs yf_batch_dropped_symbols
+                    # for any requested symbol yfinance omitted (no silent drop).
+                    _save_prices_to_db(yf_df, batch)
+                    fetched += len(batch)
+                else:
+                    failed += len(batch)
+                    click.echo("    No data returned for batch")
+            except Exception as exc:
+                failed += len(batch)
+                click.echo(f"    Error: {exc}")
+
+        click.echo(f"\nDone. Fetched: {fetched}, Failed: {failed}")
+    else:
+        click.echo("All QU100 symbols span the sweep window. Nothing to fetch.")
+
+    # Post-run gate: 100% of the CURRENT cohort must span the sweep window.
+    # Report any shortfall NON-silently (the missing list), never a clean exit.
+    still_missing = assert_cohort_coverage(window_start, end_date, as_of=end_date)
+    if still_missing:
+        click.echo(
+            f"\nWARNING: {len(still_missing)} current-cohort symbol(s) still lack "
+            f"full sweep-window coverage after the run: {still_missing}",
+            err=True,
+        )
+    else:
+        click.echo("\nCohort coverage check: 100% of the current cohort is covered.")
 
 
 @db.command(name="ingest-prices")

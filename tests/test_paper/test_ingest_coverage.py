@@ -18,13 +18,15 @@ legacy `core.database` singleton the backfill uses).
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
 from sqlalchemy import select, text
 
 from rainier.backtest.qu100_portfolio import (
+    COVERAGE_BOUNDARY_TOLERANCE_DAYS,
+    _is_covered,
     _yf_to_long,
     assert_cohort_coverage,
     select_symbols_needing_backfill,
@@ -32,10 +34,65 @@ from rainier.backtest.qu100_portfolio import (
 )
 from rainier.core.models import StockPrice
 
+# Most cases need a live Postgres (pg_legacy_session binds the legacy
+# core.database singleton the backfill uses). The pure `_is_covered` /
+# `_yf_to_long` cases below need no DB but inherit the module mark harmlessly
+# (the mark only labels for `-m` selection; the DB skip comes from the fixture).
 pytestmark = pytest.mark.requires_postgres
 
 WINDOW_START = date(2022, 5, 25)
 WINDOW_END = date(2026, 6, 12)
+
+
+# ---------------------------------------------------------------------------
+# Pure coverage-decision logic (_is_covered) — no DB. The span check is the
+# crux of the fix; pin every branch independent of Postgres availability.
+# ---------------------------------------------------------------------------
+
+TOL = COVERAGE_BOUNDARY_TOLERANCE_DAYS
+
+
+def test_is_covered_full_span_true():
+    assert _is_covered(WINDOW_START, WINDOW_END, WINDOW_START, WINDOW_END, TOL)
+
+
+def test_is_covered_recent_sliver_false():
+    # Left edge missing (AMZN case): earliest bar long after the window start.
+    assert not _is_covered(
+        date(2026, 3, 3), WINDOW_END, WINDOW_START, WINDOW_END, TOL
+    )
+
+
+def test_is_covered_stale_tail_false():
+    # Right edge missing: latest bar long before the window end.
+    assert not _is_covered(
+        WINDOW_START, date(2024, 6, 6), WINDOW_START, WINDOW_END, TOL
+    )
+
+
+def test_is_covered_absent_false():
+    assert not _is_covered(None, None, WINDOW_START, WINDOW_END, TOL)
+
+
+def test_is_covered_within_tolerance_true():
+    # Edges a few days inside the window but within tolerance → still covered.
+    assert _is_covered(
+        WINDOW_START + timedelta(days=TOL),
+        WINDOW_END - timedelta(days=TOL),
+        WINDOW_START,
+        WINDOW_END,
+        TOL,
+    )
+
+
+def test_is_covered_just_outside_tolerance_false():
+    assert not _is_covered(
+        WINDOW_START + timedelta(days=TOL + 1),
+        WINDOW_END,
+        WINDOW_START,
+        WINDOW_END,
+        TOL,
+    )
 
 
 def _instant(d: date) -> datetime:
@@ -135,35 +192,42 @@ def test_boundary_tolerates_weekends(pg_legacy_session):
 # ---------------------------------------------------------------------------
 
 
-def test_yf_to_long_surfaces_batch_drop(caplog):
-    import logging
+def _capture_warnings(monkeypatch):
+    """Capture qu100_portfolio's structlog `log.warning` calls reliably,
+    independent of how structlog routes to stdlib (which `caplog` can miss)."""
+    from rainier.backtest import qu100_portfolio as qp
 
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        qp.log, "warning", lambda event, **kw: events.append((event, kw))
+    )
+    return events
+
+
+def test_yf_to_long_surfaces_batch_drop(monkeypatch):
+    events = _capture_warnings(monkeypatch)
     idx = pd.to_datetime([date(2026, 6, 10), date(2026, 6, 11)])
     cols = pd.MultiIndex.from_product(
         [["Open", "High", "Low", "Close", "Volume"], ["AAA"]]
     )
     yf_df = pd.DataFrame(1.0, index=idx, columns=cols)
     # Request AAA + BBB; yfinance only returned AAA → BBB must be surfaced.
-    with caplog.at_level(logging.WARNING):
-        out = _yf_to_long(yf_df, ["AAA", "BBB"])
+    out = _yf_to_long(yf_df, ["AAA", "BBB"])
     assert set(out["symbol"].unique()) == {"AAA"}
-    assert any("yf_batch_dropped_symbols" in r.getMessage() for r in caplog.records)
-    assert any("BBB" in r.getMessage() for r in caplog.records)
+    drop_events = [kw for ev, kw in events if ev == "yf_batch_dropped_symbols"]
+    assert drop_events, "expected a yf_batch_dropped_symbols warning"
+    assert "BBB" in drop_events[0]["missing"]
 
 
-def test_yf_to_long_no_drop_logs_nothing(caplog):
-    import logging
-
+def test_yf_to_long_no_drop_logs_nothing(monkeypatch):
+    events = _capture_warnings(monkeypatch)
     idx = pd.to_datetime([date(2026, 6, 10)])
     cols = pd.MultiIndex.from_product(
         [["Open", "High", "Low", "Close", "Volume"], ["AAA"]]
     )
     yf_df = pd.DataFrame(1.0, index=idx, columns=cols)
-    with caplog.at_level(logging.WARNING):
-        _yf_to_long(yf_df, ["AAA"])
-    assert not any(
-        "yf_batch_dropped_symbols" in r.getMessage() for r in caplog.records
-    )
+    _yf_to_long(yf_df, ["AAA"])
+    assert not any(ev == "yf_batch_dropped_symbols" for ev, _ in events)
 
 
 # ---------------------------------------------------------------------------

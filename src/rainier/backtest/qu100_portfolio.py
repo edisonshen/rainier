@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import structlog
 import yfinance as yf
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from rainier.core.database import get_session
 from rainier.core.models import BacktestTradingLog, MoneyFlowSnapshot
@@ -139,6 +139,143 @@ def load_rankings_from_db() -> pd.DataFrame:
     return df
 
 
+# ---------------------------------------------------------------------------
+# Price-coverage helpers (TASK-PLAN p1-cleanup-price-coverag-18ff)
+#
+# `db backfill-prices` historically decided what to fetch with a PRESENCE check
+# (any StockPrice row >= start). A separate incremental ingest seeded thin
+# RECENT slivers for large-caps, so they passed presence and were skipped — their
+# 2022-2025 history (most of the sweep window) was never fetched. These helpers
+# replace presence with a COVERAGE span check at BOTH window boundaries.
+#
+#   sweep window:  [start ............................. end]
+#   recent-sliver:                              [###]   <- no left-edge bar -> refetch
+#   stale-tail:    [###########]                        <- no right-edge bar -> refetch
+#   fully-covered: [### .............................. ###] <- skip
+# ---------------------------------------------------------------------------
+
+# "at/near" a boundary must tolerate weekends/holidays — markets aren't open on a
+# given calendar date every year. A symbol is left/right covered if it has a bar
+# within this many calendar days of the boundary.
+COVERAGE_BOUNDARY_TOLERANCE_DAYS = 7
+
+
+def sweep_window_start() -> date:
+    """The sweep-consumption window start = earliest QU100 ranking date.
+
+    Derived from the same source the miss-sweep reads (``load_rankings_from_db``)
+    so selection / download / coverage all key on the window the sweep actually
+    consumes — NOT a hard-coded date or a ``--years`` arithmetic. ~2022-05-25.
+    """
+    with get_session() as db:
+        first = db.execute(
+            select(func.min(MoneyFlowSnapshot.data_date))
+        ).scalar()
+    if first is None:
+        raise ValueError("No QU100 rankings in database; cannot derive sweep start")
+    return first
+
+
+def _symbol_price_spans(
+    symbols: list[str],
+) -> dict[str, tuple[date | None, date | None]]:
+    """(min_date, max_date) of persisted bars per symbol; (None, None) if absent.
+
+    One grouped query over ``stock_prices`` for the whole batch. Dates are the
+    stored instant's UTC calendar date.
+    """
+    from rainier.core.models import StockPrice
+
+    if not symbols:
+        return {}
+    with get_session() as db:
+        rows = db.execute(
+            select(
+                StockPrice.symbol,
+                func.min(StockPrice.date),
+                func.max(StockPrice.date),
+            )
+            .where(StockPrice.symbol.in_(list(symbols)))
+            .group_by(StockPrice.symbol)
+        ).all()
+    spans: dict[str, tuple[date | None, date | None]] = {
+        s: (None, None) for s in symbols
+    }
+    for sym, lo, hi in rows:
+        spans[sym] = (
+            lo.date() if hasattr(lo, "date") else lo,
+            hi.date() if hasattr(hi, "date") else hi,
+        )
+    return spans
+
+
+def _is_covered(
+    lo: date | None,
+    hi: date | None,
+    window_start: date,
+    window_end: date,
+    tolerance_days: int,
+) -> bool:
+    """True iff the symbol's [lo, hi] span reaches BOTH window boundaries.
+
+    Left-covered: earliest bar at/before (window_start + tolerance).
+    Right-covered: latest bar at/after (window_end - tolerance).
+    Either edge missing → not covered → must re-fetch.
+    """
+    if lo is None or hi is None:
+        return False
+    left_ok = lo <= window_start + timedelta(days=tolerance_days)
+    right_ok = hi >= window_end - timedelta(days=tolerance_days)
+    return left_ok and right_ok
+
+
+def select_symbols_needing_backfill(
+    symbols: list[str],
+    window_start: date,
+    window_end: date,
+    tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
+) -> list[str]:
+    """Symbols lacking a bar at EITHER window boundary (sorted, deduped).
+
+    A bare row-count threshold is deliberately NOT used: it can mark either
+    failure mode "covered" and re-open the gap. The span check at both edges
+    catches the recent-sliver case (no left edge) AND the stale-tail case (no
+    right edge).
+    """
+    spans = _symbol_price_spans(list(symbols))
+    need = [
+        s
+        for s in symbols
+        if not _is_covered(
+            *spans.get(s, (None, None)), window_start, window_end, tolerance_days
+        )
+    ]
+    return sorted(set(need))
+
+
+def assert_cohort_coverage(
+    window_start: date,
+    window_end: date,
+    as_of: date,
+    tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
+) -> list[str]:
+    """Current-cohort symbols still NOT covered over the sweep window (sorted).
+
+    Scope is the CURRENT cohort (``get_current_qu100_cohort``, ranking_type
+    'top100') at ``as_of`` — former constituents outside today's top-100 are out
+    of scope (the sweep evaluates the current cohort). Empty list ⇒ 100%
+    coverage. Callers surface the returned list non-silently (echo/fail).
+    """
+    from rainier.paper.ingest import get_current_qu100_cohort
+
+    cohort = [r["symbol"] for r in get_current_qu100_cohort(as_of)]
+    if not cohort:
+        return []
+    return select_symbols_needing_backfill(
+        cohort, window_start, window_end, tolerance_days
+    )
+
+
 def fetch_all_prices(
     symbols: list[str], start: date, end: date,
 ) -> pd.DataFrame:
@@ -240,6 +377,17 @@ def _yf_to_long(
     frames = []
     if isinstance(yf_df.columns, pd.MultiIndex):
         available = set(yf_df["Close"].columns)
+        # Surface symbols yfinance silently omitted from the batch — a genuine
+        # upstream drop must never vanish (it would re-open a coverage gap with
+        # no signal). Compare the REQUESTED set against what the frame returned.
+        dropped = sorted(set(symbols) - available)
+        if dropped:
+            log.warning(
+                "yf_batch_dropped_symbols",
+                requested=len(symbols),
+                available=len(available & set(symbols)),
+                missing=dropped,
+            )
         for sym in symbols:
             if sym not in available:
                 continue
