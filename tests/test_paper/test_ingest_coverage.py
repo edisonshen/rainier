@@ -341,6 +341,12 @@ def _build_yf_df(symbols: list[str], days: list[date]) -> pd.DataFrame:
     return pd.DataFrame(1.0, index=idx, columns=cols)
 
 
+def _build_dense_yf_df(symbols: list[str], start: date, end: date) -> pd.DataFrame:
+    """A frame with a usable bar for every trading session — a full repair, so
+    the post-run cohort gate passes (exit 0)."""
+    return _build_yf_df(symbols, DEFAULT_CALENDAR.sessions_between(start, end))
+
+
 def test_backfill_fetch_window_pinned_to_sweep_start(pg_legacy_session, monkeypatch):
     """A present-but-incomplete symbol must be fetched from the sweep-window
     start (the earliest ranking date), NOT the trailing `--years` window."""
@@ -369,8 +375,9 @@ def test_backfill_fetch_window_pinned_to_sweep_start(pg_legacy_session, monkeypa
     def _fake_download(tickers, start=None, end=None, **kwargs):
         captured["start"] = start
         syms = tickers.split()
-        # Return a full-window frame so the fetch "repairs" history.
-        return _build_yf_df(syms, [sweep_start, today])
+        # Return a dense full-window frame so the fetch fully repairs history
+        # and the post-run cohort gate passes.
+        return _build_dense_yf_df(syms, sweep_start, today)
 
     import yfinance as yf
 
@@ -407,10 +414,9 @@ def test_backfill_idempotent_rerun(pg_legacy_session, monkeypatch):
     )
     pg_legacy_session.commit()
 
-    bars = [sweep_start, date(2024, 1, 2), today]
-
     def _fake_download(tickers, start=None, end=None, **kwargs):
-        return _build_yf_df(tickers.split(), bars)
+        # Dense full-window data so the cohort gate passes (exit 0).
+        return _build_dense_yf_df(tickers.split(), sweep_start, today)
 
     import yfinance as yf
 
@@ -420,7 +426,7 @@ def test_backfill_idempotent_rerun(pg_legacy_session, monkeypatch):
     r1 = runner.invoke(cli_mod.cli, ["db", "backfill-prices", "--years", "1"])
     assert r1.exit_code == 0, r1.output
     pg_legacy_session.expire_all()
-    n1 = len(_count := pg_legacy_session.execute(
+    n1 = len(pg_legacy_session.execute(
         select(StockPrice).where(StockPrice.symbol == "NVDA")
     ).scalars().all())
     r2 = runner.invoke(cli_mod.cli, ["db", "backfill-prices", "--years", "1"])
@@ -429,4 +435,89 @@ def test_backfill_idempotent_rerun(pg_legacy_session, monkeypatch):
     n2 = len(pg_legacy_session.execute(
         select(StockPrice).where(StockPrice.symbol == "NVDA")
     ).scalars().all())
-    assert n1 == n2 == 3  # ON CONFLICT DO NOTHING → no duplicates
+    # On re-run NVDA is already covered → not even re-selected; the COALESCE
+    # upsert is idempotent regardless → no duplicate (symbol, date) rows.
+    assert n1 == n2 > 0
+
+
+def test_save_prices_repairs_null_ohlc_placeholder(pg_legacy_session):
+    """A coverage re-fetch must REPAIR a NULL-OHLC placeholder bar, not discard
+    it (codex P1). With ON CONFLICT DO NOTHING the placeholder would survive and
+    the gap would never heal."""
+    from rainier.backtest.qu100_portfolio import _save_prices_to_db
+
+    d = date(2024, 1, 2)
+    _seed_null_ohlc(pg_legacy_session, "RPR", [d])
+    pg_legacy_session.expire_all()
+    # Re-fetch returns a real bar for the same (symbol, date).
+    yf_df = _build_yf_df(["RPR"], [d])
+    _save_prices_to_db(yf_df, ["RPR"])
+    pg_legacy_session.expire_all()
+    row = pg_legacy_session.execute(
+        select(StockPrice).where(StockPrice.symbol == "RPR")
+    ).scalar_one()
+    assert row.close is not None  # placeholder was repaired, not kept NULL
+    # Still exactly one row for the date (upsert, not a duplicate insert).
+    rows = pg_legacy_session.execute(
+        select(StockPrice).where(StockPrice.symbol == "RPR")
+    ).scalars().all()
+    assert len(rows) == 1
+
+
+def test_save_prices_coalesce_keeps_good_value_on_null_refetch(pg_legacy_session):
+    """A NULL field in a re-fetch must NOT clobber a previously-good value
+    (COALESCE(EXCLUDED, existing), B5 discipline)."""
+    from rainier.backtest.qu100_portfolio import _save_prices_to_db
+
+    d = date(2024, 1, 3)
+    _seed_prices(pg_legacy_session, "KEEP", [d])  # open=10.0 good
+    pg_legacy_session.expire_all()
+    # Re-fetch has a real close but a NULL open → open must stay 10.0.
+    idx = pd.to_datetime([d])
+    cols = pd.MultiIndex.from_product(
+        [["Open", "High", "Low", "Close", "Volume"], ["KEEP"]]
+    )
+    yf_df = pd.DataFrame(2.0, index=idx, columns=cols)
+    yf_df[("Open", "KEEP")] = None
+    _save_prices_to_db(yf_df, ["KEEP"])
+    pg_legacy_session.expire_all()
+    row = pg_legacy_session.execute(
+        select(StockPrice).where(StockPrice.symbol == "KEEP")
+    ).scalar_one()
+    assert float(row.open) == 10.0  # not clobbered to NULL
+    assert float(row.close) == 2.0  # real re-fetch value applied
+
+
+def test_backfill_gate_fails_when_cohort_incomplete(pg_legacy_session, monkeypatch):
+    """The post-run cohort gate must FAIL (non-zero exit), not warn-and-exit-0,
+    when a current-cohort symbol stays uncovered (codex P2). A warn-only gate is
+    indistinguishable from success in cron/CI."""
+    from click.testing import CliRunner
+
+    from rainier import cli as cli_mod
+
+    sweep_start = date(2022, 5, 25)
+    today = date(2026, 6, 12)
+    _seed_cohort(pg_legacy_session, ["DROP"], today)
+    pg_legacy_session.execute(
+        text(
+            "INSERT INTO money_flow_snapshots "
+            "(captured_at, capture_session, data_date, ranking_type, symbol, rank) "
+            "VALUES (:cap, 'close', :dd, 'top100', 'DROP', 1)"
+        ),
+        {"cap": _instant(sweep_start), "dd": sweep_start},
+    )
+    pg_legacy_session.commit()
+
+    def _fake_download(tickers, start=None, end=None, **kwargs):
+        # yfinance "drops" the symbol — returns nothing usable → stays uncovered.
+        return pd.DataFrame()
+
+    import yfinance as yf
+
+    monkeypatch.setattr(yf, "download", _fake_download)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "backfill-prices", "--years", "1"])
+    assert result.exit_code != 0, result.output
+    assert "DROP" in result.output

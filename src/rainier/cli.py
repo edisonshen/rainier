@@ -1963,16 +1963,21 @@ def db_backfill_prices(years, batch_size, dry_run):
         click.echo("All QU100 symbols span the sweep window. Nothing to fetch.")
 
     # Post-run gate: 100% of the CURRENT cohort must span the sweep window.
-    # Report any shortfall NON-silently (the missing list), never a clean exit.
+    # Report any shortfall NON-silently AND FAIL (non-zero exit) — a warn-and-
+    # exit-0 makes an incomplete repair indistinguishable from success in
+    # cron/CI, so the gate could never actually protect anything. Per the plan's
+    # blocker: if a cohort symbol stays uncovered after it WAS requested (a
+    # genuine upstream omission or a post-start IPO with no earlier history),
+    # STOP and raise so the operator examines it — never silently lower the bar.
     still_missing = assert_cohort_coverage(window_start, end_date, as_of=end_date)
     if still_missing:
-        click.echo(
-            f"\nWARNING: {len(still_missing)} current-cohort symbol(s) still lack "
-            f"full sweep-window coverage after the run: {still_missing}",
-            err=True,
+        raise click.ClickException(
+            f"{len(still_missing)} current-cohort symbol(s) still lack full "
+            f"sweep-window coverage after the run: {still_missing}. "
+            "Investigate (genuine yfinance omission or post-start listing) — "
+            "do not lower the coverage bar to make this pass."
         )
-    else:
-        click.echo("\nCohort coverage check: 100% of the current cohort is covered.")
+    click.echo("\nCohort coverage check: 100% of the current cohort is covered.")
 
 
 @db.command(name="ingest-prices")

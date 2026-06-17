@@ -523,7 +523,13 @@ def _save_prices_to_db(
         if new_symbols:
             db.flush()
 
-        # Batch insert prices using INSERT ... ON CONFLICT DO NOTHING
+        # Batch upsert prices. ON CONFLICT DO UPDATE with COALESCE(EXCLUDED,
+        # existing) — a coverage re-fetch must REPAIR a NULL/placeholder bar
+        # (the row the coverage check flagged as a gap), so DO NOTHING would
+        # leave the placeholder forever and the gap would never heal. A null
+        # re-fetch field keeps the old good value (B5 discipline, mirrors
+        # paper.ingest._upsert_bar); re-fetching identical data is a no-op write
+        # (idempotent — no duplicate (symbol, date) rows).
         from sqlalchemy.dialects.postgresql import insert as pg_insert
         rows_to_insert = []
         for _, row in long_df.iterrows():
@@ -546,8 +552,19 @@ def _save_prices_to_db(
             for ci in range(0, len(rows_to_insert), chunk_size):
                 chunk = rows_to_insert[ci : ci + chunk_size]
                 stmt = pg_insert(StockPrice).values(chunk)
-                stmt = stmt.on_conflict_do_nothing(
-                    constraint="uq_stock_price_symbol_date"
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_stock_price_symbol_date",
+                    set_={
+                        "open": func.coalesce(stmt.excluded.open, StockPrice.open),
+                        "high": func.coalesce(stmt.excluded.high, StockPrice.high),
+                        "low": func.coalesce(stmt.excluded.low, StockPrice.low),
+                        "close": func.coalesce(
+                            stmt.excluded.close, StockPrice.close
+                        ),
+                        "volume": func.coalesce(
+                            stmt.excluded.volume, StockPrice.volume
+                        ),
+                    },
                 )
                 db.execute(stmt)
                 count += len(chunk)
