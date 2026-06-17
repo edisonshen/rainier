@@ -717,11 +717,15 @@ def backtest_qu100(ctx, top_n, hold, min_rank, max_rank, entry_delay,
     help="Markdown report output path",
 )
 @click.option(
-    "--window-label", default="stock_prices (1yr)",
-    help="Window label printed in the report header",
+    "--window-days", default=365, show_default=True, type=int,
+    help="Trailing as-of window in calendar days (0 = all history)",
+)
+@click.option(
+    "--window-label", default=None,
+    help="Override the report window label (default: derived from corpus dates)",
 )
 @click.pass_context
-def pattern_audit(ctx, symbols, report_path, window_label):
+def pattern_audit(ctx, symbols, report_path, window_days, window_label):
     """Pattern forward-return audit over `stock_prices` (WS B).
 
     Faithfully replays the LIVE pattern layer as-of each trading day, attaches
@@ -736,12 +740,24 @@ def pattern_audit(ctx, symbols, report_path, window_label):
     sym_list = (
         [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
     )
+    # 0 means "all history"; map to None so the corpus spans every date.
+    win_days = window_days if window_days and window_days > 0 else None
 
     click.echo("Running QU100 pattern forward-return audit over stock_prices...")
     corpus, agg, corpus_file = run_pattern_audit(
-        config=settings.stock_screener, symbols=sym_list
+        config=settings.stock_screener, symbols=sym_list, window_days=win_days
     )
     click.echo(f"Corpus: {len(corpus)} emissions → {corpus_file}")
+
+    # Derive an HONEST window label from the actual as-of date range, so the
+    # report header can't claim "1yr" while spanning all history.
+    if window_label is None:
+        if not corpus.empty:
+            lo, hi = corpus["as_of"].min(), corpus["as_of"].max()
+            span = "all history" if win_days is None else f"{win_days}d trailing"
+            window_label = f"stock_prices {lo}..{hi} ({span})"
+        else:
+            window_label = "stock_prices (no emissions)"
 
     md = render_report_markdown(corpus, agg, window_label=window_label)
     out = Path(report_path)

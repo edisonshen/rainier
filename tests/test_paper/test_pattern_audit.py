@@ -222,6 +222,72 @@ def test_run_pattern_audit_defaults_min_history_to_config(monkeypatch, tmp_path)
     assert captured["min_history_bars"] == 80
 
 
+def test_build_corpus_window_start_bounds_as_of(monkeypatch):
+    """window_start bounds the AS-OF date: emissions before the cutoff are
+    dropped, earlier bars still loaded for lookback/fwd edges. Guards codex
+    iter-2 P1 (audit must not silently span all history)."""
+    import datetime as _dt
+
+    # Emit on EVERY window (stub emission) so we can count by date cleanly.
+    import rainier.paper.pattern_audit as pa
+    from rainier.paper.pattern_replay import PatternEmission
+
+    prices = [100.0 + i * 0.01 for i in range(120)]
+    df = _make_ohlcv(prices)  # date index starts 2025-01-01
+
+    def stub_emission(symbol, window, config):
+        ts = window.index[-1]
+        return PatternEmission(
+            symbol=symbol, as_of=ts, pattern_type="bull_flag",
+            direction="bullish", status="confirmed", confidence=0.7,
+            pattern_contribution=0.45, entry_price=100.0, stop_loss=95.0,
+            target_wave1=110.0, close_at_t=float(window["close"].iloc[-1]),
+        )
+
+    monkeypatch.setattr(pa, "emission_at", stub_emission)
+    cutoff = _dt.date(2025, 4, 1)
+    corpus = build_corpus(
+        {"AAA": df}, config=_CONFIG, regime_fn=lambda a: "bull",
+        min_history_bars=30, window_start=cutoff,
+    )
+    assert not corpus.empty
+    assert corpus["as_of"].min() >= cutoff  # nothing before the cutoff
+    # Without a cutoff the corpus would start at the min-history floor date.
+    full = build_corpus(
+        {"AAA": df}, config=_CONFIG, regime_fn=lambda a: "bull",
+        min_history_bars=30,
+    )
+    assert full["as_of"].min() < cutoff  # full history reaches earlier
+    assert len(corpus) < len(full)
+
+
+def test_build_corpus_window_gate_rejects_when_min_exceeds_lookback(monkeypatch):
+    """A min_history_bars above the lookback emits NOTHING — mirrors live
+    `_fetch_stock_data` rejecting a 6-month frame shorter than min_bars. Guards
+    codex iter-2 P2."""
+    import rainier.paper.pattern_audit as pa
+    from rainier.paper.pattern_replay import PatternEmission
+
+    df = _make_ohlcv([100.0] * 200)  # 200 bars lifetime
+
+    def stub_emission(symbol, window, config):
+        ts = window.index[-1]
+        return PatternEmission(
+            symbol=symbol, as_of=ts, pattern_type="bull_flag",
+            direction="bullish", status="confirmed", confidence=0.7,
+            pattern_contribution=0.45, entry_price=100.0, stop_loss=95.0,
+            target_wave1=110.0, close_at_t=100.0,
+        )
+
+    monkeypatch.setattr(pa, "emission_at", stub_emission)
+    # lookback trims the window to 50 bars; a 60-bar gate rejects every window.
+    corpus = build_corpus(
+        {"AAA": df}, config=_CONFIG, regime_fn=lambda a: "bull",
+        min_history_bars=60, lookback_bars=50,
+    )
+    assert corpus.empty
+
+
 def test_build_corpus_skips_thin_history():
     df = _make_ohlcv([100.0] * 30)  # below the 60-bar floor
     corpus = build_corpus(

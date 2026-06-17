@@ -4,7 +4,7 @@
 
 ## The problem this answers
 
-Our daily stock screen tags each QU100 name with a chart pattern and ranks by a 3-layer score where the **pattern shape carries 65% of the weight**. Those pattern weights were hand-set and **never checked against what prices actually did next**. This audit replays the live pattern detector over one year of daily prices, records every actionable emission, and measures the forward return at 5 / 10 / 20 trading days — so weight tuning can finally trace to evidence.
+Our daily stock screen tags each QU100 name with a chart pattern and ranks by a 3-layer score where the **pattern shape carries 65% of the weight**. Those pattern weights were hand-set and **never checked against what prices actually did next**. This audit replays the live pattern detector over the daily-price window below, records every actionable emission, and measures the forward return at 5 / 10 / 20 trading days — so weight tuning can finally trace to evidence.
 
 How to read the table:
 - **win-rate** = share of emissions where price went UP over the horizon. It is direction-agnostic (a bearish pattern with a high win-rate means price rose — i.e. the bearish call was *wrong*).
@@ -19,8 +19,8 @@ How to read the table:
 
 ## Provenance
 
-- Window: stock_prices ~1yr (as of 2026-06-16)
-- Total emissions: 231344
+- Window: stock_prices 2025-08-20..2026-06-16 (365d trailing)
+- Total emissions: 231366
 - Universe = symbols scraped into `money_flow_snapshots` over history (fixed-universe-over-history; survivorship disclosed).
 - Regime = SPY vs 200-day SMA on the as-of day (bull / bear / unknown). `unknown` = fewer than 200 SPY bars at/before the as-of day; reported, never dropped.
 - `thin` = n < 30 at that horizon — reported, never over-tuned.
@@ -51,18 +51,18 @@ How to read the table:
 | false_breakdown | bear | 5 | 2279 | 70.5% | 2.5% | 2.4% | 70.9% |  |
 | false_breakdown | bear | 10 | 2279 | 81.7% | 6.8% | 5.5% | 82.0% |  |
 | false_breakdown | bear | 20 | 2279 | 76.6% | 7.9% | 5.9% | 76.7% |  |
-| false_breakdown | bull | 5 | 4631 | 51.5% | 0.8% | 0.2% | 51.8% |  |
-| false_breakdown | bull | 10 | 4008 | 51.4% | 0.4% | 0.2% | 51.6% |  |
-| false_breakdown | bull | 20 | 2718 | 55.7% | 3.1% | 1.6% | 55.8% |  |
+| false_breakdown | bull | 5 | 4633 | 51.5% | 0.8% | 0.2% | 51.8% |  |
+| false_breakdown | bull | 10 | 4010 | 51.4% | 0.4% | 0.2% | 51.6% |  |
+| false_breakdown | bull | 20 | 2720 | 55.7% | 3.1% | 1.6% | 55.8% |  |
 | false_breakdown | unknown | 5 | 12800 | 46.5% | -0.2% | -0.4% | 46.9% |  |
 | false_breakdown | unknown | 10 | 12800 | 45.9% | -0.6% | -0.6% | 46.1% |  |
 | false_breakdown | unknown | 20 | 12799 | 45.4% | -1.0% | -1.2% | 45.5% |  |
 | false_breakdown_w_bottom | bear | 5 | 2639 | 68.6% | 2.2% | 2.0% | 68.9% |  |
 | false_breakdown_w_bottom | bear | 10 | 2639 | 83.2% | 6.8% | 5.6% | 83.6% |  |
 | false_breakdown_w_bottom | bear | 20 | 2639 | 81.6% | 9.6% | 7.9% | 81.8% |  |
-| false_breakdown_w_bottom | bull | 5 | 8574 | 50.1% | 0.2% | 0.0% | 50.3% |  |
-| false_breakdown_w_bottom | bull | 10 | 7423 | 46.8% | 0.0% | -0.4% | 46.9% |  |
-| false_breakdown_w_bottom | bull | 20 | 5581 | 54.3% | 2.3% | 1.0% | 54.4% |  |
+| false_breakdown_w_bottom | bull | 5 | 8580 | 50.1% | 0.2% | 0.0% | 50.4% |  |
+| false_breakdown_w_bottom | bull | 10 | 7430 | 46.8% | 0.0% | -0.4% | 47.0% |  |
+| false_breakdown_w_bottom | bull | 20 | 5583 | 54.3% | 2.3% | 1.0% | 54.4% |  |
 | false_breakdown_w_bottom | unknown | 5 | 22221 | 48.6% | -0.1% | -0.1% | 48.8% |  |
 | false_breakdown_w_bottom | unknown | 10 | 22219 | 48.0% | -0.1% | -0.3% | 48.1% |  |
 | false_breakdown_w_bottom | unknown | 20 | 22219 | 48.5% | -0.2% | -0.3% | 48.6% |  |
@@ -70,8 +70,8 @@ How to read the table:
 | false_breakout | bear | 10 | 959 | 59.7% | 3.5% | 1.9% | 40.2% |  |
 | false_breakout | bear | 20 | 952 | 68.6% | 8.5% | 5.3% | 31.3% |  |
 | false_breakout | bull | 5 | 8582 | 48.8% | 0.3% | -0.1% | 50.9% |  |
-| false_breakout | bull | 10 | 7693 | 47.7% | 0.5% | -0.3% | 52.2% |  |
-| false_breakout | bull | 20 | 6038 | 49.0% | 1.7% | -0.2% | 50.9% |  |
+| false_breakout | bull | 10 | 7695 | 47.7% | 0.5% | -0.3% | 52.2% |  |
+| false_breakout | bull | 20 | 6040 | 49.0% | 1.7% | -0.2% | 50.9% |  |
 | false_breakout | unknown | 5 | 21648 | 49.2% | 0.1% | -0.1% | 50.6% |  |
 | false_breakout | unknown | 10 | 21648 | 48.7% | -0.1% | -0.2% | 51.2% |  |
 | false_breakout | unknown | 20 | 21644 | 48.8% | -0.1% | -0.3% | 51.1% |  |
@@ -79,34 +79,34 @@ How to read the table:
 | hs_bottom | bear | 10 | 332 | 77.4% | 5.5% | 3.8% | 77.6% |  |
 | hs_bottom | bear | 20 | 332 | 70.2% | 5.8% | 3.5% | 70.2% |  |
 | hs_bottom | bull | 5 | 2522 | 51.0% | 0.3% | 0.1% | 51.3% |  |
-| hs_bottom | bull | 10 | 2306 | 51.8% | 0.6% | 0.2% | 52.0% |  |
-| hs_bottom | bull | 20 | 1787 | 54.2% | 2.4% | 0.6% | 54.3% |  |
+| hs_bottom | bull | 10 | 2308 | 51.9% | 0.6% | 0.2% | 52.0% |  |
+| hs_bottom | bull | 20 | 1789 | 54.2% | 2.4% | 0.6% | 54.3% |  |
 | hs_bottom | unknown | 5 | 8156 | 50.8% | 0.1% | 0.1% | 51.0% |  |
 | hs_bottom | unknown | 10 | 8156 | 53.8% | 0.3% | 0.4% | 53.9% |  |
 | hs_bottom | unknown | 20 | 8156 | 56.3% | 0.9% | 1.0% | 56.4% |  |
 | hs_top | bear | 5 | 636 | 66.7% | 1.8% | 1.7% | 32.8% |  |
 | hs_top | bear | 10 | 636 | 85.7% | 5.2% | 4.4% | 14.2% |  |
 | hs_top | bear | 20 | 636 | 81.3% | 8.0% | 6.6% | 18.5% |  |
-| hs_top | bull | 5 | 2211 | 49.8% | -0.0% | 0.0% | 49.9% |  |
-| hs_top | bull | 10 | 1944 | 46.3% | -0.7% | -0.3% | 53.6% |  |
-| hs_top | bull | 20 | 1427 | 56.3% | 1.5% | 0.8% | 43.5% |  |
+| hs_top | bull | 5 | 2213 | 49.8% | -0.0% | 0.0% | 49.9% |  |
+| hs_top | bull | 10 | 1946 | 46.2% | -0.7% | -0.3% | 53.7% |  |
+| hs_top | bull | 20 | 1431 | 56.3% | 1.5% | 0.8% | 43.5% |  |
 | hs_top | unknown | 5 | 5956 | 53.0% | 0.4% | 0.2% | 46.8% |  |
 | hs_top | unknown | 10 | 5955 | 51.7% | 0.3% | 0.2% | 48.1% |  |
 | hs_top | unknown | 20 | 5955 | 52.0% | 0.5% | 0.4% | 47.9% |  |
 | m_top | bear | 5 | 2205 | 70.2% | 1.6% | 1.5% | 29.2% |  |
 | m_top | bear | 10 | 2205 | 86.1% | 4.7% | 4.2% | 13.8% |  |
 | m_top | bear | 20 | 2199 | 83.9% | 7.2% | 6.5% | 16.1% |  |
-| m_top | bull | 5 | 7019 | 51.7% | 0.5% | 0.1% | 47.9% |  |
-| m_top | bull | 10 | 6098 | 51.2% | 0.5% | 0.1% | 48.6% |  |
-| m_top | bull | 20 | 4219 | 63.6% | 2.8% | 1.7% | 36.3% |  |
+| m_top | bull | 5 | 7020 | 51.7% | 0.5% | 0.1% | 47.9% |  |
+| m_top | bull | 10 | 6101 | 51.2% | 0.5% | 0.1% | 48.6% |  |
+| m_top | bull | 20 | 4220 | 63.6% | 2.8% | 1.7% | 36.3% |  |
 | m_top | unknown | 5 | 20980 | 51.6% | 0.0% | 0.1% | 48.1% |  |
 | m_top | unknown | 10 | 20977 | 51.0% | -0.1% | 0.1% | 48.8% |  |
 | m_top | unknown | 20 | 20974 | 53.8% | 0.3% | 0.4% | 46.0% |  |
 | sym_triangle_bottom | bear | 5 | 600 | 67.8% | 1.8% | 1.9% | 68.3% |  |
 | sym_triangle_bottom | bear | 10 | 600 | 76.5% | 4.2% | 3.8% | 76.6% |  |
 | sym_triangle_bottom | bear | 20 | 600 | 73.0% | 6.6% | 4.0% | 73.0% |  |
-| sym_triangle_bottom | bull | 5 | 3112 | 49.9% | 0.4% | 0.0% | 50.2% |  |
-| sym_triangle_bottom | bull | 10 | 2834 | 51.0% | 0.8% | 0.1% | 51.1% |  |
+| sym_triangle_bottom | bull | 5 | 3114 | 50.0% | 0.4% | 0.0% | 50.2% |  |
+| sym_triangle_bottom | bull | 10 | 2836 | 51.0% | 0.8% | 0.1% | 51.1% |  |
 | sym_triangle_bottom | bull | 20 | 2281 | 50.1% | 1.9% | 0.0% | 50.2% |  |
 | sym_triangle_bottom | unknown | 5 | 7527 | 51.3% | 0.2% | 0.1% | 51.5% |  |
 | sym_triangle_bottom | unknown | 10 | 7527 | 50.4% | 0.3% | 0.1% | 50.6% |  |
@@ -123,9 +123,9 @@ How to read the table:
 | w_bottom | bear | 5 | 1082 | 66.7% | 1.5% | 1.2% | 67.2% |  |
 | w_bottom | bear | 10 | 1082 | 74.5% | 3.4% | 2.7% | 74.8% |  |
 | w_bottom | bear | 20 | 1080 | 72.3% | 4.1% | 3.3% | 72.5% |  |
-| w_bottom | bull | 5 | 8571 | 52.2% | 0.1% | 0.1% | 52.6% |  |
-| w_bottom | bull | 10 | 7679 | 54.6% | 0.4% | 0.3% | 55.0% |  |
-| w_bottom | bull | 20 | 5988 | 56.7% | 1.0% | 0.7% | 56.9% |  |
+| w_bottom | bull | 5 | 8576 | 52.2% | 0.1% | 0.1% | 52.6% |  |
+| w_bottom | bull | 10 | 7684 | 54.6% | 0.4% | 0.3% | 55.0% |  |
+| w_bottom | bull | 20 | 5990 | 56.7% | 1.0% | 0.7% | 56.9% |  |
 | w_bottom | unknown | 5 | 29102 | 52.0% | 0.1% | 0.1% | 52.2% |  |
 | w_bottom | unknown | 10 | 29097 | 52.7% | 0.4% | 0.2% | 52.9% |  |
 | w_bottom | unknown | 20 | 29096 | 54.1% | 0.7% | 0.5% | 54.2% |  |

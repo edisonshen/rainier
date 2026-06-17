@@ -132,6 +132,7 @@ def build_corpus(
     regime_fn=_default_regime_fn,
     min_history_bars: int = MIN_HISTORY_BARS,
     lookback_bars: int = LIVE_LOOKBACK_BARS,
+    window_start: date | None = None,
 ) -> pd.DataFrame:
     """Replay the pattern layer over every (symbol, trading day) and attach
     forward returns + a regime tag.
@@ -141,6 +142,19 @@ def build_corpus(
     `pattern_replay.load_prices`. Rows are emitted ONLY where an actionable
     pattern exists as-of ``t`` (matching what the live ranker would consume).
     The result is sorted by ``(symbol, as_of)`` for byte-deterministic output.
+
+    ``window_start`` bounds the AS-OF date: a row is emitted only when its
+    ``t`` falls on/after this date, so the audit answers the advertised
+    trailing-window question instead of "all history". Earlier bars are still
+    LOADED (the detector's ~6-month lookback and forward-return lookups need
+    them at the window's left/right edges); they just don't generate emissions.
+    ``None`` keeps every date (full history).
+
+    The data gate (``min_history_bars``) is checked on the AS-OF WINDOW length,
+    not lifetime history: the live `_fetch_stock_data` rejects any 6-month
+    frame shorter than ``min_bars``, so a config whose ``min_daily_bars``
+    exceeds ``lookback_bars`` (~126) emits nothing here exactly as live skips
+    every symbol — no silent divergence.
     """
     # The regime for a calendar date is invariant across symbols, but the
     # default `compute_market_regime` opens a fresh DB session + SPY query per
@@ -166,7 +180,21 @@ def build_corpus(
         # trims to the live lookback; forward returns look INTO future bars of
         # the full frame, so the loop runs to the end (late rows get NULL fwd).
         for t_idx in range(min_history_bars - 1, n):
+            as_of_ts = df.index[t_idx]
+            as_of_date = (
+                as_of_ts.date() if hasattr(as_of_ts, "date") else as_of_ts
+            )
+            # Trailing-window bound on the AS-OF date (earlier bars still loaded
+            # for lookback / forward-return edges, just no emission). Bars are
+            # date-ascending, so once we cross the cutoff every later t is in.
+            if window_start is not None and as_of_date < window_start:
+                continue
             window = df.iloc[max(0, t_idx + 1 - lookback_bars) : t_idx + 1]
+            # Gate on the AS-OF WINDOW length, mirroring live `_fetch_stock_data`
+            # which rejects a 6-month frame shorter than min_bars. So a config
+            # with min_daily_bars > lookback emits nothing, same as live.
+            if len(window) < min_history_bars:
+                continue
             # The live screener wraps detect_patterns in try/except and skips
             # bad symbols; mirror that so one malformed window over a 1-year
             # replay drops that window, not the whole audit.
@@ -180,10 +208,6 @@ def build_corpus(
                 continue
             if emission is None:
                 continue
-            as_of_ts = df.index[t_idx]
-            as_of_date = (
-                as_of_ts.date() if hasattr(as_of_ts, "date") else as_of_ts
-            )
             row = {
                 "symbol": symbol,
                 "as_of": as_of_date,
@@ -335,12 +359,19 @@ def universe_symbols(session) -> list[str]:
     return sorted({r[0] for r in rows})
 
 
+# Trailing as-of window for the audit (calendar days). The report advertises a
+# 1-year audit; emissions are bounded to this window so the headline metrics
+# answer that question (earlier bars are still loaded for lookback/fwd edges).
+DEFAULT_WINDOW_DAYS = 365
+
+
 def run_pattern_audit(
     *,
     config: StockScreenerConfig,
     symbols: list[str] | None = None,
     corpus_dir: Path | None = None,
     min_history_bars: int | None = None,
+    window_days: int | None = DEFAULT_WINDOW_DAYS,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Path]:
     """Build the corpus from `stock_prices`, write Parquet, aggregate.
 
@@ -353,7 +384,14 @@ def run_pattern_audit(
     screener's data gate) so the replay starts emitting on the SAME bar floor
     the live ranker would — a champion that raises ``min_daily_bars`` must not
     leave the audit including emissions the live screen would have skipped.
+
+    ``window_days`` bounds the AS-OF date to a trailing window (relative to the
+    latest loaded bar, so it is deterministic for a fixed DB snapshot) — the
+    report advertises a 1-year audit, so the corpus must not silently span all
+    history. ``None`` audits every available date.
     """
+    from datetime import timedelta
+
     from rainier.core.database import get_session
     from rainier.paper.pattern_replay import load_prices
 
@@ -364,8 +402,26 @@ def run_pattern_audit(
         syms = symbols if symbols is not None else universe_symbols(session)
         prices = load_prices(session, syms)
 
+    # Anchor the window to the latest bar in the loaded corpus (not wall-clock),
+    # so a re-run over a fixed DB snapshot is byte-deterministic.
+    window_start: date | None = None
+    if window_days is not None:
+        latest: date | None = None
+        for df in prices.values():
+            if df.empty:
+                continue
+            last_ts = df.index[-1]
+            last_date = last_ts.date() if hasattr(last_ts, "date") else last_ts
+            if latest is None or last_date > latest:
+                latest = last_date
+        if latest is not None:
+            window_start = latest - timedelta(days=window_days)
+
     corpus = build_corpus(
-        prices, config=config, min_history_bars=min_history_bars
+        prices,
+        config=config,
+        min_history_bars=min_history_bars,
+        window_start=window_start,
     )
     agg = aggregate_to_frame(corpus)
     path = write_corpus(corpus, corpus_dir)
@@ -399,7 +455,7 @@ def render_report_markdown(
         "ranks by a 3-layer score where the **pattern shape carries 65% of the "
         "weight**. Those pattern weights were hand-set and **never checked "
         "against what prices actually did next**. This audit replays the live "
-        "pattern detector over one year of daily prices, records every "
+        "pattern detector over the daily-price window below, records every "
         "actionable emission, and measures the forward return at 5 / 10 / 20 "
         "trading days — so weight tuning can finally trace to evidence.",
         "",
