@@ -312,11 +312,17 @@ def _is_covered(
     tolerated (a late-by-3-sessions start is a run of 3 ≤ gap). It is NOT a
     row-count threshold: a dense set with one big hole still fails; a
     sparse-but-contiguous set still passes.
+
+    A symbol with NO usable bars over a non-degenerate window is never covered —
+    even a very short window (a name ranked only in the last few sessions): zero
+    prices means the sweep has nothing to read, so it must always re-fetch.
     """
     cal = calendar or _default_calendar()
     sessions = cal.sessions_between(window_start, window_end)
     if not sessions:
         return True  # degenerate window (no trading days) — nothing to cover
+    if not present:
+        return False  # window has sessions but zero usable bars → not covered
     run = 0
     for s in sessions:
         if s in present:

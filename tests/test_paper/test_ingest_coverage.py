@@ -255,6 +255,26 @@ def test_late_entrant_with_gap_after_listing_is_refetched(pg_legacy_session):
     assert "IPOGAP" in need
 
 
+def test_brand_new_symbol_with_no_bars_is_refetched(pg_legacy_session):
+    # Ranked only a few sessions before the window end (so its effective coverage
+    # window is shorter than COVERAGE_MAX_GAP_SESSIONS) but has ZERO usable bars.
+    # An empty span over a short window must NOT be treated as covered (codex P1)
+    # — zero prices means the sweep has nothing to read.
+    first_ranked = DEFAULT_CALENDAR.sub_sessions(WINDOW_END, 3)
+    _seed_cohort(pg_legacy_session, ["BRANDNEW"], first_ranked)
+    # No _seed_prices → no usable bars at all.
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["BRANDNEW"], WINDOW_START, WINDOW_END)
+    assert "BRANDNEW" in need
+
+
+def test_is_covered_empty_present_short_window_false():
+    # Pure: a non-degenerate (has sessions) but short window with empty present
+    # is never covered, even when the window is ≤ max gap.
+    short_end = DEFAULT_CALENDAR.add_sessions(WINDOW_START, 2)
+    assert not _is_covered(set(), WINDOW_START, short_end)
+
+
 def test_null_ohlc_rows_are_not_coverage(pg_legacy_session):
     # Placeholder rows with NULL OHLC at the boundaries must NOT count as
     # coverage (codex P1) — a covered span built only from NULL rows re-fetches.
