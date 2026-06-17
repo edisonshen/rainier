@@ -377,8 +377,9 @@ def select_symbols_needing_backfill(
     window_end: date,
     max_gap_sessions: int = COVERAGE_MAX_GAP_SESSIONS,
     calendar: "TradingCalendar | None" = None,
+    clamp_to_ranking_life: bool = False,
 ) -> list[str]:
-    """Symbols not fully covering the sweep window (sorted, deduped).
+    """Symbols not fully covering the window (sorted, deduped).
 
     A bare row-count threshold is deliberately NOT used: it can mark a
     split-history or boundary-missing symbol "covered" and re-open the gap. The
@@ -386,32 +387,40 @@ def select_symbols_needing_backfill(
     of missing usable sessions, catching the recent-sliver (long left run),
     stale-tail (long right run), and split-history (long interior run) cases.
 
-    Per-symbol boundaries: a symbol's effective coverage window is
-    ``[max(window_start, first_ranking), min(window_end, last_ranking)]``. A late
-    entrant (IPO) has no pre-listing history to repair (left); a former member
-    that stopped trading after its last ranking (delist/rename) is only consumed
-    THROUGH that last ranking (right). The miss-sweep evaluates a symbol only
-    over the sessions it actually appears in rankings, so neither pre-listing nor
-    post-delisting sessions are counted as gaps — without this the gate would
-    fail every run on legitimate non-current names.
+    TWO scopes via ``clamp_to_ranking_life`` (do not conflate):
+
+      - SELECTION (``False``, default — "what to FETCH"): the full
+        ``[window_start, window_end]`` per symbol, NO ranking clamp. Fetch
+        GENEROUSLY: ``run_qu100_portfolio_backtest`` pulls 180d of PRE-signal
+        lookback before a symbol's first ranking and values open positions on
+        every later session (``max_hold_days`` defaults to unlimited), so the
+        repair must pull history OUTSIDE the ranked life too (codex). Over-
+        fetching is harmless (ON CONFLICT idempotent); an IPO with no pre-listing
+        bars is simply re-selected each run (cheap) and its yfinance history
+        re-pulled.
+
+      - GATE (``True`` — "what must be COVERED to exit 0"): clamp to the symbol's
+        ranked life ``[max(start, first_ranking), min(end, last_ranking + tail)]``
+        so the success gate does NOT fail forever on an IPO (no pre-listing
+        history exists) or a delisted former member (no post-delisting history
+        exists). The forward tail covers the entry+hold past the last ranking.
     """
     usable = _symbol_usable_dates(list(symbols), window_start, window_end)
-    span = _symbol_ranking_span(list(symbols))
+    span = _symbol_ranking_span(list(symbols)) if clamp_to_ranking_life else {}
     cal = calendar or _default_calendar()
     need = []
     for s in symbols:
-        fr, lr = span.get(s, (None, None))
-        # Effective edges: clamp the global window to the symbol's ranked life,
-        # but extend the right edge by the forward tail (entry+hold past the last
-        # ranking) so the post-signal bars the backtest needs are required.
-        eff_start = window_start if fr is None else max(window_start, fr)
-        if lr is None:
-            eff_end = window_end
-        else:
-            eff_end = min(
-                window_end,
-                cal.add_sessions(lr, COVERAGE_FORWARD_TAIL_SESSIONS),
+        if clamp_to_ranking_life:
+            fr, lr = span.get(s, (None, None))
+            eff_start = window_start if fr is None else max(window_start, fr)
+            eff_end = (
+                window_end
+                if lr is None
+                else min(window_end, cal.add_sessions(lr, COVERAGE_FORWARD_TAIL_SESSIONS))
             )
+        else:
+            # Selection: the full window — fetch all history the backtest may read.
+            eff_start, eff_end = window_start, window_end
         if not _is_covered(
             usable.get(s, set()),
             eff_start,
@@ -444,8 +453,11 @@ def assert_cohort_coverage(
     cohort = [r["symbol"] for r in get_current_qu100_cohort(as_of)]
     if not cohort:
         return []
+    # GATE scope: clamp to each symbol's ranked life so an IPO/delisted name is
+    # not flagged forever for history that does not exist.
     return select_symbols_needing_backfill(
         cohort, window_start, window_end, max_gap_sessions, calendar,
+        clamp_to_ranking_life=True,
     )
 
 

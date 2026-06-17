@@ -240,8 +240,32 @@ def test_late_entrant_covered_from_first_ranking_date(pg_legacy_session):
     _seed_ranking(pg_legacy_session, "IPONEW", first_ranked)
     _seed_dense(pg_legacy_session, "IPONEW", first_ranked, WINDOW_END)
     pg_legacy_session.expire_all()
-    need = select_symbols_needing_backfill(["IPONEW"], WINDOW_START, WINDOW_END)
+    # GATE scope (clamp_to_ranking_life): covered for its ranked life. (Selection
+    # would re-select it to pull pre-listing lookback — see fetch generously.)
+    need = select_symbols_needing_backfill(
+        ["IPONEW"], WINDOW_START, WINDOW_END, clamp_to_ranking_life=True
+    )
     assert "IPONEW" not in need
+
+
+def test_selection_scope_fetches_pre_listing_lookback(pg_legacy_session):
+    # SELECTION scope (default, clamp_to_ranking_life=False): a late entrant dense
+    # only from its first ranking is STILL selected, because the portfolio
+    # backtest pulls 180d of PRE-signal lookback and the repair must fetch it
+    # (codex P1). Contrast the GATE scope, which treats it as covered.
+    first_ranked = date(2025, 1, 6)
+    _seed_cohort(pg_legacy_session, ["IPOFETCH"], WINDOW_END)
+    _seed_ranking(pg_legacy_session, "IPOFETCH", first_ranked)
+    _seed_dense(pg_legacy_session, "IPOFETCH", first_ranked, WINDOW_END)
+    pg_legacy_session.expire_all()
+    # Default (selection): not covered over the full window → fetched.
+    sel = select_symbols_needing_backfill(["IPOFETCH"], WINDOW_START, WINDOW_END)
+    assert "IPOFETCH" in sel
+    # Gate (clamp): covered for its ranked life.
+    gate = select_symbols_needing_backfill(
+        ["IPOFETCH"], WINDOW_START, WINDOW_END, clamp_to_ranking_life=True
+    )
+    assert "IPOFETCH" not in gate
 
 
 def test_late_entrant_with_gap_after_listing_is_refetched(pg_legacy_session):
@@ -273,7 +297,11 @@ def test_former_member_covered_through_last_ranking_plus_tail(pg_legacy_session)
     _seed_ranking(pg_legacy_session, "GONE", last_ranked)
     _seed_dense(pg_legacy_session, "GONE", first_ranked, tail_end)
     pg_legacy_session.expire_all()
-    need = select_symbols_needing_backfill(["GONE"], WINDOW_START, WINDOW_END)
+    # GATE scope (clamp_to_ranking_life): a delisted former member is covered
+    # through its ranked life + tail, not flagged forever for post-delist history.
+    need = select_symbols_needing_backfill(
+        ["GONE"], WINDOW_START, WINDOW_END, clamp_to_ranking_life=True
+    )
     assert "GONE" not in need
 
 
@@ -335,17 +363,19 @@ def test_weekend_ranking_with_completed_sessions_no_bars_is_refetched(
 
 
 def test_same_day_entrant_after_last_completed_session_is_covered(pg_legacy_session):
-    # A symbol first ranked AFTER the last-completed-session window_end (a same-
-    # day / weekend entrant whose entry bar is not published yet) has NO completed
-    # session in its window → covered (nothing fetchable yet), NOT a spurious flag
-    # that would fail every intraday run (codex P1). It is picked up on the next
-    # run once its first session completes.
+    # GATE scope: a symbol first ranked AFTER the last-completed-session
+    # window_end (a same-day/weekend entrant whose entry bar is not published yet)
+    # has NO completed session in its CLAMPED window → covered (nothing fetchable
+    # yet), NOT a spurious gate failure on every intraday run (codex P1). Picked
+    # up on the next run once its first session completes.
     saturday = date(2024, 6, 8)  # Saturday — first ranking after window_end
     window_end = date(2024, 6, 7)  # the prior Friday (last completed session)
     _seed_cohort(pg_legacy_session, ["SAMEDAY"], saturday)
     # No prices yet (the bar does not exist).
     pg_legacy_session.expire_all()
-    need = select_symbols_needing_backfill(["SAMEDAY"], WINDOW_START, window_end)
+    need = select_symbols_needing_backfill(
+        ["SAMEDAY"], WINDOW_START, window_end, clamp_to_ranking_life=True
+    )
     assert "SAMEDAY" not in need
 
 

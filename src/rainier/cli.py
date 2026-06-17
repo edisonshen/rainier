@@ -1938,8 +1938,10 @@ def db_backfill_prices(years, batch_size, dry_run):
             ).scalars().all()
         )
 
-    # Coverage over the SWEEP window (cov_start..today), NOT the widened fetch
-    # window — qu100_portfolio.
+    # SELECTION (what to fetch): full sweep window per symbol, NO ranking clamp —
+    # fetch generously so pre-signal lookback and post-signal tails the backtest
+    # reads are pulled. The post-run GATE below clamps to ranked life so it does
+    # not fail forever on IPO/delisted names.
     missing = select_symbols_needing_backfill(qu_symbols, cov_start, end_date)
     has_prices = sorted(set(qu_symbols) - set(missing))
 
@@ -2015,7 +2017,9 @@ def db_backfill_prices(years, batch_size, dry_run):
     # blocker: a symbol still uncovered after it WAS requested (a genuine
     # upstream omission or a post-start listing) is a STOP-and-raise for the
     # operator, never a silently lowered bar.
-    still_missing = select_symbols_needing_backfill(qu_symbols, cov_start, end_date)
+    still_missing = select_symbols_needing_backfill(
+        qu_symbols, cov_start, end_date, clamp_to_ranking_life=True
+    )
     if still_missing:
         preview = still_missing[:50]
         raise click.ClickException(
