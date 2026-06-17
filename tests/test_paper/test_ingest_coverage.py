@@ -545,6 +545,32 @@ def test_save_prices_coalesce_keeps_good_value_on_null_refetch(pg_legacy_session
     assert float(row.close) == 2.0  # real re-fetch value applied
 
 
+def test_save_prices_canonicalizes_date_conflicts_with_existing(pg_legacy_session):
+    """A re-fetch whose timestamp carries a time-of-day/tz must canonicalize to
+    00:00 UTC so it CONFLICTS with the existing canonical row and REPAIRS it,
+    rather than inserting a second row for the same trading day (codex P1 —
+    breaks idempotent repair in the mixed ingest/backfill case)."""
+    from rainier.backtest.qu100_portfolio import _save_prices_to_db
+
+    d = date(2024, 1, 4)
+    # Existing canonical 00:00 UTC row (as paper.ingest writes it).
+    _seed_prices(pg_legacy_session, "CANON", [d])
+    pg_legacy_session.expire_all()
+    # Re-fetch: same trading day but a non-midnight, tz-aware timestamp.
+    idx = pd.to_datetime([datetime(2024, 1, 4, 14, 30, tzinfo=timezone.utc)])
+    cols = pd.MultiIndex.from_product(
+        [["Open", "High", "Low", "Close", "Volume"], ["CANON"]]
+    )
+    yf_df = pd.DataFrame(7.0, index=idx, columns=cols)
+    _save_prices_to_db(yf_df, ["CANON"])
+    pg_legacy_session.expire_all()
+    rows = pg_legacy_session.execute(
+        select(StockPrice).where(StockPrice.symbol == "CANON")
+    ).scalars().all()
+    assert len(rows) == 1  # conflict-updated, NOT a duplicate row
+    assert float(rows[0].close) == 7.0  # repaired to the re-fetch value
+
+
 def test_backfill_gate_fails_when_cohort_incomplete(pg_legacy_session, monkeypatch):
     """The post-run cohort gate must FAIL (non-zero exit), not warn-and-exit-0,
     when a current-cohort symbol stays uncovered (codex P2). A warn-only gate is

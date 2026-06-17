@@ -1897,9 +1897,16 @@ def db_backfill_prices(years, batch_size, dry_run):
     download_start = min(sweep_start, years_floor)
 
     with get_session() as session:
+        # Restrict the universe to ranking_type='top100' — the EXACT slice the
+        # miss-sweep consumes. Auxiliary bottom100/other-type-only names are
+        # never read by the sweep; including them would feed the stricter sweep-
+        # window coverage check symbols with no first-top100-ranking date and
+        # schedule wasted re-downloads (codex).
         qu_symbols = sorted(
             session.execute(
-                select(func.distinct(MoneyFlowSnapshot.symbol))
+                select(func.distinct(MoneyFlowSnapshot.symbol)).where(
+                    MoneyFlowSnapshot.ranking_type == "top100"
+                )
             ).scalars().all()
         )
 

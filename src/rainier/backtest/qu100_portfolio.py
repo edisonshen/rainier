@@ -15,7 +15,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -228,15 +228,18 @@ def _symbol_usable_dates(
     guard ``.get``.
     """
     from rainier.core.models import StockPrice
+    from rainier.paper.ingest import canonical_instant, normalize_to_trading_date
 
     result: dict[str, set[date]] = {s: set() for s in symbols}
     if not symbols:
         return result
-    # date is stored as 00:00 UTC; compare against tz-aware instants, not strings.
-    start_dt = datetime(window_start.year, window_start.month, window_start.day,
-                        tzinfo=timezone.utc)
-    end_dt = datetime(window_end.year, window_end.month, window_end.day,
-                      tzinfo=timezone.utc)
+    # date is stored as canonical 00:00 UTC; compare against the SAME canonical
+    # instants (not strings) and normalize on read with normalize_to_trading_date
+    # — a non-UTC session TZ renders TIMESTAMPTZ in that zone, and a bare
+    # `d.date()` could shift a boundary bar onto the previous day (the read-side
+    # bug paper.ingest._existing_dates already guards against).
+    start_dt = canonical_instant(window_start)
+    end_dt = canonical_instant(window_end)
     with get_session() as db:
         rows = db.execute(
             select(StockPrice.symbol, StockPrice.date).where(
@@ -250,7 +253,7 @@ def _symbol_usable_dates(
             )
         ).all()
     for sym, d in rows:
-        result[sym].add(d.date() if hasattr(d, "date") else d)
+        result[sym].add(normalize_to_trading_date(d))
     return result
 
 
@@ -570,14 +573,23 @@ def _save_prices_to_db(
         # re-fetch field keeps the old good value (B5 discipline, mirrors
         # paper.ingest._upsert_bar); re-fetching identical data is a no-op write
         # (idempotent — no duplicate (symbol, date) rows).
+        #
+        # The `date` is canonicalized to 00:00 UTC (canonical_instant ∘
+        # normalize_to_trading_date) so a re-fetch CONFLICTS with the canonical
+        # row paper.ingest already wrote for that trading day — otherwise a raw
+        # yfinance timestamp at a different tz/time-of-day would dodge
+        # uq_stock_price_symbol_date and insert a SECOND row instead of repairing
+        # (breaking idempotent repair in the mixed ingest/backfill case).
         from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        from rainier.paper.ingest import canonical_instant, normalize_to_trading_date
         rows_to_insert = []
         for _, row in long_df.iterrows():
             if pd.isna(row["close"]):
                 continue
             rows_to_insert.append({
                 "symbol": row["symbol"],
-                "date": row["date"],
+                "date": canonical_instant(normalize_to_trading_date(row["date"])),
                 "open": row["open"] if pd.notna(row["open"]) else None,
                 "high": row["high"] if pd.notna(row["high"]) else None,
                 "low": row["low"] if pd.notna(row["low"]) else None,
