@@ -260,3 +260,36 @@ def test_load_prices_start_date_adds_sql_bound():
     load_prices(sess2, ["AAA"])
     sql_without = str(sess2.stmt.compile(compile_kwargs={"literal_binds": False}))
     assert "stock_prices.date >=" not in sql_without
+
+
+def test_load_prices_drops_partial_ohlc_bars():
+    """A row with a null high/low/open (a partial-backfill bar) is dropped
+    before the detector sees it; a null volume is filled to 0, not dropped.
+    Guards codex iter-9 P2."""
+    import datetime as _dt
+    from types import SimpleNamespace
+
+    from rainier.paper.pattern_replay import load_prices
+
+    def _row(d, o, h, lo, c, v):
+        return SimpleNamespace(
+            symbol="AAA",
+            date=_dt.datetime(2025, 1, d, tzinfo=_dt.timezone.utc),
+            open=o, high=h, low=lo, close=c, volume=v,
+        )
+
+    rows = [
+        _row(1, 100.0, 101.0, 99.0, 100.0, 1000.0),   # complete
+        _row(2, 100.0, None, 99.0, 100.5, 1000.0),    # null high → DROP
+        _row(3, 100.0, 102.0, 99.0, 101.0, None),     # null volume → keep, vol=0
+    ]
+
+    class _Sess:
+        def execute(self, stmt):
+            return SimpleNamespace(all=lambda: rows)
+
+    out = load_prices(_Sess(), ["AAA"])
+    df = out["AAA"]
+    assert len(df) == 2  # the null-high bar dropped
+    assert df["volume"].isna().sum() == 0
+    assert (df["volume"] == 0.0).any()  # null volume filled to 0

@@ -713,8 +713,9 @@ def backtest_qu100(ctx, top_n, hold, min_rank, max_rank, entry_delay,
     help="Comma-separated symbols (default: all in money_flow_snapshots)",
 )
 @click.option(
-    "--report", "report_path", default="docs/REPORT-qu100-pattern-hit-rate.md",
-    help="Markdown report output path",
+    "--report", "report_path", default=None,
+    help="Markdown report output path (default: canonical for a full run, "
+         "a -scoped report for a filtered/short-window run)",
 )
 @click.option(
     "--window-days", default=365, show_default=True, type=int,
@@ -744,10 +745,17 @@ def pattern_audit(ctx, symbols, report_path, window_days, window_label):
     win_days = window_days if window_days and window_days > 0 else None
 
     # A SCOPED run (filtered symbols or a non-default window) writes a distinct
-    # corpus file so it doesn't silently clobber the canonical full-universe
-    # cache that later consumers read.
+    # corpus file AND a distinct report (unless --report is explicit) so it
+    # doesn't silently clobber the canonical full-universe cache + checked-in
+    # report that later consumers read.
     scoped = sym_list is not None or window_days != 365
     corpus_filename = "corpus-scoped.parquet" if scoped else None
+    if report_path is None:
+        report_path = (
+            "docs/REPORT-qu100-pattern-hit-rate-scoped.md"
+            if scoped
+            else "docs/REPORT-qu100-pattern-hit-rate.md"
+        )
 
     click.echo("Running QU100 pattern forward-return audit over stock_prices...")
     corpus, agg, corpus_file, derived_label = run_pattern_audit(

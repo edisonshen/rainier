@@ -146,7 +146,17 @@ def load_prices(
                 "volume": [r.volume for r in sym_rows],
             }
         )
-        df = df.dropna(subset=["close"]).reset_index(drop=True)
+        # Drop partial bars: the detector reads open/high/low/close on every
+        # window, so a row missing ANY price is unusable (a NaN there either
+        # corrupts swing detection or trips the build_corpus skip path, silently
+        # biasing the audit). `stock_prices` permits these partial-backfill
+        # rows; other paper readers filter them too. Volume is NOT a price input
+        # to swing detection — a null there fills to 0 (a no-volume bar, which
+        # yfinance also emits) rather than dropping an otherwise-complete bar.
+        df = df.dropna(subset=["open", "high", "low", "close"]).reset_index(
+            drop=True
+        )
+        df["volume"] = df["volume"].fillna(0.0)
         df = df.set_index("date")
         out[sym] = df
     return out
