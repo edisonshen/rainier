@@ -412,7 +412,8 @@ def test_backfill_fetch_window_pinned_to_sweep_start(pg_legacy_session, monkeypa
     from rainier import cli as cli_mod
 
     sweep_start = date(2022, 5, 25)
-    today = date(2026, 6, 12)
+    today = date.today()  # CLI uses datetime.now(); track the real clock so the
+    # post-run coverage gate's right edge never drifts into a stale tail.
     # Rankings reach back to 2022-05-25 → that's the sweep start.
     _seed_cohort(pg_legacy_session, ["AMZN"], today)
     pg_legacy_session.execute(
@@ -459,7 +460,8 @@ def test_backfill_idempotent_rerun(pg_legacy_session, monkeypatch):
     from rainier import cli as cli_mod
 
     sweep_start = date(2022, 5, 25)
-    today = date(2026, 6, 12)
+    today = date.today()  # CLI uses datetime.now(); track the real clock so the
+    # post-run coverage gate's right edge never drifts into a stale tail.
     _seed_cohort(pg_legacy_session, ["NVDA"], today)
     pg_legacy_session.execute(
         text(
@@ -580,7 +582,8 @@ def test_backfill_gate_fails_when_cohort_incomplete(pg_legacy_session, monkeypat
     from rainier import cli as cli_mod
 
     sweep_start = date(2022, 5, 25)
-    today = date(2026, 6, 12)
+    today = date.today()  # CLI uses datetime.now(); track the real clock so the
+    # post-run coverage gate's right edge never drifts into a stale tail.
     _seed_cohort(pg_legacy_session, ["DROP"], today)
     pg_legacy_session.execute(
         text(
@@ -619,7 +622,8 @@ def test_backfill_gate_anchored_at_sweep_start_not_years_floor(
     from rainier import cli as cli_mod
 
     sweep_start = date(2022, 5, 25)
-    today = date(2026, 6, 12)
+    today = date.today()  # CLI uses datetime.now(); track the real clock so the
+    # post-run coverage gate's right edge never drifts into a stale tail.
     _seed_cohort(pg_legacy_session, ["IPOX"], today)
     pg_legacy_session.execute(
         text(
