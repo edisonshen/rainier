@@ -81,7 +81,21 @@ def load_champion_overrides(model_dir: Path | None = None) -> dict[str, Any]:
             f"champion.yaml at {path} must be a YAML mapping of "
             f"StockScreenerConfig fields, got {type(raw).__name__}"
         )
-    return {k: v for k, v in raw.items() if k not in METADATA_KEYS}
+    overrides = {k: v for k, v in raw.items() if k not in METADATA_KEYS}
+    # Reject typo'd / unknown field names. pydantic would SILENTLY drop them at
+    # StockScreenerConfig(**merged), so a misspelled `buy_threshhold` in a
+    # promotion would boot on the old live threshold — the same silent-no-op
+    # the "fail loudly" contract above guards against. Validate here instead.
+    from rainier.core.config import StockScreenerConfig
+
+    known = set(StockScreenerConfig.model_fields)
+    unknown = sorted(set(overrides) - known)
+    if unknown:
+        raise ValueError(
+            f"champion.yaml at {path} has unknown StockScreenerConfig "
+            f"field(s): {', '.join(unknown)} (typo? check against settings.yaml)"
+        )
+    return overrides
 
 
 def merge_stock_screener_config(

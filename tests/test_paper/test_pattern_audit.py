@@ -214,11 +214,15 @@ def test_run_pattern_audit_defaults_min_history_to_config(monkeypatch, tmp_path)
     monkeypatch.setattr(pa, "build_corpus", fake_build_corpus)
     monkeypatch.setattr("rainier.core.database.get_session", lambda: _FakeSession())
     monkeypatch.setattr(
-        "rainier.paper.pattern_replay.load_prices", lambda s, syms: {}
+        "rainier.paper.pattern_replay.load_prices",
+        lambda s, syms, start_date=None: {},
     )
 
     cfg = StockScreenerConfig(min_daily_bars=80)
-    pa.run_pattern_audit(config=cfg, symbols=["AAA"], corpus_dir=tmp_path)
+    # window_days=None skips the max-date query (no real session here).
+    pa.run_pattern_audit(
+        config=cfg, symbols=["AAA"], corpus_dir=tmp_path, window_days=None
+    )
     assert captured["min_history_bars"] == 80
 
 

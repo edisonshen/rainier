@@ -205,3 +205,40 @@ def test_emission_is_deterministic():
 def test_emission_none_when_no_pattern():
     df = _make_ohlcv([100.0] * 40)
     assert emission_at("FLAT", df, _CONFIG) is None
+
+
+# ---------------------------------------------------------------------------
+# load_prices — start_date bounds the SQL load (codex iter-4 P2: no full-history
+# scan for a trailing-window audit).
+# ---------------------------------------------------------------------------
+
+
+def test_load_prices_start_date_adds_sql_bound():
+    import pandas as pd
+
+    from rainier.paper.pattern_replay import load_prices
+
+    class _RecordingSession:
+        def __init__(self):
+            self.stmt = None
+
+        def execute(self, stmt):
+            self.stmt = stmt
+
+            class _Res:
+                def all(self):
+                    return []
+
+            return _Res()
+
+    # With start_date: the compiled SQL carries a `date >=` bound.
+    sess = _RecordingSession()
+    load_prices(sess, ["AAA"], start_date=pd.Timestamp("2025-06-01", tz="UTC"))
+    sql_with = str(sess.stmt.compile(compile_kwargs={"literal_binds": False}))
+    assert "stock_prices.date >=" in sql_with
+
+    # Without start_date: no date lower bound in the WHERE clause.
+    sess2 = _RecordingSession()
+    load_prices(sess2, ["AAA"])
+    sql_without = str(sess2.stmt.compile(compile_kwargs={"literal_binds": False}))
+    assert "stock_prices.date >=" not in sql_without

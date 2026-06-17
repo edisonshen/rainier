@@ -390,32 +390,52 @@ def run_pattern_audit(
     report advertises a 1-year audit, so the corpus must not silently span all
     history. ``None`` audits every available date.
     """
-    from datetime import timedelta
+    from datetime import datetime, timedelta, timezone
+
+    import pandas as _pd
+    from sqlalchemy import func, select
 
     from rainier.core.database import get_session
-    from rainier.paper.pattern_replay import load_prices
+    from rainier.core.models import StockPrice
+    from rainier.paper.pattern_replay import LIVE_LOOKBACK_BARS, load_prices
 
     if min_history_bars is None:
         min_history_bars = config.min_daily_bars
 
     with get_session() as session:
         syms = symbols if symbols is not None else universe_symbols(session)
-        prices = load_prices(session, syms)
 
-    # Anchor the window to the latest bar in the loaded corpus (not wall-clock),
-    # so a re-run over a fixed DB snapshot is byte-deterministic.
-    window_start: date | None = None
-    if window_days is not None:
-        latest: date | None = None
-        for df in prices.values():
-            if df.empty:
-                continue
-            last_ts = df.index[-1]
-            last_date = last_ts.date() if hasattr(last_ts, "date") else last_ts
-            if latest is None or last_date > latest:
-                latest = last_date
-        if latest is not None:
-            window_start = latest - timedelta(days=window_days)
+        # Anchor the window to the latest stored bar (not wall-clock) so a
+        # re-run over a fixed DB snapshot is byte-deterministic.
+        window_start: date | None = None
+        load_start: _pd.Timestamp | None = None
+        if window_days is not None:
+            max_ts = session.execute(
+                select(func.max(StockPrice.date)).where(
+                    StockPrice.symbol.in_(syms)
+                )
+            ).scalar()
+            if max_ts is not None:
+                latest = max_ts.date() if hasattr(max_ts, "date") else max_ts
+                window_start = latest - timedelta(days=window_days)
+                # Pad the SQL load left by the detector lookback so the earliest
+                # in-window as-of bar still sees its full ~6-month window. Trading
+                # bars → calendar days with a generous 2x factor + slack; trims
+                # the load from "all history" to ~window + lookback, not the
+                # whole table. Correctness is unaffected (build_corpus still
+                # bounds the as-of date to window_start).
+                pad_days = LIVE_LOOKBACK_BARS * 2 + 14
+                load_start_date = window_start - timedelta(days=pad_days)
+                load_start = _pd.Timestamp(
+                    datetime(
+                        load_start_date.year,
+                        load_start_date.month,
+                        load_start_date.day,
+                        tzinfo=timezone.utc,
+                    )
+                )
+
+        prices = load_prices(session, syms, start_date=load_start)
 
     corpus = build_corpus(
         prices,

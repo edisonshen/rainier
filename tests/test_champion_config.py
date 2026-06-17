@@ -88,6 +88,16 @@ def test_load_champion_malformed_raises(tmp_path):
         load_champion_overrides(tmp_path)
 
 
+def test_load_champion_unknown_field_raises(tmp_path):
+    """A typo'd field name (pydantic would silently drop it at construction)
+    fails loudly. Guards codex iter-4 P2."""
+    import pytest
+
+    _write_champion(tmp_path, {"buy_threshhold": 0.7})  # typo: extra 'h'
+    with pytest.raises(ValueError, match="unknown StockScreenerConfig field"):
+        load_champion_overrides(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # deep-merge precedence: champion wins; unspecified fields fall through to
 # settings.yaml (NOT to code defaults); pattern_weights deep-merges.

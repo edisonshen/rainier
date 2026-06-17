@@ -93,26 +93,35 @@ class PatternEmission:
 
 
 def load_prices(
-    session: Session, symbols: list[str]
+    session: Session,
+    symbols: list[str],
+    *,
+    start_date: "pd.Timestamp | None" = None,
 ) -> dict[str, pd.DataFrame]:
     """Load OHLCV per symbol from ``stock_prices``, sorted ``symbol, date``.
 
     Returns a dict ``{symbol: DataFrame}`` with a tz-aware ``date`` index and
     lowercase OHLCV columns. The explicit ``ORDER BY symbol, date`` makes the
     corpus byte-deterministic on re-run.
+
+    ``start_date`` (inclusive) bounds the SQL load so a trailing-window audit
+    over a multi-year table does not materialize all history. The caller must
+    pad it left by the detector lookback so the earliest in-window as-of bar
+    still sees its full ~6-month window.
     """
+    query = select(
+        StockPrice.symbol,
+        StockPrice.date,
+        StockPrice.open,
+        StockPrice.high,
+        StockPrice.low,
+        StockPrice.close,
+        StockPrice.volume,
+    ).where(StockPrice.symbol.in_(symbols))
+    if start_date is not None:
+        query = query.where(StockPrice.date >= start_date)
     rows = session.execute(
-        select(
-            StockPrice.symbol,
-            StockPrice.date,
-            StockPrice.open,
-            StockPrice.high,
-            StockPrice.low,
-            StockPrice.close,
-            StockPrice.volume,
-        )
-        .where(StockPrice.symbol.in_(symbols))
-        .order_by(StockPrice.symbol.asc(), StockPrice.date.asc())
+        query.order_by(StockPrice.symbol.asc(), StockPrice.date.asc())
     ).all()
 
     by_symbol: dict[str, list] = {}
