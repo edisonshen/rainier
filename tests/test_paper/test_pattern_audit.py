@@ -166,6 +166,62 @@ def test_build_corpus_memoizes_regime_per_date():
     assert len(calls) <= len(corpus)
 
 
+def test_build_corpus_skips_detector_exception(monkeypatch):
+    """A detector exception on one window is logged + skipped (mirrors the live
+    screener), not propagated to abort the whole audit. Guards codex iter-1 P1."""
+    import rainier.paper.pattern_audit as pa
+
+    prices = [100.0] * 60 + _false_breakdown_block() + [92.5, 93.0] * 11
+    df = _make_ohlcv(prices)
+
+    real_emission_at = pa.emission_at
+    calls = {"n": 0}
+
+    def flaky_emission_at(symbol, window, config):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("synthetic detector blowup")
+        return real_emission_at(symbol, window, config)
+
+    monkeypatch.setattr(pa, "emission_at", flaky_emission_at)
+    # Must NOT raise — the bad window is dropped, the rest still build.
+    corpus = build_corpus(
+        {"AAA": df}, config=_CONFIG, regime_fn=lambda a: "bull",
+        min_history_bars=60,
+    )
+    assert calls["n"] > 1  # kept going past the failing window
+    assert isinstance(corpus, pd.DataFrame)
+
+
+def test_run_pattern_audit_defaults_min_history_to_config(monkeypatch, tmp_path):
+    """When min_history_bars is not passed, run_pattern_audit derives it from
+    config.min_daily_bars (the live data gate). Guards codex iter-1 P2."""
+    import rainier.paper.pattern_audit as pa
+
+    captured = {}
+
+    def fake_build_corpus(prices, *, config, min_history_bars, **kw):
+        captured["min_history_bars"] = min_history_bars
+        return pd.DataFrame(columns=list(pa.CORPUS_COLUMNS))
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(pa, "build_corpus", fake_build_corpus)
+    monkeypatch.setattr("rainier.core.database.get_session", lambda: _FakeSession())
+    monkeypatch.setattr(
+        "rainier.paper.pattern_replay.load_prices", lambda s, syms: {}
+    )
+
+    cfg = StockScreenerConfig(min_daily_bars=80)
+    pa.run_pattern_audit(config=cfg, symbols=["AAA"], corpus_dir=tmp_path)
+    assert captured["min_history_bars"] == 80
+
+
 def test_build_corpus_skips_thin_history():
     df = _make_ohlcv([100.0] * 30)  # below the 60-bar floor
     corpus = build_corpus(

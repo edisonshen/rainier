@@ -526,7 +526,12 @@ def load_settings(config_path: Path | None = None) -> Settings:
         merge_stock_screener_config,
     )
 
-    champion_overrides = load_champion_overrides()
+    # Resolve champion.yaml relative to the SELECTED settings file, so a
+    # non-default --config (staging / experiment env) pairs with ITS sibling
+    # model dir instead of silently reading the CWD's champion. The repo
+    # default `config/settings.yaml` → `config/model/`, preserving behavior.
+    champion_dir = config_path.parent / "model"
+    champion_overrides = load_champion_overrides(champion_dir)
     yaml_screener = yaml_config.get("stock_screener")
     if yaml_screener or champion_overrides:
         merged_screener = merge_stock_screener_config(

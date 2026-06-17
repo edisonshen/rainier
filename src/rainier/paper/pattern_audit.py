@@ -167,7 +167,17 @@ def build_corpus(
         # the full frame, so the loop runs to the end (late rows get NULL fwd).
         for t_idx in range(min_history_bars - 1, n):
             window = df.iloc[max(0, t_idx + 1 - lookback_bars) : t_idx + 1]
-            emission = emission_at(symbol, window, config)
+            # The live screener wraps detect_patterns in try/except and skips
+            # bad symbols; mirror that so one malformed window over a 1-year
+            # replay drops that window, not the whole audit.
+            try:
+                emission = emission_at(symbol, window, config)
+            except Exception:
+                log.exception(
+                    "pattern replay failed for %s @ t_idx=%d, skipping window",
+                    symbol, t_idx,
+                )
+                continue
             if emission is None:
                 continue
             as_of_ts = df.index[t_idx]
@@ -330,7 +340,7 @@ def run_pattern_audit(
     config: StockScreenerConfig,
     symbols: list[str] | None = None,
     corpus_dir: Path | None = None,
-    min_history_bars: int = MIN_HISTORY_BARS,
+    min_history_bars: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Path]:
     """Build the corpus from `stock_prices`, write Parquet, aggregate.
 
@@ -338,9 +348,17 @@ def run_pattern_audit(
     TimescaleDB via `pattern_replay.load_prices`; the regime tag uses the live
     `compute_market_regime` (SPY vs 200-SMA). Deterministic for a fixed DB
     snapshot (explicit ORDER BY symbol, date in the price query).
+
+    ``min_history_bars`` defaults to ``config.min_daily_bars`` (the live
+    screener's data gate) so the replay starts emitting on the SAME bar floor
+    the live ranker would — a champion that raises ``min_daily_bars`` must not
+    leave the audit including emissions the live screen would have skipped.
     """
     from rainier.core.database import get_session
     from rainier.paper.pattern_replay import load_prices
+
+    if min_history_bars is None:
+        min_history_bars = config.min_daily_bars
 
     with get_session() as session:
         syms = symbols if symbols is not None else universe_symbols(session)

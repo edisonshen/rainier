@@ -101,21 +101,45 @@ def test_precedence_unspecified_field_falls_through_to_settings_yaml(
     """A champion.yaml that sets ONE field: every other field must come from
     settings.yaml, proving a dict-level deep-merge (not whole-object replace)."""
     monkeypatch.chdir(tmp_path)
+    # Real layout: settings.yaml and the model/ dir are SIBLINGS, so champion
+    # resolves relative to the selected settings file.
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
     # settings.yaml sets a NON-default buy_threshold so we can tell it apart
     # from the code default (0.65).
-    settings_path = tmp_path / "settings.yaml"
+    settings_path = cfg_dir / "settings.yaml"
     _write_settings_yaml(
         settings_path,
         {"buy_threshold": 0.61, "watch_threshold": 0.49},
     )
     # champion sets ONLY layer_weight_pattern.
-    _write_champion(tmp_path / "config" / "model", {"layer_weight_pattern": 0.55})
+    _write_champion(cfg_dir / "model", {"layer_weight_pattern": 0.55})
 
     s = load_settings(config_path=settings_path)
     sc = s.stock_screener
     assert sc.layer_weight_pattern == 0.55  # from champion
     assert sc.buy_threshold == 0.61  # from settings.yaml (NOT code default 0.65)
     assert sc.watch_threshold == 0.49  # from settings.yaml
+
+
+def test_champion_resolves_relative_to_selected_config(tmp_path):
+    """A non-default --config pairs with ITS sibling model/champion.yaml, not
+    the process CWD's. Guards the codex iter-1 P1: a staging config must not
+    silently load production thresholds."""
+    # Env A (the "wrong" champion that must NOT be picked up).
+    cwd_model = tmp_path / "cwd" / "config" / "model"
+    _write_champion(cwd_model, {"layer_weight_pattern": 0.11})
+    # Env B: the selected --config and ITS sibling champion.
+    staging = tmp_path / "staging" / "config"
+    staging.mkdir(parents=True)
+    settings_path = staging / "settings.yaml"
+    _write_settings_yaml(settings_path, {"buy_threshold": 0.61})
+    _write_champion(staging / "model", {"layer_weight_pattern": 0.55})
+
+    s = load_settings(config_path=settings_path)
+    # Picks up the staging champion (0.55), NOT the cwd one (0.11).
+    assert s.stock_screener.layer_weight_pattern == 0.55
+    assert s.stock_screener.buy_threshold == 0.61
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +163,11 @@ def test_seeded_champion_is_behavior_preserving():
 
 def test_hot_reload_picks_up_champion_change(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    settings_path = tmp_path / "settings.yaml"
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    settings_path = cfg_dir / "settings.yaml"
     _write_settings_yaml(settings_path, {"layer_weight_pattern": 0.65})
-    model_dir = tmp_path / "config" / "model"
+    model_dir = cfg_dir / "model"  # sibling of settings.yaml
 
     _write_champion(model_dir, {"layer_weight_pattern": 0.65})
     s1 = load_settings_fresh(config_path=str(settings_path))
