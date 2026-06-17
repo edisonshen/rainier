@@ -39,6 +39,7 @@ from rainier.core.config import StockScreenerConfig
 from rainier.paper.pattern_replay import (
     LIVE_LOOKBACK_BARS,
     emission_at,
+    window_as_of,
 )
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,13 @@ CORPUS_FILENAME = "corpus.parquet"
 
 # Forward-return horizons (trading days).
 HORIZONS: tuple[int, ...] = (5, 10, 20)
+
+# Max calendar days a clean H-trading-day span may cover before we treat the
+# series as gapped. H trading days span ~H*1.5 calendar days at the high end
+# (weekends + the odd holiday); a slack factor keeps normal holiday weeks valid
+# while catching real missing-session gaps. Used to NULL gap-crossing horizons
+# so a "5d" cell never silently spans 8 market days on a gappy symbol.
+GAP_CALENDAR_SLACK_DAYS = 7
 
 # A symbol needs at least this many bars of history before t for the detector
 # (mirrors the live min_daily_bars=60 floor; the window itself trims to ~126).
@@ -83,6 +91,13 @@ def forward_return(df: pd.DataFrame, t_idx: int, horizon: int) -> float | None:
     NULL near the window end is a deliberate contract: a 0 there would be a
     fake "no move" that pollutes the win-rate. ``df`` is the FULL price frame
     (so future bars exist to look up); ``t_idx`` is the as-of row.
+
+    The H rows ahead are only an honest H-TRADING-DAY return if the series has
+    no missing sessions between them. On a date-indexed frame we check the
+    calendar span: if `t..t+H` rows cover materially more than H trading days'
+    worth of calendar time (missing sessions in `stock_prices`), the return is
+    NULLed rather than mislabeled — a gappy "5d" cell must not silently span 8
+    market days and become incomparable across symbols.
     """
     if t_idx < 0 or t_idx >= len(df):
         raise IndexError(f"t_idx {t_idx} out of range for {len(df)} bars")
@@ -93,6 +108,15 @@ def forward_return(df: pd.DataFrame, t_idx: int, horizon: int) -> float | None:
     cH = df["close"].iloc[target_idx]
     if c0 is None or cH is None or c0 == 0:
         return None
+    if isinstance(df.index, pd.DatetimeIndex):
+        # H trading days span at most ~ceil(H/5)*7 calendar days (whole weeks)
+        # plus slack for holidays; a larger gap means missing sessions.
+        import math
+
+        max_calendar_days = math.ceil(horizon / 5) * 7 + GAP_CALENDAR_SLACK_DAYS
+        span_days = (df.index[target_idx] - df.index[t_idx]).days
+        if span_days > max_calendar_days:
+            return None
     return float(cH) / float(c0) - 1.0
 
 
@@ -189,7 +213,10 @@ def build_corpus(
             # date-ascending, so once we cross the cutoff every later t is in.
             if window_start is not None and as_of_date < window_start:
                 continue
-            window = df.iloc[max(0, t_idx + 1 - lookback_bars) : t_idx + 1]
+            # CALENDAR 6-month window ending at t (byte-faithful to the live
+            # yfinance period="6mo"); falls back to bar-count for index-less
+            # frames. `lookback_bars` only governs the fallback path.
+            window = window_as_of(df, t_idx, lookback_bars=lookback_bars)
             # Gate on the AS-OF WINDOW length, mirroring live `_fetch_stock_data`
             # which rejects a 6-month frame shorter than min_bars. So a config
             # with min_daily_bars > lookback emits nothing, same as live.

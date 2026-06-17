@@ -63,6 +63,21 @@ def test_forward_return_null_near_window_end_not_zero():
     assert forward_return(df, 0, 5) == 0.0
 
 
+def test_forward_return_nulls_gap_spanning_horizon():
+    """If sessions are missing so the H rows ahead span far more than H trading
+    days of calendar time, the return is NULLed (not mislabeled). Guards codex
+    iter-7 P2."""
+    df = _make_ohlcv([100.0, 101.0, 102.0, 103.0, 104.0, 130.0])
+    # Inject a multi-month gap between t=0 and the t+5 bar.
+    idx = list(df.index)
+    idx[5] = pd.Timestamp("2025-06-01", tz="UTC")  # far in the future
+    df.index = pd.DatetimeIndex(idx)
+    # H=5 from t=0 now spans ~150 calendar days >> 5 trading days → NULL.
+    assert forward_return(df, 0, 5) is None
+    # A clean (no-gap) horizon on the same frame still returns a value.
+    assert forward_return(df, 0, 1) is not None
+
+
 def test_forward_return_target_exactly_at_last_bar():
     df = _make_ohlcv([100.0, 1, 2, 3, 4, 130.0])
     # t=0, H=5 → t+H=5 == last index (valid). 130/100 - 1 = 0.30
@@ -309,14 +324,14 @@ def test_build_corpus_window_start_bounds_as_of(monkeypatch):
     assert len(corpus) < len(full)
 
 
-def test_build_corpus_window_gate_rejects_when_min_exceeds_lookback(monkeypatch):
-    """A min_history_bars above the lookback emits NOTHING — mirrors live
-    `_fetch_stock_data` rejecting a 6-month frame shorter than min_bars. Guards
-    codex iter-2 P2."""
+def test_build_corpus_window_gate_rejects_when_min_exceeds_window(monkeypatch):
+    """A min_history_bars above what the CALENDAR 6-month window holds emits
+    NOTHING — mirrors live `_fetch_stock_data` rejecting a 6-month frame shorter
+    than min_bars. Guards codex iter-2 P2 (under the calendar window of iter-7)."""
     import rainier.paper.pattern_audit as pa
     from rainier.paper.pattern_replay import PatternEmission
 
-    df = _make_ohlcv([100.0] * 200)  # 200 bars lifetime
+    df = _make_ohlcv([100.0] * 250)  # 250 daily bars; 6mo window holds ~180
 
     def stub_emission(symbol, window, config):
         ts = window.index[-1]
@@ -328,10 +343,12 @@ def test_build_corpus_window_gate_rejects_when_min_exceeds_lookback(monkeypatch)
         )
 
     monkeypatch.setattr(pa, "emission_at", stub_emission)
-    # lookback trims the window to 50 bars; a 60-bar gate rejects every window.
+    # A 6-calendar-month window over daily bars holds ~183 rows; a 240-bar gate
+    # exceeds that, so every as-of window is rejected (like live skipping the
+    # symbol when its 6mo fetch is shorter than min_bars).
     corpus = build_corpus(
         {"AAA": df}, config=_CONFIG, regime_fn=lambda a: "bull",
-        min_history_bars=60, lookback_bars=50,
+        min_history_bars=240,
     )
     assert corpus.empty
 

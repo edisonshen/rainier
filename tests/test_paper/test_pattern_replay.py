@@ -85,6 +85,24 @@ def test_window_short_history_keeps_all_bars():
     assert w["close"].iloc[-1] == 29.0
 
 
+def test_window_uses_calendar_6mo_when_date_indexed():
+    """On a date-indexed frame the window is a CALENDAR 6-month slice ending at
+    t (byte-faithful to yfinance period='6mo'), not a fixed 126-row count.
+    Guards codex iter-7 P1."""
+    df = _make_ohlcv([float(i) for i in range(400)])
+    # Business-day index so holiday-free month lengths vary the bar count.
+    df.index = pd.bdate_range("2024-06-01", periods=400, tz="UTC")
+    t_idx = 350
+    w = window_as_of(df, t_idx=t_idx)
+    t_ts = df.index[t_idx]
+    cutoff = t_ts - pd.DateOffset(months=6)
+    # every kept bar is within (t-6mo, t]; nothing before the calendar cutoff
+    assert w.index.min() > cutoff
+    assert w.index.max() == t_ts
+    # and it is NOT the fixed 126-bar slice (calendar 6mo of bdays ≈ 130)
+    assert len(w) != 126
+
+
 # ---------------------------------------------------------------------------
 # composite — reproduces the live sector double-count.
 # ---------------------------------------------------------------------------

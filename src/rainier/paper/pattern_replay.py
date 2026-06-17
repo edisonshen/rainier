@@ -55,11 +55,17 @@ from rainier.core.config import StockScreenerConfig
 from rainier.core.models import StockPrice
 from rainier.core.types import PatternSignal, SectorTrend
 
-# Live `_fetch_stock_data` uses yfinance `period="6mo"` (~126 trading bars). The
-# replay must window the SAME span ending at `t`: feeding all history diverges
-# from the live detector (swing detection + `max_pattern_bars=120` differ over a
-# 250+ bar window). Kept here, not in StockScreenerConfig, because it mirrors a
-# yfinance fetch parameter, not a tunable screener knob.
+# Live `_fetch_stock_data` uses yfinance `period="6mo"` — a CALENDAR 6-month
+# slice ending at `t`, NOT a fixed bar count. The replay mirrors that exactly
+# when the frame is date-indexed (the production `load_prices` path): a fixed
+# 126-bar slice would feed `detect_patterns` a different left edge on
+# holiday-heavy stretches where 6 calendar months != 126 sessions, and swing
+# detection / `max_pattern_bars=120` are boundary-sensitive. Kept here (not in
+# StockScreenerConfig) because it mirrors a yfinance fetch param, not a knob.
+LIVE_LOOKBACK_MONTHS = 6
+# Bar-count fallback for frames WITHOUT a datetime index (e.g. synthetic test
+# fixtures): ~126 trading sessions ≈ 6 months. The production path uses the
+# calendar window above; this only governs index-less frames.
 LIVE_LOOKBACK_BARS = 126
 
 # Columns the detector + filter expect (lowercase), in canonical order.
@@ -152,19 +158,30 @@ def load_prices(
 
 
 def window_as_of(
-    df: pd.DataFrame, t_idx: int, lookback_bars: int = LIVE_LOOKBACK_BARS
+    df: pd.DataFrame,
+    t_idx: int,
+    lookback_bars: int = LIVE_LOOKBACK_BARS,
+    lookback_months: int = LIVE_LOOKBACK_MONTHS,
 ) -> pd.DataFrame:
     """Return the bars the live path would see as-of position ``t_idx``.
 
-    Only bars up to and including ``t_idx`` (no look-ahead), trimmed to the last
-    ``lookback_bars`` (the live ~6-month window). ``t_idx`` indexes the
-    positional row in ``df`` (0-based); the returned frame's last row IS the
-    as-of bar.
+    Only bars up to and including ``t_idx`` (no look-ahead). When ``df`` is
+    date-indexed (the production path), the left edge is a CALENDAR
+    ``lookback_months`` cut ending at ``t`` — byte-faithful to yfinance
+    ``period="6mo"``. For an index-less frame (synthetic fixtures), it falls
+    back to the last ``lookback_bars`` rows. ``t_idx`` is the 0-based positional
+    row; the returned frame's last row IS the as-of bar.
     """
     if t_idx < 0 or t_idx >= len(df):
         raise IndexError(f"t_idx {t_idx} out of range for {len(df)} bars")
+    upto = df.iloc[: t_idx + 1]
+    if isinstance(df.index, pd.DatetimeIndex):
+        t_ts = df.index[t_idx]
+        # period="6mo" = bars strictly after (t - 6 months), inclusive of t.
+        cutoff = t_ts - pd.DateOffset(months=lookback_months)
+        return upto[upto.index > cutoff]
     start = max(0, t_idx + 1 - lookback_bars)
-    return df.iloc[start : t_idx + 1]
+    return upto.iloc[start:]
 
 
 # ---------------------------------------------------------------------------
