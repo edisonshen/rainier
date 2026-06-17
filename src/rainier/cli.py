@@ -1883,14 +1883,14 @@ def db_backfill_prices(years, batch_size, dry_run):
     end = datetime.now()
     today = end.date()
     # Anchor the right boundary at the LAST COMPLETED trading session — the most
-    # recent session whose bar yfinance reliably publishes. Today's session may
-    # be in progress (its bar isn't published until after the close), so step
-    # back to the previous session: requiring an as-yet-unpublished bar would
-    # make every intraday run fail for a same-day top100 entrant (coverage window
-    # [today, today], empty present) (codex). A symbol first ranked after this
-    # boundary has no completed session yet → it's covered (nothing fetchable)
-    # and gets picked up on the next run. Used for the coverage right edge, the
-    # download end, and the cohort lookup.
+    # recent session whose bar yfinance reliably publishes. Today's session may be
+    # in progress (its bar isn't published until after the close), so step back to
+    # the previous session: requiring an as-yet-unpublished bar would make an
+    # intraday run fail for a same-day top100 entrant. (Trade-off: after-close runs
+    # lag one session; the next run catches today's bar. The "use today after the
+    # close" optimisation needs the operator's run schedule — see Implementation
+    # notes / BLOCKED.) Used for the coverage right edge, download end, cohort
+    # lookup.
     end_date = DEFAULT_CALENDAR.prev_session(today)
     # yfinance `end` is EXCLUSIVE — pass the day after end_date so its bar is
     # actually fetched (codex).
