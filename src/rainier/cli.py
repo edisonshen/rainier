@@ -1872,15 +1872,25 @@ def db_backfill_prices(years, batch_size, dry_run):
 
     from rainier.backtest.qu100_portfolio import (
         _save_prices_to_db,
-        assert_cohort_coverage,
         select_symbols_needing_backfill,
         sweep_window_start,
     )
     from rainier.core.database import get_session
     from rainier.core.models import MoneyFlowSnapshot
+    from rainier.paper.calendar import DEFAULT_CALENDAR
 
     end = datetime.now()
-    end_date = end.date()
+    # Anchor the right boundary at the last trading session on-or-before today,
+    # not the raw wall-clock date (which may be a weekend/holiday). On a
+    # constituent-change day a brand-new symbol's coverage window would otherwise
+    # be [today, today] and require a same-day bar that yfinance has not
+    # published before the close — a spurious failure (codex). The
+    # COVERAGE_MAX_GAP_SESSIONS tolerance then absorbs an as-yet-unpublished
+    # today bar on a session day. Used for the coverage right edge, the download
+    # end, and the cohort lookup.
+    today = end.date()
+    end_date = today if DEFAULT_CALENDAR.is_session(today) else \
+        DEFAULT_CALENDAR.prev_session(today)
 
     # Two distinct windows, do NOT conflate them:
     #   cov_start (coverage gate) = sweep_start, the EXACT window the miss-sweep
@@ -1977,22 +1987,29 @@ def db_backfill_prices(years, batch_size, dry_run):
     else:
         click.echo("All QU100 symbols span the sweep window. Nothing to fetch.")
 
-    # Post-run gate: 100% of the CURRENT cohort must span the sweep window.
-    # Report any shortfall NON-silently AND FAIL (non-zero exit) — a warn-and-
-    # exit-0 makes an incomplete repair indistinguishable from success in
-    # cron/CI, so the gate could never actually protect anything. Per the plan's
-    # blocker: if a cohort symbol stays uncovered after it WAS requested (a
-    # genuine upstream omission or a post-start IPO with no earlier history),
-    # STOP and raise so the operator examines it — never silently lower the bar.
-    still_missing = assert_cohort_coverage(cov_start, end_date, as_of=end_date)
+    # Post-run gate: validate the SAME universe the command just attempted to
+    # repair (every historical top100 symbol — `qu_symbols`), NOT just today's
+    # cohort. The backtest reads `load_rankings_from_db()` (all historical top100
+    # constituents, current OR former), so a former member yfinance dropped would
+    # otherwise exit 0 here yet stay silently broken downstream (codex). Report
+    # NON-silently AND FAIL (non-zero exit) — a warn-and-exit-0 makes an
+    # incomplete repair indistinguishable from success in cron/CI. Per the plan's
+    # blocker: a symbol still uncovered after it WAS requested (a genuine
+    # upstream omission or a post-start listing) is a STOP-and-raise for the
+    # operator, never a silently lowered bar.
+    still_missing = select_symbols_needing_backfill(qu_symbols, cov_start, end_date)
     if still_missing:
+        preview = still_missing[:50]
         raise click.ClickException(
-            f"{len(still_missing)} current-cohort symbol(s) still lack full "
-            f"sweep-window coverage after the run: {still_missing}. "
+            f"{len(still_missing)} top100 symbol(s) still lack full sweep-window "
+            f"coverage after the run: {preview}"
+            f"{'...' if len(still_missing) > 50 else ''}. "
             "Investigate (genuine yfinance omission or post-start listing) — "
             "do not lower the coverage bar to make this pass."
         )
-    click.echo("\nCohort coverage check: 100% of the current cohort is covered.")
+    click.echo(
+        "\nCoverage check: 100% of the historical top100 universe is covered."
+    )
 
 
 @db.command(name="ingest-prices")

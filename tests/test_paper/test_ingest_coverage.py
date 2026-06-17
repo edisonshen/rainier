@@ -629,6 +629,43 @@ def test_backfill_gate_fails_when_cohort_incomplete(pg_legacy_session, monkeypat
     assert "DROP" in result.output
 
 
+def test_backfill_gate_fails_for_former_member_not_in_current_cohort(
+    pg_legacy_session, monkeypatch
+):
+    """The post-run gate validates the FULL historical top100 universe it
+    repaired, not just today's cohort (codex P1). A former constituent that
+    yfinance dropped — absent from the current cohort — must still fail the gate,
+    because the backtest reads all historical top100 names."""
+    from click.testing import CliRunner
+
+    from rainier import cli as cli_mod
+
+    sweep_start = date(2022, 5, 25)
+    today = date.today()
+    # CURRENT cohort (latest data_date) = CURR only; densely covered.
+    _seed_cohort(pg_legacy_session, ["CURR"], today)
+    _seed_ranking(pg_legacy_session, "CURR", sweep_start)
+    # FORMER member: top100 only at an OLD data_date, NOT in today's snapshot.
+    _seed_ranking(pg_legacy_session, "FORMER", sweep_start)
+
+    def _fake_download(tickers, start=None, end=None, **kwargs):
+        syms = tickers.split()
+        # CURR fully repairs; FORMER stays empty (yfinance drops it).
+        if "CURR" in syms:
+            return _build_dense_yf_df(["CURR"], sweep_start, today)
+        return pd.DataFrame()
+
+    import yfinance as yf
+
+    monkeypatch.setattr(yf, "download", _fake_download)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "backfill-prices", "--years", "1"])
+    # FORMER is uncovered → the universe gate fails even though it's not current.
+    assert result.exit_code != 0, result.output
+    assert "FORMER" in result.output
+
+
 def test_backfill_gate_anchored_at_sweep_start_not_years_floor(
     pg_legacy_session, monkeypatch
 ):
@@ -677,4 +714,4 @@ def test_backfill_gate_anchored_at_sweep_start_not_years_floor(
     assert captured["start"] < str(sweep_start)
     # But the gate is anchored at the sweep start → IPOX is covered → exit 0.
     assert result.exit_code == 0, result.output
-    assert "100% of the current cohort is covered" in result.output
+    assert "100% of the historical top100 universe is covered" in result.output
