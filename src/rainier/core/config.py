@@ -517,8 +517,22 @@ def load_settings(config_path: Path | None = None) -> Settings:
         kwargs["paper"] = PaperConfig(**yaml_config["paper"])
     if "notify" in yaml_config:
         kwargs["notify"] = NotifyConfig(**yaml_config["notify"])
-    if "stock_screener" in yaml_config:
-        kwargs["stock_screener"] = StockScreenerConfig(**yaml_config["stock_screener"])
+    # Stock screener: deep-merge code defaults ← settings.yaml ← champion.yaml
+    # (champion wins per-key). The champion.yaml model-config system (WS C) is
+    # the unit a later workstream A/B-tunes; seeded byte-identical to today's
+    # effective config, so wiring it here is behavior-preserving.
+    from rainier.core.champion import (
+        load_champion_overrides,
+        merge_stock_screener_config,
+    )
+
+    champion_overrides = load_champion_overrides()
+    yaml_screener = yaml_config.get("stock_screener")
+    if yaml_screener or champion_overrides:
+        merged_screener = merge_stock_screener_config(
+            yaml_screener, champion_overrides
+        )
+        kwargs["stock_screener"] = StockScreenerConfig(**merged_screener)
     if "backtest" in yaml_config:
         kwargs["backtest"] = BacktestConfig(**yaml_config["backtest"])
     if "ibkr" in yaml_config:
