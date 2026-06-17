@@ -707,6 +707,49 @@ def backtest_qu100(ctx, top_n, hold, min_rank, max_rank, entry_delay,
         click.echo("Report sent to Discord")
 
 
+@cli.command(name="pattern-audit")
+@click.option(
+    "--symbols", default=None,
+    help="Comma-separated symbols (default: all in money_flow_snapshots)",
+)
+@click.option(
+    "--report", "report_path", default="docs/REPORT-qu100-pattern-hit-rate.md",
+    help="Markdown report output path",
+)
+@click.option(
+    "--window-label", default="stock_prices (1yr)",
+    help="Window label printed in the report header",
+)
+@click.pass_context
+def pattern_audit(ctx, symbols, report_path, window_label):
+    """Pattern forward-return audit over `stock_prices` (WS B).
+
+    Faithfully replays the LIVE pattern layer as-of each trading day, attaches
+    5/10/20d forward returns + a regime tag, writes a regenerable Parquet
+    corpus, and renders a per-(pattern, regime, horizon) hit-rate report.
+    """
+    from pathlib import Path
+
+    from rainier.paper.pattern_audit import render_report_markdown, run_pattern_audit
+
+    settings = ctx.obj["settings"]
+    sym_list = (
+        [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    )
+
+    click.echo("Running QU100 pattern forward-return audit over stock_prices...")
+    corpus, agg, corpus_file = run_pattern_audit(
+        config=settings.stock_screener, symbols=sym_list
+    )
+    click.echo(f"Corpus: {len(corpus)} emissions → {corpus_file}")
+
+    md = render_report_markdown(corpus, agg, window_label=window_label)
+    out = Path(report_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(md)
+    click.echo(f"Report → {out}")
+
+
 def _run_qu100_sweep(webhook: str | None) -> None:
     """Run full parameter sweep and optionally send to Discord."""
     from rainier.backtest.qu100_backtest import (
