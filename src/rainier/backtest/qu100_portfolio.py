@@ -15,7 +15,8 @@ import math
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,9 @@ from sqlalchemy import func, select
 
 from rainier.core.database import get_session
 from rainier.core.models import BacktestTradingLog, MoneyFlowSnapshot
+
+if TYPE_CHECKING:
+    from rainier.paper.calendar import TradingCalendar
 
 log = structlog.get_logger()
 
@@ -146,87 +150,154 @@ def load_rankings_from_db() -> pd.DataFrame:
 # (any StockPrice row >= start). A separate incremental ingest seeded thin
 # RECENT slivers for large-caps, so they passed presence and were skipped — their
 # 2022-2025 history (most of the sweep window) was never fetched. These helpers
-# replace presence with a COVERAGE span check at BOTH window boundaries.
+# replace presence with a COVERAGE check: a symbol is "covered" only if its
+# USABLE bars (non-NULL OHLC) reach BOTH window boundaries AND have no large
+# interior hole.
 #
 #   sweep window:  [start ............................. end]
 #   recent-sliver:                              [###]   <- no left-edge bar -> refetch
 #   stale-tail:    [###########]                        <- no right-edge bar -> refetch
-#   fully-covered: [### .............................. ###] <- skip
+#   split-history: [###]...............(hole)......[###] <- interior hole -> refetch
+#   fully-covered: [############### dense ###########]   <- skip
+#
+# Why not just min/max span: a min/max span check (lo<=start, hi>=end) is fooled
+# by a split history — early + late bars with a multi-year hole between them have
+# lo at the start and hi at the end yet are NOT covered (the sweep can't measure
+# forward returns inside the hole). The check below instead works on the SET of
+# usable bar dates and looks for the largest run of consecutive missing trading
+# sessions; this catches the recent-sliver, stale-tail, AND split-history cases
+# without a bare row-count threshold (counts can pass with a hole intact).
+#
+# NULL-OHLC rows: a yfinance partial can persist a placeholder row with NULL
+# OHLC. `paper.ingest._existing_dates()` treats those as GAPS (filters
+# `close.isnot(None)` &c.) so a real bar still re-fetches. The query below
+# applies the SAME usable-OHLC filter so a placeholder near a boundary can never
+# masquerade as coverage.
 # ---------------------------------------------------------------------------
 
 # "at/near" a boundary must tolerate weekends/holidays — markets aren't open on a
-# given calendar date every year. A symbol is left/right covered if it has a bar
-# within this many calendar days of the boundary.
+# given calendar date every year. A symbol is left/right covered if it has a
+# usable bar within this many calendar days of the boundary.
 COVERAGE_BOUNDARY_TOLERANCE_DAYS = 7
+
+# The largest interior hole (run of consecutive missing TRADING sessions) a
+# covered symbol may have. A real listing trades every session; a hole longer
+# than this means whole stretches of the sweep window have no price, so the
+# symbol must re-fetch. Measured in trading sessions (not calendar days) so
+# weekends/holidays don't count as a hole. ~2 weeks of sessions.
+COVERAGE_MAX_INTERIOR_GAP_SESSIONS = 10
 
 
 def sweep_window_start() -> date:
-    """The sweep-consumption window start = earliest QU100 ranking date.
+    """The sweep-consumption window start = earliest top100 ranking date.
 
-    Derived from the same source the miss-sweep reads (``load_rankings_from_db``)
-    so selection / download / coverage all key on the window the sweep actually
-    consumes — NOT a hard-coded date or a ``--years`` arithmetic. ~2022-05-25.
+    Derived from the same source the miss-sweep reads, scoped to
+    ``ranking_type == 'top100'`` — the EXACT slice the sweep consumes
+    (cli.py filters ``rankings[ranking_type == 'top100']`` before evaluating).
+    Older ``bottom100`` / other-type snapshots are NOT consumed by the sweep, so
+    they must not widen the repair window. NOT a hard-coded date or a ``--years``
+    arithmetic. ~2022-05-25.
     """
     with get_session() as db:
         first = db.execute(
-            select(func.min(MoneyFlowSnapshot.data_date))
+            select(func.min(MoneyFlowSnapshot.data_date)).where(
+                MoneyFlowSnapshot.ranking_type == "top100"
+            )
         ).scalar()
     if first is None:
-        raise ValueError("No QU100 rankings in database; cannot derive sweep start")
+        raise ValueError("No top100 QU100 rankings in database; cannot derive sweep start")
     return first
 
 
-def _symbol_price_spans(
+def _symbol_usable_dates(
     symbols: list[str],
-) -> dict[str, tuple[date | None, date | None]]:
-    """(min_date, max_date) of persisted bars per symbol; (None, None) if absent.
+    window_start: date,
+    window_end: date,
+) -> dict[str, set[date]]:
+    """Usable-OHLC bar dates per symbol within [window_start, window_end].
 
-    One grouped query over ``stock_prices`` for the whole batch. Dates are the
-    stored instant's UTC calendar date.
+    "Usable" = all of open/high/low/close non-NULL — the SAME probe
+    ``paper.ingest._existing_dates`` uses, so a yfinance NULL/partial placeholder
+    row is treated as a GAP (not coverage). One query for the whole batch; the
+    window bound keeps the result to the bars that matter for the sweep. Returns
+    an empty set (never absent) for every requested symbol so callers needn't
+    guard ``.get``.
     """
     from rainier.core.models import StockPrice
 
+    result: dict[str, set[date]] = {s: set() for s in symbols}
     if not symbols:
-        return {}
+        return result
+    # date is stored as 00:00 UTC; compare against tz-aware instants, not strings.
+    start_dt = datetime(window_start.year, window_start.month, window_start.day,
+                        tzinfo=timezone.utc)
+    end_dt = datetime(window_end.year, window_end.month, window_end.day,
+                      tzinfo=timezone.utc)
     with get_session() as db:
         rows = db.execute(
-            select(
-                StockPrice.symbol,
-                func.min(StockPrice.date),
-                func.max(StockPrice.date),
+            select(StockPrice.symbol, StockPrice.date).where(
+                StockPrice.symbol.in_(list(symbols)),
+                StockPrice.date >= start_dt,
+                StockPrice.date <= end_dt,
+                StockPrice.open.isnot(None),
+                StockPrice.high.isnot(None),
+                StockPrice.low.isnot(None),
+                StockPrice.close.isnot(None),
             )
-            .where(StockPrice.symbol.in_(list(symbols)))
-            .group_by(StockPrice.symbol)
         ).all()
-    spans: dict[str, tuple[date | None, date | None]] = {
-        s: (None, None) for s in symbols
-    }
-    for sym, lo, hi in rows:
-        spans[sym] = (
-            lo.date() if hasattr(lo, "date") else lo,
-            hi.date() if hasattr(hi, "date") else hi,
-        )
-    return spans
+    for sym, d in rows:
+        result[sym].add(d.date() if hasattr(d, "date") else d)
+    return result
 
 
 def _is_covered(
-    lo: date | None,
-    hi: date | None,
+    present: set[date],
     window_start: date,
     window_end: date,
-    tolerance_days: int,
+    tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
+    max_interior_gap_sessions: int = COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
+    calendar: "TradingCalendar | None" = None,
 ) -> bool:
-    """True iff the symbol's [lo, hi] span reaches BOTH window boundaries.
+    """True iff ``present`` usable-bar dates fully cover the sweep window.
 
-    Left-covered: earliest bar at/before (window_start + tolerance).
-    Right-covered: latest bar at/after (window_end - tolerance).
-    Either edge missing → not covered → must re-fetch.
+    Covered requires ALL of:
+      - left edge: a usable bar at/before (window_start + tolerance)
+      - right edge: a usable bar at/after (window_end - tolerance)
+      - no interior hole: the longest run of consecutive MISSING trading
+        sessions strictly inside the covered span is <= max_interior_gap_sessions
+
+    The interior-hole test is what catches a split history (early + late bars,
+    multi-year hole between) that a min/max span check would wrongly pass. The
+    gap is counted in trading sessions via the calendar so weekends/holidays are
+    not mistaken for a hole, and it is NOT a row-count threshold (a dense count
+    with one big hole still fails; a sparse-but-contiguous set still passes).
     """
-    if lo is None or hi is None:
+    if not present:
         return False
-    left_ok = lo <= window_start + timedelta(days=tolerance_days)
-    right_ok = hi >= window_end - timedelta(days=tolerance_days)
-    return left_ok and right_ok
+    cal = calendar or _default_calendar()
+    left_ok = min(present) <= window_start + timedelta(days=tolerance_days)
+    right_ok = max(present) >= window_end - timedelta(days=tolerance_days)
+    if not (left_ok and right_ok):
+        return False
+    # Interior-hole scan over the trading sessions the symbol is expected to have:
+    # from its first usable bar to its last. A run of consecutive sessions with no
+    # usable bar longer than the tolerance means a real stretch is missing.
+    sessions = cal.sessions_between(min(present), max(present))
+    run = 0
+    for s in sessions:
+        if s in present:
+            run = 0
+        else:
+            run += 1
+            if run > max_interior_gap_sessions:
+                return False
+    return True
+
+
+def _default_calendar() -> "TradingCalendar":
+    from rainier.paper.calendar import DEFAULT_CALENDAR
+
+    return DEFAULT_CALENDAR
 
 
 def select_symbols_needing_backfill(
@@ -234,20 +305,29 @@ def select_symbols_needing_backfill(
     window_start: date,
     window_end: date,
     tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
+    max_interior_gap_sessions: int = COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
+    calendar: "TradingCalendar | None" = None,
 ) -> list[str]:
-    """Symbols lacking a bar at EITHER window boundary (sorted, deduped).
+    """Symbols not fully covering the sweep window (sorted, deduped).
 
-    A bare row-count threshold is deliberately NOT used: it can mark either
-    failure mode "covered" and re-open the gap. The span check at both edges
-    catches the recent-sliver case (no left edge) AND the stale-tail case (no
-    right edge).
+    A bare row-count threshold is deliberately NOT used: it can mark a
+    split-history or boundary-missing symbol "covered" and re-open the gap. The
+    coverage check (``_is_covered``) keys on both edges AND the largest interior
+    hole, catching the recent-sliver (no left edge), stale-tail (no right edge),
+    and split-history (interior hole) cases.
     """
-    spans = _symbol_price_spans(list(symbols))
+    usable = _symbol_usable_dates(list(symbols), window_start, window_end)
+    cal = calendar or _default_calendar()
     need = [
         s
         for s in symbols
         if not _is_covered(
-            *spans.get(s, (None, None)), window_start, window_end, tolerance_days
+            usable.get(s, set()),
+            window_start,
+            window_end,
+            tolerance_days,
+            max_interior_gap_sessions,
+            cal,
         )
     ]
     return sorted(set(need))
@@ -258,6 +338,8 @@ def assert_cohort_coverage(
     window_end: date,
     as_of: date,
     tolerance_days: int = COVERAGE_BOUNDARY_TOLERANCE_DAYS,
+    max_interior_gap_sessions: int = COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
+    calendar: "TradingCalendar | None" = None,
 ) -> list[str]:
     """Current-cohort symbols still NOT covered over the sweep window (sorted).
 
@@ -272,7 +354,8 @@ def assert_cohort_coverage(
     if not cohort:
         return []
     return select_symbols_needing_backfill(
-        cohort, window_start, window_end, tolerance_days
+        cohort, window_start, window_end, tolerance_days,
+        max_interior_gap_sessions, calendar,
     )
 
 

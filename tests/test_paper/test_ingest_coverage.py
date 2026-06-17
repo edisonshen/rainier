@@ -26,6 +26,7 @@ from sqlalchemy import select, text
 
 from rainier.backtest.qu100_portfolio import (
     COVERAGE_BOUNDARY_TOLERANCE_DAYS,
+    COVERAGE_MAX_INTERIOR_GAP_SESSIONS,
     _is_covered,
     _yf_to_long,
     assert_cohort_coverage,
@@ -33,6 +34,7 @@ from rainier.backtest.qu100_portfolio import (
     sweep_window_start,
 )
 from rainier.core.models import StockPrice
+from rainier.paper.calendar import DEFAULT_CALENDAR
 
 # Most cases need a live Postgres (pg_legacy_session binds the legacy
 # core.database singleton the backfill uses). The pure `_is_covered` /
@@ -52,47 +54,63 @@ WINDOW_END = date(2026, 6, 12)
 TOL = COVERAGE_BOUNDARY_TOLERANCE_DAYS
 
 
+def _all_sessions(start: date, end: date) -> set[date]:
+    """Every trading session in [start, end] — a dense, fully-covered set."""
+    return set(DEFAULT_CALENDAR.sessions_between(start, end))
+
+
 def test_is_covered_full_span_true():
-    assert _is_covered(WINDOW_START, WINDOW_END, WINDOW_START, WINDOW_END, TOL)
+    # Dense bars across the whole window → covered.
+    assert _is_covered(_all_sessions(WINDOW_START, WINDOW_END), WINDOW_START, WINDOW_END)
 
 
 def test_is_covered_recent_sliver_false():
-    # Left edge missing (AMZN case): earliest bar long after the window start.
-    assert not _is_covered(
-        date(2026, 3, 3), WINDOW_END, WINDOW_START, WINDOW_END, TOL
-    )
+    # Left edge missing (AMZN case): bars only near the end.
+    present = _all_sessions(date(2026, 3, 3), WINDOW_END)
+    assert not _is_covered(present, WINDOW_START, WINDOW_END)
 
 
 def test_is_covered_stale_tail_false():
-    # Right edge missing: latest bar long before the window end.
-    assert not _is_covered(
-        WINDOW_START, date(2024, 6, 6), WINDOW_START, WINDOW_END, TOL
-    )
+    # Right edge missing: bars only in the early window.
+    present = _all_sessions(WINDOW_START, date(2024, 6, 6))
+    assert not _is_covered(present, WINDOW_START, WINDOW_END)
 
 
 def test_is_covered_absent_false():
-    assert not _is_covered(None, None, WINDOW_START, WINDOW_END, TOL)
+    assert not _is_covered(set(), WINDOW_START, WINDOW_END)
+
+
+def test_is_covered_split_history_false():
+    # Both edges present but a multi-year interior hole → NOT covered. A min/max
+    # span check would wrongly pass this (codex P1). The interior-gap scan fails.
+    present = _all_sessions(WINDOW_START, date(2022, 8, 1)) | _all_sessions(
+        date(2026, 1, 1), WINDOW_END
+    )
+    assert not _is_covered(present, WINDOW_START, WINDOW_END)
+
+
+def test_is_covered_small_interior_gap_true():
+    # A short gap (<= max interior tolerance) is fine — holidays/data hiccups.
+    present = _all_sessions(WINDOW_START, WINDOW_END)
+    # Drop a handful of consecutive sessions in the middle (within tolerance).
+    mid = DEFAULT_CALENDAR.sessions_between(date(2024, 1, 8), date(2024, 1, 12))
+    present -= set(mid)  # 5 sessions ≤ COVERAGE_MAX_INTERIOR_GAP_SESSIONS (10)
+    assert COVERAGE_MAX_INTERIOR_GAP_SESSIONS >= 5
+    assert _is_covered(present, WINDOW_START, WINDOW_END)
 
 
 def test_is_covered_within_tolerance_true():
-    # Edges a few days inside the window but within tolerance → still covered.
-    assert _is_covered(
-        WINDOW_START + timedelta(days=TOL),
-        WINDOW_END - timedelta(days=TOL),
-        WINDOW_START,
-        WINDOW_END,
-        TOL,
+    # Edges a few days inside the window but within boundary tolerance → covered.
+    present = _all_sessions(
+        WINDOW_START + timedelta(days=TOL), WINDOW_END - timedelta(days=TOL)
     )
+    assert _is_covered(present, WINDOW_START, WINDOW_END)
 
 
 def test_is_covered_just_outside_tolerance_false():
-    assert not _is_covered(
-        WINDOW_START + timedelta(days=TOL + 1),
-        WINDOW_END,
-        WINDOW_START,
-        WINDOW_END,
-        TOL,
-    )
+    # Left edge starts just past tolerance → not left-covered.
+    present = _all_sessions(WINDOW_START + timedelta(days=TOL + 5), WINDOW_END)
+    assert not _is_covered(present, WINDOW_START, WINDOW_END)
 
 
 def _instant(d: date) -> datetime:
@@ -113,6 +131,26 @@ def _seed_prices(session, symbol: str, days: list[date]) -> None:
             StockPrice(
                 symbol=symbol, date=_instant(d),
                 open=10.0, high=11.0, low=9.0, close=10.5, volume=1000,
+            )
+        )
+    session.commit()
+
+
+def _seed_dense(session, symbol: str, start: date, end: date) -> None:
+    """Seed a usable bar for EVERY trading session in [start, end] — a fully
+    covered history (no interior holes)."""
+    _seed_prices(session, symbol, DEFAULT_CALENDAR.sessions_between(start, end))
+
+
+def _seed_null_ohlc(session, symbol: str, days: list[date]) -> None:
+    """Seed placeholder rows with NULL OHLC (a yfinance partial). These must be
+    treated as GAPS, not coverage (codex P1)."""
+    _seed_stock(session, symbol)
+    for d in days:
+        session.add(
+            StockPrice(
+                symbol=symbol, date=_instant(d),
+                open=None, high=None, low=None, close=None, volume=None,
             )
         )
     session.commit()
@@ -162,12 +200,33 @@ def test_stale_tail_is_refetched(pg_legacy_session):
 
 
 def test_fully_covered_symbol_is_skipped(pg_legacy_session):
-    # A bar at both edges (within weekend tolerance) → covered, not re-fetched.
-    days = [date(2022, 5, 25), date(2024, 1, 2), WINDOW_END]
-    _seed_prices(pg_legacy_session, "FULL", days)
+    # Dense bars across the whole window (no interior hole) → covered, not
+    # re-fetched.
+    _seed_dense(pg_legacy_session, "FULL", WINDOW_START, WINDOW_END)
     pg_legacy_session.expire_all()
     need = select_symbols_needing_backfill(["FULL"], WINDOW_START, WINDOW_END)
     assert "FULL" not in need
+
+
+def test_split_history_is_refetched(pg_legacy_session):
+    # Both edges present but a multi-year interior hole → must re-fetch (codex
+    # P1). A min/max span check would wrongly skip this.
+    _seed_dense(pg_legacy_session, "SPLIT", WINDOW_START, date(2022, 8, 1))
+    _seed_dense(pg_legacy_session, "SPLIT", date(2026, 1, 1), WINDOW_END)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["SPLIT"], WINDOW_START, WINDOW_END)
+    assert "SPLIT" in need
+
+
+def test_null_ohlc_rows_are_not_coverage(pg_legacy_session):
+    # Placeholder rows with NULL OHLC at the boundaries must NOT count as
+    # coverage (codex P1) — a covered span built only from NULL rows re-fetches.
+    _seed_null_ohlc(
+        pg_legacy_session, "NULLY", [WINDOW_START, date(2024, 1, 2), WINDOW_END]
+    )
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(["NULLY"], WINDOW_START, WINDOW_END)
+    assert "NULLY" in need
 
 
 def test_absent_symbol_is_refetched(pg_legacy_session):
@@ -177,10 +236,10 @@ def test_absent_symbol_is_refetched(pg_legacy_session):
 
 
 def test_boundary_tolerates_weekends(pg_legacy_session):
-    # 2022-05-25 is a Wednesday; shift edges a couple of sessions — still covered.
-    days = [date(2022, 5, 27), date(2024, 1, 2), date(2026, 6, 10)]
-    _seed_prices(pg_legacy_session, "NEARWE", days)
-    # window end on a Saturday; last bar 2 trading days earlier still counts.
+    # Dense bars whose edges sit a couple of sessions inside a weekend-bounded
+    # window — within boundary tolerance, so still covered.
+    _seed_dense(pg_legacy_session, "NEARWE", date(2022, 5, 27), date(2026, 6, 10))
+    # window start/end on weekend days; nearest bars a session or two in count.
     need = select_symbols_needing_backfill(
         ["NEARWE"], date(2022, 5, 23), date(2026, 6, 13)
     )
@@ -252,8 +311,8 @@ def _seed_cohort(session, symbols: list[str], data_date: date) -> None:
 def test_cohort_coverage_reports_missing(pg_legacy_session):
     as_of = date(2026, 6, 12)
     _seed_cohort(pg_legacy_session, ["COVD", "GAPS"], as_of)
-    # COVD spans the window; GAPS has only a recent sliver.
-    _seed_prices(pg_legacy_session, "COVD", [WINDOW_START, as_of])
+    # COVD spans the window densely; GAPS has only a recent sliver.
+    _seed_dense(pg_legacy_session, "COVD", WINDOW_START, as_of)
     _seed_prices(pg_legacy_session, "GAPS", [as_of])
     pg_legacy_session.expire_all()
     missing = assert_cohort_coverage(WINDOW_START, as_of, as_of=as_of)
@@ -263,7 +322,7 @@ def test_cohort_coverage_reports_missing(pg_legacy_session):
 def test_cohort_coverage_all_covered_empty(pg_legacy_session):
     as_of = date(2026, 6, 12)
     _seed_cohort(pg_legacy_session, ["COVD"], as_of)
-    _seed_prices(pg_legacy_session, "COVD", [WINDOW_START, as_of])
+    _seed_dense(pg_legacy_session, "COVD", WINDOW_START, as_of)
     pg_legacy_session.expire_all()
     assert assert_cohort_coverage(WINDOW_START, as_of, as_of=as_of) == []
 
