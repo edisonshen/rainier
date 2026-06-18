@@ -232,9 +232,13 @@ def backfill_screened_levels(
         symbols = sorted({r.symbol for r in rows})
         earliest = min(r.scan_date for r in rows)
         # Left-pad by 2x the ~6-month detector lookback so the earliest as-of bar
-        # still sees its full window even across holiday-heavy stretches.
-        start_date = pd.Timestamp(earliest) - pd.DateOffset(
-            months=2 * LIVE_LOOKBACK_MONTHS
+        # still sees its full window even across holiday-heavy stretches. The
+        # bound is tz-aware UTC: ``StockPrice.date`` is ``timestamptz``, so a
+        # naive bound would be interpreted in the Postgres session's TimeZone
+        # GUC (environment-dependent). Mirror pattern_audit's UTC construction.
+        start_date = pd.Timestamp(
+            (pd.Timestamp(earliest) - pd.DateOffset(months=2 * LIVE_LOOKBACK_MONTHS)).date(),
+            tz="UTC",
         )
         prices = load_prices(session, symbols, start_date=start_date)
 
