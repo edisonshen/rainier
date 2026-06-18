@@ -148,6 +148,28 @@ def _as_of_idx(df: pd.DataFrame, scan_date: date) -> int | None:
     return int(hits[-1])
 
 
+def _match_for_row(
+    row: ScreenedStockRecord,
+    df: pd.DataFrame | None,
+    config: StockScreenerConfig,
+) -> PatternSignal | None:
+    """Replay the detector as-of ``row.scan_date`` and return the matching pattern.
+
+    Returns None when prices are missing, no bar exists on/before scan_date, or no
+    as-of actionable pattern has the row's stored ``pattern_type``.
+    """
+    if df is None or df.empty:
+        return None
+    t_idx = _as_of_idx(df, row.scan_date)
+    if t_idx is None:
+        return None
+    windowed = window_as_of(df, t_idx)
+    if windowed.empty:
+        return None
+    actionable, _ = replay_pattern_layer(row.symbol, windowed, config)
+    return _match_pattern(actionable, row.pattern_type)
+
+
 def _candidate_with_levels(
     row: ScreenedStockRecord, pat: PatternSignal
 ) -> StockCandidate:
@@ -218,17 +240,7 @@ def backfill_screened_levels(
 
         candidates_by_key: dict[tuple[date, str], list[StockCandidate]] = {}
         for row in rows:
-            df = prices.get(row.symbol)
-            matched: PatternSignal | None = None
-            if df is not None and not df.empty:
-                t_idx = _as_of_idx(df, row.scan_date)
-                if t_idx is not None:
-                    windowed = window_as_of(df, t_idx)
-                    if not windowed.empty:
-                        actionable, _ = replay_pattern_layer(
-                            row.symbol, windowed, config
-                        )
-                        matched = _match_pattern(actionable, row.pattern_type)
+            matched = _match_for_row(row, prices.get(row.symbol), config)
 
             if matched is None:
                 result.still_null += 1
