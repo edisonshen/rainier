@@ -15,16 +15,24 @@ This is a one-time DATA backfill, not a code fix.
 
 THE FIX (idempotent, dry-run by default)
 -----------------------------------------
-For each ``screened_stocks`` row in ``[from_date, to_date]`` with
-``pattern_type NOT NULL AND entry_price IS NULL``:
+For each ``close``-session ``screened_stocks`` row in ``[from_date, to_date]``
+with ``pattern_type NOT NULL AND entry_price IS NULL``:
 
     replay the pattern detector AS-OF the row's scan_date over stored prices
       (reuse paper.pattern_replay.replay_pattern_layer — no look-ahead)
-    among the as-of ACTIONABLE patterns, pick the one whose pattern_type ==
-      the row's stored pattern_type  (NOT necessarily replay's top-ranked
-      `best` — a matching pattern may rank lower).  If NONE matches, leave the
-      row NULL and report it in still-NULL — never write wrong-pattern levels.
+    among the as-of ACTIONABLE patterns (in _filter_actionable priority order),
+      pick the FIRST whose pattern_type == the row's stored pattern_type — the
+      same selection the live screener uses for `best_pattern` (NOT necessarily
+      replay's top-ranked `best`, since a matching pattern may rank lower; and
+      NOT a confidence re-sort). If NONE matches, leave the row NULL and report
+      it in still-NULL — never write wrong-pattern levels.
     coalesce-upsert the four levels via persist_screened_stocks (fills NULL only)
+
+Only ``close``-session rows are reconstructable without look-ahead: the replay
+reads the COMPLETED daily ``stock_prices`` bar for scan_date, which equals what
+the live screen saw only at the close session (earlier sessions that day did not
+yet have the day's final high/low/close). Non-``close`` patterned-NULL rows are
+deliberately left NULL — see ``_BACKFILLABLE_SESSION``.
 
     ASCII flow (one row):
 
@@ -34,8 +42,8 @@ For each ``screened_stocks`` row in ``[from_date, to_date]`` with
       load stock_prices[symbol] ── window AS-OF d ──► replay_pattern_layer
             │
             ▼
-      actionable patterns ── filter pattern_type == T ── tie-break (conf, then
-            entry) ──► matched pattern.{entry, stop, target_wave1, rr_ratio}
+      actionable patterns (priority order) ── FIRST with pattern_type == T
+            ──► matched pattern.{entry, stop, target_wave1, rr_ratio}
             │
             ▼  (apply only)
       persist_screened_stocks(coalesce upsert) ── fills the NULL levels
@@ -90,26 +98,40 @@ class BackfillResult:
     still_null_keys: list[tuple[str, date]] = field(default_factory=list)
 
 
+# The replay reconstructs levels from the COMPLETED daily ``stock_prices`` bar
+# for ``scan_date``. The live screener runs the SAME ``yf.download(period="6mo")``
+# daily fetch for every session (morning/midday/afternoon/close), but only at the
+# ``close`` session is the completed EOD bar the one the live screen actually saw.
+# For an earlier session that day, the stored EOD bar carries the day's final
+# high/low/close that were NOT yet available — replaying it would inject
+# look-ahead and write levels the original intraday screen never produced. So we
+# only backfill ``close``-session rows (faithful by construction); patterned-NULL
+# rows from other sessions are left NULL rather than given look-ahead levels
+# (worse-to-write-wrong-than-leave-NULL, per the task's fidelity gate).
+_BACKFILLABLE_SESSION = "close"
+
+
 def _target_rows(
     session: Session, from_date: date, to_date: date
 ) -> list[ScreenedStockRecord]:
-    """Patterned + level-NULL rows in ``[from_date, to_date]`` (inclusive).
+    """``close``-session, patterned, level-NULL rows in ``[from_date, to_date]``.
 
-    Deterministic order (symbol, scan_date, session_name) so a re-run scans the
-    corpus identically and logs are diff-stable.
+    Only ``close``-session rows are reconstructable without look-ahead (see
+    ``_BACKFILLABLE_SESSION``). Deterministic order (symbol, scan_date) so a
+    re-run scans the corpus identically and logs are diff-stable.
     """
     stmt = (
         select(ScreenedStockRecord)
         .where(
             ScreenedStockRecord.scan_date >= from_date,
             ScreenedStockRecord.scan_date <= to_date,
+            ScreenedStockRecord.session_name == _BACKFILLABLE_SESSION,
             ScreenedStockRecord.pattern_type.isnot(None),
             ScreenedStockRecord.entry_price.is_(None),
         )
         .order_by(
             ScreenedStockRecord.symbol.asc(),
             ScreenedStockRecord.scan_date.asc(),
-            ScreenedStockRecord.session_name.asc(),
         )
     )
     return list(session.execute(stmt).scalars().all())
@@ -120,15 +142,21 @@ def _match_pattern(
 ) -> PatternSignal | None:
     """Pick the actionable pattern whose type == ``stored_type``.
 
-    If several share the type, tie-break deterministically: highest confidence
-    first, then lowest entry_price (a stable numeric key) so the choice is
+    ``actionable`` arrives in ``_filter_actionable`` priority order (the same
+    order the live screener uses to pick ``best_pattern = actionable[0]``). When
+    several patterns share ``stored_type``, take the FIRST in that order — i.e.
+    the one the live screener would have written had that type been the day's
+    best. We deliberately do NOT re-sort by confidence: the live path writes
+    levels by actionability priority, not confidence (stock_screener.py:92-93,
+    "Best = first actionable (sorted by priority), not highest confidence"), so
+    re-sorting here could persist a different same-type setup than the original
+    screen. Iterating the already-sorted list preserves that priority and is
     reproducible across runs.
     """
-    matches = [p for p in actionable if p.pattern_type == stored_type]
-    if not matches:
-        return None
-    matches.sort(key=lambda p: (-p.confidence, p.entry_price))
-    return matches[0]
+    for p in actionable:
+        if p.pattern_type == stored_type:
+            return p
+    return None
 
 
 def _as_of_idx(df: pd.DataFrame, scan_date: date) -> int | None:

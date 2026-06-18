@@ -55,8 +55,9 @@ def test_match_pattern_empty_returns_none():
 
 
 def test_match_pattern_picks_only_matching_type_not_top_ranked():
-    # The non-matching type has the highest confidence; the matching one must
-    # still win because match-by-stored-type beats top-ranking.
+    # actionable[0] (the live `best_pattern`) is a non-matching type; the
+    # matching one ranks lower but must still be chosen because we match by
+    # stored type, not by top-ranking.
     actionable = [
         _sig("w_bottom", confidence=0.95, entry_price=100.0),
         _sig("false_breakdown", confidence=0.40, entry_price=89.0),
@@ -67,27 +68,20 @@ def test_match_pattern_picks_only_matching_type_not_top_ranked():
     assert got.entry_price == 89.0
 
 
-def test_match_pattern_tiebreak_highest_confidence_first():
-    # Two SAME-type patterns: higher confidence wins.
+def test_match_pattern_same_type_takes_first_in_priority_order():
+    # Two SAME-type patterns: the FIRST in _filter_actionable priority order
+    # wins — that is the setup the live screener would have written as
+    # best_pattern. We must NOT re-sort by confidence: here the first entry has
+    # LOWER confidence but higher actionability priority, so it must win.
     actionable = [
-        _sig("w_bottom", confidence=0.50, entry_price=80.0),
-        _sig("w_bottom", confidence=0.90, entry_price=120.0),
+        _sig("w_bottom", confidence=0.50, entry_price=80.0),  # higher priority
+        _sig("w_bottom", confidence=0.90, entry_price=120.0),  # lower priority
     ]
     got = _match_pattern(actionable, "w_bottom")
     assert got is not None
-    assert got.confidence == 0.90
-    assert got.entry_price == 120.0
-
-
-def test_match_pattern_tiebreak_lowest_entry_when_confidence_equal():
-    # Equal confidence: lowest entry_price wins (the stable secondary key).
-    actionable = [
-        _sig("w_bottom", confidence=0.80, entry_price=120.0),
-        _sig("w_bottom", confidence=0.80, entry_price=95.0),
-    ]
-    got = _match_pattern(actionable, "w_bottom")
-    assert got is not None
-    assert got.entry_price == 95.0
+    # First-in-order wins despite its lower confidence (no confidence re-sort).
+    assert got.confidence == 0.50
+    assert got.entry_price == 80.0
 
 
 # --- _as_of_idx ------------------------------------------------------------

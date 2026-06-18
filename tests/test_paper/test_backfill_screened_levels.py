@@ -80,11 +80,12 @@ def _seed_screened(
     stop=None,
     target=None,
     rr=None,
+    session_name: str = "close",
 ) -> None:
     session.add(
         ScreenedStockRecord(
             scan_date=scan_date,
-            session_name="close",
+            session_name=session_name,
             symbol=symbol,
             rule_rank=1,
             composite_score=0.8,
@@ -296,3 +297,33 @@ def test_out_of_window_row_not_scanned(pg_legacy_session):
     r = _row(pg_legacy_session, "OOW", out_of_window)
     assert r.entry_price is None
     assert res.scanned == 0
+
+
+def test_non_close_session_row_not_backfilled(pg_legacy_session):
+    """A patterned NULL row from a non-close session is NEVER backfilled.
+
+    Only the close-session daily bar matches what the live screen saw; an
+    earlier session lacked the day's final high/low/close, so replaying its
+    completed bar would inject look-ahead. The row is left NULL and excluded
+    from the target set entirely (not even counted as still_null)."""
+    _seed_prices(pg_legacy_session, "MORN", _SCAN, _FB_PRICES)
+    _seed_screened(
+        pg_legacy_session,
+        "MORN",
+        _SCAN,
+        pattern_type="false_breakdown",
+        session_name="morning",
+    )
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    pg_legacy_session.expire_all()
+    r = _row(pg_legacy_session, "MORN", _SCAN)
+    assert r.entry_price is None  # never written
+    assert res.scanned == 0  # non-close row not in the target set
+    assert res.recovered == 0

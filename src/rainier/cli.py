@@ -5948,8 +5948,11 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
     row's stored type, and coalesce-upserts entry/stop/target/rr (fills NULL only,
     never clobbers a set value). Dry-run by default; pass `--apply` to write.
 
-    Rows whose stored pattern does not re-detect as-of are LEFT NULL and reported
-    in `still-NULL` — never given wrong-pattern levels.
+    Only `close`-session rows are repaired: the replay uses the completed daily
+    bar, which matches what the live screen saw only at close (earlier sessions
+    that day lacked the final high/low/close). Non-close patterned-NULL rows, and
+    rows whose stored pattern does not re-detect as-of, are LEFT NULL and reported
+    in `still-NULL` — never given look-ahead or wrong-pattern levels.
     """
     from datetime import date as _date
 
