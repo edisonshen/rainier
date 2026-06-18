@@ -421,6 +421,41 @@ def test_gate_live_symbol_stale_tail_still_flagged(pg_legacy_session):
     assert "LIVESTALE" in need
 
 
+def test_gate_tail_gap_former_member_accepted_but_selection_self_heals(pg_legacy_session):
+    # Decision 3 trade-off (adversarial review): offline, a genuine delisting
+    # (no bars past last_traded) is indistinguishable from a live former member
+    # with a TAIL fetch-gap in (lr, lr+N]. The GATE caps BOTH at last_traded so
+    # neither perpetually fails — but the SELECTION pass (clamp=False,
+    # eff_end=window_end) STILL flags the tail-gapped case on every run, so the
+    # fetch loop self-heals a live one idempotently. Pin both halves so the
+    # don't-fail-forever guard (GATE) and the gap detector (SELECTION) stay
+    # decoupled.
+    first_ranked = date(2022, 6, 1)
+    last_ranked = date(2024, 6, 3)
+    # Bars dense from first_ranked through a couple sessions PAST last_ranked,
+    # then stop — leaving a tail gap (last_traded, last_ranked+N] longer than the
+    # max gap (N=15 > GAP=10).
+    last_traded = DEFAULT_CALENDAR.add_sessions(last_ranked, 2)
+    tail_cap = DEFAULT_CALENDAR.add_sessions(last_ranked, COVERAGE_FORWARD_TAIL_SESSIONS)
+    missing_tail = DEFAULT_CALENDAR.sessions_between(
+        DEFAULT_CALENDAR.next_session(last_traded), tail_cap
+    )
+    assert len(missing_tail) > GAP  # the dropped tail really is a >max-gap run
+    _seed_ranking(pg_legacy_session, "TAILGAP", first_ranked)
+    _seed_ranking(pg_legacy_session, "TAILGAP", last_ranked)
+    _seed_dense(pg_legacy_session, "TAILGAP", first_ranked, last_traded)
+    pg_legacy_session.expire_all()
+    # GATE: accepts (capped at last_traded → no perpetual fail on a true delist).
+    gate = select_symbols_needing_backfill(
+        ["TAILGAP"], WINDOW_START, WINDOW_END, clamp_to_ranking_life=True
+    )
+    assert "TAILGAP" not in gate
+    # SELECTION: still flags it (unclamped window → the long right run shows) so a
+    # live tail-gapped member is re-fetched and self-heals.
+    sel = select_symbols_needing_backfill(["TAILGAP"], WINDOW_START, WINDOW_END)
+    assert "TAILGAP" in sel
+
+
 def test_brand_new_symbol_with_no_bars_is_refetched(pg_legacy_session):
     # Ranked only a few sessions before the window end (so its effective coverage
     # window is shorter than COVERAGE_MAX_GAP_SESSIONS) but has ZERO usable bars.

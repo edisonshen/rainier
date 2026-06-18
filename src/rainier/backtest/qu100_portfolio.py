@@ -437,6 +437,19 @@ def select_symbols_needing_backfill(
                 # a stale tail (last_ranking ≈ end_date, bars stop months earlier)
                 # is still flagged — the cap only bounds the forward TAIL
                 # (last_ranking, last_ranking + N], never the ranked life itself.
+                # A hole WITHIN the ranked life (last_traded < lr) is also still
+                # caught: max(lr, last_traded)=lr scans through lr, so _is_covered
+                # sees the interior run.
+                #
+                # Trade-off (decision 3, accepted): offline we cannot tell a
+                # genuine delisting (no bars exist past last_traded) from a live
+                # former member with a TAIL fetch-gap in (lr, lr+N] (bars exist at
+                # yfinance, just not yet pulled). The GATE caps both at last_traded
+                # so neither perpetually fails. The SELECTION pass (clamp=False,
+                # eff_end=window_end) re-flags the tail-gapped live case on EVERY
+                # run, so the fetch loop self-heals it idempotently; only a true
+                # delisting stays capped. The GATE is the don't-fail-forever guard,
+                # SELECTION is the gap detector.
                 present = usable.get(s, set())
                 last_traded = max(present) if present else None
                 tail_cap = cal.add_sessions(lr, COVERAGE_FORWARD_TAIL_SESSIONS)
