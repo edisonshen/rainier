@@ -1,0 +1,281 @@
+"""WS C — champion.yaml model-config system.
+
+Acceptance (task plan):
+- behavior-preservation: seeded champion.yaml -> byte-identical ranking on a
+  fixture (here: byte-identical StockScreenerConfig, since the ranking is a pure
+  function of the config + fixed prices).
+- precedence/deep-merge: a champion.yaml setting ONE field proves unspecified
+  fields fall through to settings.yaml (NOT to code defaults).
+- hot-reload: a champion.yaml change is picked up via load_settings_fresh
+  without restart.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pandas as pd
+import yaml
+
+from rainier.core.champion import (
+    METADATA_KEYS,
+    append_registry_entry,
+    load_champion_overrides,
+    merge_stock_screener_config,
+    read_registry,
+)
+from rainier.core.config import StockScreenerConfig, load_settings, load_settings_fresh
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def _write_settings_yaml(path, screener_block: dict | None):
+    body: dict = {}
+    if screener_block is not None:
+        body["stock_screener"] = screener_block
+    path.write_text(yaml.safe_dump(body))
+
+
+def _write_champion(model_dir, fields: dict):
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "champion.yaml").write_text(yaml.safe_dump(fields))
+
+
+# ---------------------------------------------------------------------------
+# load_champion_overrides — strips metadata, returns flat field dict
+# ---------------------------------------------------------------------------
+
+
+def test_load_champion_strips_metadata_header(tmp_path):
+    _write_champion(
+        tmp_path,
+        {
+            "version": 3,
+            "parent": 2,
+            "created": "2026-06-20",
+            "note": "x",
+            "score": {"hit_rate": 0.5},
+            "layer_weight_pattern": 0.55,
+            "pattern_weights": {"bull_flag": 0.70},
+        },
+    )
+    out = load_champion_overrides(tmp_path)
+    assert not (set(out) & METADATA_KEYS)
+    assert out["layer_weight_pattern"] == 0.55
+    assert out["pattern_weights"] == {"bull_flag": 0.70}
+
+
+def test_load_champion_missing_file_returns_empty(tmp_path):
+    assert load_champion_overrides(tmp_path) == {}
+
+
+def test_load_champion_empty_file_returns_empty(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "champion.yaml").write_text("")
+    assert load_champion_overrides(tmp_path) == {}
+
+
+def test_load_champion_malformed_raises(tmp_path):
+    """A present-but-non-mapping champion.yaml (botched promotion) must fail
+    loudly, not silently boot on stale settings.yaml. Guards codex iter-3 P2."""
+    import pytest
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "champion.yaml").write_text("- not\n- a\n- mapping\n")
+    with pytest.raises(ValueError, match="must be a YAML mapping"):
+        load_champion_overrides(tmp_path)
+
+
+def test_load_champion_unknown_field_raises(tmp_path):
+    """A typo'd field name (pydantic would silently drop it at construction)
+    fails loudly. Guards codex iter-4 P2."""
+    import pytest
+
+    _write_champion(tmp_path, {"buy_threshhold": 0.7})  # typo: extra 'h'
+    with pytest.raises(ValueError, match="unknown StockScreenerConfig field"):
+        load_champion_overrides(tmp_path)
+
+
+def test_load_champion_unknown_pattern_weight_key_raises(tmp_path):
+    """A misspelled NESTED pattern_weights key (e.g. `bulll_flag`) fails loudly
+    rather than being kept as a dead key while the real pattern stays at its old
+    weight. Guards codex iter-6 P1."""
+    import pytest
+
+    _write_champion(tmp_path, {"pattern_weights": {"bulll_flag": 0.9}})
+    with pytest.raises(ValueError, match="unknown pattern_weights key"):
+        load_champion_overrides(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# deep-merge precedence: champion wins; unspecified fields fall through to
+# settings.yaml (NOT to code defaults); pattern_weights deep-merges.
+# ---------------------------------------------------------------------------
+
+
+def test_merge_champion_wins_per_key():
+    yaml_overrides = {"layer_weight_pattern": 0.65, "buy_threshold": 0.65}
+    champion = {"layer_weight_pattern": 0.55}
+    merged = merge_stock_screener_config(yaml_overrides, champion)
+    # champion wins on the field it sets
+    assert merged["layer_weight_pattern"] == 0.55
+    # the field it does NOT set falls through to settings.yaml, not the default
+    assert merged["buy_threshold"] == 0.65
+
+
+def test_merge_pattern_weights_deep_merge():
+    yaml_overrides = {"pattern_weights": {"bull_flag": 0.75, "m_top": 0.85}}
+    champion = {"pattern_weights": {"bull_flag": 0.70}}
+    merged = merge_stock_screener_config(yaml_overrides, champion)
+    # champion overrides bull_flag; m_top survives from settings.yaml; AND every
+    # OTHER default pattern is preserved (seeded from code defaults) so the
+    # final map is the full set, not just the two named here.
+    assert merged["pattern_weights"]["bull_flag"] == 0.70
+    assert merged["pattern_weights"]["m_top"] == 0.85
+    defaults = StockScreenerConfig().pattern_weights
+    assert set(merged["pattern_weights"]) == set(defaults)
+
+
+def test_merge_partial_pattern_weights_keeps_defaults():
+    """A champion that names ONE pattern weight must NOT drop the rest to the
+    0.5 fallback — omitted patterns keep their code-default weight. Guards
+    codex iter-5 P2."""
+    champion = {"pattern_weights": {"bull_flag": 0.10}}
+    merged = merge_stock_screener_config(None, champion)
+    sc = StockScreenerConfig(**merged)
+    defaults = StockScreenerConfig()
+    assert sc.pattern_weights["bull_flag"] == 0.10  # overridden
+    # every other pattern retains its default (not silently absent)
+    for pat, w in defaults.pattern_weights.items():
+        if pat != "bull_flag":
+            assert sc.pattern_weights[pat] == w
+
+
+def test_merge_no_pattern_weights_falls_through_to_default():
+    """When NO layer touches pattern_weights, the merged dict omits the key so
+    pydantic supplies the full default map (no premature seeding)."""
+    merged = merge_stock_screener_config({"buy_threshold": 0.7}, None)
+    assert "pattern_weights" not in merged
+    sc = StockScreenerConfig(**merged)
+    assert sc.pattern_weights == StockScreenerConfig().pattern_weights
+
+
+def test_precedence_unspecified_field_falls_through_to_settings_yaml(
+    tmp_path, monkeypatch
+):
+    """A champion.yaml that sets ONE field: every other field must come from
+    settings.yaml, proving a dict-level deep-merge (not whole-object replace)."""
+    monkeypatch.chdir(tmp_path)
+    # Real layout: settings.yaml and the model/ dir are SIBLINGS, so champion
+    # resolves relative to the selected settings file.
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    # settings.yaml sets a NON-default buy_threshold so we can tell it apart
+    # from the code default (0.65).
+    settings_path = cfg_dir / "settings.yaml"
+    _write_settings_yaml(
+        settings_path,
+        {"buy_threshold": 0.61, "watch_threshold": 0.49},
+    )
+    # champion sets ONLY layer_weight_pattern.
+    _write_champion(cfg_dir / "model", {"layer_weight_pattern": 0.55})
+
+    s = load_settings(config_path=settings_path)
+    sc = s.stock_screener
+    assert sc.layer_weight_pattern == 0.55  # from champion
+    assert sc.buy_threshold == 0.61  # from settings.yaml (NOT code default 0.65)
+    assert sc.watch_threshold == 0.49  # from settings.yaml
+
+
+def test_champion_resolves_relative_to_selected_config(tmp_path):
+    """A non-default --config pairs with ITS sibling model/champion.yaml, not
+    the process CWD's. Guards the codex iter-1 P1: a staging config must not
+    silently load production thresholds."""
+    # Env A (the "wrong" champion that must NOT be picked up).
+    cwd_model = tmp_path / "cwd" / "config" / "model"
+    _write_champion(cwd_model, {"layer_weight_pattern": 0.11})
+    # Env B: the selected --config and ITS sibling champion.
+    staging = tmp_path / "staging" / "config"
+    staging.mkdir(parents=True)
+    settings_path = staging / "settings.yaml"
+    _write_settings_yaml(settings_path, {"buy_threshold": 0.61})
+    _write_champion(staging / "model", {"layer_weight_pattern": 0.55})
+
+    s = load_settings(config_path=settings_path)
+    # Picks up the staging champion (0.55), NOT the cwd one (0.11).
+    assert s.stock_screener.layer_weight_pattern == 0.55
+    assert s.stock_screener.buy_threshold == 0.61
+
+
+# ---------------------------------------------------------------------------
+# behavior-preservation: the SEEDED champion.yaml + settings.yaml in the repo
+# yields the SAME StockScreenerConfig as the code defaults (no value changed).
+# ---------------------------------------------------------------------------
+
+
+def test_seeded_champion_is_behavior_preserving():
+    """Loading the real repo config (settings.yaml + seeded champion.yaml) must
+    produce a StockScreenerConfig byte-identical to the code defaults — the WS1
+    invariant that wiring the loader changes no live behavior."""
+    s = load_settings()  # real config/settings.yaml + config/model/champion.yaml
+    assert s.stock_screener.model_dump() == StockScreenerConfig().model_dump()
+
+
+# ---------------------------------------------------------------------------
+# hot-reload: a champion.yaml edit takes effect via load_settings_fresh.
+# ---------------------------------------------------------------------------
+
+
+def test_hot_reload_picks_up_champion_change(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    settings_path = cfg_dir / "settings.yaml"
+    _write_settings_yaml(settings_path, {"layer_weight_pattern": 0.65})
+    model_dir = cfg_dir / "model"  # sibling of settings.yaml
+
+    _write_champion(model_dir, {"layer_weight_pattern": 0.65})
+    s1 = load_settings_fresh(config_path=str(settings_path))
+    assert s1.stock_screener.layer_weight_pattern == 0.65
+
+    # Edit champion.yaml; a fresh load (no restart) must pick it up.
+    _write_champion(model_dir, {"layer_weight_pattern": 0.55})
+    s2 = load_settings_fresh(config_path=str(settings_path))
+    assert s2.stock_screener.layer_weight_pattern == 0.55
+
+
+# ---------------------------------------------------------------------------
+# results registry — Parquet, append-only, off Neon.
+# ---------------------------------------------------------------------------
+
+
+def test_registry_append_and_read(tmp_path):
+    model_dir = tmp_path / "config" / "model"
+    append_registry_entry(
+        version=1,
+        window="2025-06..2026-06",
+        metrics={"hit_rate": 0.58, "risk_adj_return": 0.42},
+        recorded_at="2026-06-16T00:00:00Z",
+        model_dir=model_dir,
+    )
+    append_registry_entry(
+        version=2,
+        window="2025-06..2026-06",
+        metrics={"hit_rate": 0.40},
+        recorded_at="2026-06-17T00:00:00Z",
+        model_dir=model_dir,
+    )
+    df = read_registry(model_dir)
+    assert len(df) == 2
+    assert list(df["version"]) == ["1", "2"]
+    # losers are retained too (version 2 underperforms) — it's a research dataset
+    first = json.loads(df.iloc[0]["metrics_json"])
+    assert first["hit_rate"] == 0.58
+
+
+def test_registry_empty_when_absent(tmp_path):
+    df = read_registry(tmp_path / "config" / "model")
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 0

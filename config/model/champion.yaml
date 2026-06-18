@@ -1,0 +1,47 @@
+# config/model/champion.yaml — the LIVE screener model (WS C).
+#
+# One versioned file IS the model. The loader (core/champion.py) deep-merges
+#   code defaults  <-  settings.yaml:stock_screener  <-  champion.yaml
+# (champion wins per-key) before constructing StockScreenerConfig, and is
+# hooked into load_settings (so both get_settings and load_settings_fresh see
+# it). A promotion is a new champion.yaml: version++, parent=old, score
+# recorded, prior file retained in config/model/history/.
+#
+# WS1 seeds this byte-identical to today's effective stock_screener config, so
+# wiring the loader is behavior-preserving (proven by a parity test). NO weight
+# or threshold value is changed in WS1.
+
+# --- metadata header (stripped before model construction) ---
+version: 1
+parent: null
+created: 2026-06-16
+note: "WS1 seed — byte-identical to settings.yaml:stock_screener (behavior-preserving)"
+score: null
+
+# --- StockScreenerConfig fields (flat; match settings.yaml:stock_screener) ---
+pattern_weights:
+  false_breakdown: 1.0
+  false_breakout: 1.0
+  false_breakdown_w_bottom: 0.95
+  w_bottom: 0.85
+  m_top: 0.85
+  hs_bottom: 0.80
+  hs_top: 0.80
+  bull_flag: 0.75
+  bear_flag: 0.75
+  false_breakout_hs: 0.75
+  sym_triangle_bottom: 0.65
+  sym_triangle_top: 0.65
+layer_weight_money_flow: 0.25
+layer_weight_sector: 0.10
+layer_weight_pattern: 0.65
+strong_buy_threshold: 0.80
+buy_threshold: 0.65
+watch_threshold: 0.50
+volume_breakout_multiplier: 1.5
+swing_lookback: 5
+neckline_tolerance_pct: 0.03
+min_pattern_bars: 10
+max_pattern_bars: 120
+stop_buffer_pct: 0.02
+min_daily_bars: 60

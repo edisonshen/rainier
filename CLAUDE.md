@@ -150,6 +150,8 @@ LIVE TRADING (future, Phase 3):
 ### Regenerable caches & log size (disk hygiene)
 
 - `data/cache/tqqq_sma/` — TQQQ/SQQQ SMA sweep cache (prices + `results.parquet`, ~570 MB at Phase 2). **Regenerable**, not source-of-truth: the next `rainier sma-sweep` re-derives it from yfinance. Clear it with `rainier cache clean`, or pass `--no-results-cache` to `sma-sweep` to drop `results.parquet` automatically once the report is rendered from it.
+- `data/cache/qu100_pattern_audit/corpus.parquet` — the pattern forward-return audit corpus (one row per actionable emission with 5/10/20d forward returns + regime tag). **Regenerable**, not source-of-truth: the next `rainier pattern-audit` re-derives it from Postgres `stock_prices`. Safe to delete; gitignored. The committed artifact is `docs/REPORT-qu100-pattern-hit-rate.md` (the rendered table), not the corpus.
+- `config/model/registry.parquet` — champion/challenger results registry `(version, window, metrics)`, written by `core.champion.append_registry_entry`. **Regenerable** research dataset, gitignored; `config/model/champion.yaml` + `config/model/history/` are the committed source-of-truth.
 - Cron job logs (`data/fetch.log`, `data/qu-scrape.log`) are size-capped by `scripts/cron-wrapper.sh` to the trailing 10 MiB (override with `CRON_LOG_MAX_BYTES`). Content is unchanged; only the oldest bytes past the cap are dropped.
 
 ## Design Decisions (from eng review 2026-03-22)

@@ -56,6 +56,13 @@ docs/TEST-SPEC-*.html
 docs/PLAN-*.html
 docs/RESEARCH-*.html
 docs/SPIKE-*.html
+docs/REPORT-*.html
+
+# Champion/challenger model registry + audit corpus are regenerable Parquet
+# (feature-store convention, off Neon). The seeded champion.yaml + history/ are
+# committed; the registry and corpus caches are not.
+config/model/registry.parquet
+data/cache/qu100_pattern_audit/
 
 # Coverage
 htmlcov/

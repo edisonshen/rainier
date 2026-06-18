@@ -707,6 +707,77 @@ def backtest_qu100(ctx, top_n, hold, min_rank, max_rank, entry_delay,
         click.echo("Report sent to Discord")
 
 
+@cli.command(name="pattern-audit")
+@click.option(
+    "--symbols", default=None,
+    help="Comma-separated symbols (default: all in money_flow_snapshots)",
+)
+@click.option(
+    "--report", "report_path", default=None,
+    help="Markdown report output path (default: canonical for a full run, "
+         "a -scoped report for a filtered/short-window run)",
+)
+@click.option(
+    "--window-days", default=365, show_default=True, type=int,
+    help="Trailing as-of window in calendar days (0 = all history)",
+)
+@click.option(
+    "--window-label", default=None,
+    help="Override the report window label (default: derived from corpus dates)",
+)
+@click.pass_context
+def pattern_audit(ctx, symbols, report_path, window_days, window_label):
+    """Pattern forward-return audit over `stock_prices` (WS B).
+
+    Faithfully replays the LIVE pattern layer as-of each trading day, attaches
+    5/10/20d forward returns + a regime tag, writes a regenerable Parquet
+    corpus, and renders a per-(pattern, regime, horizon) hit-rate report.
+    """
+    from pathlib import Path
+
+    from rainier.paper.pattern_audit import render_report_markdown, run_pattern_audit
+
+    settings = ctx.obj["settings"]
+    sym_list = (
+        [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    )
+    # 0 means "all history"; map to None so the corpus spans every date.
+    win_days = window_days if window_days and window_days > 0 else None
+
+    # A SCOPED run (filtered symbols or a non-default window) writes a distinct
+    # corpus file AND a distinct report (unless --report is explicit) so it
+    # doesn't silently clobber the canonical full-universe cache + checked-in
+    # report that later consumers read.
+    scoped = sym_list is not None or window_days != 365
+    corpus_filename = "corpus-scoped.parquet" if scoped else None
+    if report_path is None:
+        report_path = (
+            "docs/REPORT-qu100-pattern-hit-rate-scoped.md"
+            if scoped
+            else "docs/REPORT-qu100-pattern-hit-rate.md"
+        )
+
+    click.echo("Running QU100 pattern forward-return audit over stock_prices...")
+    corpus, agg, corpus_file, derived_label = run_pattern_audit(
+        config=settings.stock_screener, symbols=sym_list, window_days=win_days,
+        corpus_filename=corpus_filename,
+    )
+    click.echo(f"Corpus: {len(corpus)} emissions → {corpus_file}")
+
+    # Use the REQUESTED-window label from run_pattern_audit (states the true
+    # scan cutoff even when the early window is emission-free); --window-label
+    # only overrides it when given explicitly.
+    label = window_label if window_label is not None else derived_label
+
+    md = render_report_markdown(corpus, agg, window_label=label)
+    out = Path(report_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # Explicit UTF-8: the report carries non-ASCII glyphs (⚠ → —); the locale
+    # default would UnicodeEncodeError on cp1252 / non-UTF-8 CI shells.
+    out.write_text(md, encoding="utf-8")
+    click.echo(f"Report → {out}")
+
+
 def _run_qu100_sweep(webhook: str | None) -> None:
     """Run full parameter sweep and optionally send to Discord."""
     from rainier.backtest.qu100_backtest import (
