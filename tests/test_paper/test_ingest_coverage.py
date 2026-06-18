@@ -332,6 +332,95 @@ def test_former_member_with_gap_before_last_ranking_is_refetched(pg_legacy_sessi
     assert "GONEGAP" in need
 
 
+# ---------------------------------------------------------------------------
+# Decision 3 (operator, 2026-06-17): GATE right-edge per symbol =
+#   min(end_date, last_traded_session, last_ranking + N).
+# last_traded_session is a HARD CAP: a delisted name that stopped trading
+# before last_ranking + N must NOT be asked for post-delist bars (no perpetual
+# fail), AND a position held past N sessions is intentionally not coverage-
+# required (N is a cap, not a floor). The cap NEVER shrinks the requirement
+# below last_ranking, so a still-ranked (live) symbol with a stale tail is still
+# flagged. See docs/TASK-PLAN-p1-cleanup-price-coverag-18ff.md.
+# ---------------------------------------------------------------------------
+
+
+def test_gate_delisted_before_tail_is_covered_through_last_traded(pg_legacy_session):
+    # Decision 3 (a): a former member that DELISTED a few sessions after its last
+    # ranking (last_traded < last_ranking + N) must be covered through last_traded
+    # under the GATE — its post-delist bars do not exist anywhere, so demanding
+    # them through last_ranking + N would flag it on EVERY run forever. Before the
+    # last_traded cap this raised perpetually.
+    first_ranked = date(2022, 6, 1)
+    last_ranked = date(2024, 6, 3)
+    # Delisted 3 sessions after the last ranking, well short of the N-session tail.
+    last_traded = DEFAULT_CALENDAR.add_sessions(last_ranked, 3)
+    assert last_traded < DEFAULT_CALENDAR.add_sessions(
+        last_ranked, COVERAGE_FORWARD_TAIL_SESSIONS
+    )
+    _seed_ranking(pg_legacy_session, "DELIST", first_ranked)
+    _seed_ranking(pg_legacy_session, "DELIST", last_ranked)
+    _seed_dense(pg_legacy_session, "DELIST", first_ranked, last_traded)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(
+        ["DELIST"], WINDOW_START, WINDOW_END, clamp_to_ranking_life=True
+    )
+    assert "DELIST" not in need
+
+
+def test_gate_former_member_not_required_past_tail(pg_legacy_session):
+    # Decision 3 (b): N is a CAP, not a floor. A former member dense through
+    # last_ranking + N but with NO bars past that tail (e.g. it kept trading but
+    # the backtest never holds beyond N) is NOT coverage-required past the tail.
+    first_ranked = date(2022, 6, 1)
+    last_ranked = date(2024, 6, 3)
+    tail_end = DEFAULT_CALENDAR.add_sessions(last_ranked, COVERAGE_FORWARD_TAIL_SESSIONS)
+    _seed_ranking(pg_legacy_session, "CAPPED", first_ranked)
+    _seed_ranking(pg_legacy_session, "CAPPED", last_ranked)
+    # Dense only through the tail; deliberately nothing in [tail_end+1 .. today].
+    _seed_dense(pg_legacy_session, "CAPPED", first_ranked, tail_end)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(
+        ["CAPPED"], WINDOW_START, WINDOW_END, clamp_to_ranking_life=True
+    )
+    assert "CAPPED" not in need
+
+
+def test_gate_right_edge_never_exceeds_end_date(pg_legacy_session):
+    # Decision 3 (c): the required right edge never exceeds end_date. A still-
+    # ranked symbol whose last_ranking + N AND last_traded both run past a short
+    # window_end is covered when dense only through that window_end — coverage is
+    # never demanded for sessions after end_date (an unpublished/future bar).
+    first_ranked = date(2022, 6, 1)
+    window_end = date(2024, 6, 7)  # short end_date well before today
+    # Ranked AT window_end (still active as of end_date) so last_ranking + N would
+    # extend past window_end if not clamped.
+    _seed_cohort(pg_legacy_session, ["EDGE"], window_end)
+    _seed_ranking(pg_legacy_session, "EDGE", first_ranked)
+    _seed_dense(pg_legacy_session, "EDGE", first_ranked, window_end)
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(
+        ["EDGE"], WINDOW_START, window_end, clamp_to_ranking_life=True
+    )
+    assert "EDGE" not in need
+
+
+def test_gate_live_symbol_stale_tail_still_flagged(pg_legacy_session):
+    # Decision 3 safety: the last_traded cap must NOT defeat stale-tail detection
+    # for a LIVE symbol. A symbol still ranked through window_end but whose bars
+    # stop months earlier (a fetch gap, not a delisting) must STILL be flagged —
+    # the cap never shrinks the required window below last_ranking.
+    first_ranked = date(2022, 6, 1)
+    _seed_cohort(pg_legacy_session, ["LIVESTALE"], WINDOW_END)  # ranked through today
+    _seed_ranking(pg_legacy_session, "LIVESTALE", first_ranked)
+    # Dense history but the tail stops ~2 years before window_end (stale).
+    _seed_dense(pg_legacy_session, "LIVESTALE", first_ranked, date(2024, 6, 3))
+    pg_legacy_session.expire_all()
+    need = select_symbols_needing_backfill(
+        ["LIVESTALE"], WINDOW_START, WINDOW_END, clamp_to_ranking_life=True
+    )
+    assert "LIVESTALE" in need
+
+
 def test_brand_new_symbol_with_no_bars_is_refetched(pg_legacy_session):
     # Ranked only a few sessions before the window end (so its effective coverage
     # window is shorter than COVERAGE_MAX_GAP_SESSIONS) but has ZERO usable bars.

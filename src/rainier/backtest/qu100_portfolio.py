@@ -400,10 +400,14 @@ def select_symbols_needing_backfill(
         re-pulled.
 
       - GATE (``True`` — "what must be COVERED to exit 0"): clamp to the symbol's
-        ranked life ``[max(start, first_ranking), min(end, last_ranking + tail)]``
-        so the success gate does NOT fail forever on an IPO (no pre-listing
-        history exists) or a delisted former member (no post-delisting history
-        exists). The forward tail covers the entry+hold past the last ranking.
+        ranked life ``[max(start, first_ranking),
+        min(end, last_traded, last_ranking + tail)]`` so the success gate does NOT
+        fail forever on an IPO (no pre-listing history exists) or a delisted former
+        member (no post-delisting history exists). The forward tail covers the
+        entry+hold past the last ranking; the ``last_traded`` cap (operator
+        decision 2026-06-17 #3) bounds a delisted name at its real last bar so a
+        post-delist tail it can never have is not demanded — while never shrinking
+        below ``last_ranking`` (a live stale-tail symbol stays flagged).
     """
     usable = _symbol_usable_dates(list(symbols), window_start, window_end)
     span = _symbol_ranking_span(list(symbols)) if clamp_to_ranking_life else {}
@@ -413,11 +417,33 @@ def select_symbols_needing_backfill(
         if clamp_to_ranking_life:
             fr, lr = span.get(s, (None, None))
             eff_start = window_start if fr is None else max(window_start, fr)
-            eff_end = (
-                window_end
-                if lr is None
-                else min(window_end, cal.add_sessions(lr, COVERAGE_FORWARD_TAIL_SESSIONS))
-            )
+            if lr is None:
+                eff_end = window_end
+            else:
+                # GATE right edge = min(end_date, last_traded_session,
+                # last_ranking + N) — operator decision 2026-06-17 (task plan
+                # "Resolved coverage-semantics decisions" #3). N is a HARD CAP
+                # (not a floor): positions held past N sessions are intentionally
+                # not coverage-required, bounding fetch cost.
+                #
+                # The last_traded cap stops a DELISTED former member (price series
+                # ends at/just after its last ranking) from being asked for
+                # post-delist bars it can never have → no perpetual gate failure.
+                # last_traded = the symbol's most recent usable bar in-window
+                # (max(present)); None if it has none.
+                #
+                # `max(lr, last_traded)` keeps the cap from EVER shrinking the
+                # requirement below last_ranking: a still-ranked (live) symbol with
+                # a stale tail (last_ranking ≈ end_date, bars stop months earlier)
+                # is still flagged — the cap only bounds the forward TAIL
+                # (last_ranking, last_ranking + N], never the ranked life itself.
+                present = usable.get(s, set())
+                last_traded = max(present) if present else None
+                tail_cap = cal.add_sessions(lr, COVERAGE_FORWARD_TAIL_SESSIONS)
+                if last_traded is None:
+                    eff_end = min(window_end, tail_cap)
+                else:
+                    eff_end = min(window_end, tail_cap, max(lr, last_traded))
         else:
             # Selection: the full window — fetch all history the backtest may read.
             eff_start, eff_end = window_start, window_end
