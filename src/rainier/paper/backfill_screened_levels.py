@@ -62,7 +62,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from rainier.core.config import StockScreenerConfig, get_settings
@@ -84,18 +84,25 @@ log = logging.getLogger(__name__)
 class BackfillResult:
     """Counts from one backfill run (dry-run or applied).
 
-    ``scanned`` — target rows (patterned + level-NULL + in window).
+    ``scanned`` — target rows (``close``-session + patterned + level-NULL + in
+        window) that the replay attempted to recover.
     ``recovered`` — rows whose stored pattern_type matched an as-of actionable
         pattern (levels written when ``apply`` is True; would-be-written on dry-run).
     ``still_null`` — target rows where NO actionable pattern matched the stored
-        type (left NULL and reported; never errored).
+        type / the detector raised (left NULL and reported; never errored).
     ``still_null_keys`` — the (symbol, scan_date) of each still-NULL row.
+    ``skipped_non_close`` — patterned level-NULL rows in the window from a
+        non-``close`` session. These are NOT reconstructable without look-ahead
+        (see ``_BACKFILLABLE_SESSION``) so they are excluded from the target set,
+        but they ARE still damaged rows — surfaced here so a dry-run cannot look
+        falsely complete while non-close NULLs remain.
     """
 
     scanned: int = 0
     recovered: int = 0
     still_null: int = 0
     still_null_keys: list[tuple[str, date]] = field(default_factory=list)
+    skipped_non_close: int = 0
 
 
 # The replay reconstructs levels from the COMPLETED daily ``stock_prices`` bar
@@ -135,6 +142,29 @@ def _target_rows(
         )
     )
     return list(session.execute(stmt).scalars().all())
+
+
+def _count_non_close_null(
+    session: Session, from_date: date, to_date: date
+) -> int:
+    """Patterned, level-NULL rows in the window from a NON-``close`` session.
+
+    These are excluded from the repair (not reconstructable without look-ahead)
+    but are still damaged rows; counting them keeps a dry-run from looking
+    complete while non-close NULLs remain.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(ScreenedStockRecord)
+        .where(
+            ScreenedStockRecord.scan_date >= from_date,
+            ScreenedStockRecord.scan_date <= to_date,
+            ScreenedStockRecord.session_name != _BACKFILLABLE_SESSION,
+            ScreenedStockRecord.pattern_type.isnot(None),
+            ScreenedStockRecord.entry_price.is_(None),
+        )
+    )
+    return int(session.execute(stmt).scalar_one())
 
 
 def _match_pattern(
@@ -183,8 +213,12 @@ def _match_for_row(
 ) -> PatternSignal | None:
     """Replay the detector as-of ``row.scan_date`` and return the matching pattern.
 
-    Returns None when prices are missing, no bar exists on/before scan_date, or no
-    as-of actionable pattern has the row's stored ``pattern_type``.
+    Returns None when prices are missing, no bar exists on/before scan_date, no
+    as-of actionable pattern has the row's stored ``pattern_type``, OR the
+    detector raises on this symbol's window. A per-row detector failure is
+    per-symbol noise (one bad price window must not abort a multi-day repair) —
+    ``screen_stocks`` treats it the same way (stock_screener.py:86-89). The row
+    is left NULL and reported in still-NULL, never errored.
     """
     if df is None or df.empty:
         return None
@@ -194,7 +228,16 @@ def _match_for_row(
     windowed = window_as_of(df, t_idx)
     if windowed.empty:
         return None
-    actionable, _ = replay_pattern_layer(row.symbol, windowed, config)
+    try:
+        actionable, _ = replay_pattern_layer(row.symbol, windowed, config)
+    except Exception:
+        log.exception(
+            "backfill_replay_failed symbol=%s scan_date=%s pattern_type=%s",
+            row.symbol,
+            row.scan_date,
+            row.pattern_type,
+        )
+        return None
     return _match_pattern(actionable, row.pattern_type)
 
 
@@ -250,6 +293,12 @@ def backfill_screened_levels(
     result = BackfillResult()
 
     with get_session() as session:
+        # Damaged non-close rows are not repairable (look-ahead) but ARE still
+        # damaged — count them first so the report surfaces them even when there
+        # are zero repairable close rows (a dry-run must never look complete
+        # while non-close NULLs remain).
+        result.skipped_non_close = _count_non_close_null(session, from_date, to_date)
+
         rows = _target_rows(session, from_date, to_date)
         result.scanned = len(rows)
         if not rows:

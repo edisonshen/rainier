@@ -5967,12 +5967,18 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
     click.echo(
         f"backfill-screened-levels [{mode}] {start}..{end}: "
         f"scanned={result.scanned} recovered={result.recovered} "
-        f"still_null={result.still_null}"
+        f"still_null={result.still_null} "
+        f"skipped_non_close={result.skipped_non_close}"
     )
     if result.still_null_keys:
         click.echo(f"  still-NULL ({result.still_null} rows, no as-of pattern match):")
         for symbol, scan_date in result.still_null_keys:
             click.echo(f"    {symbol} {scan_date}")
+    if result.skipped_non_close:
+        click.echo(
+            f"  skipped-non-close ({result.skipped_non_close} rows): non-close "
+            "patterned-NULL rows are NOT repairable (look-ahead) and remain NULL."
+        )
     if not apply and result.recovered:
         click.echo("  (dry-run — re-run with --apply to write the recovered levels)")
 

@@ -327,3 +327,43 @@ def test_non_close_session_row_not_backfilled(pg_legacy_session):
     assert r.entry_price is None  # never written
     assert res.scanned == 0  # non-close row not in the target set
     assert res.recovered == 0
+    # ...but it IS still a damaged row, surfaced so a dry-run isn't falsely complete.
+    assert res.skipped_non_close == 1
+
+
+def test_detector_failure_on_one_row_does_not_abort_run(
+    pg_legacy_session, monkeypatch
+):
+    """A detector exception on one symbol is per-symbol noise: that row lands in
+    still_null and the run continues to repair the others (never aborts)."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    _seed_prices(pg_legacy_session, "BAD", _SCAN, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "BAD", _SCAN, pattern_type="false_breakdown")
+    _seed_prices(pg_legacy_session, "GOOD", _SCAN, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "GOOD", _SCAN, pattern_type="false_breakdown")
+
+    real_replay = mod.replay_pattern_layer
+
+    def flaky_replay(symbol, windowed, config):
+        if symbol == "BAD":
+            raise RuntimeError("synthetic detector blow-up")
+        return real_replay(symbol, windowed, config)
+
+    monkeypatch.setattr(mod, "replay_pattern_layer", flaky_replay)
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    pg_legacy_session.expire_all()
+    # The run completed (no abort): BAD → still_null, GOOD → recovered + written.
+    assert res.scanned == 2
+    assert res.recovered == 1
+    assert res.still_null == 1
+    assert ("BAD", _SCAN) in res.still_null_keys
+    assert _row(pg_legacy_session, "BAD", _SCAN).entry_price is None
+    assert _row(pg_legacy_session, "GOOD", _SCAN).entry_price is not None
