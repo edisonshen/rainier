@@ -5932,6 +5932,48 @@ def db_verify_coverage(
     )
 
 
+@db.command("backfill-screened-levels")
+@click.option("--from", "from_date", required=True, help="Inclusive start scan_date (YYYY-MM-DD).")
+@click.option("--to", "to_date", required=True, help="Inclusive end scan_date (YYYY-MM-DD).")
+@click.option(
+    "--apply",
+    is_flag=True,
+    help="Write the recovered levels. Omit for a dry-run (report only).",
+)
+def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> None:
+    """One-time backfill of NULL screened_stocks trade levels (historical repair).
+
+    Replays the pattern detector as-of each historical scan_date over stored
+    `stock_prices`, matches the actionable pattern whose `pattern_type` equals the
+    row's stored type, and coalesce-upserts entry/stop/target/rr (fills NULL only,
+    never clobbers a set value). Dry-run by default; pass `--apply` to write.
+
+    Rows whose stored pattern does not re-detect as-of are LEFT NULL and reported
+    in `still-NULL` — never given wrong-pattern levels.
+    """
+    from datetime import date as _date
+
+    from rainier.paper.backfill_screened_levels import backfill_screened_levels
+
+    start = _date.fromisoformat(from_date)
+    end = _date.fromisoformat(to_date)
+
+    result = backfill_screened_levels(from_date=start, to_date=end, apply=apply)
+
+    mode = "APPLY" if apply else "DRY-RUN"
+    click.echo(
+        f"backfill-screened-levels [{mode}] {start}..{end}: "
+        f"scanned={result.scanned} recovered={result.recovered} "
+        f"still_null={result.still_null}"
+    )
+    if result.still_null_keys:
+        click.echo(f"  still-NULL ({result.still_null} rows, no as-of pattern match):")
+        for symbol, scan_date in result.still_null_keys:
+            click.echo(f"    {symbol} {scan_date}")
+    if not apply and result.recovered:
+        click.echo("  (dry-run — re-run with --apply to write the recovered levels)")
+
+
 # ---------------------------------------------------------------------------
 # money-flow-neon-backup-b613: nightly off-machine backup of the irreplaceable
 # money_flow_snapshots into Neon (durability). Local TimescaleDB stays primary;

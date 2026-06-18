@@ -17,7 +17,7 @@ from datetime import date, timezone
 
 import pandas as pd
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from rainier.core.models import ScreenedStockRecord, StockPrice
 from rainier.paper.backfill_screened_levels import backfill_screened_levels
