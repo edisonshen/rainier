@@ -292,6 +292,15 @@ def send_daily_paper_report(payload: dict[str, Any], discord_config: Any) -> boo
     webhook configured (H6): logs + returns False, never raises."""
     text = render_payload(payload)
     try:
+        # The except below logs status + exception class only — never
+        # str(exc) / log.exception, which would persist the webhook's secret
+        # token (last URL path segment, echoed by HTTPStatusError.__str__)
+        # into data/qu-scrape.log (P1 leak, same class fixed in 96fbd13 +
+        # the weekly sweep). _http_status pulls the HTTP code WITHOUT the URL.
+        # The status extractor is computed inline so a failed import of
+        # rainier.alerts.discord (which would land in the except before any
+        # bound helper) still honors the "returns False, never raises"
+        # contract instead of raising UnboundLocalError.
         from rainier.alerts.discord import send_daily_report
 
         webhook = getattr(discord_config, "webhook_url", None) if discord_config else None
@@ -300,6 +309,12 @@ def send_daily_paper_report(payload: dict[str, Any], discord_config: Any) -> boo
             return False
         send_daily_report(text, discord_config)
         return True
-    except Exception:
-        log.exception("paper_report_discord_failed")
+    except Exception as exc:
+        resp = getattr(exc, "response", None)
+        status = getattr(resp, "status_code", None) if resp is not None else None
+        log.error(
+            "paper_report_discord_failed status=%s error_type=%s",
+            status,
+            type(exc).__name__,
+        )
         return False
