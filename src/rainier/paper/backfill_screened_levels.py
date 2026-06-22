@@ -280,14 +280,25 @@ def _as_of_idx(df: pd.DataFrame, scan_date: date) -> int | None:
     ``still_null`` (reported, never given wrong-day levels), not be silently
     recovered from the wrong bar. So require an EXACT scan_date match.
 
-    Compares on calendar date so a ``timestamptz`` index (tz-aware or naive) and a
-    midnight ``scan_date`` line up regardless of the bar's stored intraday time.
+    Compares on the bar's UTC calendar date so a ``timestamptz`` index lines up
+    with a ``scan_date`` regardless of the bar's stored intraday time AND the
+    Postgres session ``TimeZone`` GUC. ``stock_prices`` bars are written at the
+    canonical midnight-UTC instant; psycopg returns them in the session tz (which
+    is environment-dependent — the local TimescaleDB is NOT pinned to UTC). Taking
+    the date in the index's LOCAL tz would shift a midnight-UTC bar onto the prior
+    calendar day under any behind-UTC session (e.g. America/Los_Angeles) — every
+    bar would then mis-date and NO row would match its scan_date, silently turning
+    the whole repair into a 0-recovered no-op. So convert to UTC FIRST, mirroring
+    ``paper.ingest.normalize_to_trading_date`` (the codebase's read/write-symmetric
+    trading-date rule).
     """
-    # df.index is the per-symbol price DatetimeIndex; map each bar to its calendar
-    # date and find the position whose date == scan_date. Close-session scan_dates
-    # are always trading days, so the canonical bar exists unless prices are gapped.
-    bar_dates = df.index.normalize().date  # ndarray[date]; tz-aware indices keep
-    hits = (bar_dates == scan_date).nonzero()[0]                       # local-date
+    idx = df.index
+    # Convert to UTC before flooring to the calendar date. tz-aware → tz_convert;
+    # tz-naive (synthetic fixtures) → already a bare wall-clock, localize to UTC so
+    # a midnight stamp keeps its own date instead of being read in some other tz.
+    idx_utc = idx.tz_convert("UTC") if idx.tz is not None else idx.tz_localize("UTC")
+    bar_dates = idx_utc.normalize().date  # ndarray[date], UTC calendar date
+    hits = (bar_dates == scan_date).nonzero()[0]
     if hits.size == 0:
         return None
     # Exactly-one bar per trading day; take it (last guards any duplicate ingest).

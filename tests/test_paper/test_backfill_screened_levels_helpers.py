@@ -137,6 +137,24 @@ def test_as_of_idx_includes_midnight_utc_scan_date_bar():
     assert _as_of_idx(_df([bar]), date(2026, 6, 5)) == 0
 
 
+def test_as_of_idx_matches_scan_date_under_non_utc_session_tz():
+    """A midnight-UTC bar read back under a BEHIND-UTC session tz must still match
+    its scan_date — the bar's UTC calendar date is canonical, not its local date.
+
+    psycopg returns timestamptz in the Postgres session TimeZone GUC, which is NOT
+    pinned to UTC on the local TimescaleDB. The 06-05 00:00 UTC bar presents as
+    06-04 17:00-07:00 under America/Los_Angeles; taking the LOCAL date would mis-
+    date it to 06-04 and the row would never match scan_date 06-05 — silently
+    making the whole repair a 0-recovered no-op. _as_of_idx must convert to UTC
+    first. FAILS on a local-tz `.normalize().date` implementation."""
+    # The same instant the DB stores (midnight UTC on scan_date), but presented
+    # in a behind-UTC zone the way a non-UTC psycopg session would return it.
+    bar = pd.Timestamp(date(2026, 6, 5), tz=timezone.utc).tz_convert(
+        "America/Los_Angeles"
+    )  # -> 2026-06-04 17:00-07:00, LOCAL date 06-04
+    assert _as_of_idx(_df([bar]), date(2026, 6, 5)) == 0
+
+
 # --- input validation ------------------------------------------------------
 
 
