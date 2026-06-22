@@ -387,43 +387,63 @@ def test_real_migrations_all_pending_on_fresh_db(throwaway_engine):
 
 def test_real_migration_recorded_when_driven(throwaway_engine):
     """The runner records a shipped file in ``schema_migrations`` after it
-    applies — proven on the first file the runner can drive on a bare engine.
+    records the shipped files via the baseline adoption flow.
 
-    Records all files that come BEFORE any content-failure as applied, then
-    asserts the recorded set is a contiguous prefix of the shipped order and
-    that a re-run never re-applies a recorded file. (Migration *content* that
-    can't run on a bare engine is the migration author's concern, not the
-    runner's; the runner's job is order + bookkeeping + atomic rollback.)"""
+    The realistic state for the shipped files is "schema already exists" (db
+    init / hand psql), so the correct way to record them is baseline — which
+    stamps every discovered file WITHOUT running its (possibly non-rerunnable)
+    SQL. This proves the runner sees and records the real shipped set, then is a
+    no-op."""
     from rainier.core.legacy_migrate import (
         applied_versions,
+        baseline_migrations,
         discover_migrations,
         run_migrations,
     )
     from rainier.core.models import Base
 
-    # Seed the ORM tables the ALTERs target, so a file fails (if at all) on its
-    # own content, not on a missing base table.
+    # Seed the ORM tables (the realistic "already migrated by db init" state).
     Base.metadata.create_all(throwaway_engine)
 
     all_names = [p.name for p in discover_migrations()]
-    try:
+    stamped = baseline_migrations(throwaway_engine)
+    assert stamped == all_names, "baseline must record every shipped file in order"
+    assert applied_versions(throwaway_engine) == set(all_names)
+
+    # After baseline, a normal run is a no-op (everything recorded).
+    assert run_migrations(throwaway_engine) == []
+
+
+def test_run_refuses_unversioned_existing_schema(throwaway_engine):
+    """run_migrations raises on an existing schema with no schema_migrations
+    table — it must NOT replay 0001..N (codex 43f3 round-3 [P1])."""
+    from rainier.core.legacy_migrate import (
+        UnversionedSchemaError,
+        applied_versions,
+        run_migrations,
+    )
+    from rainier.core.models import Base
+
+    Base.metadata.create_all(throwaway_engine)  # tables present, no version table
+    with pytest.raises(UnversionedSchemaError):
         run_migrations(throwaway_engine)
-    except Exception:
-        pass  # a file's content may not run on this bare engine — that's fine.
 
-    recorded = applied_versions(throwaway_engine)
-    # Whatever got recorded is a contiguous prefix of the shipped order: the
-    # runner stops at the first failure and records nothing past it.
-    expected_prefix = all_names[: len(recorded)]
-    assert recorded == set(expected_prefix), (
-        f"recorded set {recorded} is not the shipped-order prefix {expected_prefix}"
-    )
+    # Nothing was created or recorded — the guard fired before any work.
+    assert applied_versions(throwaway_engine) == set()
+    assert "schema_migrations" not in inspect(throwaway_engine).get_table_names()
 
-    # A re-run never re-applies an already-recorded file (idempotent prefix).
-    try:
-        applied_again = run_migrations(throwaway_engine)
-    except Exception:
-        applied_again = []
-    assert not (set(applied_again) & recorded), (
-        "re-run must not re-apply an already-recorded migration"
-    )
+    # Baseline adopts it; then a run is a clean no-op.
+    from rainier.core.legacy_migrate import baseline_migrations
+
+    baseline_migrations(throwaway_engine)
+    assert run_migrations(throwaway_engine) == []
+
+
+def test_fresh_empty_db_runs_from_0001_despite_guard(throwaway_engine, tmp_path):
+    """The guard only blocks a NON-EMPTY unversioned schema; a truly fresh
+    (empty) DB still runs from the first migration normally."""
+    from rainier.core.legacy_migrate import run_migrations
+
+    _make_synthetic_migrations(tmp_path)
+    applied = run_migrations(throwaway_engine, migrations_dir=tmp_path)
+    assert applied == ["0001_create_a.sql", "0002_create_b.sql", "0003_add_col.sql"]

@@ -170,6 +170,40 @@ def _ensure_version_table(engine: Engine) -> None:
         )
 
 
+class UnversionedSchemaError(RuntimeError):
+    """Raised when a non-empty legacy schema has no ``schema_migrations`` table.
+
+    Replaying ``0001..N`` from scratch on such a DB is unsafe — some historical
+    files don't re-run cleanly on an already-migrated schema. The caller must
+    first ``--baseline`` to adopt the existing prefix.
+    """
+
+
+def _version_table_exists(engine: Engine) -> bool:
+    sql = (
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = 'schema_migrations'"
+    )
+    with engine.connect() as conn:
+        return conn.execute(text(sql)).first() is not None
+
+
+def _legacy_schema_present(engine: Engine) -> bool:
+    """True if any non-bookkeeping table already exists in ``public``.
+
+    Used to distinguish a truly fresh DB (safe to run from 0001) from an
+    existing, hand-migrated DB (must be baselined first). ``schema_migrations``
+    itself is excluded so its presence/absence is judged separately.
+    """
+    sql = (
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name <> 'schema_migrations' "
+        "LIMIT 1"
+    )
+    with engine.connect() as conn:
+        return conn.execute(text(sql)).first() is not None
+
+
 def applied_versions(engine: Engine) -> set[str]:
     """Return the set of already-applied migration filenames.
 
@@ -264,9 +298,12 @@ def run_migrations(
     ``dry_run=True`` lists the pending filenames WITHOUT creating the version
     table or applying anything.
 
-    For an existing schema with no version table, baseline first
-    (``baseline_migrations`` / ``db migrate-legacy --baseline``) so already-applied
-    files are stamped rather than replayed.
+    SAFETY GUARD: if the legacy schema ALREADY has tables but no
+    ``schema_migrations`` table, this raises ``UnversionedSchemaError`` instead
+    of blindly replaying ``0001..N`` (which can fail on an already-migrated
+    schema). Adopt such a DB with ``baseline_migrations`` /
+    ``db migrate-legacy --baseline`` first, then run for the new tail only. A
+    truly fresh DB (no tables) runs from 0001 normally.
 
     Returns the list of filenames that were applied (dry-run: the filenames
     that WOULD be applied).
@@ -274,6 +311,15 @@ def run_migrations(
     if dry_run:
         pending = pending_migrations(engine, migrations_dir)
         return [p.name for p in pending]
+
+    if not _version_table_exists(engine) and _legacy_schema_present(engine):
+        raise UnversionedSchemaError(
+            "Legacy schema already has tables but no schema_migrations table. "
+            "Refusing to replay 0001..N (some historical files don't re-run "
+            "cleanly on an existing schema). Run 'rainier db migrate-legacy "
+            "--baseline' once to adopt the current schema, then re-run to apply "
+            "any new migrations."
+        )
 
     _ensure_version_table(engine)
     pending = pending_migrations(engine, migrations_dir)

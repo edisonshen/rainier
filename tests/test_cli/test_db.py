@@ -251,6 +251,33 @@ def test_db_migrate_legacy_dry_run_and_baseline_conflict(monkeypatch):
     assert "mutually exclusive" in result.output
 
 
+def test_db_migrate_legacy_unversioned_schema_fails_clean(monkeypatch):
+    """When run_migrations raises UnversionedSchemaError, the CLI surfaces a
+    clean error (non-zero, no traceback) pointing at --baseline."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _raise(engine):
+        raise lm_mod.UnversionedSchemaError(
+            "Legacy schema already has tables but no schema_migrations table. "
+            "Run 'rainier db migrate-legacy --baseline' once ..."
+        )
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    assert not isinstance(result.exception, lm_mod.UnversionedSchemaError), (
+        "UnversionedSchemaError must be wrapped in a ClickException, not leaked"
+    )
+    assert "--baseline" in (result.output or "")
+
+
 def test_db_migrate_legacy_noop_when_up_to_date(monkeypatch):
     """`db migrate-legacy` reports a no-op when nothing is pending."""
     import rainier.core.database as db_mod

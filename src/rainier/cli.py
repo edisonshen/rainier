@@ -2076,7 +2076,11 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
     without running them (to adopt an already-migrated DB).
     """
     from rainier.core.database import get_engine
-    from rainier.core.legacy_migrate import baseline_migrations, run_migrations
+    from rainier.core.legacy_migrate import (
+        UnversionedSchemaError,
+        baseline_migrations,
+        run_migrations,
+    )
 
     if dry_run and baseline:
         raise click.ClickException("--dry-run and --baseline are mutually exclusive.")
@@ -2102,7 +2106,10 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
             click.echo(f"  - {name}")
         return
 
-    applied = run_migrations(engine)
+    try:
+        applied = run_migrations(engine)
+    except UnversionedSchemaError as exc:
+        raise click.ClickException(str(exc)) from exc
     if not applied:
         click.echo("Legacy migrations already up to date (no-op).")
         return
