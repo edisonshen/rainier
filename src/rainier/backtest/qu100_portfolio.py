@@ -16,15 +16,19 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import structlog
 import yfinance as yf
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from rainier.core.database import get_session
 from rainier.core.models import BacktestTradingLog, MoneyFlowSnapshot
+
+if TYPE_CHECKING:
+    from rainier.paper.calendar import TradingCalendar
 
 log = structlog.get_logger()
 
@@ -139,6 +143,363 @@ def load_rankings_from_db() -> pd.DataFrame:
     return df
 
 
+# ---------------------------------------------------------------------------
+# Price-coverage helpers (TASK-PLAN p1-cleanup-price-coverag-18ff)
+#
+# `db backfill-prices` historically decided what to fetch with a PRESENCE check
+# (any StockPrice row >= start). A separate incremental ingest seeded thin
+# RECENT slivers for large-caps, so they passed presence and were skipped — their
+# 2022-2025 history (most of the sweep window) was never fetched. These helpers
+# replace presence with a COVERAGE check: a symbol is "covered" only if its
+# USABLE bars (non-NULL OHLC) reach BOTH window boundaries AND have no large
+# interior hole.
+#
+#   sweep window:  [start ............................. end]
+#   recent-sliver:                              [###]   <- no left-edge bar -> refetch
+#   stale-tail:    [###########]                        <- no right-edge bar -> refetch
+#   split-history: [###]...............(hole)......[###] <- interior hole -> refetch
+#   fully-covered: [############### dense ###########]   <- skip
+#
+# Why not just min/max span: a min/max span check (lo<=start, hi>=end) is fooled
+# by a split history — early + late bars with a multi-year hole between them have
+# lo at the start and hi at the end yet are NOT covered (the sweep can't measure
+# forward returns inside the hole). The check below instead works on the SET of
+# usable bar dates and looks for the largest run of consecutive missing trading
+# sessions; this catches the recent-sliver, stale-tail, AND split-history cases
+# without a bare row-count threshold (counts can pass with a hole intact).
+#
+# NULL-OHLC rows: a yfinance partial can persist a placeholder row with NULL
+# OHLC. `paper.ingest._existing_dates()` treats those as GAPS (filters
+# `close.isnot(None)` &c.) so a real bar still re-fetches. The query below
+# applies the SAME usable-OHLC filter so a placeholder near a boundary can never
+# masquerade as coverage.
+# ---------------------------------------------------------------------------
+
+# The largest hole (run of consecutive missing TRADING sessions) a covered
+# symbol may have ANYWHERE in the coverage window — at the left edge, the right
+# edge, OR the interior. A real listing trades every session; a run longer than
+# this means a whole stretch of the sweep window has no usable price, so the
+# symbol must re-fetch. Measured in trading sessions (not calendar days) so
+# weekends/holidays don't count as a hole, and applied UNIFORMLY to the edges so
+# a stale tail or a late start can't slip through as "covered" the way a
+# separate calendar-day boundary tolerance let them (codex). ~2 weeks of
+# sessions.
+COVERAGE_MAX_GAP_SESSIONS = 10
+
+# Forward tail required PAST a symbol's last top100 ranking date. The backtests
+# enter on the trading day AFTER a ranking and hold for up to ~10 sessions
+# (plus entry-delay), and run_qu100_portfolio_backtest can hold past the last
+# ranking — so a symbol's prices must extend this many sessions beyond its last
+# ranking for the post-signal entry+hold tail. Clamping coverage exactly at the
+# last ranking date would skip a former member whose price series stops there and
+# silently misprice those trades. ~3 weeks of sessions (entry-delay + max hold +
+# slack). Also makes a weekend/holiday-only ranking window non-degenerate (the
+# tail pushes eff_end onto a real session), so a brand-new Saturday-seen symbol
+# with no bars is correctly flagged uncovered rather than a vacuous pass (codex).
+COVERAGE_FORWARD_TAIL_SESSIONS = 15
+
+# Back-compat alias (kept so existing imports/tests keep resolving). Same value;
+# the edge and interior tolerances are now ONE uniform rule.
+COVERAGE_BOUNDARY_TOLERANCE_DAYS = COVERAGE_MAX_GAP_SESSIONS
+COVERAGE_MAX_INTERIOR_GAP_SESSIONS = COVERAGE_MAX_GAP_SESSIONS
+
+
+def sweep_window_start() -> date:
+    """The sweep-consumption window start = earliest top100 ranking date.
+
+    Derived from the same source the miss-sweep reads, scoped to
+    ``ranking_type == 'top100'`` — the EXACT slice the sweep consumes
+    (cli.py filters ``rankings[ranking_type == 'top100']`` before evaluating).
+    Older ``bottom100`` / other-type snapshots are NOT consumed by the sweep, so
+    they must not widen the repair window. NOT a hard-coded date or a ``--years``
+    arithmetic. ~2022-05-25.
+    """
+    with get_session() as db:
+        first = db.execute(
+            select(func.min(MoneyFlowSnapshot.data_date)).where(
+                MoneyFlowSnapshot.ranking_type == "top100"
+            )
+        ).scalar()
+    if first is None:
+        raise ValueError("No top100 QU100 rankings in database; cannot derive sweep start")
+    return first
+
+
+def _symbol_usable_dates(
+    symbols: list[str],
+    window_start: date,
+    window_end: date,
+) -> dict[str, set[date]]:
+    """Usable-OHLC bar dates per symbol within [window_start, window_end].
+
+    "Usable" = all of open/high/low/close non-NULL — the SAME probe
+    ``paper.ingest._existing_dates`` uses, so a yfinance NULL/partial placeholder
+    row is treated as a GAP (not coverage). One query for the whole batch; the
+    window bound keeps the result to the bars that matter for the sweep. Returns
+    an empty set (never absent) for every requested symbol so callers needn't
+    guard ``.get``.
+    """
+    from rainier.core.models import StockPrice
+    from rainier.paper.ingest import canonical_instant, normalize_to_trading_date
+
+    result: dict[str, set[date]] = {s: set() for s in symbols}
+    if not symbols:
+        return result
+    # date is stored as canonical 00:00 UTC; compare against the SAME canonical
+    # instants (not strings) and normalize on read with normalize_to_trading_date
+    # — a non-UTC session TZ renders TIMESTAMPTZ in that zone, and a bare
+    # `d.date()` could shift a boundary bar onto the previous day (the read-side
+    # bug paper.ingest._existing_dates already guards against).
+    start_dt = canonical_instant(window_start)
+    end_dt = canonical_instant(window_end)
+    with get_session() as db:
+        rows = db.execute(
+            select(StockPrice.symbol, StockPrice.date).where(
+                StockPrice.symbol.in_(list(symbols)),
+                StockPrice.date >= start_dt,
+                StockPrice.date <= end_dt,
+                StockPrice.open.isnot(None),
+                StockPrice.high.isnot(None),
+                StockPrice.low.isnot(None),
+                StockPrice.close.isnot(None),
+            )
+        ).all()
+    for sym, d in rows:
+        result[sym].add(normalize_to_trading_date(d))
+    return result
+
+
+def _symbol_ranking_span(
+    symbols: list[str],
+) -> dict[str, tuple[date | None, date | None]]:
+    """Each symbol's (first, last) top100 ranking date; (None, None) if never.
+
+    These bound the window the sweep ACTUALLY consumes for a symbol:
+      - first (left): the sweep evaluates a symbol only from when it first
+        APPEARS in top100, so a late entrant (recent IPO) has no pre-listing
+        history to repair — left boundary is its own first ranking, not the
+        global sweep start.
+      - last (right): a former constituent that stopped trading after its last
+        ranking (delist/rename/acquisition) is only consumed THROUGH that last
+        ranking date; requiring bars through today would flag it uncovered
+        forever — right boundary is its own last ranking, not the global today.
+    Both prevent the gate from failing every run on legitimate non-current names
+    (codex).
+    """
+    if not symbols:
+        return {}
+    with get_session() as db:
+        rows = db.execute(
+            select(
+                MoneyFlowSnapshot.symbol,
+                func.min(MoneyFlowSnapshot.data_date),
+                func.max(MoneyFlowSnapshot.data_date),
+            )
+            .where(
+                MoneyFlowSnapshot.symbol.in_(list(symbols)),
+                MoneyFlowSnapshot.ranking_type == "top100",
+            )
+            .group_by(MoneyFlowSnapshot.symbol)
+        ).all()
+    span: dict[str, tuple[date | None, date | None]] = {
+        s: (None, None) for s in symbols
+    }
+    for sym, lo, hi in rows:
+        span[sym] = (
+            lo.date() if hasattr(lo, "date") else lo,
+            hi.date() if hasattr(hi, "date") else hi,
+        )
+    return span
+
+
+def _is_covered(
+    present: set[date],
+    window_start: date,
+    window_end: date,
+    max_gap_sessions: int = COVERAGE_MAX_GAP_SESSIONS,
+    calendar: "TradingCalendar | None" = None,
+) -> bool:
+    """True iff ``present`` usable-bar dates cover ``[window_start, window_end]``.
+
+    ONE uniform rule: over EVERY trading session in the full coverage window,
+    the longest run of consecutive MISSING usable bars must be
+    <= ``max_gap_sessions``. The scan runs across the whole window (not just
+    ``min(present)..max(present)``), so a missing left edge, a missing right
+    edge, AND an interior hole are all measured the same way:
+
+      - recent sliver (no early bars)  -> long run at the LEFT  -> not covered
+      - stale tail   (no recent bars)  -> long run at the RIGHT -> not covered
+      - split history (mid-window hole)-> long run in the MIDDLE-> not covered
+      - dense/contiguous (≤ gap holes) -> covered
+
+    Counting in trading sessions (via the calendar) means weekends/holidays
+    never look like a hole, and a few-session boundary slack is naturally
+    tolerated (a late-by-3-sessions start is a run of 3 ≤ gap). It is NOT a
+    row-count threshold: a dense set with one big hole still fails; a
+    sparse-but-contiguous set still passes.
+
+    Degenerate / reversed window (no trading sessions in ``[window_start,
+    window_end]``, e.g. a symbol first ranked AFTER the last-completed-session
+    window_end — a same-day or weekend entrant whose entry bar is not published
+    yet): there is nothing fetchable yet, so it is vacuously covered regardless
+    of ``present`` and will be picked up on the next run once its first session
+    completes. When the window DOES contain sessions, a symbol with NO usable
+    bars there is never covered (zero prices → the sweep has nothing to read).
+    Callers must pass a window_end that is the last COMPLETED session so an
+    as-yet-unpublished bar is never demanded.
+    """
+    cal = calendar or _default_calendar()
+    sessions = cal.sessions_between(window_start, window_end)
+    if not sessions:
+        return True  # no completed sessions in range → nothing fetchable yet
+    if not present:
+        return False  # window has sessions but zero usable bars → not covered
+    run = 0
+    for s in sessions:
+        if s in present:
+            run = 0
+        else:
+            run += 1
+            if run > max_gap_sessions:
+                return False
+    return True
+
+
+def _default_calendar() -> "TradingCalendar":
+    from rainier.paper.calendar import DEFAULT_CALENDAR
+
+    return DEFAULT_CALENDAR
+
+
+def select_symbols_needing_backfill(
+    symbols: list[str],
+    window_start: date,
+    window_end: date,
+    max_gap_sessions: int = COVERAGE_MAX_GAP_SESSIONS,
+    calendar: "TradingCalendar | None" = None,
+    clamp_to_ranking_life: bool = False,
+) -> list[str]:
+    """Symbols not fully covering the window (sorted, deduped).
+
+    A bare row-count threshold is deliberately NOT used: it can mark a
+    split-history or boundary-missing symbol "covered" and re-open the gap. The
+    coverage check (``_is_covered``) scans the whole window for the longest run
+    of missing usable sessions, catching the recent-sliver (long left run),
+    stale-tail (long right run), and split-history (long interior run) cases.
+
+    TWO scopes via ``clamp_to_ranking_life`` (do not conflate):
+
+      - SELECTION (``False``, default — "what to FETCH"): the full
+        ``[window_start, window_end]`` per symbol, NO ranking clamp. Fetch
+        GENEROUSLY: ``run_qu100_portfolio_backtest`` pulls 180d of PRE-signal
+        lookback before a symbol's first ranking and values open positions on
+        every later session (``max_hold_days`` defaults to unlimited), so the
+        repair must pull history OUTSIDE the ranked life too (codex). Over-
+        fetching is harmless (ON CONFLICT idempotent); an IPO with no pre-listing
+        bars is simply re-selected each run (cheap) and its yfinance history
+        re-pulled.
+
+      - GATE (``True`` — "what must be COVERED to exit 0"): clamp to the symbol's
+        ranked life ``[max(start, first_ranking),
+        min(end, last_traded, last_ranking + tail)]`` so the success gate does NOT
+        fail forever on an IPO (no pre-listing history exists) or a delisted former
+        member (no post-delisting history exists). The forward tail covers the
+        entry+hold past the last ranking; the ``last_traded`` cap (operator
+        decision 2026-06-17 #3) bounds a delisted name at its real last bar so a
+        post-delist tail it can never have is not demanded — while never shrinking
+        below ``last_ranking`` (a live stale-tail symbol stays flagged).
+    """
+    usable = _symbol_usable_dates(list(symbols), window_start, window_end)
+    span = _symbol_ranking_span(list(symbols)) if clamp_to_ranking_life else {}
+    cal = calendar or _default_calendar()
+    need = []
+    for s in symbols:
+        if clamp_to_ranking_life:
+            fr, lr = span.get(s, (None, None))
+            eff_start = window_start if fr is None else max(window_start, fr)
+            if lr is None:
+                eff_end = window_end
+            else:
+                # GATE right edge = min(end_date, last_traded_session,
+                # last_ranking + N) — operator decision 2026-06-17 (task plan
+                # "Resolved coverage-semantics decisions" #3). N is a HARD CAP
+                # (not a floor): positions held past N sessions are intentionally
+                # not coverage-required, bounding fetch cost.
+                #
+                # The last_traded cap stops a DELISTED former member (price series
+                # ends at/just after its last ranking) from being asked for
+                # post-delist bars it can never have → no perpetual gate failure.
+                # last_traded = the symbol's most recent usable bar in-window
+                # (max(present)); None if it has none.
+                #
+                # `max(lr, last_traded)` keeps the cap from EVER shrinking the
+                # requirement below last_ranking: a still-ranked (live) symbol with
+                # a stale tail (last_ranking ≈ end_date, bars stop months earlier)
+                # is still flagged — the cap only bounds the forward TAIL
+                # (last_ranking, last_ranking + N], never the ranked life itself.
+                # A hole WITHIN the ranked life (last_traded < lr) is also still
+                # caught: max(lr, last_traded)=lr scans through lr, so _is_covered
+                # sees the interior run.
+                #
+                # Trade-off (decision 3, accepted): offline we cannot tell a
+                # genuine delisting (no bars exist past last_traded) from a live
+                # former member with a TAIL fetch-gap in (lr, lr+N] (bars exist at
+                # yfinance, just not yet pulled). The GATE caps both at last_traded
+                # so neither perpetually fails. The SELECTION pass (clamp=False,
+                # eff_end=window_end) re-flags the tail-gapped live case on EVERY
+                # run, so the fetch loop self-heals it idempotently; only a true
+                # delisting stays capped. The GATE is the don't-fail-forever guard,
+                # SELECTION is the gap detector.
+                present = usable.get(s, set())
+                last_traded = max(present) if present else None
+                tail_cap = cal.add_sessions(lr, COVERAGE_FORWARD_TAIL_SESSIONS)
+                if last_traded is None:
+                    eff_end = min(window_end, tail_cap)
+                else:
+                    eff_end = min(window_end, tail_cap, max(lr, last_traded))
+        else:
+            # Selection: the full window — fetch all history the backtest may read.
+            eff_start, eff_end = window_start, window_end
+        if not _is_covered(
+            usable.get(s, set()),
+            eff_start,
+            eff_end,
+            max_gap_sessions,
+            cal,
+        ):
+            need.append(s)
+    return sorted(set(need))
+
+
+def assert_cohort_coverage(
+    window_start: date,
+    window_end: date,
+    as_of: date,
+    max_gap_sessions: int = COVERAGE_MAX_GAP_SESSIONS,
+    calendar: "TradingCalendar | None" = None,
+) -> list[str]:
+    """Current-cohort symbols still NOT covered over the sweep window (sorted).
+
+    Scope is the CURRENT cohort (``get_current_qu100_cohort``, ranking_type
+    'top100') at ``as_of`` — former constituents outside today's top-100 are out
+    of scope (the sweep evaluates the current cohort). ``window_start`` must be
+    the SWEEP start (what the sweep consumes), NOT a --years-widened fetch start,
+    or a post-start IPO could never be "covered". Empty list ⇒ 100% coverage.
+    Callers surface the returned list non-silently (echo/fail).
+    """
+    from rainier.paper.ingest import get_current_qu100_cohort
+
+    cohort = [r["symbol"] for r in get_current_qu100_cohort(as_of)]
+    if not cohort:
+        return []
+    # GATE scope: clamp to each symbol's ranked life so an IPO/delisted name is
+    # not flagged forever for history that does not exist.
+    return select_symbols_needing_backfill(
+        cohort, window_start, window_end, max_gap_sessions, calendar,
+        clamp_to_ranking_life=True,
+    )
+
+
 def fetch_all_prices(
     symbols: list[str], start: date, end: date,
 ) -> pd.DataFrame:
@@ -240,6 +601,17 @@ def _yf_to_long(
     frames = []
     if isinstance(yf_df.columns, pd.MultiIndex):
         available = set(yf_df["Close"].columns)
+        # Surface symbols yfinance silently omitted from the batch — a genuine
+        # upstream drop must never vanish (it would re-open a coverage gap with
+        # no signal). Compare the REQUESTED set against what the frame returned.
+        dropped = sorted(set(symbols) - available)
+        if dropped:
+            log.warning(
+                "yf_batch_dropped_symbols",
+                requested=len(symbols),
+                available=len(available & set(symbols)),
+                missing=dropped,
+            )
         for sym in symbols:
             if sym not in available:
                 continue
@@ -292,15 +664,30 @@ def _save_prices_to_db(
         if new_symbols:
             db.flush()
 
-        # Batch insert prices using INSERT ... ON CONFLICT DO NOTHING
+        # Batch upsert prices. ON CONFLICT DO UPDATE with COALESCE(EXCLUDED,
+        # existing) — a coverage re-fetch must REPAIR a NULL/placeholder bar
+        # (the row the coverage check flagged as a gap), so DO NOTHING would
+        # leave the placeholder forever and the gap would never heal. A null
+        # re-fetch field keeps the old good value (B5 discipline, mirrors
+        # paper.ingest._upsert_bar); re-fetching identical data is a no-op write
+        # (idempotent — no duplicate (symbol, date) rows).
+        #
+        # The `date` is canonicalized to 00:00 UTC (canonical_instant ∘
+        # normalize_to_trading_date) so a re-fetch CONFLICTS with the canonical
+        # row paper.ingest already wrote for that trading day — otherwise a raw
+        # yfinance timestamp at a different tz/time-of-day would dodge
+        # uq_stock_price_symbol_date and insert a SECOND row instead of repairing
+        # (breaking idempotent repair in the mixed ingest/backfill case).
         from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        from rainier.paper.ingest import canonical_instant, normalize_to_trading_date
         rows_to_insert = []
         for _, row in long_df.iterrows():
             if pd.isna(row["close"]):
                 continue
             rows_to_insert.append({
                 "symbol": row["symbol"],
-                "date": row["date"],
+                "date": canonical_instant(normalize_to_trading_date(row["date"])),
                 "open": row["open"] if pd.notna(row["open"]) else None,
                 "high": row["high"] if pd.notna(row["high"]) else None,
                 "low": row["low"] if pd.notna(row["low"]) else None,
@@ -315,8 +702,19 @@ def _save_prices_to_db(
             for ci in range(0, len(rows_to_insert), chunk_size):
                 chunk = rows_to_insert[ci : ci + chunk_size]
                 stmt = pg_insert(StockPrice).values(chunk)
-                stmt = stmt.on_conflict_do_nothing(
-                    constraint="uq_stock_price_symbol_date"
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_stock_price_symbol_date",
+                    set_={
+                        "open": func.coalesce(stmt.excluded.open, StockPrice.open),
+                        "high": func.coalesce(stmt.excluded.high, StockPrice.high),
+                        "low": func.coalesce(stmt.excluded.low, StockPrice.low),
+                        "close": func.coalesce(
+                            stmt.excluded.close, StockPrice.close
+                        ),
+                        "volume": func.coalesce(
+                            stmt.excluded.volume, StockPrice.volume
+                        ),
+                    },
                 )
                 db.execute(stmt)
                 count += len(chunk)
