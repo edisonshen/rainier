@@ -17,10 +17,13 @@ from datetime import date, timezone
 
 import pandas as pd
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from rainier.core.models import ScreenedStockRecord, StockPrice
-from rainier.paper.backfill_screened_levels import backfill_screened_levels
+from rainier.paper.backfill_screened_levels import (
+    _target_rows,
+    backfill_screened_levels,
+)
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -367,3 +370,152 @@ def test_detector_failure_on_one_row_does_not_abort_run(
     assert ("BAD", _SCAN) in res.still_null_keys
     assert _row(pg_legacy_session, "BAD", _SCAN).entry_price is None
     assert _row(pg_legacy_session, "GOOD", _SCAN).entry_price is not None
+
+
+# ---------------------------------------------------------------------------
+# Schema-drift regression (the P1 fix): the live local DB is missing
+# `screened_stocks.bearish_invalidation_level` (migration 0012 never applied).
+# A full-ORM `select(ScreenedStockRecord)` would SELECT that column and crash
+# with UndefinedColumn. The column-scoped `_target_rows` must survive it.
+# ---------------------------------------------------------------------------
+
+
+def _column_exists(session, table: str, column: str) -> bool:
+    # to_regclass(table) resolves the table on the session's search_path (the
+    # throwaway test schema), so the catalog lookup targets THIS schema's table,
+    # not a same-named `public` one.
+    return bool(
+        session.execute(
+            text(
+                "SELECT 1 FROM pg_attribute "
+                "WHERE attrelid = to_regclass(:t) "
+                "AND attname = :c AND NOT attisdropped"
+            ),
+            {"t": table, "c": column},
+        ).first()
+    )
+
+
+def _seed_screened_raw(session, symbol: str, scan_date: date, pattern_type: str) -> None:
+    """Insert a patterned, level-NULL `screened_stocks` row via column-scoped SQL.
+
+    The full-ORM `_seed_screened` emits an INSERT over EVERY mapped column,
+    including `bearish_invalidation_level` — which the drift DB lacks. Seeding
+    here must therefore name only columns that exist pre-0012, or the seed itself
+    crashes before the backfill under test even runs.
+    """
+    session.execute(
+        text(
+            "INSERT INTO screened_stocks "
+            "(scan_date, session_name, symbol, rule_rank, composite_score, pattern_type) "
+            "VALUES (:d, 'close', :s, 1, 0.8, :p)"
+        ),
+        {"d": scan_date, "s": symbol, "p": pattern_type},
+    )
+    session.commit()
+
+
+def test_drift_db_missing_model_column_does_not_crash(pg_drift_session):
+    """On a DB missing `bearish_invalidation_level` (migration 0012 unapplied),
+    the DRY-RUN backfill must scan and report real counts — never crash with
+    UndefinedColumn. This is the operator's actual usage (dry-run first; 0012 is
+    applied before any `--apply`), and the surface this task hardens: the
+    column-scoped read in `_target_rows`. FAILS on the parent commit, whose
+    full-ORM `select(ScreenedStockRecord)` SELECTs the missing column."""
+    # Precondition: confirm the column really is absent on this drift fixture, so
+    # this test is meaningfully exercising the drift path (not a healthy DB).
+    assert not _column_exists(
+        pg_drift_session, "screened_stocks", "bearish_invalidation_level"
+    )
+
+    _seed_prices(pg_drift_session, "DRF", _SCAN, _FB_PRICES)
+    _seed_screened_raw(pg_drift_session, "DRF", _SCAN, "false_breakdown")
+
+    # Dry-run (apply=False): the read path under test. (apply=True would write
+    # through `persist_screened_stocks`, whose INSERT names the 0012 column — out
+    # of scope here; the operator applies 0012 before `--apply`, per the plan.)
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=False,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    # Scanned and matched the row without crashing on the missing column.
+    assert res.scanned == 1
+    assert res.recovered == 1  # would-recover (dry-run writes nothing)
+    assert res.still_null == 0
+    # Column-scoped read-back (a full-ORM `_row` would itself crash on the
+    # missing column): the dry-run wrote nothing, so entry_price is still NULL.
+    pg_drift_session.expire_all()
+    entry = pg_drift_session.execute(
+        text(
+            "SELECT entry_price FROM screened_stocks "
+            "WHERE symbol = :s AND scan_date = :d"
+        ),
+        {"s": "DRF", "d": _SCAN},
+    ).scalar_one()
+    assert entry is None
+
+
+def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
+    """On a complete DB the column-scoped `_target_rows` returns the SAME row set
+    (by identity key) the old full-ORM load did — no behavior change when nothing
+    is drifted."""
+    # Two close-session patterned NULL rows (in target set), plus a set-levels row
+    # and a non-close row (both excluded). The scoped query must return exactly
+    # the two target rows, in (symbol, scan_date) order.
+    _seed_prices(pg_legacy_session, "AAA", _SCAN, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "AAA", _SCAN, pattern_type="false_breakdown")
+    _seed_prices(pg_legacy_session, "BBB", _SCAN, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "BBB", _SCAN, pattern_type="false_breakdown")
+    _seed_screened(
+        pg_legacy_session,
+        "CCC",
+        _SCAN,
+        pattern_type="false_breakdown",
+        levels_null=False,
+        entry=55.0,
+        stop=50.0,
+        target=70.0,
+        rr=3.0,
+    )
+    _seed_screened(
+        pg_legacy_session,
+        "DDD",
+        _SCAN,
+        pattern_type="false_breakdown",
+        session_name="morning",
+    )
+
+    # Old ORM path: the same WHERE/ORDER over full entities.
+    orm_rows = (
+        pg_legacy_session.execute(
+            select(ScreenedStockRecord)
+            .where(
+                ScreenedStockRecord.scan_date >= date(2026, 6, 3),
+                ScreenedStockRecord.scan_date <= date(2026, 6, 12),
+                ScreenedStockRecord.session_name == "close",
+                ScreenedStockRecord.pattern_type.isnot(None),
+                ScreenedStockRecord.entry_price.is_(None),
+            )
+            .order_by(
+                ScreenedStockRecord.symbol.asc(),
+                ScreenedStockRecord.scan_date.asc(),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    orm_keys = [(r.symbol, r.scan_date) for r in orm_rows]
+
+    scoped = _target_rows(pg_legacy_session, date(2026, 6, 3), date(2026, 6, 12))
+    scoped_keys = [(r.symbol, r.scan_date) for r in scoped]
+
+    assert scoped_keys == orm_keys == [("AAA", _SCAN), ("BBB", _SCAN)]
+    # And the carried columns match the ORM values.
+    for scoped_row, orm_row in zip(scoped, orm_rows, strict=True):
+        assert scoped_row.session_name == orm_row.session_name
+        assert scoped_row.pattern_type == orm_row.pattern_type
+        assert scoped_row.sector == orm_row.sector
+        assert scoped_row.composite_score == orm_row.composite_score

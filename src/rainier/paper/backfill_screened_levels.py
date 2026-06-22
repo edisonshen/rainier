@@ -80,6 +80,29 @@ from rainier.paper.pattern_replay import (
 log = logging.getLogger(__name__)
 
 
+@dataclass(slots=True, frozen=True)
+class _TargetRow:
+    """The subset of ``screened_stocks`` columns this repair actually touches.
+
+    We deliberately do NOT load the full ORM ``ScreenedStockRecord``. A full-row
+    load emits ``SELECT *`` over every mapped column — including
+    ``bearish_invalidation_level`` (added by migration 0012). On a legacy DB
+    where 0012 was never applied, that column is missing and the read crashes
+    with ``UndefinedColumn`` even though this repair never reads it. Selecting
+    only the columns we use makes an unrelated missing column unable to crash the
+    command. Columns: the filter/identity set (``scan_date``, ``session_name``,
+    ``symbol``, ``entry_price``, ``pattern_type``) plus the two the upsert
+    placeholder carries (``sector``, ``composite_score``).
+    """
+
+    symbol: str
+    scan_date: date
+    session_name: str
+    pattern_type: str | None
+    sector: str | None
+    composite_score: float
+
+
 @dataclass(slots=True)
 class BackfillResult:
     """Counts from one backfill run (dry-run or applied).
@@ -120,15 +143,26 @@ _BACKFILLABLE_SESSION = "close"
 
 def _target_rows(
     session: Session, from_date: date, to_date: date
-) -> list[ScreenedStockRecord]:
+) -> list[_TargetRow]:
     """``close``-session, patterned, level-NULL rows in ``[from_date, to_date]``.
 
     Only ``close``-session rows are reconstructable without look-ahead (see
     ``_BACKFILLABLE_SESSION``). Deterministic order (symbol, scan_date) so a
     re-run scans the corpus identically and logs are diff-stable.
+
+    Column-scoped (NOT a full-ORM load): selecting only the columns this repair
+    touches keeps an unrelated missing column (e.g. ``bearish_invalidation_level``
+    on a DB without migration 0012) from crashing the read. See ``_TargetRow``.
     """
     stmt = (
-        select(ScreenedStockRecord)
+        select(
+            ScreenedStockRecord.symbol,
+            ScreenedStockRecord.scan_date,
+            ScreenedStockRecord.session_name,
+            ScreenedStockRecord.pattern_type,
+            ScreenedStockRecord.sector,
+            ScreenedStockRecord.composite_score,
+        )
         .where(
             ScreenedStockRecord.scan_date >= from_date,
             ScreenedStockRecord.scan_date <= to_date,
@@ -141,7 +175,17 @@ def _target_rows(
             ScreenedStockRecord.scan_date.asc(),
         )
     )
-    return list(session.execute(stmt).scalars().all())
+    return [
+        _TargetRow(
+            symbol=r.symbol,
+            scan_date=r.scan_date,
+            session_name=r.session_name,
+            pattern_type=r.pattern_type,
+            sector=r.sector,
+            composite_score=r.composite_score,
+        )
+        for r in session.execute(stmt).all()
+    ]
 
 
 def _count_non_close_null(
@@ -207,7 +251,7 @@ def _as_of_idx(df: pd.DataFrame, scan_date: date) -> int | None:
 
 
 def _match_for_row(
-    row: ScreenedStockRecord,
+    row: _TargetRow,
     df: pd.DataFrame | None,
     config: StockScreenerConfig,
 ) -> PatternSignal | None:
@@ -242,7 +286,7 @@ def _match_for_row(
 
 
 def _candidate_with_levels(
-    row: ScreenedStockRecord, pat: PatternSignal
+    row: _TargetRow, pat: PatternSignal
 ) -> StockCandidate:
     """Minimal StockCandidate carrying ONLY the four levels to backfill.
 
