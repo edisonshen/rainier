@@ -142,9 +142,24 @@ def _strip_outer_transaction(sql: str) -> str:
 _VERSION_TABLE = "public.schema_migrations"
 
 
+def _pin_public(conn) -> None:
+    """Pin this transaction's ``search_path`` to ``public``.
+
+    The migration SQL bodies reference tables UNQUALIFIED (they were written to
+    target the legacy public schema). If the engine was created with a custom
+    ``search_path`` (e.g. test isolation uses ``search_path=<schema>,public``),
+    that unqualified DDL would land in the wrong schema while the bookkeeping
+    table is hardcoded to ``public`` — a split that desyncs the two. Pinning
+    both to ``public`` for the duration of the apply keeps DDL and bookkeeping in
+    the same schema. ``SET LOCAL`` is transaction-scoped, so it reverts on commit.
+    """
+    conn.exec_driver_sql("SET LOCAL search_path TO public")
+
+
 def _ensure_version_table(engine: Engine) -> None:
     """Create ``public.schema_migrations`` if absent (idempotent)."""
     with engine.begin() as conn:
+        _pin_public(conn)
         conn.execute(
             text(
                 f"CREATE TABLE IF NOT EXISTS {_VERSION_TABLE} ("
@@ -191,12 +206,47 @@ def _apply_one(engine: Engine, path: Path) -> None:
     """
     body = _strip_outer_transaction(path.read_text())
     with engine.begin() as conn:
+        _pin_public(conn)
         if body.strip():
             conn.exec_driver_sql(body)
         conn.execute(
             text(f"INSERT INTO {_VERSION_TABLE} (version) VALUES (:v)"),
             {"v": path.name},
         )
+
+
+def baseline_migrations(
+    engine: Engine, *, migrations_dir: Path | None = None
+) -> list[str]:
+    """Adopt an existing pre-versioned DB: RECORD pending files WITHOUT running.
+
+    Some legacy DBs already carry the schema (created by ``db init`` or by hand
+    via ``psql -f``) but have no ``schema_migrations`` table. Running
+    ``run_migrations`` against them would replay 0001..N from scratch; a few
+    historical files are not guaranteed to re-run cleanly on an already-migrated
+    schema (e.g. 0001's non-IMMUTABLE index expression), so the first real run
+    could crash before establishing a head.
+
+    Baseline is the adoption escape hatch (alembic's ``stamp``): it creates
+    ``public.schema_migrations`` and records every NOT-yet-recorded discovered
+    file as applied, executing NONE of their SQL. After baselining, the operator
+    runs ``run_migrations`` for any genuinely new files only.
+
+    Returns the filenames that were stamped (recorded without running).
+    """
+    _ensure_version_table(engine)
+    pending = pending_migrations(engine, migrations_dir)
+    stamped: list[str] = []
+    for path in pending:
+        with engine.begin() as conn:
+            _pin_public(conn)
+            conn.execute(
+                text(f"INSERT INTO {_VERSION_TABLE} (version) VALUES (:v)"),
+                {"v": path.name},
+            )
+        log.info("legacy_migration_baselined", version=path.name)
+        stamped.append(path.name)
+    return stamped
 
 
 def run_migrations(
@@ -213,6 +263,10 @@ def run_migrations(
 
     ``dry_run=True`` lists the pending filenames WITHOUT creating the version
     table or applying anything.
+
+    For an existing schema with no version table, baseline first
+    (``baseline_migrations`` / ``db migrate-legacy --baseline``) so already-applied
+    files are stamped rather than replayed.
 
     Returns the list of filenames that were applied (dry-run: the filenames
     that WOULD be applied).

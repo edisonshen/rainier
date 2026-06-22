@@ -206,6 +206,51 @@ def test_db_migrate_legacy_applies_and_reports(monkeypatch):
     assert "0012_reclaim_queue.sql" in result.output
 
 
+def test_db_migrate_legacy_baseline_stamps(monkeypatch):
+    """`db migrate-legacy --baseline` records pending files without running them."""
+    from rainier import cli as cli_mod
+
+    calls = {}
+
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _fake_baseline(engine, *, migrations_dir=None):
+        calls["baseline"] = True
+        return ["0001_llm_thesis_pr1.sql", "0002_llm_thesis_pr2.sql"]
+
+    # run_migrations must NOT be called on the baseline path.
+    def _boom_run(*_a, **_k):
+        raise AssertionError("run_migrations must not run on --baseline")
+
+    monkeypatch.setattr(lm_mod, "baseline_migrations", _fake_baseline)
+    monkeypatch.setattr(lm_mod, "run_migrations", _boom_run)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code == 0, result.output
+    assert calls.get("baseline") is True
+    assert "Baselined 2" in result.output
+    assert "NOT run" in result.output
+
+
+def test_db_migrate_legacy_dry_run_and_baseline_conflict(monkeypatch):
+    """`--dry-run --baseline` together is rejected (mutually exclusive)."""
+    import rainier.core.database as db_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mod.cli, ["db", "migrate-legacy", "--dry-run", "--baseline"]
+    )
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output
+
+
 def test_db_migrate_legacy_noop_when_up_to_date(monkeypatch):
     """`db migrate-legacy` reports a no-op when nothing is pending."""
     import rainier.core.database as db_mod

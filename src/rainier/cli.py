@@ -2054,7 +2054,17 @@ def db_init(ctx):
     is_flag=True,
     help="List pending migrations/*.sql without applying anything.",
 )
-def db_migrate_legacy(dry_run: bool) -> None:
+@click.option(
+    "--baseline",
+    is_flag=True,
+    help=(
+        "Adopt an existing pre-versioned DB: RECORD all pending migrations as "
+        "applied WITHOUT running their SQL (alembic 'stamp'). Use once on a DB "
+        "that already has the schema but no schema_migrations table, then run "
+        "without this flag for genuinely new files."
+    ),
+)
+def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
     """Apply the numbered ``migrations/*.sql`` to the LEGACY ``core.database``.
 
     This is the runner for the legacy local-TimescaleDB track (public.* tables),
@@ -2062,10 +2072,14 @@ def db_migrate_legacy(dry_run: bool) -> None:
     canonical DB. Applies each forward (non-``_downgrade``) file in filename
     order, recording it in ``schema_migrations``. Idempotent: already-recorded
     files are skipped, so a second run is a no-op. ``--dry-run`` lists pending
-    files without touching the DB.
+    files without touching the DB; ``--baseline`` stamps pending files as applied
+    without running them (to adopt an already-migrated DB).
     """
     from rainier.core.database import get_engine
-    from rainier.core.legacy_migrate import run_migrations
+    from rainier.core.legacy_migrate import baseline_migrations, run_migrations
+
+    if dry_run and baseline:
+        raise click.ClickException("--dry-run and --baseline are mutually exclusive.")
 
     engine = get_engine()
     if dry_run:
@@ -2075,6 +2089,16 @@ def db_migrate_legacy(dry_run: bool) -> None:
             return
         click.echo(f"{len(pending)} pending legacy migration(s):")
         for name in pending:
+            click.echo(f"  - {name}")
+        return
+
+    if baseline:
+        stamped = baseline_migrations(engine)
+        if not stamped:
+            click.echo("Nothing to baseline (all migrations already recorded).")
+            return
+        click.echo(f"Baselined {len(stamped)} migration(s) (recorded, NOT run):")
+        for name in stamped:
             click.echo(f"  - {name}")
         return
 

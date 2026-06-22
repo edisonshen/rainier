@@ -254,6 +254,50 @@ def test_failed_migration_records_nothing(throwaway_engine, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Baseline: adopt an existing schema WITHOUT replaying SQL (codex 43f3 [P1])
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_records_without_running(throwaway_engine, tmp_path):
+    from rainier.core.legacy_migrate import (
+        applied_versions,
+        baseline_migrations,
+        run_migrations,
+    )
+
+    _make_synthetic_migrations(tmp_path)
+    stamped = baseline_migrations(throwaway_engine, migrations_dir=tmp_path)
+    assert stamped == ["0001_create_a.sql", "0002_create_b.sql", "0003_add_col.sql"]
+
+    # All recorded, but NONE of the SQL ran — the tables don't exist.
+    insp = inspect(throwaway_engine)
+    assert applied_versions(throwaway_engine) == set(stamped)
+    assert "mig_a" not in insp.get_table_names()
+    assert "mig_b" not in insp.get_table_names()
+
+    # After baseline, a normal run is a no-op (everything already stamped).
+    assert run_migrations(throwaway_engine, migrations_dir=tmp_path) == []
+
+
+def test_baseline_then_run_applies_only_new(throwaway_engine, tmp_path):
+    """Baseline the existing set, add a NEW file, then run applies only the new
+    one — the realistic adoption flow."""
+    from rainier.core.legacy_migrate import baseline_migrations, run_migrations
+
+    _make_synthetic_migrations(tmp_path)
+    baseline_migrations(throwaway_engine, migrations_dir=tmp_path)
+
+    _write_migration(
+        tmp_path,
+        "0004_new.sql",
+        "BEGIN;\nCREATE TABLE IF NOT EXISTS mig_new (id int PRIMARY KEY);\nCOMMIT;\n",
+    )
+    applied = run_migrations(throwaway_engine, migrations_dir=tmp_path)
+    assert applied == ["0004_new.sql"]
+    assert "mig_new" in inspect(throwaway_engine).get_table_names()
+
+
+# ---------------------------------------------------------------------------
 # search_path independence — version table is always public.schema_migrations
 # (codex 43f3 [P2]): an unqualified table under a non-public search_path would
 # put the CREATE in one schema and the existence-check in another → replay loop.
@@ -285,10 +329,13 @@ def test_idempotent_under_non_public_search_path(throwaway_engine, tmp_path):
     assert second == [], "re-run under a non-public search_path must be a no-op"
     assert applied_versions(throwaway_engine) == set(first)
 
-    # The version table landed in public, not the shadow schema.
+    # Both the version table AND the migration DDL landed in public, not the
+    # shadow schema — _pin_public keeps bookkeeping and DDL in the same schema.
     insp = inspect(throwaway_engine)
     assert "schema_migrations" in insp.get_table_names(schema="public")
     assert "schema_migrations" not in insp.get_table_names(schema="shadow")
+    assert {"mig_a", "mig_b"} <= set(insp.get_table_names(schema="public"))
+    assert "mig_a" not in insp.get_table_names(schema="shadow")
 
 
 # ---------------------------------------------------------------------------
