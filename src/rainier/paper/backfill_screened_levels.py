@@ -344,12 +344,27 @@ def _match_for_row(
 def _candidate_with_levels(
     row: _TargetRow, pat: PatternSignal
 ) -> StockCandidate:
-    """Minimal StockCandidate carrying ONLY the four levels to backfill.
+    """Minimal StockCandidate carrying the levels persist_screened_stocks fills.
 
     persist_screened_stocks coalesce-upserts the level columns and leaves the
     non-level columns untouched on conflict, so the other fields here are
     placeholders that never reach the existing row.
+
+    Levels carried: entry/stop/target/rr PLUS ``bearish_invalidation_level`` for an
+    exact ``false_breakout`` (the pattern's ``false_high`` key-point). The upsert
+    fills that column too, and ``paper.reclaim.detect_and_enqueue_reclaims`` filters
+    on ``bearish_invalidation_level IS NOT NULL`` (within its active ~20-day
+    window) — so leaving it NULL would silently make every repaired bearish-trap
+    row permanently invisible to reclaim, even though the live screener persists
+    it. Mirror the live derivation (``stock_screener.py``: false_breakout-only,
+    ``key_points['false_high']``, never ``stop_loss`` which sits a buffer above).
     """
+    bearish_invalidation_level: float | None = None
+    if pat.pattern_type == "false_breakout" and pat.key_points is not None:
+        false_high = pat.key_points.get("false_high")
+        if false_high is not None:
+            bearish_invalidation_level = float(false_high)
+
     return StockCandidate(
         symbol=row.symbol,
         rank=0,
@@ -363,6 +378,7 @@ def _candidate_with_levels(
         stop_loss=pat.stop_loss,
         target_price=pat.target_wave1,
         rr_ratio=pat.rr_ratio,
+        bearish_invalidation_level=bearish_invalidation_level,
     )
 
 

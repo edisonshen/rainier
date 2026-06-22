@@ -17,7 +17,9 @@ import pytest
 from rainier.core.types import PatternSignal
 from rainier.paper.backfill_screened_levels import (
     _as_of_idx,
+    _candidate_with_levels,
     _match_pattern,
+    _TargetRow,
     backfill_screened_levels,
 )
 
@@ -29,6 +31,7 @@ def _sig(
     entry_price: float,
     stop_loss: float = 0.0,
     target_wave1: float = 0.0,
+    key_points: dict | None = None,
 ) -> PatternSignal:
     return PatternSignal(
         symbol="X",
@@ -39,6 +42,18 @@ def _sig(
         entry_price=entry_price,
         stop_loss=stop_loss,
         target_wave1=target_wave1,
+        key_points=key_points,
+    )
+
+
+def _target(pattern_type: str) -> _TargetRow:
+    return _TargetRow(
+        symbol="X",
+        scan_date=date(2026, 6, 5),
+        session_name="close",
+        pattern_type=pattern_type,
+        sector="Tech",
+        composite_score=0.8,
     )
 
 
@@ -153,6 +168,63 @@ def test_as_of_idx_matches_scan_date_under_non_utc_session_tz():
         "America/Los_Angeles"
     )  # -> 2026-06-04 17:00-07:00, LOCAL date 06-04
     assert _as_of_idx(_df([bar]), date(2026, 6, 5)) == 0
+
+
+# --- _candidate_with_levels (bearish_invalidation_level backfill) ----------
+
+
+def test_candidate_carries_false_breakout_invalidation_level():
+    """A recovered `false_breakout` must carry `bearish_invalidation_level` (the
+    pattern's `false_high`) so persist_screened_stocks fills it and the reclaim
+    flow (which filters on `bearish_invalidation_level IS NOT NULL`) can re-enqueue
+    the repaired row. Mirrors the live screener's false_breakout-only derivation."""
+    pat = _sig(
+        "false_breakout",
+        confidence=0.7,
+        entry_price=90.0,
+        stop_loss=95.0,
+        target_wave1=80.0,
+        key_points={"false_high": 94.5},
+    )
+    cand = _candidate_with_levels(_target("false_breakout"), pat)
+    assert cand.bearish_invalidation_level == 94.5
+    # The four trade levels still flow through.
+    assert cand.entry_price == 90.0
+    assert cand.stop_loss == 95.0
+
+
+def test_candidate_invalidation_level_none_for_non_false_breakout():
+    """Only `false_breakout` carries a trap-high. A bullish pattern (e.g.
+    `false_breakdown`) leaves `bearish_invalidation_level` NULL even if its
+    key_points happen to contain a `false_high` key — matches live behavior."""
+    pat = _sig(
+        "false_breakdown",
+        confidence=0.7,
+        entry_price=89.0,
+        key_points={"false_high": 94.5},  # ignored for a non-false_breakout
+    )
+    cand = _candidate_with_levels(_target("false_breakdown"), pat)
+    assert cand.bearish_invalidation_level is None
+
+
+def test_candidate_invalidation_level_none_when_false_high_absent():
+    """A `false_breakout` whose key_points lack `false_high` (or None key_points)
+    leaves the level NULL rather than crashing — defensive against a malformed
+    pattern (e.g. false_breakout_hs, which has no false_high)."""
+    assert (
+        _candidate_with_levels(
+            _target("false_breakout"),
+            _sig("false_breakout", confidence=0.7, entry_price=90.0, key_points={}),
+        ).bearish_invalidation_level
+        is None
+    )
+    assert (
+        _candidate_with_levels(
+            _target("false_breakout"),
+            _sig("false_breakout", confidence=0.7, entry_price=90.0, key_points=None),
+        ).bearish_invalidation_level
+        is None
+    )
 
 
 # --- input validation ------------------------------------------------------
