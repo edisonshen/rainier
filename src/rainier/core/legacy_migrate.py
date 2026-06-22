@@ -47,9 +47,37 @@ from sqlalchemy.engine import Engine
 
 log = structlog.get_logger()
 
-# Repo-root-relative migrations directory. legacy_migrate.py lives at
-# src/rainier/core/legacy_migrate.py → parents[3] is the repo root.
-MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "migrations"
+
+def _resolve_migrations_dir() -> Path:
+    """Locate the numbered ``migrations/*.sql`` directory.
+
+    Resolved in two ways, in priority order — mirrors ``_resolve_alembic_config``
+    in cli.py so the command works from both install shapes:
+
+    1. **Wheel install** — ``importlib.resources.files("rainier") / "_db_assets"
+       / "migrations"``. Hatchling's ``force-include`` ships the top-level
+       ``migrations/`` tree into the wheel there, so a packaged CLI (no source
+       checkout) still finds the files instead of returning ``[]`` and falsely
+       reporting "up to date".
+    2. **Editable / source checkout** — ``<repo>/migrations`` via ``__file__``
+       (this module at ``src/rainier/core/legacy_migrate.py`` → ``parents[3]``
+       is the repo root).
+    """
+    from importlib import resources
+
+    try:
+        anchor = resources.files("rainier") / "_db_assets" / "migrations"
+        with resources.as_file(anchor) as path_obj:
+            packaged = Path(path_obj)
+        if packaged.is_dir():
+            return packaged
+    except (ModuleNotFoundError, FileNotFoundError):
+        pass  # fall through to source-checkout path
+
+    return Path(__file__).resolve().parents[3] / "migrations"
+
+
+MIGRATIONS_DIR = _resolve_migrations_dir()
 
 # Forward migrations are ``NNNN_<name>.sql``; downgrades are
 # ``NNNN_<name>_downgrade.sql`` and must be excluded.
@@ -106,12 +134,20 @@ def _strip_outer_transaction(sql: str) -> str:
     return "\n".join(lines)
 
 
+# The version table is ALWAYS schema-qualified ``public.schema_migrations``.
+# Unqualified DDL/DML would resolve through the role's ``search_path``, which can
+# put the CREATE in one schema and a later existence-check in another — then the
+# runner thinks nothing is applied and replays every migration. The legacy ORM
+# tables all live in ``public``, so the version table belongs there too.
+_VERSION_TABLE = "public.schema_migrations"
+
+
 def _ensure_version_table(engine: Engine) -> None:
-    """Create ``schema_migrations`` if absent (idempotent)."""
+    """Create ``public.schema_migrations`` if absent (idempotent)."""
     with engine.begin() as conn:
         conn.execute(
             text(
-                "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                f"CREATE TABLE IF NOT EXISTS {_VERSION_TABLE} ("
                 "  version TEXT PRIMARY KEY,"
                 "  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()"
                 ")"
@@ -122,7 +158,7 @@ def _ensure_version_table(engine: Engine) -> None:
 def applied_versions(engine: Engine) -> set[str]:
     """Return the set of already-applied migration filenames.
 
-    Returns an empty set when ``schema_migrations`` does not exist yet (a
+    Returns an empty set when ``public.schema_migrations`` does not exist yet (a
     fresh DB), so callers can compute "pending" without first creating it.
     """
     insp_sql = (
@@ -132,7 +168,9 @@ def applied_versions(engine: Engine) -> set[str]:
     with engine.connect() as conn:
         if conn.execute(text(insp_sql)).first() is None:
             return set()
-        rows = conn.execute(text("SELECT version FROM schema_migrations")).scalars().all()
+        rows = (
+            conn.execute(text(f"SELECT version FROM {_VERSION_TABLE}")).scalars().all()
+        )
     return set(rows)
 
 
@@ -156,7 +194,7 @@ def _apply_one(engine: Engine, path: Path) -> None:
         if body.strip():
             conn.exec_driver_sql(body)
         conn.execute(
-            text("INSERT INTO schema_migrations (version) VALUES (:v)"),
+            text(f"INSERT INTO {_VERSION_TABLE} (version) VALUES (:v)"),
             {"v": path.name},
         )
 

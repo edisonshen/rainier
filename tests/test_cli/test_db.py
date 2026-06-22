@@ -394,6 +394,46 @@ def test_wheel_packages_db_assets_under_rainier_db_assets():
     assert (repo_root / "db" / "alembic").is_dir()
 
 
+def test_wheel_packages_legacy_migrations_under_db_assets():
+    """Regression (codex 43f3 [P1]): pyproject must force-include the top-level
+    `migrations/` tree at `rainier/_db_assets/migrations/` so a packaged
+    (non-editable) install of `rainier db migrate-legacy` finds the numbered
+    SQL files. Without it, `discover_migrations()` returns [] in a wheel and the
+    command falsely reports "up to date", never applying 0001..N.
+
+    Asserts the static config (no wheel build) — same approach as the db-assets
+    test above. The matching resolver is
+    `legacy_migrate._resolve_migrations_dir()`.
+    """
+    from pathlib import Path
+
+    try:
+        import tomllib  # py311+
+    except ImportError:  # pragma: no cover
+        import tomli as tomllib
+
+    repo_root = Path(__file__).resolve().parents[2]
+    with (repo_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    force_include = (
+        pyproject.get("tool", {})
+        .get("hatch", {})
+        .get("build", {})
+        .get("targets", {})
+        .get("wheel", {})
+        .get("force-include", {})
+    )
+    assert force_include.get("migrations") == "rainier/_db_assets/migrations", (
+        "pyproject.toml's [tool.hatch.build.targets.wheel] must force-include "
+        '`"migrations" = "rainier/_db_assets/migrations"` so wheels ship the '
+        "legacy migrations/*.sql. Got: " + repr(force_include)
+    )
+
+    # Sanity: the source dir referenced by force-include actually exists.
+    assert (repo_root / "migrations").is_dir()
+
+
 def test_alembic_ini_script_location_is_config_relative(tmp_path, monkeypatch):
     """Regression: alembic.ini's `script_location` must resolve relative to
     the ini file (via `%(here)s`), NOT relative to cwd. Without this, running

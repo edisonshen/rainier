@@ -254,6 +254,44 @@ def test_failed_migration_records_nothing(throwaway_engine, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# search_path independence — version table is always public.schema_migrations
+# (codex 43f3 [P2]): an unqualified table under a non-public search_path would
+# put the CREATE in one schema and the existence-check in another → replay loop.
+# ---------------------------------------------------------------------------
+
+
+def test_idempotent_under_non_public_search_path(throwaway_engine, tmp_path):
+    from sqlalchemy import event
+
+    from rainier.core.legacy_migrate import applied_versions, run_migrations
+
+    # Create a user schema that shadows public in the search_path. If the runner
+    # wrote/read schema_migrations unqualified, the second run would not see the
+    # first run's records and would replay everything.
+    with throwaway_engine.begin() as conn:
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS shadow"))
+
+    @event.listens_for(throwaway_engine, "connect")
+    def _set_search_path(dbapi_conn, _record):  # pragma: no cover - tiny hook
+        cur = dbapi_conn.cursor()
+        cur.execute("SET search_path TO shadow, public")
+        cur.close()
+
+    _make_synthetic_migrations(tmp_path)
+    first = run_migrations(throwaway_engine, migrations_dir=tmp_path)
+    assert first == ["0001_create_a.sql", "0002_create_b.sql", "0003_add_col.sql"]
+
+    second = run_migrations(throwaway_engine, migrations_dir=tmp_path)
+    assert second == [], "re-run under a non-public search_path must be a no-op"
+    assert applied_versions(throwaway_engine) == set(first)
+
+    # The version table landed in public, not the shadow schema.
+    insp = inspect(throwaway_engine)
+    assert "schema_migrations" in insp.get_table_names(schema="public")
+    assert "schema_migrations" not in insp.get_table_names(schema="shadow")
+
+
+# ---------------------------------------------------------------------------
 # REAL shipped migrations are discovered + driven by the runner
 # ---------------------------------------------------------------------------
 # These use the real migrations/*.sql (no temp dir) but do NOT depend on every

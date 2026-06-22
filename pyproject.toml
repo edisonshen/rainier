@@ -76,7 +76,13 @@ packages = ["src/rainier"]
 # CLI works from both editable installs (where the top-level db/ exists on disk)
 # and non-editable wheel installs (where it doesn't). Catches the codex iter-2
 # [P1]: without this, wheel installs would crash with "alembic config not found".
-force-include = { "db" = "rainier/_db_assets" }
+#
+# `migrations` ships the numbered legacy `migrations/*.sql` at
+# `rainier/_db_assets/migrations/` so `rainier db migrate-legacy` finds them in
+# a packaged install too — without it `discover_migrations()` returns [] and the
+# command falsely reports "up to date" (codex 43f3 [P1]). Resolved by
+# `legacy_migrate._resolve_migrations_dir()`, same two-path idiom as alembic.
+force-include = { "db" = "rainier/_db_assets", "migrations" = "rainier/_db_assets/migrations" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
