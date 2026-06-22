@@ -2015,12 +2015,76 @@ def db():
 @db.command(name="init")
 @click.pass_context
 def db_init(ctx):
-    """Initialize database tables and hypertables."""
-    from rainier.core.database import init_db
+    """Initialize database tables and hypertables.
+
+    After ``create_all`` (additive only — it never ALTERs an existing table to
+    add a missing column), run ``check_schema_drift`` as a loud chokepoint. An
+    existing-but-drifted table (a stub ``stocks``, an unapplied
+    ``migrations/*.sql`` column) is invisible to ``create_all`` and otherwise
+    surfaces only as a silent zero-row scrape. If drift is found we print every
+    missing object and exit non-zero so it screams instead.
+    """
+    from rainier.core.database import get_engine, init_db
+    from rainier.core.schema_check import check_schema_drift
 
     click.echo("Initializing database...")
     init_db()
     click.echo("Database initialized successfully.")
+
+    findings = check_schema_drift(get_engine())
+    if findings:
+        click.echo("")
+        click.echo("SCHEMA DRIFT DETECTED — the live DB is behind the ORM:")
+        for finding in findings:
+            click.echo(f"  - {finding}")
+        click.echo("")
+        click.echo(
+            "Run 'rainier db migrate-legacy' to apply pending migrations/*.sql, "
+            "or repair the drifted table by hand."
+        )
+        raise click.ClickException(
+            f"{len(findings)} schema-drift finding(s); see above."
+        )
+    click.echo("Schema drift check: clean.")
+
+
+@db.command(name="migrate-legacy")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="List pending migrations/*.sql without applying anything.",
+)
+def db_migrate_legacy(dry_run: bool) -> None:
+    """Apply the numbered ``migrations/*.sql`` to the LEGACY ``core.database``.
+
+    This is the runner for the legacy local-TimescaleDB track (public.* tables),
+    NOT Alembic — ``rainier db migrate`` is Alembic against the separate Neon
+    canonical DB. Applies each forward (non-``_downgrade``) file in filename
+    order, recording it in ``schema_migrations``. Idempotent: already-recorded
+    files are skipped, so a second run is a no-op. ``--dry-run`` lists pending
+    files without touching the DB.
+    """
+    from rainier.core.database import get_engine
+    from rainier.core.legacy_migrate import run_migrations
+
+    engine = get_engine()
+    if dry_run:
+        pending = run_migrations(engine, dry_run=True)
+        if not pending:
+            click.echo("No pending legacy migrations.")
+            return
+        click.echo(f"{len(pending)} pending legacy migration(s):")
+        for name in pending:
+            click.echo(f"  - {name}")
+        return
+
+    applied = run_migrations(engine)
+    if not applied:
+        click.echo("Legacy migrations already up to date (no-op).")
+        return
+    click.echo(f"Applied {len(applied)} legacy migration(s):")
+    for name in applied:
+        click.echo(f"  - {name}")
 
 
 @db.command(name="gc-test-schemas")

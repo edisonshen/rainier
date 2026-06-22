@@ -40,7 +40,14 @@ def test_db_group_does_not_shadow_legacy_subcommands():
     result = runner.invoke(cli, ["db", "--help"])
     assert result.exit_code == 0, result.output
 
-    for subcmd in ("init", "backfill-prices", "ping", "migrate", "gc-test-schemas"):
+    for subcmd in (
+        "init",
+        "backfill-prices",
+        "ping",
+        "migrate",
+        "migrate-legacy",
+        "gc-test-schemas",
+    ):
         assert subcmd in result.output, (
             f"`rainier db --help` is missing `{subcmd}` — likely caused by a "
             f"duplicate `@cli.group() def db()` shadowing the original. "
@@ -142,6 +149,123 @@ def test_db_gc_test_schemas_apply_surfaces_failures(monkeypatch):
     result = runner.invoke(cli_mod.cli, ["db", "gc-test-schemas", "--apply"])
     assert result.exit_code != 0
     assert "FAILED" in result.output
+
+
+def test_db_migrate_legacy_dry_run_lists_pending(monkeypatch):
+    """`db migrate-legacy --dry-run` lists pending files and applies nothing.
+
+    Stubs the legacy engine + the runner so no live DB is needed. The command
+    must call ``run_migrations(engine, dry_run=True)`` and echo each pending file.
+    """
+    from rainier import cli as cli_mod
+
+    calls = {}
+
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _fake_run(engine, *, dry_run=False):
+        calls["dry_run"] = dry_run
+        return ["0012_reclaim_queue.sql", "0013_paper_trade_shadow.sql"]
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _fake_run)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert calls["dry_run"] is True
+    assert "0012_reclaim_queue.sql" in result.output
+    assert "0013_paper_trade_shadow.sql" in result.output
+    assert "pending" in result.output.lower()
+
+
+def test_db_migrate_legacy_applies_and_reports(monkeypatch):
+    """`db migrate-legacy` (no flag) applies pending files and lists them."""
+    from rainier import cli as cli_mod
+
+    calls = {}
+
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _fake_run(engine, *, dry_run=False):
+        calls["dry_run"] = dry_run
+        return ["0012_reclaim_queue.sql"]
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _fake_run)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy"])
+    assert result.exit_code == 0, result.output
+    assert calls["dry_run"] is False
+    assert "Applied 1" in result.output
+    assert "0012_reclaim_queue.sql" in result.output
+
+
+def test_db_migrate_legacy_noop_when_up_to_date(monkeypatch):
+    """`db migrate-legacy` reports a no-op when nothing is pending."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(lm_mod, "run_migrations", lambda engine, *, dry_run=False: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy"])
+    assert result.exit_code == 0, result.output
+    assert "up to date" in result.output.lower()
+
+
+def test_db_init_exits_loud_on_drift(monkeypatch):
+    """`db init` exits non-zero and prints every missing object when the drift
+    checker reports findings (the loud chokepoint).
+
+    Stubs ``init_db`` (no live DB) + ``check_schema_drift`` to return findings.
+    """
+    import rainier.core.database as db_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: [
+            "missing column: screened_stocks.bearish_invalidation_level",
+            "missing table: paper_reclaim_queue",
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code != 0, result.output
+    assert "SCHEMA DRIFT DETECTED" in result.output
+    assert "screened_stocks.bearish_invalidation_level" in result.output
+    assert "paper_reclaim_queue" in result.output
+    assert "migrate-legacy" in result.output
+
+
+def test_db_init_clean_when_no_drift(monkeypatch):
+    """`db init` succeeds and reports a clean drift check when there are no
+    findings."""
+    import rainier.core.database as db_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "clean" in result.output.lower()
 
 
 def test_db_migrate_help_exposes_downgrade_flag():
