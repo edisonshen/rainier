@@ -264,19 +264,33 @@ def _match_pattern(
 
 
 def _as_of_idx(df: pd.DataFrame, scan_date: date) -> int | None:
-    """Positional index of the last bar on/before ``scan_date``; None if none.
+    """Positional index of the bar EXACTLY ON ``scan_date``; None if absent.
 
-    The screener runs on the bars available as-of the scan, whose latest bar is
-    the most recent trading day on or before scan_date.
+    Fidelity gate: the live close-session screen ran on ``yf.download(period=…)``
+    whose LATEST bar is the scan_date bar (the day the screen executed). A
+    faithful replay therefore needs that exact bar as the window's last bar — its
+    high/low/close drive the reconstructed levels.
+
+    We deliberately do NOT fall back to the most-recent bar ON-OR-BEFORE
+    scan_date. If ``stock_prices`` has an ingest gap (or ``load_prices`` dropped a
+    partial bar) for the canonical scan_date, an on-or-before fallback would build
+    a window ending on the PRIOR trading day and replay stale prior-day levels —
+    writing entry/stop/target/rr that the original as-of-scan_date screen never
+    produced. That violates "faithful by construction": such a row must stay
+    ``still_null`` (reported, never given wrong-day levels), not be silently
+    recovered from the wrong bar. So require an EXACT scan_date match.
+
+    Compares on calendar date so a ``timestamptz`` index (tz-aware or naive) and a
+    midnight ``scan_date`` line up regardless of the bar's stored intraday time.
     """
-    cutoff = pd.Timestamp(scan_date)
-    if df.index.tz is not None:
-        cutoff = cutoff.tz_localize(df.index.tz)
-    mask = pd.Index(df.index <= cutoff).to_numpy()
-    hits = mask.nonzero()[0]
+    # df.index is the per-symbol price DatetimeIndex; map each bar to its calendar
+    # date and find the position whose date == scan_date. Close-session scan_dates
+    # are always trading days, so the canonical bar exists unless prices are gapped.
+    bar_dates = df.index.normalize().date  # ndarray[date]; tz-aware indices keep
+    hits = (bar_dates == scan_date).nonzero()[0]                       # local-date
     if hits.size == 0:
         return None
-    # positional index of the last bar on/before scan_date
+    # Exactly-one bar per trading day; take it (last guards any duplicate ingest).
     return int(hits[-1])
 
 
@@ -287,7 +301,8 @@ def _match_for_row(
 ) -> PatternSignal | None:
     """Replay the detector as-of ``row.scan_date`` and return the matching pattern.
 
-    Returns None when prices are missing, no bar exists on/before scan_date, no
+    Returns None when prices are missing, NO bar exists EXACTLY ON scan_date (an
+    ingest gap — never replay the prior day's stale bar; see ``_as_of_idx``), no
     as-of actionable pattern has the row's stored ``pattern_type``, OR the
     detector raises on this symbol's window. A per-row detector failure is
     per-symbol noise (one bad price window must not abort a multi-day repair) —

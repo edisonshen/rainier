@@ -524,6 +524,36 @@ def test_apply_on_healthy_db_passes_preflight(pg_legacy_session):
     assert entry is not None
 
 
+def test_missing_scan_date_bar_stays_still_null_no_prior_day_levels(pg_legacy_session):
+    """Fidelity gate (codex P1): when `stock_prices` has NO bar exactly on the
+    row's scan_date (an ingest gap), the backfill must leave the row in still_null
+    — NOT replay the prior trading day's bar and write stale prior-day levels.
+
+    Seed the full price history but ending the business day BEFORE scan_date, so
+    the canonical scan_date bar is absent. The row must report still_null with its
+    levels untouched. FAILS on the parent commit, whose `_as_of_idx` falls back to
+    the last bar on/before scan_date (the prior day) and would write its levels."""
+    prior_bday = (pd.Timestamp(_SCAN) - pd.tseries.offsets.BDay(1)).date()
+    # Prices end on the prior business day → no bar exactly on _SCAN.
+    _seed_prices(pg_legacy_session, "GAP", prior_bday, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "GAP", _SCAN, pattern_type="false_breakdown")
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    assert res.scanned == 1
+    assert res.recovered == 0
+    assert res.still_null == 1
+    assert ("GAP", _SCAN) in res.still_null_keys
+    # No prior-day levels written: the row's entry_price is still NULL.
+    pg_legacy_session.expire_all()
+    assert _row(pg_legacy_session, "GAP", _SCAN).entry_price is None
+
+
 def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
     """On a complete DB the column-scoped `_target_rows` returns the SAME row set
     (by identity key) the old full-ORM load did — no behavior change when nothing

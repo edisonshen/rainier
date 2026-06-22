@@ -91,25 +91,29 @@ def _df(dates: list[pd.Timestamp]) -> pd.DataFrame:
     return pd.DataFrame({"close": range(len(dates))}, index=pd.DatetimeIndex(dates))
 
 
-def test_as_of_idx_hits_last_bar_on_or_before_scan_date():
+def test_as_of_idx_hits_exact_scan_date_bar():
     dates = [
         pd.Timestamp("2026-06-01", tz="UTC"),
         pd.Timestamp("2026-06-03", tz="UTC"),
         pd.Timestamp("2026-06-05", tz="UTC"),
         pd.Timestamp("2026-06-09", tz="UTC"),  # after scan_date
     ]
-    # scan_date 06-05 → the 06-05 bar (positional index 2) is the as-of bar.
+    # scan_date 06-05 → the EXACT 06-05 bar (positional index 2) is the as-of bar.
     assert _as_of_idx(_df(dates), date(2026, 6, 5)) == 2
 
 
-def test_as_of_idx_picks_prior_bar_when_scan_date_has_no_bar():
+def test_as_of_idx_none_when_scan_date_bar_missing_no_prior_day_fallback():
+    """Fidelity gate (codex P1): a missing scan_date bar must NOT silently fall
+    back to the prior trading day's bar. Replaying the prior day would write stale
+    prior-day levels into a row meant to be reconstructed AS OF scan_date — so the
+    row stays still_null instead. Returns None when the exact bar is absent."""
     dates = [
         pd.Timestamp("2026-06-01", tz="UTC"),
         pd.Timestamp("2026-06-03", tz="UTC"),
         pd.Timestamp("2026-06-08", tz="UTC"),
     ]
-    # scan_date 06-05 has no bar → last bar on/before is 06-03 (index 1).
-    assert _as_of_idx(_df(dates), date(2026, 6, 5)) == 1
+    # scan_date 06-05 has NO bar → None (no 06-03 fallback). Was index 1 pre-fix.
+    assert _as_of_idx(_df(dates), date(2026, 6, 5)) is None
 
 
 def test_as_of_idx_none_when_all_bars_after_scan_date():
