@@ -62,7 +62,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from rainier.core.config import StockScreenerConfig, get_settings
@@ -211,6 +211,36 @@ def _count_non_close_null(
     return int(session.execute(stmt).scalar_one())
 
 
+# The level column migration 0005 added (entry_price etc.) plus the 0012 column
+# the write path's upsert names. The READ path is column-scoped so a missing
+# 0012 column can't crash a dry-run (see ``_TargetRow``); the WRITE path goes
+# through ``persist_screened_stocks``, whose ``INSERT ... ON CONFLICT`` references
+# ``bearish_invalidation_level`` directly. On a pre-0012 DB that write aborts with
+# an opaque ``UndefinedColumn`` mid-repair. ``--apply`` preflights for the column
+# so the operator gets a clear "apply migration 0012 first" message instead.
+_APPLY_REQUIRED_COLUMN = "bearish_invalidation_level"
+
+
+def _apply_column_present(session: Session) -> bool:
+    """True iff ``screened_stocks.bearish_invalidation_level`` exists on this DB.
+
+    ``to_regclass`` resolves ``screened_stocks`` on the session's search_path, so
+    the catalog lookup targets the same table the write path would hit (not a
+    same-named table in another schema). ``NOT attisdropped`` excludes a
+    logically-dropped column. The write path's upsert references this column; a
+    pre-0012 DB lacks it, so ``--apply`` must refuse before attempting the write.
+    """
+    row = session.execute(
+        text(
+            "SELECT 1 FROM pg_attribute "
+            "WHERE attrelid = to_regclass('screened_stocks') "
+            "AND attname = :c AND NOT attisdropped"
+        ),
+        {"c": _APPLY_REQUIRED_COLUMN},
+    ).first()
+    return row is not None
+
+
 def _match_pattern(
     actionable: list[PatternSignal], stored_type: str
 ) -> PatternSignal | None:
@@ -337,6 +367,22 @@ def backfill_screened_levels(
     result = BackfillResult()
 
     with get_session() as session:
+        # Preflight the WRITE path against schema drift BEFORE any scan work.
+        # ``persist_screened_stocks`` upserts ``bearish_invalidation_level`` (added
+        # by migration 0012); on a pre-0012 DB that write aborts with an opaque
+        # ``UndefinedColumn`` AFTER a full replay. A dry-run on the same drifted DB
+        # succeeds (column-scoped read) and tells the operator to re-run with
+        # ``--apply`` — so without this guard ``--apply`` would crash mid-repair.
+        # Fail fast with a clear, actionable message instead. (Dry-run never
+        # writes, so it stays runnable on the drifted DB for diagnosis.)
+        if apply and not _apply_column_present(session):
+            raise RuntimeError(
+                "Cannot --apply: screened_stocks is missing the "
+                f"{_APPLY_REQUIRED_COLUMN!r} column (migration 0012 not applied). "
+                "Apply migration 0012 (migrations/0012_reclaim_queue.sql) first, "
+                "then re-run with --apply. Dry-run (without --apply) works without it."
+            )
+
         # Damaged non-close rows are not repairable (look-ahead) but ARE still
         # damaged — count them first so the report surfaces them even when there
         # are zero repairable close rows (a dry-run must never look complete

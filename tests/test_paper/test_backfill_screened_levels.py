@@ -458,6 +458,72 @@ def test_drift_db_missing_model_column_does_not_crash(pg_drift_session):
     assert entry is None
 
 
+def test_apply_on_drift_db_raises_clear_error_not_undefined_column(pg_drift_session):
+    """`--apply` on a pre-0012 DB must fail fast with a clear, actionable message,
+    NOT crash mid-repair with an opaque UndefinedColumn from the upsert.
+
+    The write path (`persist_screened_stocks`) names `bearish_invalidation_level`
+    in its INSERT ... ON CONFLICT; that column is absent on a drifted DB. A
+    dry-run on the same DB succeeds and tells the operator to re-run with
+    `--apply` — so without the preflight guard `--apply` would attempt the write
+    and abort with a raw psycopg error. The guard raises a RuntimeError that names
+    the missing column and migration 0012, and leaves the row UNWRITTEN.
+
+    FAILS on the parent commit: there the apply path reaches the upsert and raises
+    a psycopg `UndefinedColumn` (not the guarded RuntimeError)."""
+    # Precondition: the column really is absent on this drift fixture.
+    assert not _column_exists(
+        pg_drift_session, "screened_stocks", "bearish_invalidation_level"
+    )
+
+    _seed_prices(pg_drift_session, "DRF", _SCAN, _FB_PRICES)
+    _seed_screened_raw(pg_drift_session, "DRF", _SCAN, "false_breakdown")
+
+    with pytest.raises(RuntimeError, match="migration 0012"):
+        backfill_screened_levels(
+            from_date=date(2026, 6, 3),
+            to_date=date(2026, 6, 12),
+            apply=True,
+            config_overrides=_CFG_OVERRIDES,
+        )
+
+    # The guard refused before any write: the row's levels stay NULL.
+    pg_drift_session.expire_all()
+    entry = pg_drift_session.execute(
+        text(
+            "SELECT entry_price FROM screened_stocks "
+            "WHERE symbol = :s AND scan_date = :d"
+        ),
+        {"s": "DRF", "d": _SCAN},
+    ).scalar_one()
+    assert entry is None
+
+
+def test_apply_on_healthy_db_passes_preflight(pg_legacy_session):
+    """On a complete (post-0012) DB the apply preflight passes and the write
+    proceeds — the guard must not block a healthy `--apply`."""
+    _seed_prices(pg_legacy_session, "OK", _SCAN, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "OK", _SCAN, pattern_type="false_breakdown")
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+    assert res.recovered == 1
+
+    pg_legacy_session.expire_all()
+    entry = pg_legacy_session.execute(
+        text(
+            "SELECT entry_price FROM screened_stocks "
+            "WHERE symbol = :s AND scan_date = :d"
+        ),
+        {"s": "OK", "d": _SCAN},
+    ).scalar_one()
+    assert entry is not None
+
+
 def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
     """On a complete DB the column-scoped `_target_rows` returns the SAME row set
     (by identity key) the old full-ORM load did — no behavior change when nothing
