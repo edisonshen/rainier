@@ -5971,6 +5971,7 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
         f"scanned={result.scanned} recovered={result.recovered} "
         f"still_null={result.still_null} "
         f"no_price_data={result.no_price_data} "
+        f"detector_errors={result.detector_errors} "
         f"skipped_non_close={result.skipped_non_close}"
     )
     if result.still_null_keys:
@@ -5986,6 +5987,14 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
             "bars even after solo retry — TRANSIENT, re-run may recover these):"
         )
         for symbol, scan_date in result.no_price_data_keys:
+            click.echo(f"    {symbol} {scan_date}")
+    if result.detector_error_keys:
+        click.echo(
+            f"  detector-errors ({result.detector_errors} rows, the detector "
+            "raised — NOT a permanent no-match; a data re-pull or code fix may "
+            "recover these; see logs for tracebacks):"
+        )
+        for symbol, scan_date in result.detector_error_keys:
             click.echo(f"    {symbol} {scan_date}")
     if result.skipped_non_close:
         click.echo(

@@ -451,7 +451,9 @@ def test_detector_failure_on_one_row_does_not_abort_run(
     pg_legacy_session, monkeypatch
 ):
     """A detector exception on one symbol is per-symbol noise: that row lands in
-    still_null and the run continues to repair the others (never aborts)."""
+    the detector_errors bucket (NOT still_null — a crash isn't a proven-permanent
+    no-match; a data/code fix may recover it) and the run continues to repair the
+    others (never aborts)."""
     import rainier.paper.backfill_screened_levels as mod
 
     _seed_prices(pg_legacy_session, "BAD", _SCAN, _FB_PRICES)
@@ -476,11 +478,14 @@ def test_detector_failure_on_one_row_does_not_abort_run(
     )
 
     pg_legacy_session.expire_all()
-    # The run completed (no abort): BAD → still_null, GOOD → recovered + written.
+    # The run completed (no abort): BAD → detector_errors, GOOD → recovered.
     assert res.scanned == 2
     assert res.recovered == 1
-    assert res.still_null == 1
-    assert ("BAD", _SCAN) in res.still_null_keys
+    # A detector crash is its own bucket, NOT permanent still_null.
+    assert res.detector_errors == 1
+    assert ("BAD", _SCAN) in res.detector_error_keys
+    assert res.still_null == 0
+    assert ("BAD", _SCAN) not in res.still_null_keys
     assert _row(pg_legacy_session, "BAD", _SCAN).entry_price is None
     assert _row(pg_legacy_session, "GOOD", _SCAN).entry_price is not None
 

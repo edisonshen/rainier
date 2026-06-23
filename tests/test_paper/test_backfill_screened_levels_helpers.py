@@ -19,7 +19,9 @@ from rainier.paper.backfill_screened_levels import (
     _as_of_idx,
     _candidate_with_levels,
     _fetch_history,
+    _match_for_row,
     _match_pattern,
+    _Outcome,
     _TargetRow,
     backfill_screened_levels,
 )
@@ -169,6 +171,84 @@ def test_as_of_idx_matches_scan_date_under_non_utc_session_tz():
         "America/Los_Angeles"
     )  # -> 2026-06-04 17:00-07:00, LOCAL date 06-04
     assert _as_of_idx(_df([bar]), date(2026, 6, 5)) == 0
+
+
+# --- _match_for_row outcome classification ---------------------------------
+
+
+def _ohlcv_at(scan: date, periods: int = 5) -> pd.DataFrame:
+    """A tiny tz-naive OHLCV frame whose LAST bar is exactly on ``scan``."""
+    dates = pd.bdate_range(end=pd.Timestamp(scan), periods=periods)
+    return pd.DataFrame(
+        {
+            "open": range(periods),
+            "high": range(1, periods + 1),
+            "low": range(periods),
+            "close": range(periods),
+            "volume": [1] * periods,
+        },
+        index=dates,
+    )
+
+
+def test_match_for_row_no_bars_is_no_as_of_data():
+    outcome, pat = _match_for_row(_target("false_breakdown"), None, config=object())
+    assert outcome is _Outcome.NO_AS_OF_DATA
+    assert pat is None
+
+
+def test_match_for_row_missing_exact_bar_is_no_as_of_data():
+    # Frame present but ending BEFORE the row's scan_date → no exact bar.
+    row = _target("false_breakdown")  # scan_date 2026-06-05
+    df = _ohlcv_at(date(2026, 6, 3))  # last bar 06-03, no 06-05
+    outcome, pat = _match_for_row(row, df, config=object())
+    assert outcome is _Outcome.NO_AS_OF_DATA
+    assert pat is None
+
+
+def test_match_for_row_detector_raise_is_detector_error(monkeypatch):
+    """A detector exception classifies DETECTOR_ERROR (its own bucket), NOT
+    NO_MATCH — a crash is not a proven-permanent no-match (codex P2)."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    def boom(symbol, windowed, config):
+        raise RuntimeError("synthetic detector blow-up")
+
+    monkeypatch.setattr(mod, "replay_pattern_layer", boom)
+    row = _target("false_breakdown")
+    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=object())
+    assert outcome is _Outcome.DETECTOR_ERROR
+    assert pat is None
+
+
+def test_match_for_row_clean_run_no_type_match_is_no_match(monkeypatch):
+    """Detector runs clean but no actionable pattern has the stored type →
+    NO_MATCH (permanent)."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    # Returns an actionable of a DIFFERENT type than the row's stored type.
+    monkeypatch.setattr(
+        mod,
+        "replay_pattern_layer",
+        lambda s, w, c: ([_sig("w_bottom", confidence=0.9, entry_price=100.0)], None),
+    )
+    row = _target("false_breakdown")
+    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=object())
+    assert outcome is _Outcome.NO_MATCH
+    assert pat is None
+
+
+def test_match_for_row_type_match_is_recovered(monkeypatch):
+    import rainier.paper.backfill_screened_levels as mod
+
+    match = _sig("false_breakdown", confidence=0.5, entry_price=89.0)
+    monkeypatch.setattr(
+        mod, "replay_pattern_layer", lambda s, w, c: ([match], None)
+    )
+    row = _target("false_breakdown")
+    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=object())
+    assert outcome is _Outcome.RECOVERED
+    assert pat is match
 
 
 # --- _candidate_with_levels (bearish_invalidation_level backfill) ----------

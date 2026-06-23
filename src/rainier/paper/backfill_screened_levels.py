@@ -161,6 +161,12 @@ class BackfillResult:
         operator should retry rather than treat it as permanently unreconstructable.
         Kept separate so a fetch blip is never silently mislabeled a no-match.
     ``no_price_data_keys`` — the (symbol, scan_date) of each no-price-data row.
+    ``detector_errors`` — target rows where the detector RAISED on the as-of
+        window (malformed vendor data / a detector bug). Surfaced separately from
+        ``still_null`` because they are NOT a proven-permanent no-match — a data
+        re-pull or a code fix may recover them. The run never aborts on these
+        (per-symbol fault isolation).
+    ``detector_error_keys`` — the (symbol, scan_date) of each detector-error row.
     ``skipped_non_close`` — patterned level-NULL rows in the window from a
         non-``close`` session. These are NOT reconstructable without look-ahead
         (see ``_BACKFILLABLE_SESSION``) so they are excluded from the target set,
@@ -174,6 +180,8 @@ class BackfillResult:
     still_null_keys: list[tuple[str, date]] = field(default_factory=list)
     no_price_data: int = 0
     no_price_data_keys: list[tuple[str, date]] = field(default_factory=list)
+    detector_errors: int = 0
+    detector_error_keys: list[tuple[str, date]] = field(default_factory=list)
     skipped_non_close: int = 0
 
 
@@ -491,13 +499,19 @@ class _Outcome(enum.Enum):
         for just the as-of day). A later fetch can fill the gap, so the operator
         should re-run rather than treat the row as permanently lost.
     ``NO_MATCH`` — PERMANENT: a real as-of window existed (the scan_date bar was
-        present) but no actionable pattern matched the stored type, or the detector
-        raised. Re-running over the same bars produces the same result.
+        present) and the detector ran clean, but no actionable pattern matched the
+        stored type. Re-running over the same bars produces the same result.
+    ``DETECTOR_ERROR`` — the detector RAISED on this row's window (malformed vendor
+        data or a detector bug). Unlike ``NO_MATCH`` this is NOT proven permanent:
+        a data re-pull or a detector fix may recover it, so it gets its own bucket
+        rather than being reported as a permanent no-match. The run never aborts on
+        it (per-symbol fault isolation, matching ``screen_stocks``).
     """
 
     RECOVERED = "recovered"
     NO_AS_OF_DATA = "no_as_of_data"
     NO_MATCH = "no_match"
+    DETECTOR_ERROR = "detector_error"
 
 
 def _match_for_row(
@@ -508,17 +522,17 @@ def _match_for_row(
     """Replay the detector as-of ``row.scan_date`` and classify the result.
 
     Returns ``(outcome, pattern)``. ``pattern`` is non-None only for
-    ``RECOVERED``. The outcome separates a TRANSIENT data gap
+    ``RECOVERED``. The outcome distinguishes a TRANSIENT data gap
     (``NO_AS_OF_DATA`` — no usable bars, or the fetch lacks the exact scan_date
-    bar; never replay the prior day's stale bar, see ``_as_of_idx``) from a
-    PERMANENT ``NO_MATCH`` (a real as-of window existed but no actionable pattern
-    matched the stored type, OR the detector raised). The caller buckets the two
-    differently so the operator knows which rows a re-run can still recover.
+    bar; never replay the prior day's stale bar, see ``_as_of_idx``), a PERMANENT
+    ``NO_MATCH`` (a real as-of window existed, the detector ran clean, but no
+    actionable pattern matched the stored type), and a ``DETECTOR_ERROR`` (the
+    detector raised — not proven permanent, a data/code fix may recover it). The
+    caller buckets all three so the operator knows which rows a re-run can recover.
 
     A per-row detector failure is per-symbol noise (one bad price window must not
     abort a multi-day repair) — ``screen_stocks`` treats it the same way
-    (stock_screener.py:86-89). It is classified ``NO_MATCH`` (the bar existed; the
-    detector, not the data, is what failed) and reported, never errored.
+    (stock_screener.py:86-89). It is reported in its own bucket, never errored.
     """
     if df is None or df.empty:
         return _Outcome.NO_AS_OF_DATA, None
@@ -539,7 +553,10 @@ def _match_for_row(
             row.scan_date,
             row.pattern_type,
         )
-        return _Outcome.NO_MATCH, None
+        # The bar existed; the DETECTOR failed. Not a proven-permanent no-match —
+        # a malformed-data re-pull or a detector fix may recover it, so keep it
+        # out of still_null (which the CLI labels "re-run won't help").
+        return _Outcome.DETECTOR_ERROR, None
     pat = _match_pattern(actionable, row.pattern_type)
     if pat is None:
         return _Outcome.NO_MATCH, None
@@ -689,6 +706,12 @@ def backfill_screened_levels(
             )
             continue
 
+        if outcome is _Outcome.DETECTOR_ERROR:
+            result.detector_errors += 1
+            result.detector_error_keys.append((row.symbol, row.scan_date))
+            # Already logged with traceback in _match_for_row.
+            continue
+
         if outcome is _Outcome.NO_MATCH:
             result.still_null += 1
             result.still_null_keys.append((row.symbol, row.scan_date))
@@ -713,11 +736,12 @@ def backfill_screened_levels(
 
     log.info(
         "backfill_screened_levels done scanned=%d recovered=%d still_null=%d "
-        "no_price_data=%d apply=%s",
+        "no_price_data=%d detector_errors=%d apply=%s",
         result.scanned,
         result.recovered,
         result.still_null,
         result.no_price_data,
+        result.detector_errors,
         apply,
     )
     return result
