@@ -49,12 +49,16 @@ _FB_PRICES = (
 )
 
 # StockScreenerConfig knobs that make the fixture's patterns detect (mirrors the
-# replay parity test's _CONFIG).
+# replay parity test's _CONFIG). ``min_daily_bars`` is lowered to 10 because the
+# synthetic ``_FB_PRICES`` window is only ~24 bars; the default 60 would make
+# _match_for_row reject every fixture window as a too-short as-of history (the
+# codex-P2 min_daily_bars gate) and the recovery tests would all see NO_MATCH.
 _CFG_OVERRIDES = {
     "swing_lookback": 3,
     "min_pattern_bars": 3,
     "max_pattern_bars": 50,
     "neckline_tolerance_pct": 0.05,
+    "min_daily_bars": 10,
 }
 
 
@@ -392,6 +396,34 @@ def test_no_price_data_row_is_separate_bucket_not_still_null(pg_legacy_session):
     assert res.no_price_data == 1  # transient: surfaced for re-run
     assert ("NODATA", _SCAN) in res.no_price_data_keys
     assert ("NODATA", _SCAN) not in res.still_null_keys
+
+
+def test_short_as_of_history_is_permanent_still_null_not_transient(pg_legacy_session):
+    """Codex P2: a ticker with FEWER bars than min_daily_bars by to_date (a recent
+    IPO/spinoff) is a PERMANENT insufficient-history case, not a transient fetch
+    gap. The short-but-nonempty frame now flows through _fetch_history (min_bars=1)
+    to _match_for_row, whose window gate classifies it NO_MATCH (still_null), NOT
+    no_price_data — so the operator is not falsely told a re-run may recover it."""
+    # 6 bars < the 10-bar min_daily_bars floor in _CFG_OVERRIDES.
+    _seed_prices(pg_legacy_session, "IPO", _SCAN, [90.0, 91.0, 89.0, 88.0, 90.0, 91.0])
+    _seed_screened(pg_legacy_session, "IPO", _SCAN, pattern_type="false_breakdown")
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    pg_legacy_session.expire_all()
+    assert res.scanned == 1
+    assert res.recovered == 0
+    # Permanent insufficient-history → still_null, NOT transient no_price_data.
+    assert res.still_null == 1
+    assert ("IPO", _SCAN) in res.still_null_keys
+    assert res.no_price_data == 0
+    assert ("IPO", _SCAN) not in res.no_price_data_keys
+    assert _row(pg_legacy_session, "IPO", _SCAN).entry_price is None
 
 
 def test_multiple_scan_dates_each_gets_its_own_window_levels(pg_legacy_session):

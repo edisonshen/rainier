@@ -308,6 +308,13 @@ def _normalize_symbol_frame(
     too short. Kept byte-identical to the live screener so the replay sees the
     same corpus the live screen would have built (modulo vendor restatement —
     see the module docstring's fidelity caveat).
+
+    NOTE: the production call passes ``min_bars=1`` (drop only EMPTY frames). The
+    authoritative ``min_daily_bars`` gate is ``_match_for_row``, on the AS-OF-
+    CLIPPED window — so a genuine short-history row reaches the classifier and is
+    bucketed permanent ``still_null`` rather than going missing and being reported
+    transient ``no_price_data``. ``min_bars`` stays a parameter so the helper
+    remains independently testable at any floor.
     """
     try:
         df = df.dropna(subset=["Close"]).copy()
@@ -691,9 +698,15 @@ def backfill_screened_levels(
     # paper.ingest's ``end + timedelta(days=1)``); _as_of_idx still requires the
     # exact scan_date bar, so this only guarantees inclusion, never look-ahead.
     fetch_end = to_date + timedelta(days=1)
-    prices = _fetch_history(
-        symbols, start=fetch_start, end=fetch_end, min_bars=config.min_daily_bars
-    )
+    # Keep SHORT-but-nonempty frames (min_bars=1, drop only truly-empty ones).
+    # The authoritative min_daily_bars gate is _match_for_row, applied to the
+    # AS-OF-CLIPPED window. If we dropped a short frame here, a genuine
+    # insufficient-history row (an IPO/spinoff with < min_daily_bars by to_date)
+    # would go MISSING from `prices` and be bucketed no_price_data (TRANSIENT —
+    # "re-run may recover"), when it is actually a PERMANENT insufficient-history
+    # case. Letting the frame through routes it to _match_for_row, whose window
+    # check classifies it NO_MATCH (permanent). (codex P2)
+    prices = _fetch_history(symbols, start=fetch_start, end=fetch_end, min_bars=1)
 
     # Replay + persist run with NO open DB session: the prices come from
     # yfinance, and ``persist_screened_stocks`` manages its own session.

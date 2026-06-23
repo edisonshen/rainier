@@ -5940,7 +5940,8 @@ def db_verify_coverage(
     is_flag=True,
     help="Write the recovered levels. Omit for a dry-run (report only).",
 )
-def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> None:
+@click.pass_context
+def db_backfill_screened_levels(ctx, from_date: str, to_date: str, apply: bool) -> None:
     """One-time backfill of NULL screened_stocks trade levels (historical repair).
 
     Replays the pattern detector as-of each historical scan_date over a fresh
@@ -5950,6 +5951,15 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
     entry/stop/target/rr (fills NULL only, never clobbers a set value). Dry-run by
     default; pass `--apply` to write.
 
+    Honors the root `--config` for BOTH the target database AND the detector knobs
+    used in the replay. Because this reconstructs HISTORICAL screen output, point
+    `--config` at the settings YAML whose `stock_screener` section matches what the
+    live screen ran on those dates (e.g. `rainier --config config/settings.yaml db
+    backfill-screened-levels ...`). If detector thresholds (swing_lookback,
+    neckline_tolerance_pct, min_daily_bars, ...) were tuned after the scan window,
+    a default config would replay with TODAY's knobs and write levels the live
+    screen never produced — so pin the historical config.
+
     Only `close`-session rows are repaired: the replay uses the completed daily
     bar, which matches what the live screen saw only at close (earlier sessions
     that day lacked the final high/low/close). Non-close patterned-NULL rows, and
@@ -5958,7 +5968,17 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
     """
     from datetime import date as _date
 
+    from rainier.core import config as _config_mod
+    from rainier.core.config import load_settings_fresh
     from rainier.paper.backfill_screened_levels import backfill_screened_levels
+
+    # Honor the root `--config` (codex P1). load_settings_fresh reads the YAML the
+    # operator selected; we (a) seed the process settings singleton so the legacy
+    # DB session + persist_screened_stocks target THAT database (not the default
+    # config/settings.yaml), and (b) pass its stock_screener as the replay config
+    # so the reconstruction uses the operator-pinned (historical) detector knobs.
+    settings = load_settings_fresh(_settings_path(ctx))
+    _config_mod._settings = settings  # seed singleton before any get_session()
 
     # Operator-facing validation failures (a bad date string, from>to, or --apply
     # on a pre-0012 DB) must surface as a clean Click error, not a raw traceback
@@ -5970,7 +5990,12 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
         raise click.BadParameter(f"dates must be YYYY-MM-DD: {exc}") from exc
 
     try:
-        result = backfill_screened_levels(from_date=start, to_date=end, apply=apply)
+        result = backfill_screened_levels(
+            from_date=start,
+            to_date=end,
+            apply=apply,
+            config=settings.stock_screener,
+        )
     except (ValueError, RuntimeError) as exc:
         # ValueError: from_date > to_date. RuntimeError: --apply preflight on a
         # pre-0012 DB (the message already names migration 0012).
