@@ -220,6 +220,15 @@ def _null_level_predicate(*, bil_present: bool):
     gap (a pre-0012 row reclaim can't see). persist fills only bil; the already-set
     trade tuple is left untouched. The column is named only when present, preserving
     the pre-0012 column-scoped-read drift safety.
+
+    Accepted edge (P3, near-unreachable): a ``false_breakout`` whose four trade
+    levels are ALL NULL but whose bil is already SET matches the all-four-NULL
+    clause; the replay writes a fresh tuple while ``persist_screened_stocks``
+    coalesce-keeps the pre-existing bil, so the new tuple's basis and the old bil's
+    basis could differ after a restatement. The live screener only ever writes bil
+    ALONGSIDE the tuple, so a bil-set/tuple-NULL row should not occur in the real
+    corpus; the no-clobber invariant (never overwrite a set value) takes precedence
+    over forcing single-basis consistency on a row that shouldn't exist.
     """
     all_trade_levels_null = and_(
         ScreenedStockRecord.entry_price.is_(None),
