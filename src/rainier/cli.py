@@ -5943,10 +5943,12 @@ def db_verify_coverage(
 def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> None:
     """One-time backfill of NULL screened_stocks trade levels (historical repair).
 
-    Replays the pattern detector as-of each historical scan_date over stored
-    `stock_prices`, matches the actionable pattern whose `pattern_type` equals the
-    row's stored type, and coalesce-upserts entry/stop/target/rr (fills NULL only,
-    never clobbers a set value). Dry-run by default; pass `--apply` to write.
+    Replays the pattern detector as-of each historical scan_date over a fresh
+    yfinance 6-month window (the source the live screener used — the stored
+    `stock_prices` corpus is too short to form a pattern), matches the actionable
+    pattern whose `pattern_type` equals the row's stored type, and coalesce-upserts
+    entry/stop/target/rr (fills NULL only, never clobbers a set value). Dry-run by
+    default; pass `--apply` to write.
 
     Only `close`-session rows are repaired: the replay uses the completed daily
     bar, which matches what the live screen saw only at close (earlier sessions

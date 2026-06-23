@@ -13,13 +13,37 @@ levels: the running scraper only picked up the level-writing code at the 06-15
 deploy. ``pattern_type`` IS recorded on those rows; entry/stop/target/rr are NULL.
 This is a one-time DATA backfill, not a code fix.
 
+PRICE SOURCE — yfinance, not ``stock_prices``
+---------------------------------------------
+The replay's prices come from a FRESH yfinance daily fetch (the same source the
+live screener used), NOT the local ``stock_prices`` table. ``stock_prices`` is
+truncated to ~9-33 bars/symbol — far too short for the detector, which needs the
+live screen's ~6-month (~124-bar) window to form swings, support/resistance, and
+multi-bar shapes. Replaying it over the stub produced ZERO actionable patterns
+for 96 of 117 close rows (a 21/510 recovery). Re-pointing to a yfinance 6-month
+as-of window recovers ~116/117 close rows. See ``_fetch_history``.
+
+Two fidelity caveats (NEITHER is look-ahead):
+
+* **Corporate-action / vendor restatement.** A fresh ``auto_adjust=True`` pull
+  re-applies every split/dividend that happened AFTER scan_date, so absolute OHLC
+  — and the entry/stop/target derived from it — can differ slightly from the
+  snapshot the original live screen saw. This is restatement of past bars, not
+  future data leaking in; the as-of clip still bars post-scan_date BARS from the
+  detector (``_as_of_idx`` + ``window_as_of``).
+* **~1% residual type-mismatch.** A re-pull is not bit-identical to the historical
+  screen's pull, so a tiny set of rows (~1/117, e.g. AMT 06-03) re-detects as a
+  NEIGHBORING pattern type. The type-match gate (``_match_pattern``) leaves those
+  NULL rather than write a different-type setup — the don't-guess invariant holds.
+
 THE FIX (idempotent, dry-run by default)
 -----------------------------------------
 For each ``close``-session ``screened_stocks`` row in ``[from_date, to_date]``
 with ``pattern_type NOT NULL AND entry_price IS NULL``:
 
-    replay the pattern detector AS-OF the row's scan_date over stored prices
-      (reuse paper.pattern_replay.replay_pattern_layer — no look-ahead)
+    replay the pattern detector AS-OF the row's scan_date over a fresh yfinance
+      6-month window (reuse paper.pattern_replay.replay_pattern_layer — no
+      look-ahead)
     among the as-of ACTIONABLE patterns (in _filter_actionable priority order),
       pick the FIRST whose pattern_type == the row's stored pattern_type — the
       same selection the live screener uses for `best_pattern` (NOT necessarily
@@ -29,17 +53,18 @@ with ``pattern_type NOT NULL AND entry_price IS NULL``:
     coalesce-upsert the four levels via persist_screened_stocks (fills NULL only)
 
 Only ``close``-session rows are reconstructable without look-ahead: the replay
-reads the COMPLETED daily ``stock_prices`` bar for scan_date, which equals what
-the live screen saw only at the close session (earlier sessions that day did not
-yet have the day's final high/low/close). Non-``close`` patterned-NULL rows are
-deliberately left NULL — see ``_BACKFILLABLE_SESSION``.
+reads the COMPLETED daily bar for scan_date (the last bar ``<= scan_date`` of the
+fresh 1d pull), which equals what the live screen saw only at the close session
+(earlier sessions that day did not yet have the day's final high/low/close).
+Non-``close`` patterned-NULL rows are deliberately left NULL — see
+``_BACKFILLABLE_SESSION``.
 
     ASCII flow (one row):
 
       screened_stocks row (pattern_type=T, levels NULL, scan_date=d)
             │
             ▼
-      load stock_prices[symbol] ── window AS-OF d ──► replay_pattern_layer
+      yfinance 6mo as-of d ── window AS-OF d ──► replay_pattern_layer
             │
             ▼
       actionable patterns (priority order) ── FIRST with pattern_type == T
@@ -62,6 +87,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import pandas as pd
+import yfinance as yf
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -71,13 +97,21 @@ from rainier.core.models import ScreenedStockRecord
 from rainier.core.types import PatternSignal, StockCandidate
 from rainier.llm_thesis.persistence import persist_screened_stocks
 from rainier.paper.pattern_replay import (
-    LIVE_LOOKBACK_MONTHS,
-    load_prices,
     replay_pattern_layer,
     window_as_of,
 )
 
 log = logging.getLogger(__name__)
+
+# How far before the window's earliest scan_date to start the yfinance fetch.
+# The detector needs ~6 months of bars to form swings / S-R / multi-bar shapes
+# as-of each scan_date. period="6mo" ends TODAY, so for an early-June as-of date
+# its left edge would be cut short; an explicit ``start`` ~9 months before the
+# earliest scan_date guarantees a full ~6-month window even at the left edge
+# (the extra ~3 months absorbs holiday-heavy stretches). The fetch runs through
+# today; ``_as_of_idx`` + ``window_as_of`` clip to ``<= scan_date`` per row, so
+# post-scan_date bars never reach the detector (no look-ahead).
+_FETCH_START_LEAD_MONTHS = 9
 
 
 @dataclass(slots=True, frozen=True)
@@ -128,12 +162,12 @@ class BackfillResult:
     skipped_non_close: int = 0
 
 
-# The replay reconstructs levels from the COMPLETED daily ``stock_prices`` bar
-# for ``scan_date``. The live screener runs the SAME ``yf.download(period="6mo")``
-# daily fetch for every session (morning/midday/afternoon/close), but only at the
-# ``close`` session is the completed EOD bar the one the live screen actually saw.
-# For an earlier session that day, the stored EOD bar carries the day's final
-# high/low/close that were NOT yet available — replaying it would inject
+# The replay reconstructs levels from the COMPLETED daily bar for ``scan_date``
+# (the last bar ``<= scan_date`` of the fresh yfinance 1d pull). The live screener
+# ran the SAME daily fetch for every session (morning/midday/afternoon/close), but
+# only at the ``close`` session is that completed EOD bar the one the live screen
+# actually saw. For an earlier session that day, the EOD bar carries the day's
+# final high/low/close that were NOT yet available — replaying it would inject
 # look-ahead and write levels the original intraday screen never produced. So we
 # only backfill ``close``-session rows (faithful by construction); patterned-NULL
 # rows from other sessions are left NULL rather than given look-ahead levels
@@ -241,6 +275,101 @@ def _apply_column_present(session: Session) -> bool:
     return row is not None
 
 
+def _normalize_symbol_frame(
+    df: pd.DataFrame, min_bars: int
+) -> pd.DataFrame | None:
+    """Mirror ``stock_screener._fetch_stock_data``'s per-symbol normalization.
+
+    Drop rows missing a Close, skip a frame shorter than ``min_bars``, lowercase
+    the OHLCV columns. Returns the normalized frame or None when it is empty /
+    too short. Kept byte-identical to the live screener so the replay sees the
+    same corpus the live screen would have built (modulo vendor restatement —
+    see the module docstring's fidelity caveat).
+    """
+    try:
+        df = df.dropna(subset=["Close"]).copy()
+    except KeyError:
+        return None
+    if len(df) < min_bars:
+        return None
+    df.columns = [c.lower() for c in df.columns]
+    return df
+
+
+def _fetch_history(
+    symbols: list[str], *, start: date, end: date, min_bars: int
+) -> dict[str, pd.DataFrame]:
+    """Fetch daily OHLCV per symbol from yfinance, sliced ``[start, end]``.
+
+    Re-points the backfill's price corpus from the truncated ``stock_prices``
+    table (~9-33 bars/symbol — too short for the detector to form a pattern) to a
+    FRESH yfinance window, the same source the live screener uses. Returns a
+    ``{symbol: DataFrame}`` map with lowercase OHLCV columns and a tz-naive
+    DatetimeIndex — the exact shape ``_as_of_idx``/``window_as_of`` consume, so
+    everything downstream runs unchanged.
+
+    Mirrors ``stock_screener._fetch_stock_data`` (interval="1d",
+    group_by="ticker", per-symbol dropna+min_bars+lowercase) with two
+    deliberate differences:
+
+    * Explicit ``start``/``end`` instead of ``period="6mo"``. ``period`` ends
+      TODAY, so for an early-June as-of date its left edge would be cut short of
+      the ~6-month window the detector needs. The caller passes a ``start`` ~9
+      months before the earliest scan_date so even the left-edge row sees a full
+      window.
+    * ``auto_adjust=True`` pinned (the screener takes the yfinance default). This
+      matches how ``stock_prices`` was ingested (``paper/ingest.py``), keeping the
+      adjusted basis consistent. A fresh adjusted pull re-applies post-scan_date
+      splits/dividends, so absolute OHLC can differ slightly from the original
+      screen's snapshot — corporate-action restatement, NOT look-ahead (the as-of
+      clip still bars post-scan_date BARS from the detector).
+
+    Per-symbol retry: a single grouped batch download can transiently drop a
+    ticker (observed: LLY returned no data in a batch but 202 bars solo) or the
+    whole batch can raise. Any symbol missing from / too short in the batch is
+    re-fetched solo before being recorded as no-data, so a network blip is never
+    mislabeled still-NULL.
+    """
+    if not symbols:
+        return {}
+
+    def _download(syms: list[str]) -> pd.DataFrame | None:
+        try:
+            return yf.download(
+                syms,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                interval="1d",
+                group_by="ticker",
+                auto_adjust=True,
+                progress=False,
+            )
+        except Exception:
+            log.exception("yfinance download failed symbols=%s", syms)
+            return None
+
+    def _extract(raw: pd.DataFrame | None, sym: str, batch_len: int) -> pd.DataFrame | None:
+        if raw is None or raw.empty:
+            return None
+        try:
+            df = raw.copy() if batch_len == 1 else raw[sym].copy()
+        except (KeyError, TypeError):
+            return None
+        return _normalize_symbol_frame(df, min_bars)
+
+    out: dict[str, pd.DataFrame] = {}
+    raw = _download(symbols)
+    for sym in symbols:
+        df = _extract(raw, sym, len(symbols))
+        if df is None:
+            # Transient batch drop / failure: retry this symbol solo before
+            # treating it as no-data (a network blip must not become still-NULL).
+            df = _extract(_download([sym]), sym, 1)
+        if df is not None:
+            out[sym] = df
+    return out
+
+
 def _match_pattern(
     actionable: list[PatternSignal], stored_type: str
 ) -> PatternSignal | None:
@@ -266,31 +395,29 @@ def _match_pattern(
 def _as_of_idx(df: pd.DataFrame, scan_date: date) -> int | None:
     """Positional index of the bar EXACTLY ON ``scan_date``; None if absent.
 
-    Fidelity gate: the live close-session screen ran on ``yf.download(period=…)``
+    Fidelity gate: the live close-session screen ran on a daily yfinance pull
     whose LATEST bar is the scan_date bar (the day the screen executed). A
     faithful replay therefore needs that exact bar as the window's last bar — its
     high/low/close drive the reconstructed levels.
 
     We deliberately do NOT fall back to the most-recent bar ON-OR-BEFORE
-    scan_date. If ``stock_prices`` has an ingest gap (or ``load_prices`` dropped a
-    partial bar) for the canonical scan_date, an on-or-before fallback would build
-    a window ending on the PRIOR trading day and replay stale prior-day levels —
-    writing entry/stop/target/rr that the original as-of-scan_date screen never
-    produced. That violates "faithful by construction": such a row must stay
-    ``still_null`` (reported, never given wrong-day levels), not be silently
-    recovered from the wrong bar. So require an EXACT scan_date match.
+    scan_date. If the yfinance pull has a gap (a delisting, a market holiday the
+    DateOffset over-shot, or a dropped bar) for the canonical scan_date, an
+    on-or-before fallback would build a window ending on the PRIOR trading day and
+    replay stale prior-day levels — writing entry/stop/target/rr that the original
+    as-of-scan_date screen never produced. That violates "faithful by
+    construction": such a row must stay ``still_null`` (reported, never given
+    wrong-day levels), not be silently recovered from the wrong bar. So require an
+    EXACT scan_date match.
 
-    Compares on the bar's UTC calendar date so a ``timestamptz`` index lines up
-    with a ``scan_date`` regardless of the bar's stored intraday time AND the
-    Postgres session ``TimeZone`` GUC. ``stock_prices`` bars are written at the
-    canonical midnight-UTC instant; psycopg returns them in the session tz (which
-    is environment-dependent — the local TimescaleDB is NOT pinned to UTC). Taking
-    the date in the index's LOCAL tz would shift a midnight-UTC bar onto the prior
-    calendar day under any behind-UTC session (e.g. America/Los_Angeles) — every
-    bar would then mis-date and NO row would match its scan_date, silently turning
-    the whole repair into a 0-recovered no-op. So convert to UTC FIRST, mirroring
-    ``paper.ingest.normalize_to_trading_date`` (the codebase's read/write-symmetric
-    trading-date rule).
+    Compares on the bar's UTC calendar date so the lookup is robust to whatever
+    tz the index carries. yfinance daily bars are tz-NAIVE wall-clock dates
+    (the common case here), which localize to UTC unchanged; but the same code
+    also handled the prior ``stock_prices`` source's tz-aware ``timestamptz``
+    index, where taking the LOCAL date under a behind-UTC session would shift a
+    midnight-UTC bar onto the prior calendar day and mis-match every row. Convert
+    to UTC FIRST either way, mirroring ``paper.ingest.normalize_to_trading_date``
+    (the codebase's read/write-symmetric trading-date rule).
     """
     idx = df.index
     # Convert to UTC before flooring to the calendar date. tz-aware → tz_convert;
@@ -312,8 +439,8 @@ def _match_for_row(
 ) -> PatternSignal | None:
     """Replay the detector as-of ``row.scan_date`` and return the matching pattern.
 
-    Returns None when prices are missing, NO bar exists EXACTLY ON scan_date (an
-    ingest gap — never replay the prior day's stale bar; see ``_as_of_idx``), no
+    Returns None when prices are missing, NO bar exists EXACTLY ON scan_date (a
+    yfinance gap — never replay the prior day's stale bar; see ``_as_of_idx``), no
     as-of actionable pattern has the row's stored ``pattern_type``, OR the
     detector raises on this symbol's window. A per-row detector failure is
     per-symbol noise (one bad price window must not abort a multi-day repair) —
@@ -436,46 +563,48 @@ def backfill_screened_levels(
         if not rows:
             return result
 
-        # Load prices once for the full symbol set, left-padded by the detector
-        # lookback so each as-of window still sees its full ~6-month history.
-        symbols = sorted({r.symbol for r in rows})
-        earliest = min(r.scan_date for r in rows)
-        # Left-pad by 2x the ~6-month detector lookback so the earliest as-of bar
-        # still sees its full window even across holiday-heavy stretches. The
-        # bound is tz-aware UTC: ``StockPrice.date`` is ``timestamptz``, so a
-        # naive bound would be interpreted in the Postgres session's TimeZone
-        # GUC (environment-dependent). Mirror pattern_audit's UTC construction.
-        start_date = pd.Timestamp(
-            (pd.Timestamp(earliest) - pd.DateOffset(months=2 * LIVE_LOOKBACK_MONTHS)).date(),
-            tz="UTC",
-        )
-        prices = load_prices(session, symbols, start_date=start_date)
+    # Fetch prices OUTSIDE the DB session: the corpus now comes from yfinance
+    # (the source the live screener used), not the truncated ``stock_prices``
+    # table. Load once for the full symbol set, started ~9 months before the
+    # earliest scan_date so each as-of window still sees its full ~6-month
+    # history, then sliced as-of per row by ``_as_of_idx``/``window_as_of``.
+    symbols = sorted({r.symbol for r in rows})
+    earliest = min(r.scan_date for r in rows)
+    fetch_start = (
+        pd.Timestamp(earliest) - pd.DateOffset(months=_FETCH_START_LEAD_MONTHS)
+    ).date()
+    fetch_end = date.today()  # noqa: DTZ011 — calendar day for a daily-bar fetch window
+    prices = _fetch_history(
+        symbols, start=fetch_start, end=fetch_end, min_bars=config.min_daily_bars
+    )
 
-        candidates_by_key: dict[tuple[date, str], list[StockCandidate]] = {}
-        for row in rows:
-            matched = _match_for_row(row, prices.get(row.symbol), config)
+    # Replay + persist run with NO open DB session: the prices come from
+    # yfinance, and ``persist_screened_stocks`` manages its own session.
+    candidates_by_key: dict[tuple[date, str], list[StockCandidate]] = {}
+    for row in rows:
+        matched = _match_for_row(row, prices.get(row.symbol), config)
 
-            if matched is None:
-                result.still_null += 1
-                result.still_null_keys.append((row.symbol, row.scan_date))
-                log.info(
-                    "backfill_still_null symbol=%s scan_date=%s pattern_type=%s",
-                    row.symbol,
-                    row.scan_date,
-                    row.pattern_type,
-                )
-                continue
+        if matched is None:
+            result.still_null += 1
+            result.still_null_keys.append((row.symbol, row.scan_date))
+            log.info(
+                "backfill_still_null symbol=%s scan_date=%s pattern_type=%s",
+                row.symbol,
+                row.scan_date,
+                row.pattern_type,
+            )
+            continue
 
-            result.recovered += 1
-            if apply:
-                cand = _candidate_with_levels(row, matched)
-                candidates_by_key.setdefault(
-                    (row.scan_date, row.session_name), []
-                ).append(cand)
+        result.recovered += 1
+        if apply:
+            cand = _candidate_with_levels(row, matched)
+            candidates_by_key.setdefault(
+                (row.scan_date, row.session_name), []
+            ).append(cand)
 
-        if apply and candidates_by_key:
-            for (scan_date, session_name), cands in candidates_by_key.items():
-                persist_screened_stocks(cands, scan_date, session_name)
+    if apply and candidates_by_key:
+        for (scan_date, session_name), cands in candidates_by_key.items():
+            persist_screened_stocks(cands, scan_date, session_name)
 
     log.info(
         "backfill_screened_levels done scanned=%d recovered=%d still_null=%d apply=%s",

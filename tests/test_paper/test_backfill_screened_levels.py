@@ -3,23 +3,27 @@
 The screen->persist path has written entry/stop/target/rr correctly since the
 06-15 cutover, but ~510 patterned rows from scan_date 06-03..06-12 carry NULL
 levels (written by the pre-cutover live code). This backfill replays the pattern
-detector AS-OF each historical scan_date over stored ``stock_prices``, matches the
-actionable pattern whose ``pattern_type`` equals the row's stored type, and
-coalesce-upserts the four levels. Dry-run by default; ``apply=True`` writes.
+detector AS-OF each historical scan_date over a FRESH yfinance window (the same
+source the live screener uses — the stored ``stock_prices`` corpus is too short
+to form a pattern), matches the actionable pattern whose ``pattern_type`` equals
+the row's stored type, and coalesce-upserts the four levels. Dry-run by default;
+``apply=True`` writes.
 
-The detector / replay needs the legacy DB + Postgres ON CONFLICT, so these run
-under ``requires_postgres`` against ``pg_legacy_session``.
+The screened rows + Postgres ON CONFLICT need the legacy DB, so these run under
+``requires_postgres`` against ``pg_legacy_session``. The PRICE source is yfinance;
+each test injects a deterministic ``{symbol: DataFrame}`` by monkeypatching
+``_fetch_history`` (autouse ``_patch_fetch_history`` fixture) — no live network.
 """
 
 from __future__ import annotations
 
-from datetime import date, timezone
+from datetime import date
 
 import pandas as pd
 import pytest
 from sqlalchemy import select, text
 
-from rainier.core.models import ScreenedStockRecord, StockPrice
+from rainier.core.models import ScreenedStockRecord
 from rainier.paper.backfill_screened_levels import (
     _target_rows,
     backfill_screened_levels,
@@ -54,22 +58,51 @@ _CFG_OVERRIDES = {
 }
 
 
+# In-memory price corpus the patched ``_fetch_history`` serves. Mirrors the
+# yfinance return shape: tz-naive DatetimeIndex, lowercase OHLCV columns. Tests
+# populate it via ``_seed_prices``; the autouse ``_patch_fetch_history`` fixture
+# resets it per test and routes ``_fetch_history`` to read from it (no network).
+_PRICE_FIXTURES: dict[str, pd.DataFrame] = {}
+
+
+@pytest.fixture(autouse=True)
+def _patch_fetch_history(monkeypatch):
+    """Route ``_fetch_history`` to the in-memory ``_PRICE_FIXTURES`` map.
+
+    The source swap means the backfill fetches prices from yfinance, not the DB.
+    Tests must not hit the network, so this autouse fixture replaces the helper
+    with one that returns the deterministic frames ``_seed_prices`` registered —
+    honoring the requested symbol set, exactly like the real batch fetch."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    _PRICE_FIXTURES.clear()
+
+    def fake_fetch(symbols, *, start, end, min_bars):
+        return {s: _PRICE_FIXTURES[s] for s in symbols if s in _PRICE_FIXTURES}
+
+    monkeypatch.setattr(mod, "_fetch_history", fake_fetch)
+    yield
+    _PRICE_FIXTURES.clear()
+
+
 def _seed_prices(session, symbol: str, last_date: date, prices: list[float]) -> None:
-    """Insert OHLCV bars ending ON ``last_date`` (one business day apart)."""
+    """Register a yfinance-shaped OHLCV frame ending ON ``last_date``.
+
+    Bars are one business day apart with a tz-naive DatetimeIndex and lowercase
+    columns — the exact shape ``_fetch_history`` returns. The ``session`` arg is
+    kept for call-site symmetry but unused (prices no longer live in the DB)."""
     dates = pd.bdate_range(end=pd.Timestamp(last_date), periods=len(prices))
-    for i, (d, p) in enumerate(zip(dates, prices, strict=True)):
-        session.add(
-            StockPrice(
-                symbol=symbol,
-                date=d.to_pydatetime().replace(tzinfo=timezone.utc),
-                open=prices[max(0, i - 1)],
-                high=p * 1.01,
-                low=p * 0.99,
-                close=p,
-                volume=1000,
-            )
-        )
-    session.commit()
+    df = pd.DataFrame(
+        {
+            "open": [prices[max(0, i - 1)] for i in range(len(prices))],
+            "high": [p * 1.01 for p in prices],
+            "low": [p * 0.99 for p in prices],
+            "close": list(prices),
+            "volume": [1000] * len(prices),
+        },
+        index=dates,
+    )
+    _PRICE_FIXTURES[symbol] = df
 
 
 def _seed_screened(
