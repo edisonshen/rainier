@@ -5970,11 +5970,22 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
         f"backfill-screened-levels [{mode}] {start}..{end}: "
         f"scanned={result.scanned} recovered={result.recovered} "
         f"still_null={result.still_null} "
+        f"no_price_data={result.no_price_data} "
         f"skipped_non_close={result.skipped_non_close}"
     )
     if result.still_null_keys:
-        click.echo(f"  still-NULL ({result.still_null} rows, no as-of pattern match):")
+        click.echo(
+            f"  still-NULL ({result.still_null} rows, had prices but no as-of "
+            "pattern matched the stored type — permanent, re-run won't help):"
+        )
         for symbol, scan_date in result.still_null_keys:
+            click.echo(f"    {symbol} {scan_date}")
+    if result.no_price_data_keys:
+        click.echo(
+            f"  no-price-data ({result.no_price_data} rows, yfinance returned no "
+            "bars even after solo retry — TRANSIENT, re-run may recover these):"
+        )
+        for symbol, scan_date in result.no_price_data_keys:
             click.echo(f"    {symbol} {scan_date}")
     if result.skipped_non_close:
         click.echo(

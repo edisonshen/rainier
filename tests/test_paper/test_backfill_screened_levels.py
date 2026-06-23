@@ -367,6 +367,86 @@ def test_non_close_session_row_not_backfilled(pg_legacy_session):
     assert res.skipped_non_close == 1
 
 
+def test_no_price_data_row_is_separate_bucket_not_still_null(pg_legacy_session):
+    """A patterned NULL row whose symbol returned NO yfinance bars (transient
+    fetch failure) lands in `no_price_data`, NOT `still_null`. Conflating them
+    would let a fetch blip masquerade as a permanent no-pattern-match, so the
+    operator would mark a recoverable row unreconstructable. Seed the screened
+    row but NO prices for its symbol → the faked `_fetch_history` omits it."""
+    # NB: deliberately do NOT call _seed_prices for NODATA → absent from corpus.
+    _seed_screened(pg_legacy_session, "NODATA", _SCAN, pattern_type="false_breakdown")
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    pg_legacy_session.expire_all()
+    r = _row(pg_legacy_session, "NODATA", _SCAN)
+    assert r.entry_price is None  # nothing written
+    assert res.scanned == 1
+    assert res.recovered == 0
+    assert res.still_null == 0  # NOT a permanent no-match
+    assert res.no_price_data == 1  # transient: surfaced for re-run
+    assert ("NODATA", _SCAN) in res.no_price_data_keys
+    assert ("NODATA", _SCAN) not in res.still_null_keys
+
+
+def test_multiple_scan_dates_each_gets_its_own_window_levels(pg_legacy_session):
+    """Two close-session patterned-NULL rows on DIFFERENT scan_dates each get the
+    levels derived from THEIR OWN as-of window. The apply path groups candidates
+    by (scan_date, session_name) and persists per group; a regression mapping a
+    candidate to the wrong scan_date would mis-persist. Distinct price magnitudes
+    per symbol prove each row got its own window, not the other's."""
+    scan_a = date(2026, 6, 5)
+    scan_b = date(2026, 6, 9)
+    # Distinct price bases → distinct entry levels, so a cross-mapping is visible.
+    _seed_prices(pg_legacy_session, "AAA", scan_a, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "AAA", scan_a, pattern_type="false_breakdown")
+    _seed_prices(pg_legacy_session, "BBB", scan_b, [p + 100.0 for p in _FB_PRICES])
+    _seed_screened(pg_legacy_session, "BBB", scan_b, pattern_type="false_breakdown")
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    pg_legacy_session.expire_all()
+    ra = _row(pg_legacy_session, "AAA", scan_a)
+    rb = _row(pg_legacy_session, "BBB", scan_b)
+    assert res.recovered == 2
+    assert ra.entry_price is not None and rb.entry_price is not None
+    # AAA's window (~89) is the low corpus; BBB's (+100, ~189) is the high one.
+    assert ra.entry_price < 100.0
+    assert rb.entry_price > 100.0
+
+
+def test_multiple_same_group_rows_all_persisted(pg_legacy_session):
+    """Two recovered rows in the SAME (scan_date, session_name) group are BOTH
+    written via the single per-group persist_screened_stocks call — the per-group
+    candidate list is fully persisted, not just its first element."""
+    _seed_prices(pg_legacy_session, "AAA", _SCAN, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "AAA", _SCAN, pattern_type="false_breakdown")
+    _seed_prices(pg_legacy_session, "BBB", _SCAN, _FB_PRICES)
+    _seed_screened(pg_legacy_session, "BBB", _SCAN, pattern_type="false_breakdown")
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    pg_legacy_session.expire_all()
+    assert res.recovered == 2
+    assert _row(pg_legacy_session, "AAA", _SCAN).entry_price is not None
+    assert _row(pg_legacy_session, "BBB", _SCAN).entry_price is not None
+
+
 def test_detector_failure_on_one_row_does_not_abort_run(
     pg_legacy_session, monkeypatch
 ):

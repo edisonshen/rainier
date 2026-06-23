@@ -362,6 +362,29 @@ def test_fetch_history_batch_exception_falls_back_to_per_symbol(monkeypatch):
     assert set(out) == {"AAA", "BBB"}
 
 
+def test_fetch_history_symbol_absent_after_solo_retry_omitted_not_crashed(monkeypatch):
+    """The TERMINAL no-data branch: a symbol missing from the batch AND whose solo
+    retry also returns nothing is simply omitted from the output map — never
+    crashes, never falsely present. A well-formed sibling still comes through."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    batch = _multi_download({"AAA": _ohlcv_frame(dates, 100.0)})  # GONE absent
+
+    def fake_download(symbols, **kw):
+        syms = symbols if isinstance(symbols, list) else [symbols]
+        if syms == ["GONE"]:
+            return None  # solo retry also yields nothing (delisting / outage)
+        return batch
+
+    monkeypatch.setattr(mod.yf, "download", fake_download)
+
+    out = _fetch_history(
+        ["AAA", "GONE"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+    assert set(out) == {"AAA"}  # GONE dropped (doubly-failed), AAA preserved
+
+
 def test_fetch_history_empty_symbols_returns_empty(monkeypatch):
     import rainier.paper.backfill_screened_levels as mod
 

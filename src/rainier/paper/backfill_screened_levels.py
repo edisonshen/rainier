@@ -84,7 +84,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -145,9 +145,19 @@ class BackfillResult:
         window) that the replay attempted to recover.
     ``recovered`` — rows whose stored pattern_type matched an as-of actionable
         pattern (levels written when ``apply`` is True; would-be-written on dry-run).
-    ``still_null`` — target rows where NO actionable pattern matched the stored
-        type / the detector raised (left NULL and reported; never errored).
-    ``still_null_keys`` — the (symbol, scan_date) of each still-NULL row.
+    ``still_null`` — target rows where an as-of price window EXISTED but NO
+        actionable pattern matched the stored type / the detector raised (left
+        NULL and reported; never errored). This is a PERMANENT no-match: a re-run
+        produces the same result, so the operator can stop chasing these.
+    ``still_null_keys`` — the (symbol, scan_date) of each still-NULL (no-match) row.
+    ``no_price_data`` — target rows whose symbol returned NO usable yfinance bars
+        even after the per-symbol solo retry (throttle / outage / delisting), so
+        the replay could not run AT ALL. Distinct from ``still_null``: this is a
+        TRANSIENT/recoverable failure — a re-run once the fetch succeeds may
+        recover the row, so the operator should retry rather than treat it as
+        permanently unreconstructable. Kept separate so a fetch blip is never
+        silently mislabeled as a permanent no-pattern-match.
+    ``no_price_data_keys`` — the (symbol, scan_date) of each no-price-data row.
     ``skipped_non_close`` — patterned level-NULL rows in the window from a
         non-``close`` session. These are NOT reconstructable without look-ahead
         (see ``_BACKFILLABLE_SESSION``) so they are excluded from the target set,
@@ -159,6 +169,8 @@ class BackfillResult:
     recovered: int = 0
     still_null: int = 0
     still_null_keys: list[tuple[str, date]] = field(default_factory=list)
+    no_price_data: int = 0
+    no_price_data_keys: list[tuple[str, date]] = field(default_factory=list)
     skipped_non_close: int = 0
 
 
@@ -573,7 +585,17 @@ def backfill_screened_levels(
     fetch_start = (
         pd.Timestamp(earliest) - pd.DateOffset(months=_FETCH_START_LEAD_MONTHS)
     ).date()
-    fetch_end = date.today()  # noqa: DTZ011 — calendar day for a daily-bar fetch window
+    # Pin the fetch's right edge to to_date (the window's last scan_date), NOT
+    # date.today(). The repair never needs a bar past to_date — the as-of clip
+    # discards everything after each row's scan_date anyway. Pinning to to_date
+    # makes the corpus a pure function of [from_date, to_date], so a dry-run and a
+    # later --apply re-pull the SAME window (a wall-clock today would shift the
+    # right edge and the split/dividend basis between the two runs, so the
+    # previewed levels could differ from the applied ones). yfinance ``end`` is
+    # EXCLUSIVE, so add a day to keep the to_date bar in-window (mirrors
+    # paper.ingest's ``end + timedelta(days=1)``); _as_of_idx still requires the
+    # exact scan_date bar, so this only guarantees inclusion, never look-ahead.
+    fetch_end = to_date + timedelta(days=1)
     prices = _fetch_history(
         symbols, start=fetch_start, end=fetch_end, min_bars=config.min_daily_bars
     )
@@ -582,7 +604,26 @@ def backfill_screened_levels(
     # yfinance, and ``persist_screened_stocks`` manages its own session.
     candidates_by_key: dict[tuple[date, str], list[StockCandidate]] = {}
     for row in rows:
-        matched = _match_for_row(row, prices.get(row.symbol), config)
+        df = prices.get(row.symbol)
+
+        # Distinguish "the fetch returned NO bars for this symbol" (transient /
+        # recoverable: throttle, outage, delisting — a re-run may recover it)
+        # from "we HAD a price window but no actionable pattern matched the stored
+        # type" (permanent no-match — re-running changes nothing). Conflating them
+        # would let a fetch blip during the apply run masquerade as a permanent
+        # no-match, so the operator marks a recoverable row unreconstructable.
+        if df is None or df.empty:
+            result.no_price_data += 1
+            result.no_price_data_keys.append((row.symbol, row.scan_date))
+            log.info(
+                "backfill_no_price_data symbol=%s scan_date=%s pattern_type=%s",
+                row.symbol,
+                row.scan_date,
+                row.pattern_type,
+            )
+            continue
+
+        matched = _match_for_row(row, df, config)
 
         if matched is None:
             result.still_null += 1
@@ -607,10 +648,12 @@ def backfill_screened_levels(
             persist_screened_stocks(cands, scan_date, session_name)
 
     log.info(
-        "backfill_screened_levels done scanned=%d recovered=%d still_null=%d apply=%s",
+        "backfill_screened_levels done scanned=%d recovered=%d still_null=%d "
+        "no_price_data=%d apply=%s",
         result.scanned,
         result.recovered,
         result.still_null,
+        result.no_price_data,
         apply,
     )
     return result
