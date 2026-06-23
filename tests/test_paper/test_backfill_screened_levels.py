@@ -248,12 +248,13 @@ def test_coalesce_no_clobber_of_set_levels(pg_legacy_session):
     assert res.scanned == 0  # already-set row excluded from target set
 
 
-def test_partial_levels_row_is_backfilled(pg_legacy_session):
-    """Codex P2: a row with entry_price SET but stop_loss/target_price/rr_ratio
-    NULL (a prior partial write) IS in the target set — the predicate keys on ANY
-    level NULL, not just entry. persist_screened_stocks coalesce-fills only the
-    still-NULL fields, so the recovered pattern's stop/target/rr land while the
-    pre-existing entry is preserved (never clobbered)."""
+def test_partial_trade_level_row_is_not_targeted_no_mixing(pg_legacy_session):
+    """Codex P1 (no-mixing): a row with SOME trade levels set and others NULL (a
+    prior partial write) is NOT targeted. A fresh replay can restate OHLC
+    (splits/dividends), so coalesce-filling only the NULL fields would mix the
+    pre-existing entry with newly-computed stop/target/rr — an inconsistent tuple.
+    The repair targets a trade-level row only when ALL FOUR are NULL, so the
+    partial row is left exactly as-is (no scan, no write)."""
     _seed_prices(pg_legacy_session, "PART", _SCAN, _FB_PRICES)
     # entry set, the other three NULL — a partially-populated historical row.
     pg_legacy_session.add(
@@ -264,7 +265,7 @@ def test_partial_levels_row_is_backfilled(pg_legacy_session):
             rule_rank=1,
             composite_score=0.8,
             pattern_type="false_breakdown",
-            entry_price=88.0,  # pre-set; must be preserved
+            entry_price=88.0,
             stop_loss=None,
             target_price=None,
             rr_ratio=None,
@@ -281,12 +282,13 @@ def test_partial_levels_row_is_backfilled(pg_legacy_session):
 
     pg_legacy_session.expire_all()
     r = _row(pg_legacy_session, "PART", _SCAN)
-    assert res.scanned == 1  # partial row IS a target (not skipped on entry NOT NULL)
-    assert res.recovered == 1
-    assert r.entry_price == 88.0  # pre-existing entry preserved (coalesce no-clobber)
-    assert r.stop_loss is not None  # the three NULL levels filled
-    assert r.target_price is not None
-    assert r.rr_ratio is not None
+    assert res.scanned == 0  # partial trade-level row NOT a target (no mixing)
+    assert res.recovered == 0
+    # Left exactly as seeded — entry intact, the three NULLs still NULL.
+    assert r.entry_price == 88.0
+    assert r.stop_loss is None
+    assert r.target_price is None
+    assert r.rr_ratio is None
 
 
 def test_target_rows_includes_false_breakout_missing_only_invalidation_level(
@@ -818,18 +820,19 @@ def test_missing_scan_date_bar_is_transient_no_price_data_no_prior_day_levels(
 def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
     """On a complete DB the column-scoped `_target_rows` returns the SAME row set
     (by identity key) the equivalent full-ORM load does — no behavior change when
-    nothing is drifted. The predicate is "ANY of the four levels NULL" (codex P2),
-    so a PARTIAL row (entry set, others NULL) is a target too."""
-    from sqlalchemy import or_
+    nothing is drifted. The predicate is "ALL FOUR trade levels NULL" (no-mixing,
+    codex P1), so a PARTIAL row (entry set, others NULL) is NOT a target."""
+    from sqlalchemy import and_, or_
 
-    # Two all-NULL rows (targets), a PARTIAL row (entry set, rest NULL — also a
-    # target under the any-NULL predicate), a fully-set row + a non-close row
-    # (both excluded). The scoped query must return AAA, BBB, PART in order.
+    # Two all-NULL rows (targets), a PARTIAL row (entry set, rest NULL — NOT a
+    # target under the no-mixing predicate), a fully-set row + a non-close row
+    # (both excluded). The scoped query must return AAA, BBB in order.
     _seed_prices(pg_legacy_session, "AAA", _SCAN, _FB_PRICES)
     _seed_screened(pg_legacy_session, "AAA", _SCAN, pattern_type="false_breakdown")
     _seed_prices(pg_legacy_session, "BBB", _SCAN, _FB_PRICES)
     _seed_screened(pg_legacy_session, "BBB", _SCAN, pattern_type="false_breakdown")
-    # PART: entry set, stop/target/rr NULL → still a target (any-NULL predicate).
+    # PART: entry set, stop/target/rr NULL → NOT a target (no-mixing: only all-four-
+    # NULL trade-level rows qualify; mixing restated levels is unsafe).
     pg_legacy_session.add(
         ScreenedStockRecord(
             scan_date=_SCAN,
@@ -864,10 +867,9 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
         session_name="morning",
     )
 
-    # Equivalent ORM path: the same WHERE/ORDER over full entities (any-NULL level
-    # + false_breakout NULL bearish_invalidation_level on a post-0012 DB).
-    from sqlalchemy import and_
-
+    # Equivalent ORM path: the same WHERE/ORDER over full entities. No-mixing
+    # predicate: ALL FOUR trade levels NULL, OR a false_breakout whose bil is NULL
+    # while its four trade levels are ALL SET (bil-only gap, post-0012 DB).
     orm_rows = (
         pg_legacy_session.execute(
             select(ScreenedStockRecord)
@@ -877,13 +879,19 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
                 ScreenedStockRecord.session_name == "close",
                 ScreenedStockRecord.pattern_type.isnot(None),
                 or_(
-                    ScreenedStockRecord.entry_price.is_(None),
-                    ScreenedStockRecord.stop_loss.is_(None),
-                    ScreenedStockRecord.target_price.is_(None),
-                    ScreenedStockRecord.rr_ratio.is_(None),
+                    and_(
+                        ScreenedStockRecord.entry_price.is_(None),
+                        ScreenedStockRecord.stop_loss.is_(None),
+                        ScreenedStockRecord.target_price.is_(None),
+                        ScreenedStockRecord.rr_ratio.is_(None),
+                    ),
                     and_(
                         ScreenedStockRecord.pattern_type == "false_breakout",
                         ScreenedStockRecord.bearish_invalidation_level.is_(None),
+                        ScreenedStockRecord.entry_price.isnot(None),
+                        ScreenedStockRecord.stop_loss.isnot(None),
+                        ScreenedStockRecord.target_price.isnot(None),
+                        ScreenedStockRecord.rr_ratio.isnot(None),
                     ),
                 ),
             )
@@ -903,7 +911,8 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
     )
     scoped_keys = [(r.symbol, r.scan_date) for r in scoped]
 
-    assert scoped_keys == orm_keys == [("AAA", _SCAN), ("BBB", _SCAN), ("PART", _SCAN)]
+    # PART (entry set, rest NULL) is NOT a target now (no-mixing) → only AAA, BBB.
+    assert scoped_keys == orm_keys == [("AAA", _SCAN), ("BBB", _SCAN)]
     # And the carried columns match the ORM values.
     for scoped_row, orm_row in zip(scoped, orm_rows, strict=True):
         assert scoped_row.session_name == orm_row.session_name

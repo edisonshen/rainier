@@ -199,26 +199,46 @@ _BACKFILLABLE_SESSION = "close"
 
 
 def _null_level_predicate(*, bil_present: bool):
-    """The ``OR`` of "this trade level is NULL" clauses defining a DAMAGED row.
+    """The ``OR`` of clauses defining a DAMAGED, SAFELY-REPAIRABLE row.
 
     Shared by ``_target_rows`` (repairable close rows) and ``_count_non_close_null``
-    (damaged-but-unrepairable non-close rows) so the two can never drift. The four
-    trade levels always count; ``bearish_invalidation_level`` is added ONLY when
-    the 0012 column exists on this DB (and scoped to ``false_breakout``, the only
-    pattern that carries a trap-high) — naming it on a pre-0012 DB would re-
-    introduce the ``UndefinedColumn`` crash the column-scoped read avoids.
+    (damaged-but-unrepairable non-close rows) so the two can never drift.
+
+    NO-MIXING invariant (codex P1): a fresh yfinance pull can RESTATE historical
+    OHLC (post-scan splits/dividends — see the module docstring), so a freshly
+    replayed entry/stop/target/rr tuple is not guaranteed to equal a value ALREADY
+    stored on the row. ``persist_screened_stocks`` coalesce-fills only NULLs, so
+    targeting a PARTIALLY-populated trade-level row would keep its old (set) fields
+    and write newly-computed ones — an internally inconsistent mixed tuple. To
+    avoid that, a row qualifies on its trade levels ONLY when ALL FOUR are NULL
+    (a clean full-tuple write from one replay), never when only some are NULL.
+
+    ``bearish_invalidation_level`` is a SEPARATE column the live screener derives
+    independently of the trade-level tuple, so filling it never mixes the tuple.
+    When the 0012 column exists (``bil_present``) we ALSO target a ``false_breakout``
+    whose trap-high is NULL but whose four trade levels are ALL SET — the bil-only
+    gap (a pre-0012 row reclaim can't see). persist fills only bil; the already-set
+    trade tuple is left untouched. The column is named only when present, preserving
+    the pre-0012 column-scoped-read drift safety.
     """
-    clauses = [
+    all_trade_levels_null = and_(
         ScreenedStockRecord.entry_price.is_(None),
         ScreenedStockRecord.stop_loss.is_(None),
         ScreenedStockRecord.target_price.is_(None),
         ScreenedStockRecord.rr_ratio.is_(None),
-    ]
+    )
+    clauses = [all_trade_levels_null]
     if bil_present:
         clauses.append(
             and_(
                 ScreenedStockRecord.pattern_type == "false_breakout",
                 ScreenedStockRecord.bearish_invalidation_level.is_(None),
+                # bil-ONLY gap: trade tuple fully set, so persist touches only bil
+                # (no mixed old/new trade levels).
+                ScreenedStockRecord.entry_price.isnot(None),
+                ScreenedStockRecord.stop_loss.isnot(None),
+                ScreenedStockRecord.target_price.isnot(None),
+                ScreenedStockRecord.rr_ratio.isnot(None),
             )
         )
     return or_(*clauses)
@@ -233,25 +253,16 @@ def _target_rows(
     ``_BACKFILLABLE_SESSION``). Deterministic order (symbol, scan_date) so a
     re-run scans the corpus identically and logs are diff-stable.
 
-    Target predicate (codex P2): ``pattern_type NOT NULL`` AND ANY tracked level
-    NULL — NOT only ``entry_price IS NULL``. A prior PARTIAL write could have set
-    ``entry_price`` while leaving ``stop_loss`` / ``target_price`` / ``rr_ratio``
-    NULL; downstream paper-trade creation treats any missing level as
-    ``missing_levels``, so an entry-only predicate would skip those broken rows
-    forever. ``persist_screened_stocks`` coalesce-upserts each level independently
-    (fills NULL only, never clobbers a set value), so re-running the matched
-    pattern over a partially-set row safely fills just the still-NULL fields.
-
-    ``bil_present`` (codex P2): when ``screened_stocks.bearish_invalidation_level``
-    EXISTS on this DB (post-0012), also target rows where ONLY that column is NULL
-    — a ``false_breakout`` row written pre-0012 can have all four trade levels set
-    yet a NULL trap-high, which ``paper.reclaim.detect_and_enqueue_reclaims``
-    filters out (it requires ``bearish_invalidation_level IS NOT NULL``), leaving
-    the thesis permanently invisible to reclaim. We add this clause ONLY when the
-    column exists: referencing it on a pre-0012 DB would re-introduce the very
-    ``UndefinedColumn`` crash the column-scoped read avoids. (Dry-run on a drifted
-    DB therefore can't surface these — but reclaim can't use the column there
-    either, and ``--apply`` already requires 0012 via the preflight.)
+    Target predicate (``_null_level_predicate``): ``pattern_type NOT NULL`` AND the
+    row is damaged-but-safely-repairable — ALL FOUR trade levels NULL (a clean
+    full-tuple write from one replay; the actual production damage is rows with all
+    four NULL), OR, on a post-0012 DB, a ``false_breakout`` whose trap-high
+    (``bearish_invalidation_level``) is NULL but whose four trade levels are ALL
+    SET. A row with only SOME trade levels NULL is deliberately NOT targeted: a
+    fresh replay can restate OHLC (splits/dividends), so coalesce-filling just the
+    NULL fields could mix old + newly-computed levels into an inconsistent tuple
+    (codex P1). See ``_null_level_predicate`` for the full rationale and the
+    ``bil_present`` drift-safety note.
 
     Column-scoped (NOT a full-ORM load): selecting only the columns this repair
     touches keeps an unrelated missing column (e.g. ``bearish_invalidation_level``
@@ -301,10 +312,10 @@ def _count_non_close_null(
     complete while non-close NULLs remain.
 
     Uses the SAME damaged-row predicate as ``_target_rows`` (via
-    ``_null_level_predicate``) so the two can't drift: any of the four trade levels
-    NULL (codex P2 — a partial-write non-close row is damaged too), plus a NULL
-    ``bearish_invalidation_level`` on a ``false_breakout`` when the 0012 column
-    exists.
+    ``_null_level_predicate``) so the two can't drift: ALL FOUR trade levels NULL,
+    plus the bil-only-gap ``false_breakout`` case when the 0012 column exists. (A
+    partially-set non-close row is intentionally NOT counted, mirroring that it is
+    not repairable without mixing restated levels — see ``_null_level_predicate``.)
     """
     stmt = (
         select(func.count())

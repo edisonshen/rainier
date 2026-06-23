@@ -400,11 +400,17 @@ def test_backfill_screened_levels_restores_global_settings_and_engine(monkeypatc
     monkeypatch.setattr(db_mod, "_session_factory", sentinel_factory, raising=False)
 
     # Stub load_settings_fresh so no real YAML/DB is touched; its stock_screener is
-    # unused on the from>to error path (raised before any replay).
+    # unused on the from>to error path (raised before any replay). The command does
+    # a function-local `from rainier.core.config import load_settings_fresh`, so the
+    # patch MUST target rainier.core.config (NOT rainier.cli), else the real YAML is
+    # read (codex P3).
     from types import SimpleNamespace
 
     fresh = SimpleNamespace(stock_screener=object())
-    monkeypatch.setattr(cli_mod, "load_settings_fresh", lambda _p: fresh, raising=False)
+    monkeypatch.setattr(config_mod, "load_settings_fresh", lambda _p: fresh)
+    # Guard: prove the patch target is effective — if the command resolved from
+    # rainier.cli we'd be patching the wrong name and silently read real settings.
+    assert config_mod.load_settings_fresh("x") is fresh
 
     runner = CliRunner()
     result = runner.invoke(
