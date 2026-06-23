@@ -5969,6 +5969,7 @@ def db_backfill_screened_levels(ctx, from_date: str, to_date: str, apply: bool) 
     from datetime import date as _date
 
     from rainier.core import config as _config_mod
+    from rainier.core import database as _database_mod
     from rainier.core.config import load_settings_fresh
     from rainier.paper.backfill_screened_levels import backfill_screened_levels
 
@@ -5979,6 +5980,13 @@ def db_backfill_screened_levels(ctx, from_date: str, to_date: str, apply: bool) 
     # so the reconstruction uses the operator-pinned (historical) detector knobs.
     settings = load_settings_fresh(_settings_path(ctx))
     _config_mod._settings = settings  # seed singleton before any get_session()
+    # Reset the cached legacy engine/session factory so they REBUILD against the
+    # just-seeded settings (codex P3). Seeding _settings alone is insufficient if
+    # a session was already opened earlier in the same process (programmatic reuse
+    # / tests): get_session() would keep the stale module-level _engine pointed at
+    # the old DB. Clearing them forces a fresh bind to the --config database.
+    _database_mod._engine = None
+    _database_mod._session_factory = None
 
     # Operator-facing validation failures (a bad date string, from>to, or --apply
     # on a pre-0012 DB) must surface as a clean Click error, not a raw traceback

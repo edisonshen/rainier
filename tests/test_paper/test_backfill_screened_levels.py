@@ -248,6 +248,47 @@ def test_coalesce_no_clobber_of_set_levels(pg_legacy_session):
     assert res.scanned == 0  # already-set row excluded from target set
 
 
+def test_partial_levels_row_is_backfilled(pg_legacy_session):
+    """Codex P2: a row with entry_price SET but stop_loss/target_price/rr_ratio
+    NULL (a prior partial write) IS in the target set — the predicate keys on ANY
+    level NULL, not just entry. persist_screened_stocks coalesce-fills only the
+    still-NULL fields, so the recovered pattern's stop/target/rr land while the
+    pre-existing entry is preserved (never clobbered)."""
+    _seed_prices(pg_legacy_session, "PART", _SCAN, _FB_PRICES)
+    # entry set, the other three NULL — a partially-populated historical row.
+    pg_legacy_session.add(
+        ScreenedStockRecord(
+            scan_date=_SCAN,
+            session_name="close",
+            symbol="PART",
+            rule_rank=1,
+            composite_score=0.8,
+            pattern_type="false_breakdown",
+            entry_price=88.0,  # pre-set; must be preserved
+            stop_loss=None,
+            target_price=None,
+            rr_ratio=None,
+        )
+    )
+    pg_legacy_session.commit()
+
+    res = backfill_screened_levels(
+        from_date=date(2026, 6, 3),
+        to_date=date(2026, 6, 12),
+        apply=True,
+        config_overrides=_CFG_OVERRIDES,
+    )
+
+    pg_legacy_session.expire_all()
+    r = _row(pg_legacy_session, "PART", _SCAN)
+    assert res.scanned == 1  # partial row IS a target (not skipped on entry NOT NULL)
+    assert res.recovered == 1
+    assert r.entry_price == 88.0  # pre-existing entry preserved (coalesce no-clobber)
+    assert r.stop_loss is not None  # the three NULL levels filled
+    assert r.target_price is not None
+    assert r.rr_ratio is not None
+
+
 def test_patternless_row_untouched(pg_legacy_session):
     _seed_prices(pg_legacy_session, "NOP", _SCAN, _FB_PRICES)
     _seed_screened(pg_legacy_session, "NOP", _SCAN, pattern_type=None)
@@ -715,15 +756,34 @@ def test_missing_scan_date_bar_is_transient_no_price_data_no_prior_day_levels(
 
 def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
     """On a complete DB the column-scoped `_target_rows` returns the SAME row set
-    (by identity key) the old full-ORM load did — no behavior change when nothing
-    is drifted."""
-    # Two close-session patterned NULL rows (in target set), plus a set-levels row
-    # and a non-close row (both excluded). The scoped query must return exactly
-    # the two target rows, in (symbol, scan_date) order.
+    (by identity key) the equivalent full-ORM load does — no behavior change when
+    nothing is drifted. The predicate is "ANY of the four levels NULL" (codex P2),
+    so a PARTIAL row (entry set, others NULL) is a target too."""
+    from sqlalchemy import or_
+
+    # Two all-NULL rows (targets), a PARTIAL row (entry set, rest NULL — also a
+    # target under the any-NULL predicate), a fully-set row + a non-close row
+    # (both excluded). The scoped query must return AAA, BBB, PART in order.
     _seed_prices(pg_legacy_session, "AAA", _SCAN, _FB_PRICES)
     _seed_screened(pg_legacy_session, "AAA", _SCAN, pattern_type="false_breakdown")
     _seed_prices(pg_legacy_session, "BBB", _SCAN, _FB_PRICES)
     _seed_screened(pg_legacy_session, "BBB", _SCAN, pattern_type="false_breakdown")
+    # PART: entry set, stop/target/rr NULL → still a target (any-NULL predicate).
+    pg_legacy_session.add(
+        ScreenedStockRecord(
+            scan_date=_SCAN,
+            session_name="close",
+            symbol="PART",
+            rule_rank=1,
+            composite_score=0.8,
+            pattern_type="false_breakdown",
+            entry_price=88.0,
+            stop_loss=None,
+            target_price=None,
+            rr_ratio=None,
+        )
+    )
+    pg_legacy_session.commit()
     _seed_screened(
         pg_legacy_session,
         "CCC",
@@ -743,7 +803,7 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
         session_name="morning",
     )
 
-    # Old ORM path: the same WHERE/ORDER over full entities.
+    # Equivalent ORM path: the same WHERE/ORDER over full entities (any-NULL level).
     orm_rows = (
         pg_legacy_session.execute(
             select(ScreenedStockRecord)
@@ -752,7 +812,12 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
                 ScreenedStockRecord.scan_date <= date(2026, 6, 12),
                 ScreenedStockRecord.session_name == "close",
                 ScreenedStockRecord.pattern_type.isnot(None),
-                ScreenedStockRecord.entry_price.is_(None),
+                or_(
+                    ScreenedStockRecord.entry_price.is_(None),
+                    ScreenedStockRecord.stop_loss.is_(None),
+                    ScreenedStockRecord.target_price.is_(None),
+                    ScreenedStockRecord.rr_ratio.is_(None),
+                ),
             )
             .order_by(
                 ScreenedStockRecord.symbol.asc(),
@@ -767,7 +832,7 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
     scoped = _target_rows(pg_legacy_session, date(2026, 6, 3), date(2026, 6, 12))
     scoped_keys = [(r.symbol, r.scan_date) for r in scoped]
 
-    assert scoped_keys == orm_keys == [("AAA", _SCAN), ("BBB", _SCAN)]
+    assert scoped_keys == orm_keys == [("AAA", _SCAN), ("BBB", _SCAN), ("PART", _SCAN)]
     # And the carried columns match the ORM values.
     for scoped_row, orm_row in zip(scoped, orm_rows, strict=True):
         assert scoped_row.session_name == orm_row.session_name

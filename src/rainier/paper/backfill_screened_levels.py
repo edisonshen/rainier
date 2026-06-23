@@ -89,7 +89,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import yfinance as yf
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from rainier.core.config import StockScreenerConfig, get_settings
@@ -207,6 +207,15 @@ def _target_rows(
     ``_BACKFILLABLE_SESSION``). Deterministic order (symbol, scan_date) so a
     re-run scans the corpus identically and logs are diff-stable.
 
+    Target predicate (codex P2): ``pattern_type NOT NULL`` AND ANY of the four
+    trade levels NULL — NOT only ``entry_price IS NULL``. A prior PARTIAL write
+    could have set ``entry_price`` while leaving ``stop_loss`` / ``target_price`` /
+    ``rr_ratio`` NULL; downstream paper-trade creation treats any missing level as
+    ``missing_levels``, so an entry-only predicate would skip those broken rows
+    forever. ``persist_screened_stocks`` coalesce-upserts each level independently
+    (fills NULL only, never clobbers a set value), so re-running the matched
+    pattern over a partially-set row safely fills just the still-NULL fields.
+
     Column-scoped (NOT a full-ORM load): selecting only the columns this repair
     touches keeps an unrelated missing column (e.g. ``bearish_invalidation_level``
     on a DB without migration 0012) from crashing the read. See ``_TargetRow``.
@@ -225,7 +234,12 @@ def _target_rows(
             ScreenedStockRecord.scan_date <= to_date,
             ScreenedStockRecord.session_name == _BACKFILLABLE_SESSION,
             ScreenedStockRecord.pattern_type.isnot(None),
-            ScreenedStockRecord.entry_price.is_(None),
+            or_(
+                ScreenedStockRecord.entry_price.is_(None),
+                ScreenedStockRecord.stop_loss.is_(None),
+                ScreenedStockRecord.target_price.is_(None),
+                ScreenedStockRecord.rr_ratio.is_(None),
+            ),
         )
         .order_by(
             ScreenedStockRecord.symbol.asc(),
