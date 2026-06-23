@@ -637,15 +637,21 @@ def test_apply_on_healthy_db_passes_preflight(pg_legacy_session):
     assert entry is not None
 
 
-def test_missing_scan_date_bar_stays_still_null_no_prior_day_levels(pg_legacy_session):
-    """Fidelity gate (codex P1): when `stock_prices` has NO bar exactly on the
-    row's scan_date (an ingest gap), the backfill must leave the row in still_null
-    — NOT replay the prior trading day's bar and write stale prior-day levels.
+def test_missing_scan_date_bar_is_transient_no_price_data_no_prior_day_levels(
+    pg_legacy_session,
+):
+    """Fidelity gate: when the fetch has NO bar exactly on the row's scan_date (a
+    vendor gap), the backfill must NOT replay the prior trading day's bar and write
+    stale prior-day levels. The row is left UNWRITTEN.
+
+    Classification (codex iter-N P2): a missing exact-scan_date bar is a TRANSIENT
+    gap — a later fetch can supply it — so it belongs in `no_price_data`
+    (recoverable, re-run may help), NOT `still_null` (which the CLI labels a
+    PERMANENT no-pattern-match). Mislabeling it permanent would tell the operator
+    to stop retrying a row a re-run could fix.
 
     Seed the full price history but ending the business day BEFORE scan_date, so
-    the canonical scan_date bar is absent. The row must report still_null with its
-    levels untouched. FAILS on the parent commit, whose `_as_of_idx` falls back to
-    the last bar on/before scan_date (the prior day) and would write its levels."""
+    the canonical scan_date bar is absent."""
     prior_bday = (pd.Timestamp(_SCAN) - pd.tseries.offsets.BDay(1)).date()
     # Prices end on the prior business day → no bar exactly on _SCAN.
     _seed_prices(pg_legacy_session, "GAP", prior_bday, _FB_PRICES)
@@ -660,8 +666,11 @@ def test_missing_scan_date_bar_stays_still_null_no_prior_day_levels(pg_legacy_se
 
     assert res.scanned == 1
     assert res.recovered == 0
-    assert res.still_null == 1
-    assert ("GAP", _SCAN) in res.still_null_keys
+    # Transient (missing exact bar) → no_price_data, NOT permanent still_null.
+    assert res.still_null == 0
+    assert ("GAP", _SCAN) not in res.still_null_keys
+    assert res.no_price_data == 1
+    assert ("GAP", _SCAN) in res.no_price_data_keys
     # No prior-day levels written: the row's entry_price is still NULL.
     pg_legacy_session.expire_all()
     assert _row(pg_legacy_session, "GAP", _SCAN).entry_price is None

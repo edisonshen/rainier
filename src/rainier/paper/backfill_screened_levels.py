@@ -82,6 +82,7 @@ scheduled job — a historical repair.
 
 from __future__ import annotations
 
+import enum
 import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -145,18 +146,20 @@ class BackfillResult:
         window) that the replay attempted to recover.
     ``recovered`` — rows whose stored pattern_type matched an as-of actionable
         pattern (levels written when ``apply`` is True; would-be-written on dry-run).
-    ``still_null`` — target rows where an as-of price window EXISTED but NO
-        actionable pattern matched the stored type / the detector raised (left
-        NULL and reported; never errored). This is a PERMANENT no-match: a re-run
-        produces the same result, so the operator can stop chasing these.
+    ``still_null`` — target rows where a real as-of window EXISTED (the exact
+        scan_date bar was present) but NO actionable pattern matched the stored
+        type / the detector raised (left NULL and reported; never errored). This
+        is a PERMANENT no-match: a re-run over the same bars produces the same
+        result, so the operator can stop chasing these.
     ``still_null_keys`` — the (symbol, scan_date) of each still-NULL (no-match) row.
-    ``no_price_data`` — target rows whose symbol returned NO usable yfinance bars
-        even after the per-symbol solo retry (throttle / outage / delisting), so
-        the replay could not run AT ALL. Distinct from ``still_null``: this is a
-        TRANSIENT/recoverable failure — a re-run once the fetch succeeds may
-        recover the row, so the operator should retry rather than treat it as
-        permanently unreconstructable. Kept separate so a fetch blip is never
-        silently mislabeled as a permanent no-pattern-match.
+    ``no_price_data`` — target rows the replay could not run on because the as-of
+        bars were unavailable: the symbol returned NO usable yfinance bars even
+        after the per-symbol solo retry (throttle / outage / delisting), OR the
+        fetched frame was missing the EXACT scan_date bar (a vendor gap for just
+        the as-of day). Distinct from ``still_null``: this is a TRANSIENT failure
+        — a re-run once the fetch supplies the bar may recover the row, so the
+        operator should retry rather than treat it as permanently unreconstructable.
+        Kept separate so a fetch blip is never silently mislabeled a no-match.
     ``no_price_data_keys`` — the (symbol, scan_date) of each no-price-data row.
     ``skipped_non_close`` — patterned level-NULL rows in the window from a
         non-``close`` session. These are NOT reconstructable without look-ahead
@@ -444,29 +447,54 @@ def _as_of_idx(df: pd.DataFrame, scan_date: date) -> int | None:
     return int(hits[-1])
 
 
+class _Outcome(enum.Enum):
+    """How a single row's as-of replay resolved.
+
+    ``RECOVERED`` — an actionable pattern matched the stored type (levels found).
+    ``NO_AS_OF_DATA`` — TRANSIENT/recoverable: the symbol had no usable bars, or
+        the fetch returned a frame that lacks the EXACT scan_date bar (a vendor gap
+        for just the as-of day). A later fetch can fill the gap, so the operator
+        should re-run rather than treat the row as permanently lost.
+    ``NO_MATCH`` — PERMANENT: a real as-of window existed (the scan_date bar was
+        present) but no actionable pattern matched the stored type, or the detector
+        raised. Re-running over the same bars produces the same result.
+    """
+
+    RECOVERED = "recovered"
+    NO_AS_OF_DATA = "no_as_of_data"
+    NO_MATCH = "no_match"
+
+
 def _match_for_row(
     row: _TargetRow,
     df: pd.DataFrame | None,
     config: StockScreenerConfig,
-) -> PatternSignal | None:
-    """Replay the detector as-of ``row.scan_date`` and return the matching pattern.
+) -> tuple[_Outcome, PatternSignal | None]:
+    """Replay the detector as-of ``row.scan_date`` and classify the result.
 
-    Returns None when prices are missing, NO bar exists EXACTLY ON scan_date (a
-    yfinance gap — never replay the prior day's stale bar; see ``_as_of_idx``), no
-    as-of actionable pattern has the row's stored ``pattern_type``, OR the
-    detector raises on this symbol's window. A per-row detector failure is
-    per-symbol noise (one bad price window must not abort a multi-day repair) —
-    ``screen_stocks`` treats it the same way (stock_screener.py:86-89). The row
-    is left NULL and reported in still-NULL, never errored.
+    Returns ``(outcome, pattern)``. ``pattern`` is non-None only for
+    ``RECOVERED``. The outcome separates a TRANSIENT data gap
+    (``NO_AS_OF_DATA`` — no usable bars, or the fetch lacks the exact scan_date
+    bar; never replay the prior day's stale bar, see ``_as_of_idx``) from a
+    PERMANENT ``NO_MATCH`` (a real as-of window existed but no actionable pattern
+    matched the stored type, OR the detector raised). The caller buckets the two
+    differently so the operator knows which rows a re-run can still recover.
+
+    A per-row detector failure is per-symbol noise (one bad price window must not
+    abort a multi-day repair) — ``screen_stocks`` treats it the same way
+    (stock_screener.py:86-89). It is classified ``NO_MATCH`` (the bar existed; the
+    detector, not the data, is what failed) and reported, never errored.
     """
     if df is None or df.empty:
-        return None
+        return _Outcome.NO_AS_OF_DATA, None
     t_idx = _as_of_idx(df, row.scan_date)
     if t_idx is None:
-        return None
+        # Frame present but missing the exact scan_date bar — a vendor gap for
+        # just the as-of day. Transient: a later fetch may supply it.
+        return _Outcome.NO_AS_OF_DATA, None
     windowed = window_as_of(df, t_idx)
     if windowed.empty:
-        return None
+        return _Outcome.NO_AS_OF_DATA, None
     try:
         actionable, _ = replay_pattern_layer(row.symbol, windowed, config)
     except Exception:
@@ -476,8 +504,11 @@ def _match_for_row(
             row.scan_date,
             row.pattern_type,
         )
-        return None
-    return _match_pattern(actionable, row.pattern_type)
+        return _Outcome.NO_MATCH, None
+    pat = _match_pattern(actionable, row.pattern_type)
+    if pat is None:
+        return _Outcome.NO_MATCH, None
+    return _Outcome.RECOVERED, pat
 
 
 def _candidate_with_levels(
@@ -604,15 +635,15 @@ def backfill_screened_levels(
     # yfinance, and ``persist_screened_stocks`` manages its own session.
     candidates_by_key: dict[tuple[date, str], list[StockCandidate]] = {}
     for row in rows:
-        df = prices.get(row.symbol)
+        # _match_for_row classifies into three mutually-exclusive outcomes. The
+        # split between NO_AS_OF_DATA (TRANSIENT: symbol had no bars OR the fetch
+        # lacks the exact scan_date bar — a re-run may recover it) and NO_MATCH
+        # (PERMANENT: a real as-of window existed but no actionable pattern matched
+        # the stored type) keeps a fetch blip from masquerading as a permanent
+        # no-match, so the operator never marks a recoverable row unreconstructable.
+        outcome, matched = _match_for_row(row, prices.get(row.symbol), config)
 
-        # Distinguish "the fetch returned NO bars for this symbol" (transient /
-        # recoverable: throttle, outage, delisting — a re-run may recover it)
-        # from "we HAD a price window but no actionable pattern matched the stored
-        # type" (permanent no-match — re-running changes nothing). Conflating them
-        # would let a fetch blip during the apply run masquerade as a permanent
-        # no-match, so the operator marks a recoverable row unreconstructable.
-        if df is None or df.empty:
+        if outcome is _Outcome.NO_AS_OF_DATA:
             result.no_price_data += 1
             result.no_price_data_keys.append((row.symbol, row.scan_date))
             log.info(
@@ -623,9 +654,7 @@ def backfill_screened_levels(
             )
             continue
 
-        matched = _match_for_row(row, df, config)
-
-        if matched is None:
+        if outcome is _Outcome.NO_MATCH:
             result.still_null += 1
             result.still_null_keys.append((row.symbol, row.scan_date))
             log.info(
@@ -637,7 +666,7 @@ def backfill_screened_levels(
             continue
 
         result.recovered += 1
-        if apply:
+        if apply and matched is not None:
             cand = _candidate_with_levels(row, matched)
             candidates_by_key.setdefault(
                 (row.scan_date, row.session_name), []
