@@ -89,7 +89,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import yfinance as yf
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from rainier.core.config import StockScreenerConfig, get_settings
@@ -198,8 +198,34 @@ class BackfillResult:
 _BACKFILLABLE_SESSION = "close"
 
 
+def _null_level_predicate(*, bil_present: bool):
+    """The ``OR`` of "this trade level is NULL" clauses defining a DAMAGED row.
+
+    Shared by ``_target_rows`` (repairable close rows) and ``_count_non_close_null``
+    (damaged-but-unrepairable non-close rows) so the two can never drift. The four
+    trade levels always count; ``bearish_invalidation_level`` is added ONLY when
+    the 0012 column exists on this DB (and scoped to ``false_breakout``, the only
+    pattern that carries a trap-high) — naming it on a pre-0012 DB would re-
+    introduce the ``UndefinedColumn`` crash the column-scoped read avoids.
+    """
+    clauses = [
+        ScreenedStockRecord.entry_price.is_(None),
+        ScreenedStockRecord.stop_loss.is_(None),
+        ScreenedStockRecord.target_price.is_(None),
+        ScreenedStockRecord.rr_ratio.is_(None),
+    ]
+    if bil_present:
+        clauses.append(
+            and_(
+                ScreenedStockRecord.pattern_type == "false_breakout",
+                ScreenedStockRecord.bearish_invalidation_level.is_(None),
+            )
+        )
+    return or_(*clauses)
+
+
 def _target_rows(
-    session: Session, from_date: date, to_date: date
+    session: Session, from_date: date, to_date: date, *, bil_present: bool
 ) -> list[_TargetRow]:
     """``close``-session, patterned, level-NULL rows in ``[from_date, to_date]``.
 
@@ -207,14 +233,25 @@ def _target_rows(
     ``_BACKFILLABLE_SESSION``). Deterministic order (symbol, scan_date) so a
     re-run scans the corpus identically and logs are diff-stable.
 
-    Target predicate (codex P2): ``pattern_type NOT NULL`` AND ANY of the four
-    trade levels NULL — NOT only ``entry_price IS NULL``. A prior PARTIAL write
-    could have set ``entry_price`` while leaving ``stop_loss`` / ``target_price`` /
-    ``rr_ratio`` NULL; downstream paper-trade creation treats any missing level as
+    Target predicate (codex P2): ``pattern_type NOT NULL`` AND ANY tracked level
+    NULL — NOT only ``entry_price IS NULL``. A prior PARTIAL write could have set
+    ``entry_price`` while leaving ``stop_loss`` / ``target_price`` / ``rr_ratio``
+    NULL; downstream paper-trade creation treats any missing level as
     ``missing_levels``, so an entry-only predicate would skip those broken rows
     forever. ``persist_screened_stocks`` coalesce-upserts each level independently
     (fills NULL only, never clobbers a set value), so re-running the matched
     pattern over a partially-set row safely fills just the still-NULL fields.
+
+    ``bil_present`` (codex P2): when ``screened_stocks.bearish_invalidation_level``
+    EXISTS on this DB (post-0012), also target rows where ONLY that column is NULL
+    — a ``false_breakout`` row written pre-0012 can have all four trade levels set
+    yet a NULL trap-high, which ``paper.reclaim.detect_and_enqueue_reclaims``
+    filters out (it requires ``bearish_invalidation_level IS NOT NULL``), leaving
+    the thesis permanently invisible to reclaim. We add this clause ONLY when the
+    column exists: referencing it on a pre-0012 DB would re-introduce the very
+    ``UndefinedColumn`` crash the column-scoped read avoids. (Dry-run on a drifted
+    DB therefore can't surface these — but reclaim can't use the column there
+    either, and ``--apply`` already requires 0012 via the preflight.)
 
     Column-scoped (NOT a full-ORM load): selecting only the columns this repair
     touches keeps an unrelated missing column (e.g. ``bearish_invalidation_level``
@@ -234,12 +271,7 @@ def _target_rows(
             ScreenedStockRecord.scan_date <= to_date,
             ScreenedStockRecord.session_name == _BACKFILLABLE_SESSION,
             ScreenedStockRecord.pattern_type.isnot(None),
-            or_(
-                ScreenedStockRecord.entry_price.is_(None),
-                ScreenedStockRecord.stop_loss.is_(None),
-                ScreenedStockRecord.target_price.is_(None),
-                ScreenedStockRecord.rr_ratio.is_(None),
-            ),
+            _null_level_predicate(bil_present=bil_present),
         )
         .order_by(
             ScreenedStockRecord.symbol.asc(),
@@ -260,7 +292,7 @@ def _target_rows(
 
 
 def _count_non_close_null(
-    session: Session, from_date: date, to_date: date
+    session: Session, from_date: date, to_date: date, *, bil_present: bool
 ) -> int:
     """Patterned, level-NULL rows in the window from a NON-``close`` session.
 
@@ -268,10 +300,11 @@ def _count_non_close_null(
     but are still damaged rows; counting them keeps a dry-run from looking
     complete while non-close NULLs remain.
 
-    Uses the SAME any-of-four-levels-NULL predicate as ``_target_rows`` (codex P2):
-    a partial-write non-close row (entry set, stop/target/rr NULL) is damaged too,
-    so an ``entry_price``-only count would let a dry-run claim the non-close
-    backlog is clear while broken partial rows remain.
+    Uses the SAME damaged-row predicate as ``_target_rows`` (via
+    ``_null_level_predicate``) so the two can't drift: any of the four trade levels
+    NULL (codex P2 — a partial-write non-close row is damaged too), plus a NULL
+    ``bearish_invalidation_level`` on a ``false_breakout`` when the 0012 column
+    exists.
     """
     stmt = (
         select(func.count())
@@ -281,12 +314,7 @@ def _count_non_close_null(
             ScreenedStockRecord.scan_date <= to_date,
             ScreenedStockRecord.session_name != _BACKFILLABLE_SESSION,
             ScreenedStockRecord.pattern_type.isnot(None),
-            or_(
-                ScreenedStockRecord.entry_price.is_(None),
-                ScreenedStockRecord.stop_loss.is_(None),
-                ScreenedStockRecord.target_price.is_(None),
-                ScreenedStockRecord.rr_ratio.is_(None),
-            ),
+            _null_level_predicate(bil_present=bil_present),
         )
     )
     return int(session.execute(stmt).scalar_one())
@@ -674,6 +702,12 @@ def backfill_screened_levels(
     result = BackfillResult()
 
     with get_session() as session:
+        # Does this DB have the 0012 ``bearish_invalidation_level`` column? Probed
+        # once and reused for the apply preflight AND the target/count predicates
+        # (which name the column only when present, preserving the pre-0012
+        # column-scoped-read safety).
+        bil_present = _apply_column_present(session)
+
         # Preflight the WRITE path against schema drift BEFORE any scan work.
         # ``persist_screened_stocks`` upserts ``bearish_invalidation_level`` (added
         # by migration 0012); on a pre-0012 DB that write aborts with an opaque
@@ -682,7 +716,7 @@ def backfill_screened_levels(
         # ``--apply`` — so without this guard ``--apply`` would crash mid-repair.
         # Fail fast with a clear, actionable message instead. (Dry-run never
         # writes, so it stays runnable on the drifted DB for diagnosis.)
-        if apply and not _apply_column_present(session):
+        if apply and not bil_present:
             raise RuntimeError(
                 "Cannot --apply: screened_stocks is missing the "
                 f"{_APPLY_REQUIRED_COLUMN!r} column (migration 0012 not applied). "
@@ -694,9 +728,13 @@ def backfill_screened_levels(
         # damaged — count them first so the report surfaces them even when there
         # are zero repairable close rows (a dry-run must never look complete
         # while non-close NULLs remain).
-        result.skipped_non_close = _count_non_close_null(session, from_date, to_date)
+        result.skipped_non_close = _count_non_close_null(
+            session, from_date, to_date, bil_present=bil_present
+        )
 
-        rows = _target_rows(session, from_date, to_date)
+        rows = _target_rows(
+            session, from_date, to_date, bil_present=bil_present
+        )
         result.scanned = len(rows)
         if not rows:
             return result

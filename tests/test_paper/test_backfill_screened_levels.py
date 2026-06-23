@@ -289,6 +289,67 @@ def test_partial_levels_row_is_backfilled(pg_legacy_session):
     assert r.rr_ratio is not None
 
 
+def test_target_rows_includes_false_breakout_missing_only_invalidation_level(
+    pg_legacy_session,
+):
+    """Codex P2: on a post-0012 DB, a `false_breakout` row with ALL FOUR trade
+    levels set but `bearish_invalidation_level` NULL (written pre-0012) IS a target
+    — otherwise reclaim (`bearish_invalidation_level IS NOT NULL`) ignores it
+    forever. A NON-false_breakout row in the same all-trade-levels-set / NULL-bil
+    state is NOT targeted (only false_breakout carries a trap-high).
+
+    Deterministic at the _target_rows level (no detector dependency): proves the
+    SELECT predicate, which is the P2 fix surface."""
+    # TRAP: false_breakout, 4 trade levels set, bil NULL → IS a target.
+    pg_legacy_session.add(
+        ScreenedStockRecord(
+            scan_date=_SCAN,
+            session_name="close",
+            symbol="TRAP",
+            rule_rank=1,
+            composite_score=0.8,
+            pattern_type="false_breakout",
+            entry_price=88.5,
+            stop_loss=93.5,
+            target_price=82.0,
+            rr_ratio=2.0,
+            bearish_invalidation_level=None,
+        )
+    )
+    # OTHER: false_breakdown, 4 trade levels set, bil NULL → NOT a target (only
+    # false_breakout's NULL bil counts as damage).
+    pg_legacy_session.add(
+        ScreenedStockRecord(
+            scan_date=_SCAN,
+            session_name="close",
+            symbol="OTHER",
+            rule_rank=1,
+            composite_score=0.8,
+            pattern_type="false_breakdown",
+            entry_price=89.0,
+            stop_loss=85.0,
+            target_price=95.0,
+            rr_ratio=1.5,
+            bearish_invalidation_level=None,
+        )
+    )
+    pg_legacy_session.commit()
+
+    scoped = _target_rows(
+        pg_legacy_session, date(2026, 6, 3), date(2026, 6, 12), bil_present=True
+    )
+    keys = {(r.symbol, r.scan_date) for r in scoped}
+    assert ("TRAP", _SCAN) in keys  # false_breakout NULL-bil targeted
+    assert ("OTHER", _SCAN) not in keys  # false_breakdown NULL-bil NOT targeted
+
+    # And with bil_present=False (pre-0012 DB) TRAP is NOT targeted — the column
+    # is never named, so the NULL-bil clause is absent (drift-safe).
+    scoped_pre0012 = _target_rows(
+        pg_legacy_session, date(2026, 6, 3), date(2026, 6, 12), bil_present=False
+    )
+    assert ("TRAP", _SCAN) not in {(r.symbol, r.scan_date) for r in scoped_pre0012}
+
+
 def test_patternless_row_untouched(pg_legacy_session):
     _seed_prices(pg_legacy_session, "NOP", _SCAN, _FB_PRICES)
     _seed_screened(pg_legacy_session, "NOP", _SCAN, pattern_type=None)
@@ -803,7 +864,10 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
         session_name="morning",
     )
 
-    # Equivalent ORM path: the same WHERE/ORDER over full entities (any-NULL level).
+    # Equivalent ORM path: the same WHERE/ORDER over full entities (any-NULL level
+    # + false_breakout NULL bearish_invalidation_level on a post-0012 DB).
+    from sqlalchemy import and_
+
     orm_rows = (
         pg_legacy_session.execute(
             select(ScreenedStockRecord)
@@ -817,6 +881,10 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
                     ScreenedStockRecord.stop_loss.is_(None),
                     ScreenedStockRecord.target_price.is_(None),
                     ScreenedStockRecord.rr_ratio.is_(None),
+                    and_(
+                        ScreenedStockRecord.pattern_type == "false_breakout",
+                        ScreenedStockRecord.bearish_invalidation_level.is_(None),
+                    ),
                 ),
             )
             .order_by(
@@ -829,7 +897,10 @@ def test_target_rows_match_orm_path_on_healthy_db(pg_legacy_session):
     )
     orm_keys = [(r.symbol, r.scan_date) for r in orm_rows]
 
-    scoped = _target_rows(pg_legacy_session, date(2026, 6, 3), date(2026, 6, 12))
+    # pg_legacy_session is post-0012, so the 0012 column exists.
+    scoped = _target_rows(
+        pg_legacy_session, date(2026, 6, 3), date(2026, 6, 12), bil_present=True
+    )
     scoped_keys = [(r.symbol, r.scan_date) for r in scoped]
 
     assert scoped_keys == orm_keys == [("AAA", _SCAN), ("BBB", _SCAN), ("PART", _SCAN)]
