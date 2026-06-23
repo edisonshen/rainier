@@ -5960,10 +5960,21 @@ def db_backfill_screened_levels(from_date: str, to_date: str, apply: bool) -> No
 
     from rainier.paper.backfill_screened_levels import backfill_screened_levels
 
-    start = _date.fromisoformat(from_date)
-    end = _date.fromisoformat(to_date)
+    # Operator-facing validation failures (a bad date string, from>to, or --apply
+    # on a pre-0012 DB) must surface as a clean Click error, not a raw traceback
+    # that looks like the command crashed.
+    try:
+        start = _date.fromisoformat(from_date)
+        end = _date.fromisoformat(to_date)
+    except ValueError as exc:
+        raise click.BadParameter(f"dates must be YYYY-MM-DD: {exc}") from exc
 
-    result = backfill_screened_levels(from_date=start, to_date=end, apply=apply)
+    try:
+        result = backfill_screened_levels(from_date=start, to_date=end, apply=apply)
+    except (ValueError, RuntimeError) as exc:
+        # ValueError: from_date > to_date. RuntimeError: --apply preflight on a
+        # pre-0012 DB (the message already names migration 0012).
+        raise click.ClickException(str(exc)) from exc
 
     mode = "APPLY" if apply else "DRY-RUN"
     click.echo(

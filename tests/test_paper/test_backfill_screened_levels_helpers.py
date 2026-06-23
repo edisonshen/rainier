@@ -176,6 +176,15 @@ def test_as_of_idx_matches_scan_date_under_non_utc_session_tz():
 # --- _match_for_row outcome classification ---------------------------------
 
 
+def _cfg(min_bars: int = 0):
+    """A minimal stand-in config carrying just the knob _match_for_row reads past
+    the early returns (``min_daily_bars``). The detector itself is monkeypatched
+    in these tests, so no other config field is touched."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(min_daily_bars=min_bars)
+
+
 def _ohlcv_at(scan: date, periods: int = 5) -> pd.DataFrame:
     """A tiny tz-naive OHLCV frame whose LAST bar is exactly on ``scan``."""
     dates = pd.bdate_range(end=pd.Timestamp(scan), periods=periods)
@@ -216,7 +225,7 @@ def test_match_for_row_detector_raise_is_detector_error(monkeypatch):
 
     monkeypatch.setattr(mod, "replay_pattern_layer", boom)
     row = _target("false_breakdown")
-    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=object())
+    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=_cfg())
     assert outcome is _Outcome.DETECTOR_ERROR
     assert pat is None
 
@@ -233,7 +242,7 @@ def test_match_for_row_clean_run_no_type_match_is_no_match(monkeypatch):
         lambda s, w, c: ([_sig("w_bottom", confidence=0.9, entry_price=100.0)], None),
     )
     row = _target("false_breakdown")
-    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=object())
+    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=_cfg())
     assert outcome is _Outcome.NO_MATCH
     assert pat is None
 
@@ -246,9 +255,30 @@ def test_match_for_row_type_match_is_recovered(monkeypatch):
         mod, "replay_pattern_layer", lambda s, w, c: ([match], None)
     )
     row = _target("false_breakdown")
-    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=object())
+    outcome, pat = _match_for_row(row, _ohlcv_at(date(2026, 6, 5)), config=_cfg())
     assert outcome is _Outcome.RECOVERED
     assert pat is match
+
+
+def test_match_for_row_window_below_min_daily_bars_is_no_match(monkeypatch):
+    """Codex P2 fidelity gate: an as-of window SHORTER than min_daily_bars (a
+    recent IPO/spinoff that only reaches the floor later in the range) is rejected
+    BEFORE the detector runs — the live screener would have skipped that symbol on
+    scan_date, so writing levels would fabricate a never-screened setup. NO_MATCH
+    (permanent: the as-of window is fixed by scan_date + to_date)."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    def must_not_run(*a, **k):
+        raise AssertionError("detector must not run on a too-short as-of window")
+
+    monkeypatch.setattr(mod, "replay_pattern_layer", must_not_run)
+    row = _target("false_breakdown")
+    # 5-bar window, but the floor is 60 → rejected as NO_MATCH, detector skipped.
+    outcome, pat = _match_for_row(
+        row, _ohlcv_at(date(2026, 6, 5), periods=5), config=_cfg(min_bars=60)
+    )
+    assert outcome is _Outcome.NO_MATCH
+    assert pat is None
 
 
 # --- _candidate_with_levels (bearish_invalidation_level backfill) ----------

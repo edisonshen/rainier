@@ -544,6 +544,18 @@ def _match_for_row(
     windowed = window_as_of(df, t_idx)
     if windowed.empty:
         return _Outcome.NO_AS_OF_DATA, None
+    # Enforce min_daily_bars on the AS-OF-CLIPPED window, mirroring the live
+    # screener. The live path fetches period="6mo" ending at scan_date and applies
+    # min_daily_bars to THAT ~6-month frame (stock_screener._fetch_stock_data:436);
+    # our wider ~9-month fetch passes min_daily_bars at the fetch frame, but the
+    # detector only ever sees the clipped window. A ticker that reaches the floor
+    # only LATER in the range (a recent IPO/spinoff) would clear the fetch-frame
+    # check yet have a too-short as-of window — the live screen would have SKIPPED
+    # it on scan_date, so writing levels here fabricates a setup that never had
+    # enough history to be screened. Treat as NO_MATCH (permanent: the as-of
+    # window is fixed by scan_date + to_date, so a re-run can't lengthen it).
+    if len(windowed) < config.min_daily_bars:
+        return _Outcome.NO_MATCH, None
     try:
         actionable, _ = replay_pattern_layer(row.symbol, windowed, config)
     except Exception:
