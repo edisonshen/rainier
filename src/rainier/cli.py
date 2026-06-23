@@ -5978,75 +5978,95 @@ def db_backfill_screened_levels(ctx, from_date: str, to_date: str, apply: bool) 
     # DB session + persist_screened_stocks target THAT database (not the default
     # config/settings.yaml), and (b) pass its stock_screener as the replay config
     # so the reconstruction uses the operator-pinned (historical) detector knobs.
+    #
+    # These are PROCESS globals. Snapshot them and RESTORE in finally (codex P2):
+    # an in-process caller (CliRunner / programmatic reuse) must not have its later
+    # commands silently inherit this backfill's --config DB. Without restore, the
+    # next get_settings()/get_session() in the same interpreter would read/write
+    # the wrong database.
+    _prev_settings = _config_mod._settings
+    _prev_engine = _database_mod._engine
+    _prev_factory = _database_mod._session_factory
+
     settings = load_settings_fresh(_settings_path(ctx))
     _config_mod._settings = settings  # seed singleton before any get_session()
-    # Reset the cached legacy engine/session factory so they REBUILD against the
-    # just-seeded settings (codex P3). Seeding _settings alone is insufficient if
-    # a session was already opened earlier in the same process (programmatic reuse
-    # / tests): get_session() would keep the stale module-level _engine pointed at
-    # the old DB. Clearing them forces a fresh bind to the --config database.
+    # Reset the cached legacy engine/session factory so they REBIND against the
+    # just-seeded settings. Seeding _settings alone is insufficient if a session
+    # was already opened earlier in the same process — get_session() would keep the
+    # stale module-level _engine pointed at the old DB.
     _database_mod._engine = None
     _database_mod._session_factory = None
 
-    # Operator-facing validation failures (a bad date string, from>to, or --apply
-    # on a pre-0012 DB) must surface as a clean Click error, not a raw traceback
-    # that looks like the command crashed.
     try:
-        start = _date.fromisoformat(from_date)
-        end = _date.fromisoformat(to_date)
-    except ValueError as exc:
-        raise click.BadParameter(f"dates must be YYYY-MM-DD: {exc}") from exc
+        # Operator-facing validation failures (a bad date string, from>to, or
+        # --apply on a pre-0012 DB) must surface as a clean Click error, not a raw
+        # traceback that looks like the command crashed.
+        try:
+            start = _date.fromisoformat(from_date)
+            end = _date.fromisoformat(to_date)
+        except ValueError as exc:
+            raise click.BadParameter(f"dates must be YYYY-MM-DD: {exc}") from exc
 
-    try:
-        result = backfill_screened_levels(
-            from_date=start,
-            to_date=end,
-            apply=apply,
-            config=settings.stock_screener,
-        )
-    except (ValueError, RuntimeError) as exc:
-        # ValueError: from_date > to_date. RuntimeError: --apply preflight on a
-        # pre-0012 DB (the message already names migration 0012).
-        raise click.ClickException(str(exc)) from exc
+        try:
+            result = backfill_screened_levels(
+                from_date=start,
+                to_date=end,
+                apply=apply,
+                config=settings.stock_screener,
+            )
+        except (ValueError, RuntimeError) as exc:
+            # ValueError: from_date > to_date. RuntimeError: --apply preflight on a
+            # pre-0012 DB (the message already names migration 0012).
+            raise click.ClickException(str(exc)) from exc
 
-    mode = "APPLY" if apply else "DRY-RUN"
-    click.echo(
-        f"backfill-screened-levels [{mode}] {start}..{end}: "
-        f"scanned={result.scanned} recovered={result.recovered} "
-        f"still_null={result.still_null} "
-        f"no_price_data={result.no_price_data} "
-        f"detector_errors={result.detector_errors} "
-        f"skipped_non_close={result.skipped_non_close}"
-    )
-    if result.still_null_keys:
+        mode = "APPLY" if apply else "DRY-RUN"
         click.echo(
-            f"  still-NULL ({result.still_null} rows, had prices but no as-of "
-            "pattern matched the stored type — permanent, re-run won't help):"
+            f"backfill-screened-levels [{mode}] {start}..{end}: "
+            f"scanned={result.scanned} recovered={result.recovered} "
+            f"still_null={result.still_null} "
+            f"no_price_data={result.no_price_data} "
+            f"detector_errors={result.detector_errors} "
+            f"skipped_non_close={result.skipped_non_close}"
         )
-        for symbol, scan_date in result.still_null_keys:
-            click.echo(f"    {symbol} {scan_date}")
-    if result.no_price_data_keys:
-        click.echo(
-            f"  no-price-data ({result.no_price_data} rows, yfinance returned no "
-            "bars even after solo retry — TRANSIENT, re-run may recover these):"
-        )
-        for symbol, scan_date in result.no_price_data_keys:
-            click.echo(f"    {symbol} {scan_date}")
-    if result.detector_error_keys:
-        click.echo(
-            f"  detector-errors ({result.detector_errors} rows, the detector "
-            "raised — NOT a permanent no-match; a data re-pull or code fix may "
-            "recover these; see logs for tracebacks):"
-        )
-        for symbol, scan_date in result.detector_error_keys:
-            click.echo(f"    {symbol} {scan_date}")
-    if result.skipped_non_close:
-        click.echo(
-            f"  skipped-non-close ({result.skipped_non_close} rows): non-close "
-            "patterned-NULL rows are NOT repairable (look-ahead) and remain NULL."
-        )
-    if not apply and result.recovered:
-        click.echo("  (dry-run — re-run with --apply to write the recovered levels)")
+        if result.still_null_keys:
+            click.echo(
+                f"  still-NULL ({result.still_null} rows, had prices but no as-of "
+                "pattern matched the stored type — permanent, re-run won't help):"
+            )
+            for symbol, scan_date in result.still_null_keys:
+                click.echo(f"    {symbol} {scan_date}")
+        if result.no_price_data_keys:
+            click.echo(
+                f"  no-price-data ({result.no_price_data} rows, yfinance returned "
+                "no bars even after solo retry — TRANSIENT, re-run may recover):"
+            )
+            for symbol, scan_date in result.no_price_data_keys:
+                click.echo(f"    {symbol} {scan_date}")
+        if result.detector_error_keys:
+            click.echo(
+                f"  detector-errors ({result.detector_errors} rows, the detector "
+                "raised — NOT a permanent no-match; a data re-pull or code fix may "
+                "recover these; see logs for tracebacks):"
+            )
+            for symbol, scan_date in result.detector_error_keys:
+                click.echo(f"    {symbol} {scan_date}")
+        if result.skipped_non_close:
+            click.echo(
+                f"  skipped-non-close ({result.skipped_non_close} rows): non-close "
+                "patterned-NULL rows are NOT repairable (look-ahead) and remain NULL."
+            )
+        if not apply and result.recovered:
+            click.echo(
+                "  (dry-run — re-run with --apply to write the recovered levels)"
+            )
+    finally:
+        # Restore the process globals so a later in-process command uses its own
+        # root --config, not this backfill's. Dispose the engine we (re)built.
+        if _database_mod._engine is not None:
+            _database_mod._engine.dispose()
+        _config_mod._settings = _prev_settings
+        _database_mod._engine = _prev_engine
+        _database_mod._session_factory = _prev_factory
 
 
 # ---------------------------------------------------------------------------

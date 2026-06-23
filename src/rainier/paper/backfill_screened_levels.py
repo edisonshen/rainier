@@ -267,6 +267,11 @@ def _count_non_close_null(
     These are excluded from the repair (not reconstructable without look-ahead)
     but are still damaged rows; counting them keeps a dry-run from looking
     complete while non-close NULLs remain.
+
+    Uses the SAME any-of-four-levels-NULL predicate as ``_target_rows`` (codex P2):
+    a partial-write non-close row (entry set, stop/target/rr NULL) is damaged too,
+    so an ``entry_price``-only count would let a dry-run claim the non-close
+    backlog is clear while broken partial rows remain.
     """
     stmt = (
         select(func.count())
@@ -276,7 +281,12 @@ def _count_non_close_null(
             ScreenedStockRecord.scan_date <= to_date,
             ScreenedStockRecord.session_name != _BACKFILLABLE_SESSION,
             ScreenedStockRecord.pattern_type.isnot(None),
-            ScreenedStockRecord.entry_price.is_(None),
+            or_(
+                ScreenedStockRecord.entry_price.is_(None),
+                ScreenedStockRecord.stop_loss.is_(None),
+                ScreenedStockRecord.target_price.is_(None),
+                ScreenedStockRecord.rr_ratio.is_(None),
+            ),
         )
     )
     return int(session.execute(stmt).scalar_one())
