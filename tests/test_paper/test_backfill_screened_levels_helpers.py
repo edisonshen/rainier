@@ -18,6 +18,7 @@ from rainier.core.types import PatternSignal
 from rainier.paper.backfill_screened_levels import (
     _as_of_idx,
     _candidate_with_levels,
+    _fetch_history,
     _match_pattern,
     _TargetRow,
     backfill_screened_levels,
@@ -225,6 +226,150 @@ def test_candidate_invalidation_level_none_when_false_high_absent():
         ).bearish_invalidation_level
         is None
     )
+
+
+# --- _fetch_history (yfinance source, mirrors _fetch_stock_data normalize) -
+
+
+def _ohlcv_frame(dates: pd.DatetimeIndex, base: float) -> pd.DataFrame:
+    """A yfinance-shaped per-symbol OHLCV frame (capitalized columns)."""
+    n = len(dates)
+    return pd.DataFrame(
+        {
+            "Open": [base + i for i in range(n)],
+            "High": [base + i + 1 for i in range(n)],
+            "Low": [base + i - 1 for i in range(n)],
+            "Close": [base + i for i in range(n)],
+            "Volume": [1000] * n,
+        },
+        index=dates,
+    )
+
+
+def _multi_download(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """A multi-symbol ``yf.download(group_by="ticker")`` shape: MultiIndex
+    columns (symbol, field) over a shared date index."""
+    return pd.concat(frames, axis=1)
+
+
+def test_fetch_history_multi_symbol_normalizes_lowercase_and_indexes(monkeypatch):
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    raw = _multi_download(
+        {"AAA": _ohlcv_frame(dates, 100.0), "BBB": _ohlcv_frame(dates, 50.0)}
+    )
+
+    def fake_download(symbols, **kwargs):
+        # mirror the live screener: 1d interval, grouped by ticker, adjusted.
+        assert kwargs["interval"] == "1d"
+        assert kwargs["group_by"] == "ticker"
+        assert kwargs["auto_adjust"] is True
+        # explicit start/end (NOT period=) so the left edge is reachable.
+        assert "start" in kwargs and "end" in kwargs and "period" not in kwargs
+        return raw
+
+    monkeypatch.setattr(mod.yf, "download", fake_download)
+
+    out = _fetch_history(
+        ["AAA", "BBB"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+
+    assert set(out) == {"AAA", "BBB"}
+    # lowercase OHLCV columns, date-indexed.
+    assert list(out["AAA"].columns) == ["open", "high", "low", "close", "volume"]
+    assert isinstance(out["AAA"].index, pd.DatetimeIndex)
+    assert len(out["AAA"]) == 70
+
+
+def test_fetch_history_single_symbol_flat_columns(monkeypatch):
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    raw = _ohlcv_frame(dates, 100.0)  # flat (non-MultiIndex) columns for 1 symbol
+
+    monkeypatch.setattr(mod.yf, "download", lambda symbols, **kw: raw)
+
+    out = _fetch_history(
+        ["AAA"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+    assert set(out) == {"AAA"}
+    assert list(out["AAA"].columns) == ["open", "high", "low", "close", "volume"]
+
+
+def test_fetch_history_skips_symbol_below_min_bars(monkeypatch):
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    short = pd.date_range("2026-01-02", periods=10, freq="B")
+    raw = _multi_download(
+        {"AAA": _ohlcv_frame(dates, 100.0), "SHORT": _ohlcv_frame(short, 50.0)}
+    )
+    monkeypatch.setattr(mod.yf, "download", lambda symbols, **kw: raw)
+
+    out = _fetch_history(
+        ["AAA", "SHORT"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+    assert set(out) == {"AAA"}  # SHORT (10 bars) dropped below the 60-bar floor
+
+
+def test_fetch_history_per_symbol_retry_on_transient_batch_drop(monkeypatch):
+    """A symbol absent from the batch frame (observed LLY hiccup) is re-fetched
+    solo; a network blip must never be mislabeled as no-data."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    # Batch returns AAA only; LLY is missing from the grouped frame.
+    batch = _multi_download({"AAA": _ohlcv_frame(dates, 100.0)})
+    solo = _ohlcv_frame(dates, 80.0)  # LLY solo retry succeeds
+
+    calls: list[list[str]] = []
+
+    def fake_download(symbols, **kw):
+        calls.append(list(symbols) if isinstance(symbols, list) else [symbols])
+        if symbols == ["LLY"] or symbols == "LLY":
+            return solo
+        return batch
+
+    monkeypatch.setattr(mod.yf, "download", fake_download)
+
+    out = _fetch_history(
+        ["AAA", "LLY"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+    assert set(out) == {"AAA", "LLY"}  # LLY recovered via the solo retry
+    assert ["LLY"] in calls  # the per-symbol retry actually fired
+
+
+def test_fetch_history_batch_exception_falls_back_to_per_symbol(monkeypatch):
+    """If the whole batch download raises, each symbol is still attempted solo
+    so a single bad batch does not zero out the corpus."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    solo = {"AAA": _ohlcv_frame(dates, 100.0), "BBB": _ohlcv_frame(dates, 50.0)}
+
+    def fake_download(symbols, **kw):
+        syms = symbols if isinstance(symbols, list) else [symbols]
+        if len(syms) > 1:
+            raise RuntimeError("synthetic batch failure")
+        return solo[syms[0]]
+
+    monkeypatch.setattr(mod.yf, "download", fake_download)
+
+    out = _fetch_history(
+        ["AAA", "BBB"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+    assert set(out) == {"AAA", "BBB"}
+
+
+def test_fetch_history_empty_symbols_returns_empty(monkeypatch):
+    import rainier.paper.backfill_screened_levels as mod
+
+    def boom(*a, **k):
+        raise AssertionError("must not download for an empty symbol list")
+
+    monkeypatch.setattr(mod.yf, "download", boom)
+    assert _fetch_history([], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60) == {}
 
 
 # --- input validation ------------------------------------------------------
