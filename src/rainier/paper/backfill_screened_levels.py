@@ -363,23 +363,58 @@ def _fetch_history(
             log.exception("yfinance download failed symbols=%s", syms)
             return None
 
-    def _extract(raw: pd.DataFrame | None, sym: str, batch_len: int) -> pd.DataFrame | None:
+    def _extract(
+        raw: pd.DataFrame | None, sym: str, *, solo: bool
+    ) -> pd.DataFrame | None:
+        """Pull ``sym``'s per-ticker OHLCV sub-frame out of a ``yf.download`` result.
+
+        ``group_by="ticker"`` makes a MULTI-symbol download a MultiIndex keyed
+        ``(ticker, field)`` — slice ``raw[sym]`` (None when the ticker was dropped
+        from the batch). A SOLO download (``solo=True`` — the one-symbol retry, or
+        a run with a single target symbol) is shape-inconsistent across yfinance
+        builds: it can come back FLAT (``Close``/...) OR still MultiIndex
+        (``(AAPL, Close)``). If we treated a solo MultiIndex like a batch and only
+        sliced by ``sym`` it would work, but yfinance can label the top level
+        differently than requested, so for a solo fetch we instead drop the single
+        top level to flat columns — otherwise every per-symbol retry silently
+        normalizes to None and is misclassified as no-data (codex [P1]).
+
+        ``solo`` is essential: a BATCH frame that happens to contain ONE ticker
+        must NOT be flattened for a DIFFERENT requested symbol (that symbol is
+        genuinely absent → None), or a batch miss would return the wrong ticker's
+        bars under the missing symbol's name.
+        """
         if raw is None or raw.empty:
             return None
         try:
-            df = raw.copy() if batch_len == 1 else raw[sym].copy()
+            if isinstance(raw.columns, pd.MultiIndex):
+                top = raw.columns.get_level_values(0)
+                if sym in top:
+                    df = raw[sym].copy()
+                elif solo and top.nunique() == 1:
+                    # Solo single-ticker MultiIndex (e.g. ('AAPL', 'Close')) whose
+                    # top level isn't our requested label — drop it to flat columns.
+                    df = raw.copy()
+                    df.columns = df.columns.get_level_values(-1)
+                else:
+                    return None  # genuinely absent from a batch frame
+            else:
+                df = raw.copy()
         except (KeyError, TypeError):
             return None
         return _normalize_symbol_frame(df, min_bars)
 
     out: dict[str, pd.DataFrame] = {}
     raw = _download(symbols)
+    # A single-symbol target set makes the batch download itself a solo fetch
+    # (yfinance may return it flat or MultiIndex) — flag it so _extract flattens.
+    batch_is_solo = len(symbols) == 1
     for sym in symbols:
-        df = _extract(raw, sym, len(symbols))
+        df = _extract(raw, sym, solo=batch_is_solo)
         if df is None:
             # Transient batch drop / failure: retry this symbol solo before
-            # treating it as no-data (a network blip must not become still-NULL).
-            df = _extract(_download([sym]), sym, 1)
+            # treating it as no-data (a network blip must not become no_price_data).
+            df = _extract(_download([sym]), sym, solo=True)
         if df is not None:
             out[sym] = df
     return out

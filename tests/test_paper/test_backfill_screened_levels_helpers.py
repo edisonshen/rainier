@@ -297,6 +297,52 @@ def test_fetch_history_single_symbol_flat_columns(monkeypatch):
     assert list(out["AAA"].columns) == ["open", "high", "low", "close", "volume"]
 
 
+def test_fetch_history_single_symbol_multiindex_columns(monkeypatch):
+    """Codex [P1] regression: with group_by='ticker', a SINGLE-ticker yfinance
+    download in 1.2.x still returns a MultiIndex (('AAA','Close')). The old
+    `raw.copy()` kept those tuple columns so `_normalize_symbol_frame` found no
+    'Close' and returned None — silently misclassifying every one-symbol fetch as
+    no-data and DEFEATING the per-symbol solo-retry recovery path. _extract must
+    flatten the single-ticker MultiIndex. FAILS pre-fix (out would be empty)."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    # Single-ticker MultiIndex, exactly what yf.download(['AAA'], group_by='ticker')
+    # returns: columns are ('AAA', 'Open'), ('AAA', 'Close'), ...
+    raw = _multi_download({"AAA": _ohlcv_frame(dates, 100.0)})
+    assert isinstance(raw.columns, pd.MultiIndex)  # precondition: it IS MultiIndex
+
+    monkeypatch.setattr(mod.yf, "download", lambda symbols, **kw: raw)
+
+    out = _fetch_history(
+        ["AAA"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+    assert set(out) == {"AAA"}  # recovered, NOT dropped to no-data
+    assert list(out["AAA"].columns) == ["open", "high", "low", "close", "volume"]
+
+
+def test_fetch_history_solo_retry_returns_multiindex_recovers(monkeypatch):
+    """Codex [P1] regression on the retry path: a symbol dropped from the batch is
+    re-fetched solo, and that solo call returns a single-ticker MultiIndex. The
+    retry must still extract it (pre-fix it normalized to None → no_price_data)."""
+    import rainier.paper.backfill_screened_levels as mod
+
+    dates = pd.date_range("2026-01-02", periods=70, freq="B")
+    batch = _multi_download({"AAA": _ohlcv_frame(dates, 100.0)})  # LLY absent
+    solo = _multi_download({"LLY": _ohlcv_frame(dates, 80.0)})  # MultiIndex, 1 sym
+
+    def fake_download(symbols, **kw):
+        syms = symbols if isinstance(symbols, list) else [symbols]
+        return solo if syms == ["LLY"] else batch
+
+    monkeypatch.setattr(mod.yf, "download", fake_download)
+
+    out = _fetch_history(
+        ["AAA", "LLY"], start=date(2026, 1, 1), end=date(2026, 6, 1), min_bars=60
+    )
+    assert set(out) == {"AAA", "LLY"}  # LLY recovered from the MultiIndex solo retry
+
+
 def test_fetch_history_skips_symbol_below_min_bars(monkeypatch):
     import rainier.paper.backfill_screened_levels as mod
 
