@@ -1835,17 +1835,22 @@ async def _recover(settings, dry_run: bool):
     report_sent = False
     freshness_restored = False
     if qu100_stale and recovered_scrapes:
+        from datetime import time
+
         from rainier.core.database import get_session
 
-        # Re-evaluate against the CURRENT clock, but for the SAME market day we set
-        # out to recover (`today`) — NOT market_date(now). A recover that crossed a
-        # slot boundary (15:29 -> 15:31) must judge against the now-overdue 15:30
-        # slot (use the fresh `now_after`), but it must keep judging the day it was
-        # repairing: re-deriving the market date here would, on a recovery that
-        # crossed midnight ET, switch to the NEXT market day where no slot is due
-        # yet -> `_qu100_day_is_fresh` returns True and the report fires off the
-        # still-stale prior day (Codex P2). The day is fixed; only the clock moves.
+        # Re-evaluate against the CURRENT clock, but CLAMPED to the day we set out
+        # to recover (`today`). A recover that crossed a slot boundary (15:29 ->
+        # 15:31) must judge against the now-overdue 15:30 slot, so the clock must
+        # advance. But if the rerun crosses local MIDNIGHT, `now_after` lands on a
+        # NEW day where no slot is due yet -> `_latest_due_slot` returns None ->
+        # `_qu100_day_is_fresh` returns True and we'd resend the outlook off the
+        # still-stale prior day (Codex). Clamp the clock to end-of-`today` so the
+        # recovered day is always judged against its OWN last due slot, never a
+        # fresh next-day clock. The day is fixed; the clock advances within it only.
         now_after = datetime.now(tz)
+        if now_after.date() > today:
+            now_after = datetime.combine(today, time.max, tzinfo=tz)
         with get_session() as db:
             freshness_restored = _qu100_day_is_fresh(
                 db, today, now_after, sessions_config, tz

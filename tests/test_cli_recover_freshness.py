@@ -193,3 +193,30 @@ def test_day_fresh_before_any_slot_due_with_no_data(db_factory):
     now = _dt(9, 0)
     with db_factory() as db:
         assert _qu100_day_is_fresh(db, DAY, now, SCHEDULE, TZ) is True
+
+
+def test_midnight_clamp_keeps_recovered_day_stale(db_factory):
+    """REGRESSION (Codex): a recovery that crosses local midnight must still judge
+    the recovered day against ITS OWN last slot, not a fresh next-day clock.
+
+    A snapshot stuck at the morning slot, evaluated with the clock clamped to
+    end-of-`DAY` (18:00 close is the last due slot), must read STALE. Without the
+    clamp the post-midnight clock would find no slot due on the new day and
+    falsely report fresh."""
+    _insert(db_factory, "top100", datetime(2026, 6, 1, 15, 31, tzinfo=timezone.utc))
+    _insert(db_factory, "bottom100", datetime(2026, 6, 1, 15, 31, tzinfo=timezone.utc))
+    # Clamp the clock to end-of-DAY (what _recover does when now crosses midnight).
+    clamped = datetime(2026, 6, 1, 23, 59, 59, tzinfo=TZ)
+    with db_factory() as db:
+        # 11:31 ET data vs the 18:00 close slot now due -> STALE.
+        assert _qu100_day_is_fresh(db, DAY, clamped, SCHEDULE, TZ) is False
+
+
+def test_midnight_clamp_fresh_when_close_slot_landed(db_factory):
+    """Clamped to end-of-day: a snapshot at/after the 18:00 close slot is fresh."""
+    _insert(db_factory, "top100", datetime(2026, 6, 1, 22, 1, tzinfo=timezone.utc))
+    _insert(db_factory, "bottom100", datetime(2026, 6, 1, 22, 1, tzinfo=timezone.utc))
+    clamped = datetime(2026, 6, 1, 23, 59, 59, tzinfo=TZ)
+    with db_factory() as db:
+        # 18:01 ET >= 18:00 close slot -> fresh.
+        assert _qu100_day_is_fresh(db, DAY, clamped, SCHEDULE, TZ) is True
