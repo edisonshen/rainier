@@ -5932,6 +5932,143 @@ def db_verify_coverage(
     )
 
 
+@db.command("backfill-screened-levels")
+@click.option("--from", "from_date", required=True, help="Inclusive start scan_date (YYYY-MM-DD).")
+@click.option("--to", "to_date", required=True, help="Inclusive end scan_date (YYYY-MM-DD).")
+@click.option(
+    "--apply",
+    is_flag=True,
+    help="Write the recovered levels. Omit for a dry-run (report only).",
+)
+@click.pass_context
+def db_backfill_screened_levels(ctx, from_date: str, to_date: str, apply: bool) -> None:
+    """One-time backfill of NULL screened_stocks trade levels (historical repair).
+
+    Replays the pattern detector as-of each historical scan_date over a fresh
+    yfinance 6-month window (the source the live screener used — the stored
+    `stock_prices` corpus is too short to form a pattern), matches the actionable
+    pattern whose `pattern_type` equals the row's stored type, and coalesce-upserts
+    entry/stop/target/rr (fills NULL only, never clobbers a set value). Dry-run by
+    default; pass `--apply` to write.
+
+    Honors the root `--config` for BOTH the target database AND the detector knobs
+    used in the replay. Because this reconstructs HISTORICAL screen output, point
+    `--config` at the settings YAML whose `stock_screener` section matches what the
+    live screen ran on those dates (e.g. `rainier --config config/settings.yaml db
+    backfill-screened-levels ...`). If detector thresholds (swing_lookback,
+    neckline_tolerance_pct, min_daily_bars, ...) were tuned after the scan window,
+    a default config would replay with TODAY's knobs and write levels the live
+    screen never produced — so pin the historical config.
+
+    Only `close`-session rows are repaired: the replay uses the completed daily
+    bar, which matches what the live screen saw only at close (earlier sessions
+    that day lacked the final high/low/close). Non-close patterned-NULL rows, and
+    rows whose stored pattern does not re-detect as-of, are LEFT NULL and reported
+    in `still-NULL` — never given look-ahead or wrong-pattern levels.
+    """
+    from datetime import date as _date
+
+    from rainier.core import config as _config_mod
+    from rainier.core import database as _database_mod
+    from rainier.core.config import load_settings_fresh
+    from rainier.paper.backfill_screened_levels import backfill_screened_levels
+
+    # Honor the root `--config` (codex P1). load_settings_fresh reads the YAML the
+    # operator selected; we (a) seed the process settings singleton so the legacy
+    # DB session + persist_screened_stocks target THAT database (not the default
+    # config/settings.yaml), and (b) pass its stock_screener as the replay config
+    # so the reconstruction uses the operator-pinned (historical) detector knobs.
+    #
+    # These are PROCESS globals. Snapshot them and RESTORE in finally (codex P2):
+    # an in-process caller (CliRunner / programmatic reuse) must not have its later
+    # commands silently inherit this backfill's --config DB. Without restore, the
+    # next get_settings()/get_session() in the same interpreter would read/write
+    # the wrong database.
+    _prev_settings = _config_mod._settings
+    _prev_engine = _database_mod._engine
+    _prev_factory = _database_mod._session_factory
+
+    settings = load_settings_fresh(_settings_path(ctx))
+    _config_mod._settings = settings  # seed singleton before any get_session()
+    # Reset the cached legacy engine/session factory so they REBIND against the
+    # just-seeded settings. Seeding _settings alone is insufficient if a session
+    # was already opened earlier in the same process — get_session() would keep the
+    # stale module-level _engine pointed at the old DB.
+    _database_mod._engine = None
+    _database_mod._session_factory = None
+
+    try:
+        # Operator-facing validation failures (a bad date string, from>to, or
+        # --apply on a pre-0012 DB) must surface as a clean Click error, not a raw
+        # traceback that looks like the command crashed.
+        try:
+            start = _date.fromisoformat(from_date)
+            end = _date.fromisoformat(to_date)
+        except ValueError as exc:
+            raise click.BadParameter(f"dates must be YYYY-MM-DD: {exc}") from exc
+
+        try:
+            result = backfill_screened_levels(
+                from_date=start,
+                to_date=end,
+                apply=apply,
+                config=settings.stock_screener,
+            )
+        except (ValueError, RuntimeError) as exc:
+            # ValueError: from_date > to_date. RuntimeError: --apply preflight on a
+            # pre-0012 DB (the message already names migration 0012).
+            raise click.ClickException(str(exc)) from exc
+
+        mode = "APPLY" if apply else "DRY-RUN"
+        click.echo(
+            f"backfill-screened-levels [{mode}] {start}..{end}: "
+            f"scanned={result.scanned} recovered={result.recovered} "
+            f"still_null={result.still_null} "
+            f"no_price_data={result.no_price_data} "
+            f"detector_errors={result.detector_errors} "
+            f"skipped_non_close={result.skipped_non_close}"
+        )
+        if result.still_null_keys:
+            click.echo(
+                f"  still-NULL ({result.still_null} rows, had prices but no as-of "
+                "pattern matched the stored type — permanent, re-run won't help):"
+            )
+            for symbol, scan_date in result.still_null_keys:
+                click.echo(f"    {symbol} {scan_date}")
+        if result.no_price_data_keys:
+            click.echo(
+                f"  no-price-data ({result.no_price_data} rows, yfinance returned "
+                "no bars even after solo retry — TRANSIENT, re-run may recover):"
+            )
+            for symbol, scan_date in result.no_price_data_keys:
+                click.echo(f"    {symbol} {scan_date}")
+        if result.detector_error_keys:
+            click.echo(
+                f"  detector-errors ({result.detector_errors} rows, the detector "
+                "raised — NOT a permanent no-match; a data re-pull or code fix may "
+                "recover these; see logs for tracebacks):"
+            )
+            for symbol, scan_date in result.detector_error_keys:
+                click.echo(f"    {symbol} {scan_date}")
+        if result.skipped_non_close:
+            click.echo(
+                f"  skipped-non-close ({result.skipped_non_close} rows): non-close "
+                "patterned-NULL rows are NOT repairable (look-ahead) and remain NULL."
+            )
+        if not apply and result.recovered:
+            click.echo(
+                "  (dry-run — re-run with --apply to write the recovered levels)"
+            )
+    finally:
+        # Restore the process globals so a later in-process command uses its own
+        # root --config, not this backfill's. Dispose the engine we (re)built.
+        if _database_mod._engine is not None:
+            _database_mod._engine.dispose()
+        _config_mod._settings = _prev_settings
+        _database_mod._engine = _prev_engine
+        _database_mod._session_factory = _prev_factory
+
+
 # ---------------------------------------------------------------------------
 # money-flow-neon-backup-b613: nightly off-machine backup of the irreplaceable
 # money_flow_snapshots into Neon (durability). Local TimescaleDB stays primary;

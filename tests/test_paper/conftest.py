@@ -388,6 +388,90 @@ def pg_legacy_session(pg_legacy_engine):
 
 
 # --------------------------------------------------------------------------
+# Schema-DRIFT fixture: a legacy DB that is BEHIND on migrations — it applies
+# everything through 0011 but NOT 0012, so `screened_stocks` is missing the
+# `bearish_invalidation_level` column the ORM model declares. This is the exact
+# state of the live local DB (0012 never `psql -f`'d there) that crashes a
+# full-ORM `select(ScreenedStockRecord)`. The backfill must survive it via its
+# column-scoped read. Own disposable schema; teardown can never reach `public`.
+# --------------------------------------------------------------------------
+
+_DRIFT_SCHEMA_BASE = "rainier_paper_test"  # within the gc-test-schemas allowlist
+
+
+@pytest.fixture
+def pg_drift_engine(request):
+    """Ephemeral Postgres at a PRE-0012 schema state (0012/0013 NOT applied).
+
+    Identical to ``pg_legacy_engine`` except it stops before migration 0012, so
+    ``screened_stocks.bearish_invalidation_level`` does not exist. Binds the
+    legacy ``core.database`` singleton so production code under test hits this DB.
+    Same WS C leak-hardening: per-run schema, all setup inside the try whose
+    finally drops the schema.
+    """
+    url = _resolve_pg_url(request)
+    schema = f"{_DRIFT_SCHEMA_BASE}_{_run_suffix()}"
+    engine = None
+    try:
+        admin = create_engine(url, future=True)
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            conn.execute(text(f"CREATE SCHEMA {schema}"))
+        admin.dispose()
+
+        engine = create_engine(
+            url,
+            future=True,
+            connect_args={"options": f"-csearch_path={schema},public"},
+        )
+        engine.rainier_schema = schema  # type: ignore[attr-defined]
+        with engine.begin() as conn:
+            conn.execute(text(_PREREQ_DDL))
+        _apply_sql(engine, MIGRATION_UP)
+        _apply_sql(engine, MIGRATION_0007_UP)
+        _apply_sql(engine, MIGRATION_0008_UP)
+        _apply_sql(engine, MIGRATION_0009_UP)
+        _apply_sql(engine, MIGRATION_0003_UP)
+        if MIGRATION_0010_UP.exists():
+            _apply_sql(engine, MIGRATION_0010_UP)
+        _apply_sql(engine, MIGRATION_0011_UP)
+        # DELIBERATELY skip 0012 (and 0013): leave the DB drifted so
+        # `screened_stocks.bearish_invalidation_level` is absent.
+
+        from rainier.core import config, database
+
+        config._settings = None
+        database._engine = engine
+        database._session_factory = sessionmaker(
+            bind=engine, expire_on_commit=False
+        )
+        yield engine
+    finally:
+        from rainier.core import config, database
+
+        database._engine = None
+        database._session_factory = None
+        config._settings = None
+        if engine is not None:
+            engine.dispose()
+        admin = create_engine(url, future=True)
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        admin.dispose()
+
+
+@pytest.fixture
+def pg_drift_session(pg_drift_engine):
+    Session = sessionmaker(bind=pg_drift_engine, expire_on_commit=False)
+    sess = Session()
+    try:
+        yield sess
+    finally:
+        sess.rollback()
+        sess.close()
+
+
+# --------------------------------------------------------------------------
 # Migration 0010 (R-D chart archive) fixtures — PRE-0010 state so the
 # migration's backfill / index creation / idempotency / downgrade run under
 # test. Own disposable schema; teardown can never reach shared `public`.

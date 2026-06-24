@@ -378,3 +378,50 @@ def test_alembic_include_filter_scopes_to_market_schema(monkeypatch):
     # Indexes / FKs in market accepted; in public rejected.
     assert inc("ix_thematic_ohlcv_date", "index", {"schema_name": "market"}) is True
     assert inc("ix_legacy", "index", {"schema_name": "public"}) is False
+
+
+def test_backfill_screened_levels_restores_global_settings_and_engine(monkeypatch):
+    """codex P2: `db backfill-screened-levels` seeds the process settings singleton
+    + clears the cached legacy engine to honor --config, but MUST restore both in a
+    finally so an in-process caller's later commands don't inherit this backfill's
+    --config DB. Invoke with from>to (exits via ClickException after the seed but
+    the finally still runs); assert the globals are back to their pre-call values.
+    """
+    import rainier.core.config as config_mod
+    import rainier.core.database as db_mod
+    from rainier import cli as cli_mod
+
+    # Pre-call sentinel globals — the command must restore exactly these.
+    sentinel_settings = object()
+    sentinel_engine = object()
+    sentinel_factory = object()
+    monkeypatch.setattr(config_mod, "_settings", sentinel_settings, raising=False)
+    monkeypatch.setattr(db_mod, "_engine", sentinel_engine, raising=False)
+    monkeypatch.setattr(db_mod, "_session_factory", sentinel_factory, raising=False)
+
+    # Stub load_settings_fresh so no real YAML/DB is touched; its stock_screener is
+    # unused on the from>to error path (raised before any replay). The command does
+    # a function-local `from rainier.core.config import load_settings_fresh`, so the
+    # patch MUST target rainier.core.config (NOT rainier.cli), else the real YAML is
+    # read (codex P3).
+    from types import SimpleNamespace
+
+    fresh = SimpleNamespace(stock_screener=object())
+    monkeypatch.setattr(config_mod, "load_settings_fresh", lambda _p: fresh)
+    # Guard: prove the patch target is effective — if the command resolved from
+    # rainier.cli we'd be patching the wrong name and silently read real settings.
+    assert config_mod.load_settings_fresh("x") is fresh
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mod.cli,
+        ["db", "backfill-screened-levels", "--from", "2026-06-12", "--to", "2026-06-03"],
+    )
+
+    # from>to surfaces as a clean Click error (exit 1), not a traceback.
+    assert result.exit_code == 1, result.output
+    assert "from_date" in result.output and "to_date" in result.output
+    # The finally restored every global to its pre-call sentinel.
+    assert config_mod._settings is sentinel_settings
+    assert db_mod._engine is sentinel_engine
+    assert db_mod._session_factory is sentinel_factory
