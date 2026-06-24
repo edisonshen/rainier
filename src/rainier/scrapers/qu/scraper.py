@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import delete, select
 
 from rainier.core.config import get_settings
 from rainier.core.database import get_session
@@ -590,28 +590,76 @@ class QUScraper(BaseScraper):
         captured_at: datetime,
         data_date=None,
     ) -> int:
-        """Save QU100 rows to the database using batch operations. Returns row count."""
+        """Rebuild the day's ``(data_date, ranking_type)`` snapshot from this scrape.
+
+        Each later same-day scrape must OVERRIDE the symbols it returns and CARRY
+        FORWARD the rest, stamping the whole day with the latest ``captured_at`` —
+        one snapshot generation per ``(data_date, ranking_type)``. An empty scrape
+        (0 rows) is a no-op so a blank pull never wipes a good snapshot.
+
+        Mechanics (one transaction):
+
+            read existing rows  ─►  carried = stored symbols NOT in this scrape
+            DELETE the day's rows
+            INSERT  fresh rows  (this captured_at + this capture_session)
+                  + carried rows (this captured_at, ORIGINAL capture_session,
+                                  data copied into NEW instances — fresh ids)
+
+        We never UPDATE ``captured_at`` in place (it is the hypertable partition
+        key) and never re-``add`` the just-deleted ORM objects (identity-map
+        pitfall); carried field values are copied into fresh ``MoneyFlowSnapshot``
+        instances. ``captured_at`` advancing is itself the freshness signal.
+        Returns the count of rows that now make up the day's snapshot.
+
+        NOTE: delete-then-rebuild assumes scrapes for the same
+        ``(data_date, ranking_type)`` are serial (cron / single-slot APScheduler).
+        Overlapping same-day scrapes could race the rebuild — accepted under the
+        serial scheduler; concurrency hardening is a tracked P2 follow-up.
+        """
         effective_date = data_date or captured_at.date()
 
+        # Empty scrape -> no-op. Never overwrite a good snapshot with a blank one.
+        if not rows:
+            self.log.info("persist_skipped", date=str(effective_date),
+                          ranking_type=ranking_type, reason="empty_scrape")
+            return 0
+
+        scraped_symbols = {row.symbol for row in rows}
+
         with get_session() as db:
-            # Check if this (date, ranking_type) already exists — skip if so
-            existing_count = db.execute(
-                select(func.count()).where(
+            # 1) Read the existing day's rows BEFORE deleting so we can carry
+            #    forward symbols this scrape did not return.
+            existing = db.execute(
+                select(MoneyFlowSnapshot).where(
                     MoneyFlowSnapshot.data_date == effective_date,
                     MoneyFlowSnapshot.ranking_type == ranking_type,
                 )
-            ).scalar()
-            if existing_count and existing_count >= len(rows):
-                self.log.info("persist_skipped", date=str(effective_date),
-                              ranking_type=ranking_type, reason="already_exists")
-                return len(rows)
+            ).scalars().all()
+            # Carry forward only symbols absent from this scrape. Copy the field
+            # VALUES out now (the ORM objects get deleted next), keeping each
+            # carried row's ORIGINAL capture_session truthful.
+            carried = [
+                {
+                    "symbol": row.symbol,
+                    "rank": row.rank,
+                    "daily_change": row.daily_change,
+                    "sector": row.sector,
+                    "industry": row.industry,
+                    "long_short": row.long_short,
+                    "raw_data": row.raw_data,
+                    "view_type": row.view_type,
+                    "capture_session": row.capture_session,
+                }
+                for row in existing
+                if row.symbol not in scraped_symbols
+            ]
 
-            # Ensure stocks exist
-            symbols = {row.symbol for row in rows}
+            # 2) Ensure stocks exist for the scraped symbols (carried symbols
+            #    already have a stock row from a prior scrape).
             existing_stocks = {
                 s.symbol
                 for s in db.execute(
-                    select(Stock.symbol).where(Stock.symbol.in_(symbols))
+                    select(Stock.symbol).where(Stock.symbol.in_(scraped_symbols))
                 ).all()
             }
             new_stocks = [
@@ -623,7 +671,19 @@ class QUScraper(BaseScraper):
                 db.add_all(new_stocks)
                 db.flush()
 
-            # Bulk insert all snapshots
+            # 3) Delete the day's existing rows, then rebuild. flush() so the
+            #    DELETE lands before the INSERTs in the same transaction.
+            db.execute(
+                delete(MoneyFlowSnapshot).where(
+                    MoneyFlowSnapshot.data_date == effective_date,
+                    MoneyFlowSnapshot.ranking_type == ranking_type,
+                )
+            )
+            db.flush()
+
+            # 4) Insert fresh rows (this session) + carried rows (this captured_at,
+            #    original capture_session). Carried rows are NEW instances (fresh
+            #    ids) — never the deleted ORM objects.
             db.add_all([
                 MoneyFlowSnapshot(
                     captured_at=captured_at,
@@ -640,8 +700,25 @@ class QUScraper(BaseScraper):
                 )
                 for row in rows
             ])
+            db.add_all([
+                MoneyFlowSnapshot(
+                    captured_at=captured_at,
+                    capture_session=c["capture_session"],
+                    data_date=effective_date,
+                    ranking_type=ranking_type,
+                    symbol=c["symbol"],
+                    rank=c["rank"],
+                    daily_change=c["daily_change"],
+                    sector=c["sector"],
+                    industry=c["industry"],
+                    long_short=c["long_short"],
+                    raw_data=c["raw_data"],
+                    view_type=c["view_type"],
+                )
+                for c in carried
+            ])
 
-        return len(rows)
+        return len(rows) + len(carried)
 
     # ------------------------------------------------------------------
     # Phase B: Detail pages

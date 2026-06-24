@@ -123,9 +123,11 @@ class Stock(Base):
 
 class MoneyFlowSnapshot(Base):
     __tablename__ = "money_flow_snapshots"
-    # Logical key: (data_date, ranking_type, rank) — one stock per rank per day.
-    # TimescaleDB hypertable requires captured_at in unique constraints,
-    # so upsert logic in scraper.py enforces this at the application level.
+    # Logical key: (data_date, ranking_type, symbol) — one row per stock per
+    # ranking type per day. (Rank is NOT unique within a day: a carried-forward
+    # symbol can share a rank with a freshly-scraped one — see _persist_qu100's
+    # rebuild-with-carry-forward.) TimescaleDB hypertables require captured_at in
+    # unique constraints, so scraper.py enforces this key at the application level.
     __table_args__ = (PrimaryKeyConstraint("id", "captured_at"),)
 
     id: Mapped[int] = mapped_column(BigInteger, autoincrement=True)
