@@ -1835,11 +1835,21 @@ async def _recover(settings, dry_run: bool):
     report_sent = False
     freshness_restored = False
     if qu100_stale and recovered_scrapes:
-        from rainier.core.database import get_session
+        from datetime import timezone as _timezone
 
+        from rainier.core.database import get_session
+        from rainier.scrapers.qu.scraper import market_date
+
+        # Re-evaluate against the CURRENT clock + market date, not the `now`/`today`
+        # captured before the restart+scrape work. A recover that started just
+        # before a slot boundary (e.g. 15:29) and finished after it (15:31) must
+        # judge freshness against the now-overdue 15:30 slot, or it would resend
+        # the outlook off a snapshot that is already stale for the new slot.
+        now_after = datetime.now(tz)
+        today_after = market_date(datetime.now(_timezone.utc))
         with get_session() as db:
             freshness_restored = _qu100_day_is_fresh(
-                db, today, now, sessions_config, tz
+                db, today_after, now_after, sessions_config, tz
             )
         if not freshness_restored:
             click.echo(

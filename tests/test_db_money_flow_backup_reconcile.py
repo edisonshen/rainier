@@ -219,3 +219,59 @@ def test_day_gone_to_zero_left_deleted(src_engine, dst_engine):
     bt = mfb.backup_table()
     assert _dst_ids(dst_engine, bt) == [2], "DAY1 rows must be purged from backup"
     assert mfb.verify_backup(src_engine, dst_engine, run_max=2).ok
+
+
+def test_concurrent_rebuild_does_not_purge_day_from_backup(src_engine, dst_engine):
+    """Codex P1 regression — a same-day rebuild landing AFTER the source snapshot
+    must NOT cause the day to be purged from the backup.
+
+    Day1 (ids 1,2) is backed up. Then, via the `after_run_max` race hook, we
+    simulate WS A rebuilding day1 (delete 1,2 -> insert 3,4) the instant after the
+    reconcile captured the source snapshot. The reconcile read run_max + src_rows
+    from one consistent snapshot, so it still sees {1,2}; the backup must keep the
+    day (NOT delete it and write nothing), and the rebuild is reconciled next run."""
+    mfb = _import()
+    _seed(src_engine, [_row(1), _row(2)])
+    mfb.backup_money_flow(src_engine, dst_engine)
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [1, 2]
+
+    def _rebuild_after_snapshot(stage: str) -> None:
+        if stage == "after_run_max":
+            with src_engine.begin() as conn:
+                conn.execute(delete(_SRC).where(_SRC.c.data_date == DAY1))
+            _seed(
+                src_engine,
+                [_row(3, captured_at=T2, capture_session="midday"),
+                 _row(4, captured_at=T2, capture_session="midday")],
+            )
+
+    mfb.backup_money_flow(src_engine, dst_engine, _race_hook=_rebuild_after_snapshot)
+    assert _dst_ids(dst_engine, bt) == [1, 2], "day must not be purged on a torn read"
+
+    # Next run sees the rebuilt day whole and reconciles to {3,4}, still green.
+    mfb.backup_money_flow(src_engine, dst_engine)
+    assert _dst_ids(dst_engine, bt) == [3, 4]
+    assert mfb.verify_backup(src_engine, dst_engine, run_max=4).ok
+
+
+def test_deleted_latest_day_with_high_ids_is_purged(src_engine, dst_engine):
+    """Codex P2 regression — when the deleted day held the HIGHEST ids, dropping it
+    lowers run_max below those ids. The backup-only day must still be purged.
+
+    day1=id1, day2=id2 backed up. Delete day2 (the high-id day) from source ->
+    next run_max=1. The reconcile reads the FULL backup (uncapped), sees day2 only
+    in the backup, and purges it; verify at the lowered run_max is green."""
+    mfb = _import()
+    _seed(src_engine, [_row(1, data_date=DAY1), _row(2, data_date=DAY2, captured_at=T_DAY2)])
+    mfb.backup_money_flow(src_engine, dst_engine)
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [1, 2]
+
+    with src_engine.begin() as conn:
+        conn.execute(delete(_SRC).where(_SRC.c.data_date == DAY2))  # drop the high-id day
+
+    result = mfb.backup_money_flow(src_engine, dst_engine)
+    assert result.run_max == 1, "run_max drops to the remaining max source id"
+    assert _dst_ids(dst_engine, bt) == [1], "deleted high-id day must be purged from backup"
+    assert mfb.verify_backup(src_engine, dst_engine, run_max=1).ok

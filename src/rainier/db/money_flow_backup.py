@@ -239,12 +239,15 @@ def backup_money_flow(
     # creates it; checkfirst makes this a no-op there and creates it on SQLite.
     dst_tbl.create(dst, checkfirst=True)
 
-    # 1) Stable upper bound on the source, captured ONCE. Only id <= run_max is
-    #    reconciled, so a scrape landing mid-run is not a torn read.
-    with src.connect() as sconn:
-        run_max = sconn.execute(
-            select(func.coalesce(func.max(src_tbl.c.id), 0))
-        ).scalar_one()
+    # 1) Read the ENTIRE source in ONE snapshot, then derive run_max FROM that
+    #    same read. A same-day rebuild (DELETE day D's ids <= run_max, re-INSERT
+    #    ids > run_max) landing between "capture run_max" and "read src_rows" used
+    #    to make D look source-empty -> the reconcile purged D from the backup
+    #    (Codex P1: torn read). Reading rows and run_max from one consistent
+    #    snapshot closes that window: either we see D's pre-rebuild rows (and
+    #    run_max excludes the new ids), or we see the post-rebuild rows whole.
+    src_all = _read_all(src, src_tbl)
+    run_max = max((r["id"] for r in src_all), default=0)
 
     if _race_hook is not None:
         _race_hook("after_run_max")
@@ -255,9 +258,17 @@ def backup_money_flow(
             select(func.coalesce(func.max(dst_tbl.c.id), 0))
         ).scalar_one()
 
-    # 3) Read both full windows (id <= run_max) and fingerprint per data_date.
-    src_rows = _read_window(src, src_tbl, run_max)
-    dst_rows = _read_window(dst, dst_tbl, run_max)
+    # 3) Read the FULL backup (NOT capped at run_max). A backup-only day must be
+    #    purgeable even when dropping it from the source LOWERED run_max below that
+    #    day's ids (Codex P2: a deleted latest day whose ids all exceed the new
+    #    run_max would otherwise be invisible and never purged). Source rows are
+    #    restricted to id <= run_max for the COPY (in-flight inserts past run_max
+    #    are picked up next run), but the day-set comparison uses the full source.
+    src_rows = [r for r in src_all if r["id"] <= run_max]
+    dst_rows = _read_all(dst, dst_tbl)
+    # Full-source day set (incl. any rows > run_max) so a day is never mis-flagged
+    # backup-only just because its only surviving rows are an in-flight insert.
+    src_days_all = {r["data_date"] for r in src_all}
     src_fps = _day_fingerprints(src_rows)
     dst_fps = _day_fingerprints(dst_rows)
 
@@ -270,7 +281,11 @@ def backup_money_flow(
         if in_src and not in_dst:
             days_to_copy.add(day)
         elif in_dst and not in_src:
-            days_to_delete.add(day)  # source dropped the day entirely
+            # Purge only if the day is truly gone from the source. A day present
+            # in src_all but absent from src_fps (all its rows are id > run_max,
+            # i.e. an in-flight insert) must NOT be purged — it copies next run.
+            if day not in src_days_all:
+                days_to_delete.add(day)
         else:
             s, d = src_fps[day], dst_fps[day]
             differs = (
@@ -407,6 +422,21 @@ def _read_window(engine: Engine, tbl: Table, run_max: int) -> list[dict]:
             for m in conn.execute(
                 select(*cols).where(tbl.c.id > 0, tbl.c.id <= run_max)
             ).mappings()
+        ]
+
+
+def _read_all(engine: Engine, tbl: Table) -> list[dict]:
+    """Read every row of ``tbl`` (id > 0) in one connection.
+
+    The source read derives ``run_max`` from this same snapshot so a concurrent
+    same-day rebuild can't tear the window; the destination read is uncapped so a
+    backup-only day whose ids exceed a lowered ``run_max`` stays visible for purge.
+    """
+    cols = [tbl.c[name] for name in COLUMNS]
+    with engine.connect() as conn:
+        return [
+            dict(m)
+            for m in conn.execute(select(*cols).where(tbl.c.id > 0)).mappings()
         ]
 
 
