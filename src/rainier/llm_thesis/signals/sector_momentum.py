@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import timedelta
 
 from sqlalchemy import func
 
@@ -32,31 +32,37 @@ class SectorMomentumSignal:
             }
 
         days = int(ctx.params.get("days", 10))
-        scan_dt = datetime.combine(ctx.scan_date, time.max, tzinfo=timezone.utc)
-        prior_dt_floor = scan_dt - timedelta(days=days)
+        prior_floor_date = ctx.scan_date - timedelta(days=days)
 
         try:
             with get_session() as session:
-                latest_ts = (
-                    session.query(func.max(MoneyFlowSnapshot.captured_at))
-                    .filter(MoneyFlowSnapshot.captured_at <= scan_dt)
+                # Resolve the latest snapshot DATE on/before each as-of date. Under
+                # the rebuild-the-day fix a day holds one captured_at per
+                # (data_date, ranking_type); analyze_sectors_at picks each ranking
+                # type's latest generation, so we key on data_date, not a single
+                # global captured_at (which would read only one ranking type).
+                latest_date = (
+                    session.query(func.max(MoneyFlowSnapshot.data_date))
+                    .filter(MoneyFlowSnapshot.data_date <= ctx.scan_date)
                     .scalar()
                 )
-                prior_ts = (
-                    session.query(func.max(MoneyFlowSnapshot.captured_at))
-                    .filter(MoneyFlowSnapshot.captured_at <= prior_dt_floor)
+                prior_date = (
+                    session.query(func.max(MoneyFlowSnapshot.data_date))
+                    .filter(MoneyFlowSnapshot.data_date <= prior_floor_date)
                     .scalar()
                 )
-                if latest_ts is None:
+                if latest_date is None:
                     return None
 
                 # Defer expensive analysis to analyze_sectors_at (also explicit
                 # session injection so we don't open a second connection).
                 from rainier.analysis.sector_analyzer import analyze_sectors_at
 
-                today = analyze_sectors_at(latest_ts, session=session)
+                today = analyze_sectors_at(latest_date, session=session)
                 prior = (
-                    analyze_sectors_at(prior_ts, session=session) if prior_ts else []
+                    analyze_sectors_at(prior_date, session=session)
+                    if prior_date
+                    else []
                 )
         except Exception:
             log.exception("sector_momentum_db_error symbol=%s", ctx.symbol)
