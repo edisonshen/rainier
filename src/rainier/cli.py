@@ -1533,6 +1533,75 @@ def _notify_recover(title: str, description: str, color: int = 0x3498DB):
         pass  # Don't let notification failures block recovery
 
 
+def _is_qu100_fresh(latest_captured_at, now, schedule: dict, tz) -> bool:
+    """Is today's QU100 data present and fresh as of the latest due scrape slot?
+
+    Under the rebuild-the-day fix a day holds ONE ``captured_at`` per
+    ``(data_date, ranking_type)`` and rows carry the LATEST scrape's
+    ``capture_session`` — so the old per-``capture_session`` row count can no
+    longer tell which slot ran. Freshness is detected PER DAY via ``captured_at``:
+
+      * find the most-recent scheduled slot whose local time is already due
+        (``slot_time <= now``);
+      * if no slot is due yet, nothing was expected -> fresh (no scrape needed);
+      * otherwise the day is fresh iff a snapshot exists AND its ``captured_at``
+        is at/after that most-recent-due slot.
+
+    This degrades from per-slot to per-day detection (it can't tell WHICH earlier
+    slot ran) — acceptable, since the intraday slots are unrecoverable anyway, and
+    it never false-negatives on data: if nothing landed, ``captured_at`` stays
+    stale and recover fires a scrape.
+
+    ``schedule`` maps slot name -> ``"HH:MM"`` in the app timezone (``tz``);
+    ``now`` and ``latest_captured_at`` are tz-aware datetimes.
+    """
+    # Most-recent slot time that is already due today.
+    latest_due = None
+    for time_str in schedule.values():
+        hour, minute = map(int, time_str.split(":"))
+        slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if slot_time <= now and (latest_due is None or slot_time > latest_due):
+            latest_due = slot_time
+
+    if latest_due is None:
+        return True  # nothing due yet today
+    if latest_captured_at is None:
+        return False  # a slot is due but no data landed
+    # Compare in the app timezone (captured_at may be UTC-aware).
+    return latest_captured_at.astimezone(tz) >= latest_due
+
+
+def _latest_due_session(schedule: dict, now) -> str:
+    """The session name of the most-recent scheduled slot already due at ``now``.
+
+    Used to label the single recovery scrape when today's data is stale. Falls
+    back to the first slot if (defensively) none is due — the caller only invokes
+    this when a slot IS due, so the fallback is just a safety net.
+    """
+    latest_name = next(iter(schedule))
+    latest_time = None
+    for name, time_str in schedule.items():
+        hour, minute = map(int, time_str.split(":"))
+        slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if slot_time <= now and (latest_time is None or slot_time > latest_time):
+            latest_time = slot_time
+            latest_name = name
+    return latest_name
+
+
+def _should_send_recovery_report(*, was_stale: bool, scrape_succeeded: bool) -> bool:
+    """Gate the recovery Discord outlook on a SUCCESSFUL recovery scrape.
+
+    The daily outlook is the ``backtest-qu100 --discord`` report the scheduler
+    fires after the morning scrape. On recovery it must NOT fire off a stale /
+    empty snapshot: send it ONLY when the day was stale AND a recovery scrape this
+    run actually succeeded (restoring freshness). Data already fresh -> treat as
+    already sent (no duplicate); recovery scrape FAILED -> do not send (that would
+    reintroduce the frozen-data bug this PR fixes).
+    """
+    return was_stale and scrape_succeeded
+
+
 async def _recover(settings, dry_run: bool):
     """Check Chrome CDP, scheduler, and missed scrape sessions."""
     import subprocess
@@ -1586,54 +1655,61 @@ async def _recover(settings, dry_run: bool):
         "close": schedule.close,
     }
 
-    # Only check weekdays
+    # Detect today's QU100 freshness via the latest captured_at vs the schedule
+    # (per-DAY, not per-capture_session — under the rebuild-the-day fix a day
+    # holds one captured_at and the rows carry the LATEST scrape's session, so
+    # per-session counts can no longer tell which slot ran). ``qu100_stale`` drives
+    # both the recovery scrape AND whether the daily outlook is re-sent.
+    qu100_stale = False
     if now.weekday() >= 5:
         click.echo("  Weekend — no scrape sessions to check")
     else:
+        from sqlalchemy import func
+
         from rainier.core.database import get_session
         from rainier.core.models import MoneyFlowSnapshot
 
         today = now.date()
-        missed_sessions = []
+        with get_session() as db:
+            latest_captured_at = (
+                db.query(func.max(MoneyFlowSnapshot.captured_at))
+                .filter(MoneyFlowSnapshot.data_date == today)
+                .scalar()
+            )
 
-        for session_name, time_str in sessions_config.items():
-            hour, minute = map(int, time_str.split(":"))
-            scheduled_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-            # Skip future sessions
-            if now < scheduled_time:
-                click.echo(f"  {session_name} ({time_str}): upcoming")
-                continue
-
-            # Check if data exists for this session today
-            with get_session() as db:
-                count = (
-                    db.query(MoneyFlowSnapshot)
-                    .filter(
-                        MoneyFlowSnapshot.capture_session == session_name,
-                        MoneyFlowSnapshot.data_date == today,
-                    )
-                    .count()
+        if _is_qu100_fresh(latest_captured_at, now, sessions_config, tz):
+            if latest_captured_at is None:
+                click.echo("  QU100 today: no slot due yet — OK")
+            else:
+                click.echo(
+                    f"  QU100 today: fresh (captured_at "
+                    f"{latest_captured_at.astimezone(tz):%H:%M})"
+                )
+        else:
+            qu100_stale = True
+            issues.append("QU100 data stale (today's latest scrape slot missing)")
+            # One recovery scrape targeting the most-recent due slot's session.
+            recover_session = _latest_due_session(sessions_config, now)
+            actions.append(f"scrape_{recover_session}")
+            if latest_captured_at is None:
+                click.echo("  QU100 today: STALE — no snapshot for today")
+            else:
+                click.echo(
+                    "  QU100 today: STALE — latest captured_at "
+                    f"{latest_captured_at.astimezone(tz):%H:%M}"
                 )
 
-            if count > 0:
-                click.echo(f"  {session_name} ({time_str}): OK ({count} rows)")
-            else:
-                missed_sessions.append(session_name)
-                issues.append(f"Missed {session_name} scrape")
-                actions.append(f"scrape_{session_name}")
-                click.echo(f"  {session_name} ({time_str}): MISSED")
-
-    # --- 4. Check missed QU100 Discord report ---
+    # --- 4. QU100 Discord report ---
+    # Decoupled from scrape-action queueing: the daily outlook is re-sent ONLY
+    # when the recovery scrape later SUCCEEDS (see _should_send_recovery_report at
+    # the execution stage). A queued-but-failed scrape must not fire a report off
+    # a stale snapshot — that would reintroduce the frozen-data bug. So we do NOT
+    # queue a "discord_report" action here; the decision is made post-scrape.
     click.echo("Checking QU100 Discord report...")
-    # The backtest-qu100 --discord runs from scheduler after morning scrape
-    # We can't easily tell if it was sent, so if morning scrape was missed, re-send
-    if "scrape_morning" in actions:
-        actions.append("discord_report")
-        issues.append("Morning Discord report likely missed")
-        click.echo("  Discord report: likely MISSED (morning scrape was missed)")
+    if qu100_stale:
+        click.echo("  Discord report: deferred — gated on a successful recovery scrape")
     else:
-        click.echo("  Discord report: likely OK")
+        click.echo("  Discord report: likely OK (data fresh)")
 
     # --- Summary ---
     click.echo()
@@ -1731,7 +1807,14 @@ async def _recover(settings, dry_run: bool):
                     color=0xE74C3C,
                 )
 
-    if "discord_report" in actions:
+    # Re-send the daily outlook ONLY if the day was stale AND a recovery scrape
+    # this run actually succeeded (restoring freshness). A failed scrape leaves
+    # the snapshot stale -> no report (avoids the frozen-data bug). Data already
+    # fresh -> treated as already sent.
+    report_sent = False
+    if _should_send_recovery_report(
+        was_stale=qu100_stale, scrape_succeeded=bool(recovered_scrapes)
+    ):
         click.echo("  Sending QU100 Discord report...")
         try:
             from rainier.backtest.qu100_backtest import (
@@ -1744,6 +1827,7 @@ async def _recover(settings, dry_run: bool):
                 embeds = format_discord_report(result)
                 _send_discord_embeds(webhook, embeds)
                 click.echo("  Discord report: sent")
+                report_sent = True
                 _notify_recover("QU100 Report", "Sent to Discord", color=0x2ECC71)
             else:
                 click.echo("  Discord report: no webhook configured")
@@ -1759,7 +1843,7 @@ async def _recover(settings, dry_run: bool):
         summary_parts.append("Scheduler restarted")
     if recovered_scrapes:
         summary_parts.append(f"Scrapes recovered: {', '.join(recovered_scrapes)}")
-    if "discord_report" in actions:
+    if report_sent:
         summary_parts.append("QU100 report re-sent")
 
     _notify_recover(
