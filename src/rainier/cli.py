@@ -1688,16 +1688,16 @@ async def _recover(settings, dry_run: bool):
     # per-session counts can no longer tell which slot ran). ``qu100_stale`` drives
     # both the recovery scrape AND whether the daily outlook is re-sent.
     qu100_stale = False
-    # Key the day on the MARKET date (America/New_York), matching how the scraper
-    # stamps `data_date` (scrapers/qu/scraper.py:market_date). `now.date()` is in
-    # the app timezone (default LA); near the PT/ET date boundary the two calendar
-    # dates diverge, so using the wall-clock date would query the wrong day and
-    # mis-classify a present snapshot as stale (or vice-versa).
-    from datetime import timezone as _timezone
-
-    from rainier.scrapers.qu.scraper import market_date
-
-    today = market_date(datetime.now(_timezone.utc))
+    # ONE timezone basis for the whole QU100 freshness check: the app timezone.
+    # The schedule slot strings (sessions_config) are app-tz — the scheduler runs
+    # them under AsyncIOScheduler(timezone=app.timezone) — so `today`, the weekend
+    # guard, and the latest-due-slot scan must ALL key off the app-tz `now`. Mixing
+    # an ET market_date for `today` with app-tz slots false-flags QU100 stale every
+    # evening after ET-midnight-but-before-local-midnight (Codex). During the
+    # scraping window (the only time freshness matters) the app-tz date equals the
+    # scraper's ET `data_date`, so this single basis stays consistent with stored
+    # rows where it counts.
+    today = now.date()
     if now.weekday() >= 5:
         click.echo("  Weekend — no scrape sessions to check")
     else:
