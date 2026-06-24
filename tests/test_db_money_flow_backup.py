@@ -151,22 +151,31 @@ def test_bootstrap_copies_all_rows(src_engine, dst_engine):
 
 
 # ===========================================================================
-# Test 2 — incremental: only new rows (> hwm) copied
+# Test 2 — incremental: a brand-new DAY appends; the unchanged old day is skipped
 # ===========================================================================
 
+_CAP_DAY2 = datetime(2026, 6, 2, 22, 0, tzinfo=timezone.utc)
 
-def test_incremental_only_new_rows(src_engine, dst_engine):
+
+def test_incremental_new_day_appends(src_engine, dst_engine):
+    """Under the data_date-aware reconcile, genuinely-new rows are a NEW trading
+    day; the unchanged prior day is not recopied."""
     mfb = _import()
-    _seed_src(src_engine, [_row(i) for i in range(1, 4)])
+    _seed_src(src_engine, [_row(i) for i in range(1, 4)])  # day 2026-06-01
     mfb.backup_money_flow(src_engine, dst_engine)
 
-    _seed_src(src_engine, [_row(i) for i in range(4, 7)])
+    # A new trading day (2026-06-02) — distinct data_date + captured_at.
+    _seed_src(
+        src_engine,
+        [_row(i, data_date=date(2026, 6, 2), captured_at=_CAP_DAY2) for i in range(4, 7)],
+    )
     result = mfb.backup_money_flow(src_engine, dst_engine)
 
-    assert result.copied == 3
+    assert result.copied == 3  # only the new day's 3 rows; old day skipped
     assert result.hwm_before == 3
     assert result.run_max == 6
     assert _dst_ids(dst_engine, mfb.backup_table()) == [1, 2, 3, 4, 5, 6]
+    assert mfb.verify_backup(src_engine, dst_engine, run_max=6).ok
 
 
 # ===========================================================================
@@ -214,17 +223,18 @@ def test_stable_upper_bound_race(src_engine, dst_engine):
     _seed_src(src_engine, [_row(i) for i in range(1, 4)])
 
     # Simulate a scrape landing mid-backup: a hook fires AFTER run_max is
-    # captured but BEFORE rows are read, inserting id=99.
+    # captured but BEFORE rows are read, inserting id=99 on a NEW trading day.
     def _mid(stage):
         if stage == "after_run_max":
-            _seed_src(src_engine, [_row(99)])
+            _seed_src(src_engine, [_row(99, data_date=date(2026, 6, 2), captured_at=_CAP_DAY2)])
 
     result = mfb.backup_money_flow(src_engine, dst_engine, _race_hook=_mid)
+    # id=99 > run_max(3) -> excluded this run (not a torn read).
     assert result.run_max == 3
     assert result.copied == 3
     assert _dst_ids(dst_engine, mfb.backup_table()) == [1, 2, 3]
 
-    # Next run picks up id=99.
+    # Next run reconciles the new day and picks up id=99.
     result2 = mfb.backup_money_flow(src_engine, dst_engine)
     assert result2.copied == 1
     assert _dst_ids(dst_engine, mfb.backup_table()) == [1, 2, 3, 99]
@@ -344,28 +354,32 @@ def test_verify_raw_data_value_divergence_fails(src_engine, dst_engine):
     assert any("checksum" in f.lower() for f in report.failures)
 
 
-def test_verify_edited_old_row_caught_by_full_window_checksum(src_engine, dst_engine):
-    """7(d) — an edited OLD source row with id <= hwm (same composite key,
-    different value) is caught by the FULL-window checksum.
+def test_reconcile_self_heals_edited_old_row(src_engine, dst_engine):
+    """An edited OLD source row (same (id, captured_at), different value) is
+    detected by the per-day checksum and RE-COPIED by the reconcile.
 
-    counts/max-id/missing-row all still pass because the (id, captured_at) key is
-    unchanged — only a full-window (id <= run_max, not just the incremental
-    window) checksum fires. This is the declared drift safety net.
+    Under the old HWM-by-id copy an in-place edit below the high-water mark was
+    never recopied — verify could only flag it. The data_date-aware reconcile
+    fingerprints each day and recopies any day whose checksum changed, so the
+    backup self-heals and verify is green.
     """
     mfb = _import()
     _seed_src(src_engine, [_row(i) for i in range(1, 4)])
-    mfb.backup_money_flow(src_engine, dst_engine)  # backup now has 1,2,3 (hwm=3)
+    mfb.backup_money_flow(src_engine, dst_engine)  # backup now has 1,2,3
 
-    # Edit an OLD source row in place (id=2, id <= hwm). The backup still holds
-    # the original value. New rows added so there IS an incremental window.
+    # Edit an OLD source row in place (id=2). Same data_date -> the day's checksum
+    # changes, so the reconcile recopies the whole day.
     with src_engine.begin() as conn:
         conn.execute(_SRC.update().where(_SRC.c.id == 2).values(rank=777))
-    _seed_src(src_engine, [_row(i) for i in range(4, 6)])
-    mfb.backup_money_flow(src_engine, dst_engine)  # copies 4,5; id=2 NOT recopied
+    mfb.backup_money_flow(src_engine, dst_engine)
 
-    report = mfb.verify_backup(src_engine, dst_engine, run_max=5)
-    assert not report.ok, "full-window checksum must catch an edited id<=hwm row"
-    assert any("checksum" in f.lower() for f in report.failures)
+    # Backup now matches source — verify is green (self-healed).
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=3)
+    assert report.ok, report.failures
+    bt = mfb.backup_table()
+    with dst_engine.connect() as conn:
+        rank = conn.execute(select(bt.c.rank).where(bt.c.id == 2)).scalar_one()
+    assert rank == 777, "edited row must be recopied into the backup"
 
 
 def test_verify_duplicate_source_id_fails(src_engine, dst_engine):

@@ -9,32 +9,43 @@ incrementally and idempotently, into a plain ``backup.money_flow_snapshots``
 table on Neon (which has managed backups). Local stays the primary; Neon holds
 a backup copy.
 
-Copy mechanism (high-water-mark by ``id``, insert-only, idempotent)
--------------------------------------------------------------------
-The QU scraper is insert-only for money flow (it skips already-present
-``(data_date, ranking_type)`` batches and only INSERTs; never UPDATE/DELETE),
-``id`` is a monotonic sequence, so a HWM-by-``id`` copy is correct as long as
-that invariant holds. ``verify_backup`` (full-window canonicalized checksum) is
-the declared drift safety net if the invariant is ever violated.
+Copy mechanism (``data_date``-aware reconcile, idempotent)
+----------------------------------------------------------
+The QU scraper REBUILDS a day on each later same-day scrape: it DELETEs that
+day's ``(data_date, ranking_type)`` rows and re-INSERTs fresh ones with new
+autoincrement ids (see ``scrapers/qu/scraper.py:_persist_qu100``). So a day's
+rows change after first write, and old ids vanish. The previous high-water-mark-
+by-``id`` copy CANNOT cope: an id-forward cursor can neither purge the orphaned
+old ids the rebuild deleted (they sit *below* the high-water mark) nor re-copy a
+changed day whose new max-id it already passed — ``verify_backup``'s full-window
+checksum would then fail the nightly cron.
+
+Instead we reconcile per ``data_date`` over the UNION of source and backup days,
+in ONE destination transaction:
 
     src = core.database.get_engine()    # legacy -> local TimescaleDB (PR #115)
     dst = db.engine.get_engine()        # canonical -> DATABASE_URL -> Neon
-    run_max = MAX(id) on src            # STABLE upper bound, captured ONCE
-    hwm     = MAX(id) on dst backup     # high-water mark
-    copy WHERE id > hwm AND id <= run_max, ON CONFLICT (id, captured_at) DO NOTHING
+    run_max = MAX(id) on src            # STABLE upper bound (id <= run_max only)
+    for data_date in source_days ∪ backup_days:
+        source-only day         -> copy the day
+        backup-only day         -> DELETE the day from backup (source dropped it)
+        present on both, DIFFER -> DELETE the day in backup + re-copy from source
+            (differ = row-count mismatch, OR a source captured_at newer than the
+             backup's, OR a per-day canonical checksum mismatch)
+        present on both, equal  -> skip
+    a day gone-to-zero in source is left deleted.
 
-A scrape landing rows mid-backup (id > run_max) is NOT torn-read — those rows
-are picked up next run. The whole destination insert runs in ONE transaction so
-a mid-run failure leaves the backup unchanged (next run retries from the same
-hwm). JSONB ``raw_data`` is bound via a typed SQLAlchemy Core column (NOT raw
-text interpolation).
+Only rows with ``id <= run_max`` are considered, so a scrape landing mid-backup
+is not a torn read (it is reconciled next run). The whole destination mutation
+runs in ONE transaction, so a mid-run failure leaves the backup unchanged.
+JSONB ``raw_data`` is bound via a typed SQLAlchemy Core column (NOT raw text).
 
-    ASCII (one run):
+    ASCII (a same-day rebuild):
 
         src.money_flow_snapshots            dst.backup.money_flow_snapshots
         ┌───────────────────────┐           ┌───────────────────────────┐
-        │ id 1..run_max (stable)│  copy >hwm │ id 1..hwm  (already there)│
-        │ id >run_max (ignored) │ ─────────▶ │ + id (hwm, run_max]       │
+        │ day D: ids {3,4} (new)│  D differs │ day D: ids {1,2} (stale)  │
+        │ (ids 1,2 deleted)     │ ─────────▶ │ DELETE day D, re-copy {3,4}│
         └───────────────────────┘  one txn   └───────────────────────────┘
 """
 
@@ -143,7 +154,13 @@ def _backup_schema_for(engine: Engine) -> str | None:
 
 @dataclass
 class BackupResult:
-    """Outcome of one ``backup_money_flow`` run."""
+    """Outcome of one ``backup_money_flow`` run.
+
+    ``copied`` — rows written this run (new days + recopied changed days).
+    ``hwm_before`` — pre-run ``MAX(id)`` in the backup (reported for logging; the
+    reconcile keys on ``data_date``, not an id high-water mark).
+    ``run_max`` — the stable ``MAX(id)`` upper bound the run reconciled up to.
+    """
 
     copied: int
     hwm_before: int
@@ -166,6 +183,27 @@ class VerifyReport:
 # ---------------------------------------------------------------------------
 
 
+def _day_fingerprints(rows: list[dict]) -> dict[object, dict]:
+    """Group ``rows`` by ``data_date`` -> ``{count, max_cap, checksum}``.
+
+    ``max_cap`` is the canonical (UTC-normalized) max ``captured_at`` over the
+    day; ``checksum`` is the order-independent content hash of the day's rows.
+    Used to decide whether a day differs between source and backup.
+    """
+    by_day: dict[object, list[dict]] = {}
+    for r in rows:
+        by_day.setdefault(r["data_date"], []).append(r)
+    fps: dict[object, dict] = {}
+    for day, day_rows in by_day.items():
+        max_cap = max(_canon_captured_at(r["captured_at"]) for r in day_rows)
+        fps[day] = {
+            "count": len(day_rows),
+            "max_cap": max_cap,
+            "checksum": _checksum(day_rows),
+        }
+    return fps
+
+
 def backup_money_flow(
     src: Engine,
     dst: Engine,
@@ -173,18 +211,25 @@ def backup_money_flow(
     chunk_size: int = 5000,
     _race_hook: Callable[[str], None] | None = None,
 ) -> BackupResult:
-    """Copy new ``money_flow_snapshots`` rows from ``src`` to ``dst`` (insert-only).
+    """Reconcile ``money_flow_snapshots`` from ``src`` into ``dst`` per ``data_date``.
 
-    Captures a STABLE ``run_max = MAX(id)`` on ``src`` once at the start, reads
-    the backup high-water mark ``hwm`` from ``dst``, then copies
-    ``id > hwm AND id <= run_max`` into the backup table within ONE transaction
-    with ``ON CONFLICT (id, captured_at) DO NOTHING``. The destination table is
-    created if absent (idempotent bootstrap from an empty backup).
+    Captures a STABLE ``run_max = MAX(id)`` on ``src`` once, then — considering
+    only ``id <= run_max`` — reconciles each ``data_date`` in the union of source
+    and backup days: a day present only in source is copied; a day present only in
+    backup is deleted (source dropped it); a day present in both but DIFFERING
+    (row-count / newer ``captured_at`` / canonical-checksum mismatch — e.g. a
+    same-day rebuild) is delete-then-recopied; an equal day is skipped. All
+    mutations run in ONE destination transaction, so a mid-run failure leaves the
+    backup unchanged. The destination table is created if absent.
 
-    ``_race_hook`` is a test seam called with stage names
-    (``"after_run_max"`` after the stable upper bound is captured;
-    ``"before_commit"`` just before the txn commits) so tests can simulate a
-    concurrent scrape or a forced mid-insert failure without sleeps.
+    ``BackupResult.copied`` counts rows WRITTEN this run (new + recopied days).
+    ``hwm_before`` is the pre-run ``MAX(id)`` in the backup (kept for callers /
+    logging; the reconcile no longer uses an id high-water mark as the cursor).
+
+    ``_race_hook`` is a test seam called with stage names (``"after_run_max"``
+    after the stable upper bound is captured; ``"before_commit"`` just before the
+    txn commits) so tests can simulate a concurrent scrape or a forced mid-run
+    failure without sleeps.
     """
     src_tbl = source_table()
     schema = _backup_schema_for(dst)
@@ -194,41 +239,61 @@ def backup_money_flow(
     # creates it; checkfirst makes this a no-op there and creates it on SQLite.
     dst_tbl.create(dst, checkfirst=True)
 
-    # 1) Stable upper bound on the source, captured ONCE.
+    # 1) Stable upper bound on the source, captured ONCE. Only id <= run_max is
+    #    reconciled, so a scrape landing mid-run is not a torn read.
     with src.connect() as sconn:
-        run_max = sconn.execute(select(func.coalesce(func.max(src_tbl.c.id), 0))).scalar_one()
+        run_max = sconn.execute(
+            select(func.coalesce(func.max(src_tbl.c.id), 0))
+        ).scalar_one()
 
     if _race_hook is not None:
         _race_hook("after_run_max")
 
-    # 2) High-water mark on the destination backup.
+    # 2) Pre-run backup high-water mark (reported, not used as the cursor).
     with dst.connect() as dconn:
         hwm = dconn.execute(
             select(func.coalesce(func.max(dst_tbl.c.id), 0))
         ).scalar_one()
 
+    # 3) Read both full windows (id <= run_max) and fingerprint per data_date.
+    src_rows = _read_window(src, src_tbl, run_max)
+    dst_rows = _read_window(dst, dst_tbl, run_max)
+    src_fps = _day_fingerprints(src_rows)
+    dst_fps = _day_fingerprints(dst_rows)
+
+    # Decide which days to (re)copy and which backup-only days to delete.
+    days_to_delete: set = set()
+    days_to_copy: set = set()
+    for day in set(src_fps) | set(dst_fps):
+        in_src = day in src_fps
+        in_dst = day in dst_fps
+        if in_src and not in_dst:
+            days_to_copy.add(day)
+        elif in_dst and not in_src:
+            days_to_delete.add(day)  # source dropped the day entirely
+        else:
+            s, d = src_fps[day], dst_fps[day]
+            differs = (
+                s["count"] != d["count"]
+                or s["max_cap"] != d["max_cap"]
+                or s["checksum"] != d["checksum"]
+            )
+            if differs:
+                days_to_delete.add(day)  # purge stale rows first
+                days_to_copy.add(day)
+
+    rows_to_copy = [r for r in src_rows if r["data_date"] in days_to_copy]
+
     copied = 0
-    if run_max <= hwm:
-        return BackupResult(copied=0, hwm_before=hwm, run_max=run_max)
-
-    # 3) Read the incremental window from the source, ordered by id.
-    select_cols = [src_tbl.c[name] for name in COLUMNS]
-    with src.connect() as sconn:
-        rows = [
-            dict(m)
-            for m in sconn.execute(
-                select(*select_cols)
-                .where(src_tbl.c.id > hwm, src_tbl.c.id <= run_max)
-                .order_by(src_tbl.c.id)
-            ).mappings()
-        ]
-
-    # 4) One transaction on the destination: chunked typed Core insert with
-    #    ON CONFLICT (id, captured_at) DO NOTHING. Commit once at the end so a
-    #    mid-run failure leaves the backup unchanged.
+    # 4) One transaction on the destination: delete changed/dropped days, then
+    #    re-insert. Commit once so a mid-run failure leaves the backup unchanged.
     with dst.begin() as dconn:
-        for start in range(0, len(rows), chunk_size):
-            chunk = rows[start : start + chunk_size]
+        if days_to_delete:
+            dconn.execute(
+                dst_tbl.delete().where(dst_tbl.c.data_date.in_(days_to_delete))
+            )
+        for start in range(0, len(rows_to_copy), chunk_size):
+            chunk = rows_to_copy[start : start + chunk_size]
             if not chunk:
                 continue
             stmt = _conflict_insert(dst, dst_tbl, chunk)
@@ -348,18 +413,23 @@ def _read_window(engine: Engine, tbl: Table, run_max: int) -> list[dict]:
 def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
     """Strong integrity check over the full covered window ``id <= run_max``.
 
-    Checks (design §2.3), any failure recorded loudly:
+    The copy is a ``data_date``-aware reconcile (delete-changed-day + recopy), so
+    after a same-day rebuild the backup must EXACTLY mirror the source over the
+    covered window — no orphaned old ids, no stale day. Checks, any failure
+    recorded loudly:
 
-      (a) ``MAX(id)`` on src vs backup match for ``id <= run_max``;
+      (a) ``MAX(id)`` on src vs backup match for ``id <= run_max`` (a recopied
+          day restores matching ids; an un-purged orphan would diverge);
       (b) missing-row reconciliation on the FULL composite key
           ``(id, captured_at)`` — no source row in ``(0, run_max]`` absent from
           the backup;
-      (c) deterministic checksum over the full window ``id <= run_max`` (NOT
-          just the incremental window) with ``raw_data`` canonicalized — catches
-          an edited already-backed-up row (``id <= hwm``) that keeps its key;
+      (c) deterministic checksum over the full window ``id <= run_max`` with
+          ``raw_data`` canonicalized — catches any content drift (e.g. a day the
+          reconcile failed to recopy);
       (d) ``id``-uniqueness guard: ``COUNT(*) == COUNT(DISTINCT id)`` over
-          ``id <= run_max`` on the source (HWM-by-id relies on global ``id``
-          uniqueness the composite PK does not enforce).
+          ``id <= run_max`` on the source. Autoincrement keeps ``id`` globally
+          unique (the composite PK ``(id, captured_at)`` alone does not enforce
+          it); a duplicate id would make the per-day fingerprints ambiguous.
     """
     report = VerifyReport()
     src_tbl = source_table()

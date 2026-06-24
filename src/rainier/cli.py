@@ -6098,10 +6098,12 @@ def db_backfill_screened_levels(ctx, from_date: str, to_date: str, apply: bool) 
 def db_backup_money_flow(do_verify: bool, skip_if_unconfigured: bool) -> None:
     """Back up ``money_flow_snapshots`` (local) -> ``backup.money_flow_snapshots`` (Neon).
 
-    Incremental high-water-mark by ``id``, insert-only, idempotent. Reads the
-    local TimescaleDB via the legacy engine and writes Neon via ``DATABASE_URL``.
-    DATABASE_URL unset fails loud (non-zero) by default; ``--skip-if-unconfigured``
-    turns that into a warn + exit 0 for local dev (cron stays loud).
+    ``data_date``-aware reconcile (delete-changed-day + recopy), idempotent — so a
+    same-day rebuild (QU scraper re-INSERTs a day with new ids) is mirrored, not
+    orphaned. Reads the local TimescaleDB via the legacy engine and writes Neon via
+    ``DATABASE_URL``. DATABASE_URL unset fails loud (non-zero) by default;
+    ``--skip-if-unconfigured`` turns that into a warn + exit 0 for local dev (cron
+    stays loud).
     """
     from rainier.core.database import get_engine as get_local_engine
     from rainier.db.engine import get_engine as get_neon_engine
@@ -6134,8 +6136,8 @@ def db_backup_money_flow(do_verify: bool, skip_if_unconfigured: bool) -> None:
     try:
         result = backup_money_flow(src, dst)
         click.echo(
-            f"backed up {result.copied} new rows "
-            f"(hwm {result.hwm_before} -> {result.run_max})"
+            f"backed up {result.copied} rows "
+            f"(reconciled up to id {result.run_max})"
         )
         if do_verify:
             report = verify_backup(src, dst, run_max=result.run_max)
