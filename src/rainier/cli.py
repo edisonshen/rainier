@@ -6284,6 +6284,18 @@ def db_backup_money_flow(do_verify: bool, skip_if_unconfigured: bool) -> None:
 
     try:
         result = backup_money_flow(src, dst)
+        # An EMPTY source is a misconfiguration (mispointed LEGACY_DATABASE_URL /
+        # failed restore / empty local DB), NOT a legitimate "nothing to do". The
+        # reconcile left the backup intact (non-destructive), but exiting 0 here
+        # would let the nightly cron silently back up NOTHING from a dead source.
+        # Fail loud (non-zero) so the cron alerts instead of masking the gap.
+        if result.source_empty:
+            raise click.ClickException(
+                "backup-money-flow — local SOURCE is EMPTY (0 rows). The backup "
+                "was left intact, but nothing was copied. This is a "
+                "misconfiguration (check LEGACY_DATABASE_URL / local DB health), "
+                "not a no-op — failing loudly rather than reporting success."
+            )
         click.echo(
             f"backed up {result.copied} rows "
             f"(reconciled up to id {result.run_max})"

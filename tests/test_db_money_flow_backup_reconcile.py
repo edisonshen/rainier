@@ -303,6 +303,7 @@ def test_empty_source_does_not_wipe_backup(src_engine, dst_engine):
     result = mfb.backup_money_flow(src_engine, dst_engine)
     assert result.copied == 0
     assert result.run_max == 0
+    assert result.source_empty is True, "empty source must be flagged for a loud CLI exit"
     assert _dst_ids(dst_engine, bt) == [1, 2], "empty source must NOT wipe the backup"
 
 

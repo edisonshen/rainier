@@ -455,6 +455,7 @@ def test_empty_source_no_op(src_engine, dst_engine):
     result = mfb.backup_money_flow(src_engine, dst_engine)
     assert result.copied == 0
     assert result.run_max == 0
+    assert result.source_empty is True
 
 
 # ===========================================================================
@@ -522,6 +523,36 @@ def test_cli_backup_copies_to_neon(monkeypatch, tmp_path, _local_src_path):
     check = create_engine(f"sqlite:///{dst_path}")
     assert _count(check, "backup_money_flow_snapshots") == 3
     check.dispose()
+    local_eng.dispose()
+
+
+def test_cli_empty_source_fails_loud(monkeypatch, tmp_path):
+    """Codex P1 regression — a configured backup whose local SOURCE is empty
+    (mispointed LEGACY_DATABASE_URL / failed restore) must FAIL the run (non-zero),
+    NOT print a silent '0 rows' success. The backup is left intact; the cron
+    alerts instead of masking a dead source."""
+    from rainier.cli import cli
+    from rainier.core import database
+    from rainier.db import engine as db_engine
+
+    # Empty local source (schema only, no rows).
+    local_path = tmp_path / "empty_local.db"
+    local_eng = create_engine(f"sqlite:///{local_path}")
+    _SRC_META.create_all(local_eng)
+    monkeypatch.setattr(database, "get_engine", lambda *a, **k: local_eng)
+
+    # A pre-seeded Neon-side backup that must NOT be wiped.
+    dst_path = tmp_path / "neon.db"
+    monkeypatch.setattr(
+        db_engine, "get_engine", lambda: create_engine(f"sqlite:///{dst_path}")
+    )
+
+    res = CliRunner().invoke(cli, ["db", "backup-money-flow"])
+    assert res.exit_code != 0, res.output
+    assert res.exception is None or isinstance(res.exception, SystemExit), (
+        f"expected a clean ClickException, got {res.exception!r}"
+    )
+    assert "empty" in res.output.lower()
     local_eng.dispose()
 
 

@@ -172,15 +172,20 @@ def _backup_schema_for(engine: Engine) -> str | None:
 class BackupResult:
     """Outcome of one ``backup_money_flow`` run.
 
-    ``copied`` — rows written this run (new days + recopied changed days).
+    ``copied`` — rows written this run (new gens + recopied changed gens).
     ``hwm_before`` — pre-run ``MAX(id)`` in the backup (reported for logging; the
-    reconcile keys on ``data_date``, not an id high-water mark).
+    reconcile keys on ``(data_date, ranking_type)``, not an id high-water mark).
     ``run_max`` — the stable ``MAX(id)`` upper bound the run reconciled up to.
+    ``source_empty`` — the source had ZERO rows, so the reconcile was skipped
+    (backup left intact). A configured backup whose source is empty is a
+    misconfiguration (mispointed ``LEGACY_DATABASE_URL`` / failed restore), so the
+    CLI turns this into a NON-ZERO exit — never a silent "0 rows" success.
     """
 
     copied: int
     hwm_before: int
     run_max: int
+    source_empty: bool = False
 
 
 @dataclass
@@ -303,7 +308,9 @@ def backup_money_flow(
             "left intact, hwm=%s). Check LEGACY_DATABASE_URL / local DB health.",
             hwm,
         )
-        return BackupResult(copied=0, hwm_before=hwm, run_max=run_max)
+        return BackupResult(
+            copied=0, hwm_before=hwm, run_max=run_max, source_empty=True
+        )
 
     # 3) Read the FULL backup. Source rows are restricted to id <= run_max for the
     #    COPY (in-flight inserts past run_max are picked up next run).
