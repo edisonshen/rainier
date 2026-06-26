@@ -474,12 +474,14 @@ def test_transaction_safety_rolls_back(src_engine, dst_engine):
 # ===========================================================================
 
 
-def test_empty_source_no_op(src_engine, dst_engine):
+def test_empty_source_bootstrap_no_op(src_engine, dst_engine):
+    """Source AND backup both empty -> legitimate bootstrap (fresh deploy / just
+    after db init, before the first scrape). No-op, NOT flagged as data loss."""
     mfb = _import()
     result = mfb.backup_money_flow(src_engine, dst_engine)
     assert result.copied == 0
     assert result.run_max == 0
-    assert result.source_empty is True
+    assert result.source_empty is False, "both-empty bootstrap must not be flagged"
 
 
 # ===========================================================================
@@ -550,33 +552,64 @@ def test_cli_backup_copies_to_neon(monkeypatch, tmp_path, _local_src_path):
     local_eng.dispose()
 
 
-def test_cli_empty_source_fails_loud(monkeypatch, tmp_path):
-    """Codex P1 regression — a configured backup whose local SOURCE is empty
-    (mispointed LEGACY_DATABASE_URL / failed restore) must FAIL the run (non-zero),
-    NOT print a silent '0 rows' success. The backup is left intact; the cron
-    alerts instead of masking a dead source."""
+def test_cli_empty_source_fails_loud_when_backup_has_rows(monkeypatch, tmp_path):
+    """Codex P1 regression — a SOURCE that LOST all its data while the backup
+    already has rows (mispointed LEGACY_DATABASE_URL / failed restore) must FAIL
+    the run (non-zero), NOT print a silent '0 rows' success. Backup left intact."""
     from rainier.cli import cli
     from rainier.core import database
     from rainier.db import engine as db_engine
 
-    # Empty local source (schema only, no rows).
-    local_path = tmp_path / "empty_local.db"
+    local_path = tmp_path / "local.db"
     local_eng = create_engine(f"sqlite:///{local_path}")
     _SRC_META.create_all(local_eng)
+    with local_eng.begin() as conn:
+        conn.execute(insert(_SRC), [_row(i) for i in range(1, 4)])
     monkeypatch.setattr(database, "get_engine", lambda *a, **k: local_eng)
 
-    # A pre-seeded Neon-side backup that must NOT be wiped.
+    dst_path = tmp_path / "neon.db"
+    monkeypatch.setattr(
+        db_engine, "get_engine", lambda: create_engine(f"sqlite:///{dst_path}")
+    )
+
+    # First run populates the backup.
+    res1 = CliRunner().invoke(cli, ["db", "backup-money-flow"])
+    assert res1.exit_code == 0, res1.output
+
+    # Source loses all its data (the dangerous misconfiguration) -> fail loud.
+    with local_eng.begin() as conn:
+        conn.execute(_SRC.delete())
+    res2 = CliRunner().invoke(cli, ["db", "backup-money-flow"])
+    assert res2.exit_code != 0, res2.output
+    assert res2.exception is None or isinstance(res2.exception, SystemExit), (
+        f"expected a clean ClickException, got {res2.exception!r}"
+    )
+    assert "empty" in res2.output.lower()
+    # Backup still holds the 3 rows (non-destructive).
+    assert _count(create_engine(f"sqlite:///{dst_path}"), "backup_money_flow_snapshots") == 3
+    local_eng.dispose()
+
+
+def test_cli_empty_source_bootstrap_exits_zero(monkeypatch, tmp_path):
+    """Codex P2 regression — a fresh deploy / just-after-db-init state (source AND
+    backup both empty, before the first scrape) is a legitimate no-op: the nightly
+    cron must exit 0, NOT page on the normal pre-bootstrap empty table."""
+    from rainier.cli import cli
+    from rainier.core import database
+    from rainier.db import engine as db_engine
+
+    local_path = tmp_path / "empty_local.db"
+    local_eng = create_engine(f"sqlite:///{local_path}")
+    _SRC_META.create_all(local_eng)  # schema only, no rows
+    monkeypatch.setattr(database, "get_engine", lambda *a, **k: local_eng)
+
     dst_path = tmp_path / "neon.db"
     monkeypatch.setattr(
         db_engine, "get_engine", lambda: create_engine(f"sqlite:///{dst_path}")
     )
 
     res = CliRunner().invoke(cli, ["db", "backup-money-flow"])
-    assert res.exit_code != 0, res.output
-    assert res.exception is None or isinstance(res.exception, SystemExit), (
-        f"expected a clean ClickException, got {res.exception!r}"
-    )
-    assert "empty" in res.output.lower()
+    assert res.exit_code == 0, res.output
     local_eng.dispose()
 
 

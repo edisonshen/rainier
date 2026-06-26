@@ -176,10 +176,12 @@ class BackupResult:
     ``hwm_before`` — pre-run ``MAX(id)`` in the backup (reported for logging; the
     reconcile keys on ``(data_date, ranking_type)``, not an id high-water mark).
     ``run_max`` — the stable ``MAX(id)`` upper bound the run reconciled up to.
-    ``source_empty`` — the source had ZERO rows, so the reconcile was skipped
-    (backup left intact). A configured backup whose source is empty is a
-    misconfiguration (mispointed ``LEGACY_DATABASE_URL`` / failed restore), so the
-    CLI turns this into a NON-ZERO exit — never a silent "0 rows" success.
+    ``source_empty`` — the source had ZERO rows WHILE the backup already had rows
+    (``hwm > 0``), i.e. the source LOST all its data (mispointed
+    ``LEGACY_DATABASE_URL`` / failed restore). The reconcile was skipped (backup
+    left intact) and the CLI turns this into a NON-ZERO exit — never a silent
+    "0 rows" success. A fresh bootstrap (source AND backup both empty) is NOT
+    flagged (``source_empty=False``): it's a normal pre-first-scrape no-op.
     """
 
     copied: int
@@ -312,21 +314,34 @@ def backup_money_flow(
             select(func.coalesce(func.max(dst_tbl.c.id), 0))
         ).scalar_one()
 
-    # 2a) Empty-source early-out + LOUD operational signal. The non-destructive
-    #     invariant below (a backup-only day is never purged) already makes an
-    #     empty source a safe no-op, but a source that went fully dark is a strong
-    #     misconfiguration signal — a fresh/rebuilt local DB, a failed restore, or a
-    #     mis-pointed LEGACY_DATABASE_URL (a confusion that already caused a prior
-    #     P0). Log it loudly and return early so the operator notices rather than
-    #     seeing a silent "0 rows" success.
+    # 2a) Empty-source early-out. The non-destructive invariant below (a
+    #     backup-only generation is never purged) already makes an empty source a
+    #     safe no-op for the backup data. Whether it's an ALARM depends on the
+    #     backup's state:
+    #       * backup ALSO empty (hwm == 0) -> legitimate BOOTSTRAP: a fresh deploy
+    #         / just after ``db init``, before the first scrape. No-op, NOT an
+    #         alarm (failing here would page the nightly cron for a normal
+    #         pre-bootstrap state — Codex P2).
+    #       * backup NON-empty (hwm > 0) but source empty -> the source LOST all
+    #         its data (mis-pointed LEGACY_DATABASE_URL / failed restore / rebuilt
+    #         local DB — a confusion that already caused a prior P0). That must NOT
+    #         read as a silent "0 rows" success; flag it so the CLI fails loud
+    #         (Codex P1).
     if not src_all:
-        log.warning(
-            "backup_money_flow: source is EMPTY — skipping reconcile (backup rows "
-            "left intact, hwm=%s). Check LEGACY_DATABASE_URL / local DB health.",
-            hwm,
-        )
+        if hwm > 0:
+            log.warning(
+                "backup_money_flow: source is EMPTY but the backup has rows "
+                "(hwm=%s) — the source lost all its data. Skipping reconcile "
+                "(backup left intact). Check LEGACY_DATABASE_URL / local DB health.",
+                hwm,
+            )
+        else:
+            log.info(
+                "backup_money_flow: source and backup both empty — bootstrap "
+                "no-op (nothing scraped yet)."
+            )
         return BackupResult(
-            copied=0, hwm_before=hwm, run_max=run_max, source_empty=True
+            copied=0, hwm_before=hwm, run_max=run_max, source_empty=hwm > 0
         )
 
     # 3) Read the FULL backup. Source rows are restricted to id <= run_max for the
