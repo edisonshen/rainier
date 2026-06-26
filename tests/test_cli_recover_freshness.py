@@ -38,6 +38,7 @@ from rainier.cli import (
     _latest_due_session,
     _latest_due_slot,
     _qu100_day_is_fresh,
+    _recover_market_today,
 )
 from rainier.core.models import MoneyFlowSnapshot
 
@@ -52,6 +53,24 @@ SCHEDULE = {
 
 def _dt(h, m):
     return datetime(2026, 6, 1, h, m, tzinfo=TZ)
+
+
+# --- "today" anchored to the market trading date (Acceptance 7e) -----------
+
+
+def test_recover_today_anchored_to_market_date():
+    """`recover` resolves "today" via the US market trading date, not the
+    app-tz/wall-clock date. A run at a late-PT instant that has already crossed
+    ET midnight must resolve to the NEXT ET trading date — matching the stored
+    `data_date = market_date(captured_at)` keying, so the freshness day filter
+    looks at the right day."""
+    pt = ZoneInfo("America/Los_Angeles")
+    # 2026-06-01 22:30 PT == 2026-06-02 01:30 ET (already the next ET day).
+    late_pt = datetime(2026, 6, 1, 22, 30, tzinfo=pt)
+    assert _recover_market_today(late_pt) == date(2026, 6, 2)
+    # mid-afternoon PT: ET date is the same calendar day.
+    afternoon_pt = datetime(2026, 6, 1, 13, 0, tzinfo=pt)
+    assert _recover_market_today(afternoon_pt) == date(2026, 6, 1)
 
 
 # --- per-book freshness primitive ------------------------------------------
