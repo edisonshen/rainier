@@ -14,6 +14,13 @@ from .base import SignalContext, SignalValue
 
 log = logging.getLogger(__name__)
 
+# QU100 sentiment is the two QU100 books only. The date probes below MUST be
+# scoped to these, matching analyze_sectors_at; otherwise a newer auxiliary board
+# (concept/etf) would advance latest_date/prior_date to a day with no QU100 data,
+# and analyze_sectors_at's "latest QU100 day <= as_of" fallback would silently
+# report a STALE day's sentiment as current.
+_QU100_RANKING_TYPES = ("top100", "bottom100")
+
 
 class SectorMomentumSignal:
     name = "sector_momentum"
@@ -43,12 +50,18 @@ class SectorMomentumSignal:
                 # global captured_at (which would read only one ranking type).
                 latest_date = (
                     session.query(func.max(MoneyFlowSnapshot.data_date))
-                    .filter(MoneyFlowSnapshot.data_date <= ctx.scan_date)
+                    .filter(
+                        MoneyFlowSnapshot.ranking_type.in_(_QU100_RANKING_TYPES),
+                        MoneyFlowSnapshot.data_date <= ctx.scan_date,
+                    )
                     .scalar()
                 )
                 prior_date = (
                     session.query(func.max(MoneyFlowSnapshot.data_date))
-                    .filter(MoneyFlowSnapshot.data_date <= prior_floor_date)
+                    .filter(
+                        MoneyFlowSnapshot.ranking_type.in_(_QU100_RANKING_TYPES),
+                        MoneyFlowSnapshot.data_date <= prior_floor_date,
+                    )
                     .scalar()
                 )
                 if latest_date is None:

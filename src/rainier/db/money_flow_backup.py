@@ -218,23 +218,40 @@ def _gen_key(r: dict) -> tuple:
     return (r["data_date"], r["ranking_type"])
 
 
+def _cap_utc(value: object) -> _dt.datetime:
+    """A captured_at value as an ORDER-COMPARABLE aware UTC datetime.
+
+    Aware -> converted to UTC; naive (e.g. a SQLite read-back) -> assumed UTC so a
+    later instant always compares greater. Used to tell a genuine NEWER-generation
+    rebuild (captured_at advanced) from a same-captured_at source-side change.
+    """
+    if isinstance(value, _dt.datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=_dt.timezone.utc)
+        return value.astimezone(_dt.timezone.utc)
+    # Non-datetime captured_at should never occur; fall back to the epoch so it
+    # sorts before any real timestamp rather than raising.
+    return _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+
+
 def _gen_fingerprints(rows: list[dict]) -> dict[tuple, dict]:
-    """Group ``rows`` by ``(data_date, ranking_type)`` -> ``{count, max_cap,
+    """Group ``rows`` by ``(data_date, ranking_type)`` -> ``{count, max_cap_dt,
     checksum}``.
 
-    ``max_cap`` is the canonical (UTC-normalized) max ``captured_at`` over the
-    generation; ``checksum`` is the order-independent content hash of its rows.
-    Used to decide whether a generation differs between source and backup.
+    ``max_cap_dt`` is the max ``captured_at`` (UTC datetime) over the generation —
+    the rebuild-vs-corruption discriminator; ``checksum`` is the order-independent
+    content hash of its rows. Used to decide whether a generation differs between
+    source and backup and whether the difference is a legitimate newer rebuild.
     """
     by_gen: dict[tuple, list[dict]] = {}
     for r in rows:
         by_gen.setdefault(_gen_key(r), []).append(r)
     fps: dict[tuple, dict] = {}
     for key, gen_rows in by_gen.items():
-        max_cap = max(_canon_captured_at(r["captured_at"]) for r in gen_rows)
+        max_cap_dt = max(_cap_utc(r["captured_at"]) for r in gen_rows)
         fps[key] = {
             "count": len(gen_rows),
-            "max_cap": max_cap,
+            "max_cap_dt": max_cap_dt,
             "checksum": _checksum(gen_rows),
         }
     return fps
@@ -324,16 +341,25 @@ def backup_money_flow(
     # the scraper rebuilds — so a partial source-side loss of one book never
     # disturbs the other (Codex P1).
     #
-    # NON-DESTRUCTIVE INVARIANT: the backup NEVER propagates a source-side DELETE
-    # of a whole generation. A generation present ONLY in the backup (gone from
-    # source) is LEFT INTACT — the off-site copy is disaster recovery, so a source
-    # that lost a historical book (bad restore, manual cleanup, partial
-    # corruption) must not erase the only recoverable copy on the next cron
-    # (Codex P1). We only ever DELETE a backup generation to immediately RE-COPY it
-    # from source in the SAME txn (the same-day rebuild: the generation still
-    # exists in source with new ids / content, so its stale backup rows — including
-    # the rebuild's orphaned old ids — are replaced wholesale). Deletion is thus
-    # always paired with a recopy; a backup generation is never left empty here.
+    # NON-DESTRUCTIVE INVARIANT: the backup NEVER propagates a source-side DELETE.
+    # The discriminator between a legitimate rebuild and source-side corruption is
+    # the generation's max ``captured_at``:
+    #
+    #   * a genuine same-day REBUILD always stamps the generation with a NEWER
+    #     captured_at (the scraper deletes the old rows and re-inserts a fresh
+    #     generation under one new captured_at). Only then do we DELETE the stale
+    #     backup rows — including the rebuild's orphaned old ids — and recopy the
+    #     current source rows wholesale (delete paired with copy in one txn);
+    #   * a difference at the SAME (or older) captured_at is NOT a rebuild — it is a
+    #     source-side shrink / in-place edit / partial corruption (bad restore,
+    #     manual cleanup). We must NOT delete: that would erase the backup's last
+    #     copy of rows the source lost (Codex P1). Instead we additively copy any
+    #     source rows the backup is MISSING (ON CONFLICT DO NOTHING) and leave the
+    #     rest intact; verify_backup REPORTS any residual content drift loudly
+    #     rather than auto-destroying it.
+    #
+    # A generation present ONLY in the backup (whole generation gone from source)
+    # is likewise LEFT INTACT — never propagate a source-side delete.
     keys_to_delete: set = set()
     keys_to_copy: set = set()
     for key in set(src_fps) | set(dst_fps):
@@ -345,15 +371,14 @@ def backup_money_flow(
             continue  # backup-only generation: retain (never propagate a delete)
         else:
             s, d = src_fps[key], dst_fps[key]
-            differs = (
-                s["count"] != d["count"]
-                or s["max_cap"] != d["max_cap"]
-                or s["checksum"] != d["checksum"]
-            )
-            if differs:
-                # Same-day rebuild: purge this generation's stale backup rows and
-                # recopy the current source rows in one txn (delete paired w/ copy).
+            if s["max_cap_dt"] > d["max_cap_dt"]:
+                # Genuine newer rebuild -> supersede wholesale (purge orphans).
                 keys_to_delete.add(key)
+                keys_to_copy.add(key)
+            elif s["count"] != d["count"] or s["checksum"] != d["checksum"]:
+                # Same/older captured_at but content differs: source-side
+                # shrink/edit/corruption. NON-DESTRUCTIVE -> additive copy only
+                # (ON CONFLICT DO NOTHING completes any missing rows), NEVER delete.
                 keys_to_copy.add(key)
 
     rows_to_copy = [r for r in src_rows if _gen_key(r) in keys_to_copy]

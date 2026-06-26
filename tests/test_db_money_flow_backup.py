@@ -354,32 +354,56 @@ def test_verify_raw_data_value_divergence_fails(src_engine, dst_engine):
     assert any("checksum" in f.lower() for f in report.failures)
 
 
-def test_reconcile_self_heals_edited_old_row(src_engine, dst_engine):
-    """An edited OLD source row (same (id, captured_at), different value) is
-    detected by the per-day checksum and RE-COPIED by the reconcile.
+def test_reconcile_does_not_propagate_same_capture_edit(src_engine, dst_engine):
+    """Codex P1 — an in-place edit of a SOURCE row at the SAME captured_at is NOT
+    propagated to the backup; verify REPORTS it loudly instead.
 
-    Under the old HWM-by-id copy an in-place edit below the high-water mark was
-    never recopied — verify could only flag it. The data_date-aware reconcile
-    fingerprints each day and recopies any day whose checksum changed, so the
-    backup self-heals and verify is green.
+    A difference at the same captured_at is not a rebuild (a rebuild advances
+    captured_at). It is a source-side shrink / in-place edit / corruption, and the
+    reconcile cannot tell a genuine correction from corruption — so the
+    NON-DESTRUCTIVE invariant forbids overwriting the backup. The edit is detected
+    by verify_backup's content-faithful checksum (loud), never auto-destroyed.
     """
     mfb = _import()
     _seed_src(src_engine, [_row(i) for i in range(1, 4)])
     mfb.backup_money_flow(src_engine, dst_engine)  # backup now has 1,2,3
 
-    # Edit an OLD source row in place (id=2). Same data_date -> the day's checksum
-    # changes, so the reconcile recopies the whole day.
+    # Edit an OLD source row in place (id=2), SAME captured_at (no new rebuild).
     with src_engine.begin() as conn:
         conn.execute(_SRC.update().where(_SRC.c.id == 2).values(rank=777))
     mfb.backup_money_flow(src_engine, dst_engine)
 
-    # Backup now matches source — verify is green (self-healed).
-    report = mfb.verify_backup(src_engine, dst_engine, run_max=3)
-    assert report.ok, report.failures
+    # Backup row is NOT overwritten (non-destructive); verify FLAGS the drift.
     bt = mfb.backup_table()
     with dst_engine.connect() as conn:
         rank = conn.execute(select(bt.c.rank).where(bt.c.id == 2)).scalar_one()
-    assert rank == 777, "edited row must be recopied into the backup"
+    assert rank == 2, "same-captured_at edit must NOT be propagated to the backup"
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=3)
+    assert not report.ok, "verify must loudly report the source/backup content drift"
+
+
+def test_reconcile_recopies_on_newer_capture_rebuild(src_engine, dst_engine):
+    """The flip side: a row changed under a NEWER captured_at IS a rebuild and the
+    backup DOES recopy it (orphans purged, content aligned)."""
+    mfb = _import()
+    _seed_src(src_engine, [_row(i) for i in range(1, 4)])
+    mfb.backup_money_flow(src_engine, dst_engine)
+
+    # Rebuild the day: drop the old generation, re-insert NEW ids under a NEWER
+    # captured_at with a corrected value (simulates WS A's rebuild generation).
+    newer = datetime(2026, 6, 1, 23, 30, tzinfo=timezone.utc)  # > _CAP (22:00)
+    with src_engine.begin() as conn:
+        conn.execute(_SRC.delete().where(_SRC.c.data_date == _row(1)["data_date"]))
+    _seed_src(
+        src_engine,
+        [_row(i, captured_at=newer, rank=777 if i == 5 else i) for i in (4, 5, 6)],
+    )
+    mfb.backup_money_flow(src_engine, dst_engine)
+
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=6)
+    assert report.ok, report.failures
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [4, 5, 6], "newer rebuild purges orphans 1,2,3"
 
 
 def test_verify_duplicate_source_id_fails(src_engine, dst_engine):
