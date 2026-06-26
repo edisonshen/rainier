@@ -120,6 +120,10 @@ log = structlog.get_logger()
 # config knob only if a non-US market ever materializes.
 MARKET_TZ = ZoneInfo("America/New_York")
 
+# QU100 is exactly 100 ranked slots per (data_date, ranking_type). Ranks outside
+# 1..100 are a glitched API response and are dropped during canonicalization.
+QU100_MAX_RANK = 100
+
 
 def market_date(timestamp: datetime) -> date_type:
     """Return the US-market calendar date for a (UTC-or-other-tz) timestamp.
@@ -590,26 +594,51 @@ class QUScraper(BaseScraper):
         captured_at: datetime,
         data_date=None,
     ) -> int:
-        """Rebuild the day's ``(data_date, ranking_type)`` snapshot from this scrape.
+        """Rebuild the day's ``(data_date, ranking_type)`` snapshot by RANK slot.
 
-        Each later same-day scrape must OVERRIDE the symbols it returns and CARRY
-        FORWARD the rest, stamping the whole day with the latest ``captured_at`` —
-        one snapshot generation per ``(data_date, ranking_type)``. An empty scrape
-        (0 rows) is a no-op so a blank pull never wipes a good snapshot.
+        QU100 is 100 ranked SLOTS (rank 1..100) per ``(data_date, ranking_type)``.
+        Each later same-day scrape REBUILDS that day keyed on the rank slot, NOT
+        the symbol:
+
+            * the scrape batch is CANONICALIZED first — out-of-range ranks dropped,
+              a duplicate symbol or duplicate rank collapsed to one row (keep the
+              first occurrence). The cohort reader (``get_current_qu100_cohort``)
+              has NO dedup of its own, so this is the only guard against a glitched
+              API response double-counting a symbol/rank;
+            * every SCRAPED rank OVERRIDES its slot (fresh value, this session);
+            * every stored rank NOT in the scrape CARRIES FORWARD its prior
+              occupant (last data, ORIGINAL ``capture_session``, the new
+              ``captured_at``);
+            * a carried slot whose symbol was freshly scraped at ANOTHER rank is
+              DROPPED — fresh placement wins; that rank is left unfilled (dedup by
+              symbol);
+            * the whole day is stamped with the latest scrape's ``captured_at``
+              (ONE generation per ``(data_date, ranking_type)``);
+            * an empty scrape (0 rows, or a batch that canonicalizes to nothing) is
+              a no-op so a blank/fully-glitched pull never wipes a good snapshot.
+
+        Because carry-forward is RANK-keyed, a FULL scrape overrides every slot,
+        so a stock that fell out of the top 100 holds no rank and disappears — the
+        cohort stays <=100 with no fallen-out members (exactly 100 after a full
+        scrape). A partial/glitched scrape carries only the missing ranks, so the
+        contract readers see is "<=100, rank-ordered, current as of the latest
+        full scrape", NOT an unconditional exactly-100.
 
         Mechanics (one transaction):
 
-            read existing rows  ─►  carried = stored symbols NOT in this scrape
+            canonicalize batch ─► {rank: row}, each rank & symbol once
+            read existing rows ─► {rank: row}; carried = stored ranks NOT scraped,
+                                  minus any whose symbol was scraped elsewhere
             DELETE the day's rows
             INSERT  fresh rows  (this captured_at + this capture_session)
                   + carried rows (this captured_at, ORIGINAL capture_session,
                                   data copied into NEW instances — fresh ids)
 
-        We never UPDATE ``captured_at`` in place (it is the hypertable partition
-        key) and never re-``add`` the just-deleted ORM objects (identity-map
-        pitfall); carried field values are copied into fresh ``MoneyFlowSnapshot``
-        instances. ``captured_at`` advancing is itself the freshness signal.
-        Returns the count of rows that now make up the day's snapshot.
+        We never UPDATE ``captured_at``/``rank`` in place (``captured_at`` is the
+        hypertable partition key) and never re-``add`` the just-deleted ORM objects
+        (identity-map pitfall); carried field values are copied into fresh
+        ``MoneyFlowSnapshot`` instances. ``captured_at`` advancing is itself the
+        freshness signal. Returns the count of rows in the rebuilt snapshot.
 
         NOTE: delete-then-rebuild assumes scrapes for the same
         ``(data_date, ranking_type)`` are serial (cron / single-slot APScheduler).
@@ -624,24 +653,57 @@ class QUScraper(BaseScraper):
                           ranking_type=ranking_type, reason="empty_scrape")
             return 0
 
-        scraped_symbols = {row.symbol for row in rows}
+        # 0) Canonicalize the batch into {rank: row}: drop out-of-range ranks, and
+        #    keep the FIRST occurrence of any repeated rank OR symbol so neither
+        #    appears twice. This is the cohort reader's only defense against a
+        #    glitched API response.
+        canonical: dict[int, QU100Row] = {}
+        seen_symbols: set[str] = set()
+        dropped = 0
+        for row in rows:
+            if not (1 <= row.rank <= QU100_MAX_RANK):
+                dropped += 1
+                continue
+            if row.rank in canonical or row.symbol in seen_symbols:
+                dropped += 1
+                continue
+            canonical[row.rank] = row
+            seen_symbols.add(row.symbol)
+        if dropped:
+            self.log.warning("qu100_batch_canonicalized", date=str(effective_date),
+                             ranking_type=ranking_type, dropped=dropped,
+                             kept=len(canonical))
+        # A batch that canonicalizes to nothing (every row invalid) is treated like
+        # an empty scrape — never wipe a good snapshot with a fully-glitched pull.
+        if not canonical:
+            self.log.info("persist_skipped", date=str(effective_date),
+                          ranking_type=ranking_type, reason="no_valid_rows")
+            return 0
+
+        scraped_symbols = seen_symbols
 
         with get_session() as db:
-            # 1) Read the existing day's rows BEFORE deleting so we can carry
-            #    forward symbols this scrape did not return.
+            # 1) Read the existing day's rows BEFORE deleting, keyed by RANK (keep
+            #    the first occupant of a rank if legacy data has a duplicate).
             existing = db.execute(
                 select(MoneyFlowSnapshot).where(
                     MoneyFlowSnapshot.data_date == effective_date,
                     MoneyFlowSnapshot.ranking_type == ranking_type,
                 )
             ).scalars().all()
-            # Carry forward only symbols absent from this scrape. Copy the field
+            existing_by_rank: dict[int, MoneyFlowSnapshot] = {}
+            for row in existing:
+                existing_by_rank.setdefault(row.rank, row)
+
+            # Carry forward the prior occupant of any rank NOT in this scrape —
+            # UNLESS that symbol was freshly scraped at another rank (fresh wins;
+            # the carried slot is dropped, the rank left unfilled). Copy field
             # VALUES out now (the ORM objects get deleted next), keeping each
             # carried row's ORIGINAL capture_session truthful.
             carried = [
                 {
                     "symbol": row.symbol,
-                    "rank": row.rank,
+                    "rank": rank,
                     "daily_change": row.daily_change,
                     "sector": row.sector,
                     "industry": row.industry,
@@ -650,8 +712,8 @@ class QUScraper(BaseScraper):
                     "view_type": row.view_type,
                     "capture_session": row.capture_session,
                 }
-                for row in existing
-                if row.symbol not in scraped_symbols
+                for rank, row in existing_by_rank.items()
+                if rank not in canonical and row.symbol not in scraped_symbols
             ]
 
             # 2) Ensure stocks exist for the scraped symbols (carried symbols
@@ -664,7 +726,7 @@ class QUScraper(BaseScraper):
             }
             new_stocks = [
                 Stock(symbol=r.symbol, sector=r.sector, industry=r.industry)
-                for r in rows
+                for r in canonical.values()
                 if r.symbol not in existing_stocks
             ]
             if new_stocks:
@@ -698,7 +760,7 @@ class QUScraper(BaseScraper):
                     long_short=row.long_short,
                     raw_data=row.raw,
                 )
-                for row in rows
+                for row in canonical.values()
             ])
             db.add_all([
                 MoneyFlowSnapshot(
@@ -718,7 +780,7 @@ class QUScraper(BaseScraper):
                 for c in carried
             ])
 
-        return len(rows) + len(carried)
+        return len(canonical) + len(carried)
 
     # ------------------------------------------------------------------
     # Phase B: Detail pages
