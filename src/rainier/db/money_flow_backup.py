@@ -565,7 +565,11 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
       (d) ``id``-uniqueness guard: ``COUNT(*) == COUNT(DISTINCT id)`` over
           ``id <= run_max`` on the source. Autoincrement keeps ``id`` globally
           unique (the composite PK ``(id, captured_at)`` alone does not enforce
-          it); a duplicate id would make the per-day fingerprints ambiguous.
+          it); a duplicate id would make the per-day fingerprints ambiguous;
+      (e) SOURCE-side data-loss alarm: any backup row in ``id <= run_max`` whose
+          key is ABSENT from the source. The non-destructive backup retains rows
+          the source dropped (data safe), but verify still flags the divergence so
+          a silent source-side row loss / corruption is surfaced loudly.
     """
     report = VerifyReport()
     src_tbl = source_table()
@@ -650,6 +654,26 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
             f"diverges from its backup copy (an edited row, reordered "
             f"non-raw_data content, or torn copy). raw_data key-order is "
             f"canonicalized, so this is a genuine content drift."
+        )
+
+    # (e) SOURCE-side data-loss alarm. The backup is NON-DESTRUCTIVE: when the
+    # source loses rows from a generation without a newer captured_at (a bad
+    # restore / partial corruption), backup_money_flow RETAINS the backup's copy
+    # rather than propagate the delete. That keeps the data safe, but the operator
+    # must still be ALERTED that the source diverged — otherwise a silent source-
+    # side row loss goes unnoticed (Codex P1). So any backup row in ``id <=
+    # run_max`` whose key is absent from the source is flagged loudly here. In
+    # normal operation (no source loss) there are no such extras; a legitimate
+    # rebuild is delete-then-recopied so its orphans don't survive. This is a
+    # SOURCE health signal, not a backup-integrity failure — the backup is correct.
+    extra = set(dst_by_key) - src_keys
+    if extra:
+        sample = sorted(extra)[:5]
+        report.failures.append(
+            f"{len(extra)} backup row(s) in (0, {run_max}] are absent from the "
+            f"SOURCE — the source dropped rows the backup retained (non-destructive "
+            f"backup is intact; this flags a source-side data loss / corruption to "
+            f"investigate). sample={sample}"
         )
 
     return report

@@ -206,12 +206,11 @@ def test_day_shrunk_in_source_recopies_smaller(src_engine, dst_engine):
     assert mfb.verify_backup(src_engine, dst_engine, run_max=3).ok
 
 
-def test_day_lost_in_source_is_retained_in_backup(src_engine, dst_engine):
-    """Codex P1 regression — a historical day the SOURCE lost (bad restore, manual
-    cleanup, corruption) must be RETAINED in the backup, NOT purged. The off-site
-    copy is disaster recovery; it never propagates a source-side delete. verify
-    stays green because it asserts the backup is a content-faithful SUPERSET of the
-    source, not an exact mirror."""
+def test_day_lost_in_source_is_retained_but_verify_alarms(src_engine, dst_engine):
+    """Codex P1 — a historical day the SOURCE lost (bad restore, manual cleanup,
+    corruption) is RETAINED in the backup (never propagate a source-side delete),
+    AND verify ALARMS the source-side loss loudly (check e). The backup data is
+    safe; the alarm tells the operator the source diverged so they investigate."""
     mfb = _import()
     _seed(src_engine, [_row(1, data_date=DAY1), _row(2, data_date=DAY2, captured_at=T_DAY2)])
     mfb.backup_money_flow(src_engine, dst_engine)
@@ -222,7 +221,30 @@ def test_day_lost_in_source_is_retained_in_backup(src_engine, dst_engine):
     mfb.backup_money_flow(src_engine, dst_engine)
     bt = mfb.backup_table()
     assert _dst_ids(dst_engine, bt) == [1, 2], "lost DAY1 must be retained in the backup"
-    assert mfb.verify_backup(src_engine, dst_engine, run_max=2).ok
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=2)
+    assert not report.ok, "verify must alarm the source-side data loss"
+    assert any("absent from the SOURCE" in f for f in report.failures)
+
+
+def test_partial_row_loss_in_source_retained_and_alarmed(src_engine, dst_engine):
+    """Codex P1 — the source loses SOME rows of a generation without a newer
+    captured_at (ids {1,3} survive, id 2 dropped). The backup retains all of
+    {1,2,3} (non-destructive) and verify ALARMS that the source dropped id 2."""
+    mfb = _import()
+    _seed(src_engine, [_row(1), _row(2), _row(3)])
+    mfb.backup_money_flow(src_engine, dst_engine)
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [1, 2, 3]
+
+    # Source drops id 2 in place (same captured_at — not a rebuild).
+    with src_engine.begin() as conn:
+        conn.execute(delete(_SRC).where(_SRC.c.id == 2))
+
+    mfb.backup_money_flow(src_engine, dst_engine)
+    assert _dst_ids(dst_engine, bt) == [1, 2, 3], "dropped id 2 retained in backup"
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=3)
+    assert not report.ok, "verify must alarm the partial source-side loss"
+    assert any("absent from the SOURCE" in f for f in report.failures)
 
 
 def test_concurrent_rebuild_does_not_purge_day_from_backup(src_engine, dst_engine):

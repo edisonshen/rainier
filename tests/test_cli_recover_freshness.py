@@ -165,18 +165,22 @@ def db_factory():
     engine.dispose()
 
 
-def _insert(factory, ranking_type: str, captured_at: datetime, symbol: str = "X"):
+def _insert(factory, ranking_type: str, captured_at: datetime, symbol: str = "X",
+            count: int = 100):
+    """Seed ``count`` rows for a book (default 100 = a full scrape, above the
+    coverage floor). Pass a small ``count`` to simulate a glitched partial scrape."""
     with factory() as s:
-        s.add(
-            MoneyFlowSnapshot(
-                captured_at=captured_at,
-                capture_session="midday",
-                data_date=DAY,
-                ranking_type=ranking_type,
-                symbol=symbol,
-                rank=1,
+        for rank in range(1, count + 1):
+            s.add(
+                MoneyFlowSnapshot(
+                    captured_at=captured_at,
+                    capture_session="midday",
+                    data_date=DAY,
+                    ranking_type=ranking_type,
+                    symbol=f"{symbol}{rank}",
+                    rank=rank,
+                )
             )
-        )
         s.commit()
 
 
@@ -207,6 +211,30 @@ def test_day_stale_when_one_book_behind(db_factory):
     now = _dt(16, 0)  # latest due 15:30 ET == 19:30 UTC; bottom100 is 11:31 ET
     with db_factory() as db:
         assert _qu100_day_is_fresh(db, DAY, now, SCHEDULE, TZ) is False
+
+
+def test_day_stale_when_book_partial_despite_fresh_captured_at(db_factory):
+    """Codex P1 regression — a non-empty PARTIAL scrape (few ranks, nothing earlier
+    to carry forward) advances captured_at but leaves the book mostly empty. Rank
+    coverage below the floor must read STALE so recover re-fires, not run the
+    screener off a near-empty book."""
+    fresh = datetime(2026, 6, 1, 19, 31, tzinfo=timezone.utc)
+    _insert(db_factory, "top100", fresh, count=100)
+    _insert(db_factory, "bottom100", fresh, count=5)  # glitched partial book
+    now = _dt(16, 0)  # 15:30 ET due
+    with db_factory() as db:
+        assert _qu100_day_is_fresh(db, DAY, now, SCHEDULE, TZ) is False
+
+
+def test_day_fresh_with_minor_dedup_unfill(db_factory):
+    """A near-full book (a couple ranks unfilled by dedup) is still fresh — the
+    floor must not false-stale a legitimate full scrape."""
+    fresh = datetime(2026, 6, 1, 19, 31, tzinfo=timezone.utc)
+    _insert(db_factory, "top100", fresh, count=98)
+    _insert(db_factory, "bottom100", fresh, count=98)
+    now = _dt(16, 0)
+    with db_factory() as db:
+        assert _qu100_day_is_fresh(db, DAY, now, SCHEDULE, TZ) is True
 
 
 def test_day_fresh_before_any_slot_due_with_no_data(db_factory):

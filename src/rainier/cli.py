@@ -1540,6 +1540,15 @@ def _notify_recover(title: str, description: str, color: int = 0x3498DB):
 # but bottom100 returns an empty no-op) must read as STALE so recover re-fires.
 _QU100_RANKING_TYPES = ("top100", "bottom100")
 
+# Minimum rank coverage for a book to count as "fresh". QU100 is exactly 100 ranks
+# and a full scrape overrides every slot (count == 100); a glitched non-empty
+# PARTIAL scrape (a handful of ranks, nothing earlier that day to carry forward)
+# lands far below this floor, so it reads STALE and recover re-fires rather than
+# treating a near-empty book as a fresh full scrape. 90 = a strong-majority cohort,
+# above any realistic dedup-unfill (a moved symbol leaves at most a few slots
+# unfilled) yet well clear of a partial response.
+_QU100_MIN_FRESH_RANKS = 90
+
 
 def _recover_trading_day(now: datetime) -> date:
     """Anchor recover's "today" to the APP-LOCAL calendar date of ``now`` — the
@@ -1621,29 +1630,54 @@ def _is_qu100_fresh(latest_captured_at, now, schedule: dict, tz) -> bool:
 def _qu100_day_is_fresh(db, today, now, schedule: dict, tz) -> bool:
     """Is today's QU100 snapshot fresh for EVERY ranking_type?
 
-    Reads ``max(captured_at)`` per ranking_type for ``data_date == today`` and
-    requires each expected book (``top100`` AND ``bottom100``) to be fresh. A
-    single global ``max(captured_at)`` would let a fresh top100 mask a stale/empty
-    bottom100 (partial-failure scrape) and report the day fresh when half the book
-    is frozen. Used both at detection AND post-scrape to gate the Discord report.
+    Reads ``max(captured_at)`` AND the row count per ranking_type for
+    ``data_date == today`` and requires each expected book (``top100`` AND
+    ``bottom100``) to be both timely AND adequately covered:
+
+      * TIMELY — its ``captured_at`` is at/after the latest due slot (a single
+        global ``max(captured_at)`` would let a fresh top100 mask a stale/empty
+        bottom100 — a partial-failure scrape — and report the day fresh when half
+        the book is frozen);
+      * COVERED — once a slot is due, the book holds at least
+        ``_QU100_MIN_FRESH_RANKS`` rows. Under the rebuild fix a day's whole book
+        shares one ``captured_at``, so a non-empty PARTIAL first scrape (a handful
+        of ranks, nothing earlier to carry forward) would otherwise advance
+        ``captured_at`` and read as fully fresh even though the book is mostly
+        missing (Codex P1). A full scrape is exactly 100 ranks; a glitched partial
+        is well below the floor, so recover re-fires instead of running the
+        screener off a near-empty book. (Coverage is NOT required before any slot
+        is due — there may legitimately be no data yet.)
+
+    Used both at detection AND post-scrape to gate the Discord report.
     """
     from sqlalchemy import func
 
     from rainier.core.models import MoneyFlowSnapshot
 
-    latest_by_type = dict(
-        db.query(
+    by_type = {
+        rt: (max_cap, count)
+        for rt, max_cap, count in db.query(
             MoneyFlowSnapshot.ranking_type,
             func.max(MoneyFlowSnapshot.captured_at),
+            func.count(),
         )
         .filter(MoneyFlowSnapshot.data_date == today)
         .group_by(MoneyFlowSnapshot.ranking_type)
         .all()
-    )
-    return all(
-        _is_qu100_fresh(latest_by_type.get(rt), now, schedule, tz)
-        for rt in _QU100_RANKING_TYPES
-    )
+    }
+    _, latest_due = _latest_due_slot(schedule, now)
+
+    def _book_fresh(rt: str) -> bool:
+        max_cap, count = by_type.get(rt, (None, 0))
+        if not _is_qu100_fresh(max_cap, now, schedule, tz):
+            return False
+        # Timely. Demand rank coverage too — but only once a slot is due (before
+        # that, "nothing expected" is fresh regardless of coverage).
+        if latest_due is None:
+            return True
+        return count >= _QU100_MIN_FRESH_RANKS
+
+    return all(_book_fresh(rt) for rt in _QU100_RANKING_TYPES)
 
 
 def _latest_due_session(schedule: dict, now) -> str:
