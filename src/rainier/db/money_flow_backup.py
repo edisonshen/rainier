@@ -27,13 +27,20 @@ in ONE destination transaction:
     dst = db.engine.get_engine()        # canonical -> DATABASE_URL -> Neon
     run_max = MAX(id) on src            # STABLE upper bound (id <= run_max only)
     for data_date in source_days ∪ backup_days:
-        source-only day         -> copy the day
-        backup-only day         -> DELETE the day from backup (source dropped it)
+        source-only day         -> copy the day (append)
+        backup-only day         -> RETAIN (never propagate a source-side delete)
         present on both, DIFFER -> DELETE the day in backup + re-copy from source
             (differ = row-count mismatch, OR a source captured_at newer than the
              backup's, OR a per-day canonical checksum mismatch)
         present on both, equal  -> skip
-    a day gone-to-zero in source is left deleted.
+
+NON-DESTRUCTIVE INVARIANT: this function never propagates a source-side DELETE.
+A backup DELETE is only ever issued to immediately RE-COPY the same day in the
+same txn (the same-day rebuild: the day still exists in source with new ids, so
+its stale backup rows — including the rebuild's orphaned old ids — are replaced
+wholesale). A day the source LOST entirely (bad restore, manual cleanup,
+corruption) is LEFT INTACT in the backup — the off-site copy is disaster
+recovery and must not erase the only recoverable copy of an irreplaceable day.
 
 Only rows with ``id <= run_max`` are considered, so a scrape landing mid-backup
 is not a torn read (it is reconciled next run). The whole destination mutation
@@ -219,9 +226,10 @@ def backup_money_flow(
     Captures a STABLE ``run_max = MAX(id)`` on ``src`` once, then — considering
     only ``id <= run_max`` — reconciles each ``data_date`` in the union of source
     and backup days: a day present only in source is copied; a day present only in
-    backup is deleted (source dropped it); a day present in both but DIFFERING
-    (row-count / newer ``captured_at`` / canonical-checksum mismatch — e.g. a
-    same-day rebuild) is delete-then-recopied; an equal day is skipped. All
+    backup is RETAINED (the backup never propagates a source-side delete — see the
+    non-destructive invariant in the module docstring); a day present in both but
+    DIFFERING (row-count / newer ``captured_at`` / canonical-checksum mismatch —
+    e.g. a same-day rebuild) is delete-then-recopied; an equal day is skipped. All
     mutations run in ONE destination transaction, so a mid-run failure leaves the
     backup unchanged. The destination table is created if absent.
 
@@ -261,52 +269,49 @@ def backup_money_flow(
             select(func.coalesce(func.max(dst_tbl.c.id), 0))
         ).scalar_one()
 
-    # 2a) Empty-source SAFETY GUARD. The reconcile purges any backup day absent
-    #     from the source, so an EMPTY source (no rows at all) would delete the
-    #     ENTIRE backup in one transaction — the off-site copy of record gone on a
-    #     routine cron. That is never a legitimate reconcile: the QU scraper is the
-    #     only writer and never zeroes the whole table. An empty source means a
-    #     fresh/rebuilt local DB, a failed restore, or a mis-pointed
-    #     LEGACY_DATABASE_URL (a confusion that already caused a prior P0), NOT
-    #     "every day was intentionally dropped". The old insert-only copy was
-    #     immune (it never deleted); preserve that invariant — abort as a no-op and
-    #     leave the backup untouched rather than wipe it from an empty source.
+    # 2a) Empty-source early-out + LOUD operational signal. The non-destructive
+    #     invariant below (a backup-only day is never purged) already makes an
+    #     empty source a safe no-op, but a source that went fully dark is a strong
+    #     misconfiguration signal — a fresh/rebuilt local DB, a failed restore, or a
+    #     mis-pointed LEGACY_DATABASE_URL (a confusion that already caused a prior
+    #     P0). Log it loudly and return early so the operator notices rather than
+    #     seeing a silent "0 rows" success.
     if not src_all:
         log.warning(
-            "backup_money_flow: source is EMPTY — aborting reconcile to avoid "
-            "wiping the backup (backup rows left intact, hwm=%s)",
+            "backup_money_flow: source is EMPTY — skipping reconcile (backup rows "
+            "left intact, hwm=%s). Check LEGACY_DATABASE_URL / local DB health.",
             hwm,
         )
         return BackupResult(copied=0, hwm_before=hwm, run_max=run_max)
 
-    # 3) Read the FULL backup (NOT capped at run_max). A backup-only day must be
-    #    purgeable even when dropping it from the source LOWERED run_max below that
-    #    day's ids (Codex P2: a deleted latest day whose ids all exceed the new
-    #    run_max would otherwise be invisible and never purged). Source rows are
-    #    restricted to id <= run_max for the COPY (in-flight inserts past run_max
-    #    are picked up next run), but the day-set comparison uses the full source.
+    # 3) Read the FULL backup. Source rows are restricted to id <= run_max for the
+    #    COPY (in-flight inserts past run_max are picked up next run).
     src_rows = [r for r in src_all if r["id"] <= run_max]
     dst_rows = _read_all(dst, dst_tbl)
-    # Full-source day set (incl. any rows > run_max) so a day is never mis-flagged
-    # backup-only just because its only surviving rows are an in-flight insert.
-    src_days_all = {r["data_date"] for r in src_all}
     src_fps = _day_fingerprints(src_rows)
     dst_fps = _day_fingerprints(dst_rows)
 
-    # Decide which days to (re)copy and which backup-only days to delete.
+    # Decide which days to (re)copy and which to delete-then-recopy.
+    #
+    # NON-DESTRUCTIVE INVARIANT: the backup NEVER propagates a source-side DELETE
+    # of a whole day. A day present ONLY in the backup (gone from source) is LEFT
+    # INTACT — the off-site copy is disaster recovery, so a source that lost a
+    # historical day (bad restore, manual cleanup, partial corruption) must not
+    # erase the only recoverable copy on the next cron (Codex P1). We only ever
+    # DELETE a backup day to immediately RE-COPY it from source in the SAME txn
+    # (the same-day rebuild case: the day still exists in source with new ids /
+    # content, so its stale backup rows — including the rebuild's orphaned old
+    # ids — are replaced wholesale). Deletion is thus always paired with a recopy;
+    # a backup day is never left empty by this function.
     days_to_delete: set = set()
     days_to_copy: set = set()
     for day in set(src_fps) | set(dst_fps):
         in_src = day in src_fps
         in_dst = day in dst_fps
         if in_src and not in_dst:
-            days_to_copy.add(day)
+            days_to_copy.add(day)  # brand-new day -> append
         elif in_dst and not in_src:
-            # Purge only if the day is truly gone from the source. A day present
-            # in src_all but absent from src_fps (all its rows are id > run_max,
-            # i.e. an in-flight insert) must NOT be purged — it copies next run.
-            if day not in src_days_all:
-                days_to_delete.add(day)
+            continue  # backup-only day: retain (never propagate a source delete)
         else:
             s, d = src_fps[day], dst_fps[day]
             differs = (
@@ -315,7 +320,9 @@ def backup_money_flow(
                 or s["checksum"] != d["checksum"]
             )
             if differs:
-                days_to_delete.add(day)  # purge stale rows first
+                # Same-day rebuild: purge the day's stale backup rows and recopy
+                # the current source rows in one txn (delete is paired with copy).
+                days_to_delete.add(day)
                 days_to_copy.add(day)
 
     rows_to_copy = [r for r in src_rows if r["data_date"] in days_to_copy]
@@ -451,7 +458,8 @@ def _read_all(engine: Engine, tbl: Table) -> list[dict]:
 
     The source read derives ``run_max`` from this same snapshot so a concurrent
     same-day rebuild can't tear the window; the destination read is uncapped so a
-    backup-only day whose ids exceed a lowered ``run_max`` stays visible for purge.
+    backup-only day whose ids exceed a lowered ``run_max`` is still seen (it is
+    retained, not purged — see the non-destructive invariant).
     """
     cols = [tbl.c[name] for name in COLUMNS]
     with engine.connect() as conn:
@@ -462,21 +470,23 @@ def _read_all(engine: Engine, tbl: Table) -> list[dict]:
 
 
 def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
-    """Strong integrity check over the full covered window ``id <= run_max``.
+    """Strong integrity check over the covered window ``id <= run_max``.
 
-    The copy is a ``data_date``-aware reconcile (delete-changed-day + recopy), so
-    after a same-day rebuild the backup must EXACTLY mirror the source over the
-    covered window — no orphaned old ids, no stale day. Checks, any failure
-    recorded loudly:
+    The copy is a NON-DESTRUCTIVE ``data_date``-aware reconcile (new days appended,
+    same-day rebuilds delete-then-recopied, days the source LOST left intact), so
+    the backup must CONTAIN every source row over the window with matching content
+    — a SUPERSET, not an exact mirror (it may retain a historical day the source
+    dropped). Checks, any failure recorded loudly:
 
-      (a) ``MAX(id)`` on src vs backup match for ``id <= run_max`` (a recopied
-          day restores matching ids; an un-purged orphan would diverge);
+      (a) ``MAX(id)`` on src vs backup match for ``id <= run_max`` (source's max
+          row is always mirrored; retained ids > run_max are excluded);
       (b) missing-row reconciliation on the FULL composite key
           ``(id, captured_at)`` — no source row in ``(0, run_max]`` absent from
           the backup;
-      (c) deterministic checksum over the full window ``id <= run_max`` with
-          ``raw_data`` canonicalized — catches any content drift (e.g. a day the
-          reconcile failed to recopy);
+      (c) content-faithful checksum: every source row in ``id <= run_max`` matches
+          its backup copy (``raw_data`` canonicalized), comparing only the backup
+          rows that share a source key so legitimately-retained extras are ignored
+          — catches a copied row whose content drifted;
       (d) ``id``-uniqueness guard: ``COUNT(*) == COUNT(DISTINCT id)`` over
           ``id <= run_max`` on the source. Autoincrement keeps ``id`` globally
           unique (the composite PK ``(id, captured_at)`` alone does not enforce
@@ -539,8 +549,8 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
         return (r["id"], _canon_captured_at(r["captured_at"]))
 
     src_keys = {_key(r) for r in src_rows}
-    dst_keys = {_key(r) for r in dst_rows}
-    missing = src_keys - dst_keys
+    dst_by_key = {_key(r): r for r in dst_rows}
+    missing = src_keys - set(dst_by_key)
     if missing:
         sample = sorted(missing)[:5]
         report.failures.append(
@@ -548,13 +558,23 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
             f"backup (composite key id, captured_at). sample={sample}"
         )
 
-    # (c) full-window canonicalized checksum.
-    if _checksum(src_rows) != _checksum(dst_rows):
+    # (c) content-faithful checksum. The backup is a NON-DESTRUCTIVE archive: it
+    # may RETAIN rows the source lost (a historical day a bad restore / corruption
+    # dropped — see the module invariant), so the backup is a SUPERSET of the
+    # source over the window, not an exact mirror. Verify therefore compares the
+    # source against the backup rows that SHARE a source key — every mirrored row
+    # must match content — and ignores retained extras. (b) already guarantees no
+    # source row is missing; together they assert "the backup faithfully contains
+    # every source row". A same-day rebuild's orphaned old ids cannot survive here:
+    # an in-both-differing day is delete-then-recopied in ONE txn, so a successful
+    # reconcile leaves no stale ids for a day still in source.
+    dst_mirrored = [dst_by_key[k] for k in src_keys if k in dst_by_key]
+    if _checksum(src_rows) != _checksum(dst_mirrored):
         report.failures.append(
-            f"checksum mismatch over the full window id<={run_max}: the backup "
-            f"diverges from the source (an edited row, reordered non-raw_data "
-            f"content, or torn copy). raw_data key-order is canonicalized, so "
-            f"this is a genuine content drift."
+            f"checksum mismatch over id<={run_max}: a source row's content "
+            f"diverges from its backup copy (an edited row, reordered "
+            f"non-raw_data content, or torn copy). raw_data key-order is "
+            f"canonicalized, so this is a genuine content drift."
         )
 
     return report

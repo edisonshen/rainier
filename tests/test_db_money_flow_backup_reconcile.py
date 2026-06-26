@@ -206,8 +206,12 @@ def test_day_shrunk_in_source_recopies_smaller(src_engine, dst_engine):
     assert mfb.verify_backup(src_engine, dst_engine, run_max=3).ok
 
 
-def test_day_gone_to_zero_left_deleted(src_engine, dst_engine):
-    """If a whole day disappears from source, the backup day is left deleted."""
+def test_day_lost_in_source_is_retained_in_backup(src_engine, dst_engine):
+    """Codex P1 regression — a historical day the SOURCE lost (bad restore, manual
+    cleanup, corruption) must be RETAINED in the backup, NOT purged. The off-site
+    copy is disaster recovery; it never propagates a source-side delete. verify
+    stays green because it asserts the backup is a content-faithful SUPERSET of the
+    source, not an exact mirror."""
     mfb = _import()
     _seed(src_engine, [_row(1, data_date=DAY1), _row(2, data_date=DAY2, captured_at=T_DAY2)])
     mfb.backup_money_flow(src_engine, dst_engine)
@@ -217,7 +221,7 @@ def test_day_gone_to_zero_left_deleted(src_engine, dst_engine):
 
     mfb.backup_money_flow(src_engine, dst_engine)
     bt = mfb.backup_table()
-    assert _dst_ids(dst_engine, bt) == [2], "DAY1 rows must be purged from backup"
+    assert _dst_ids(dst_engine, bt) == [1, 2], "lost DAY1 must be retained in the backup"
     assert mfb.verify_backup(src_engine, dst_engine, run_max=2).ok
 
 
@@ -255,13 +259,14 @@ def test_concurrent_rebuild_does_not_purge_day_from_backup(src_engine, dst_engin
     assert mfb.verify_backup(src_engine, dst_engine, run_max=4).ok
 
 
-def test_deleted_latest_day_with_high_ids_is_purged(src_engine, dst_engine):
-    """Codex P2 regression — when the deleted day held the HIGHEST ids, dropping it
-    lowers run_max below those ids. The backup-only day must still be purged.
+def test_deleted_latest_day_with_high_ids_is_retained(src_engine, dst_engine):
+    """When the day the source lost held the HIGHEST ids, dropping it lowers
+    run_max below those ids. The backup retains that day (non-destructive
+    invariant); the retained ids sit ABOVE the lowered run_max so verify — bounded
+    to id<=run_max — stays green.
 
     day1=id1, day2=id2 backed up. Delete day2 (the high-id day) from source ->
-    next run_max=1. The reconcile reads the FULL backup (uncapped), sees day2 only
-    in the backup, and purges it; verify at the lowered run_max is green."""
+    next run_max=1. day2 is backup-only -> retained, not purged."""
     mfb = _import()
     _seed(src_engine, [_row(1, data_date=DAY1), _row(2, data_date=DAY2, captured_at=T_DAY2)])
     mfb.backup_money_flow(src_engine, dst_engine)
@@ -273,7 +278,7 @@ def test_deleted_latest_day_with_high_ids_is_purged(src_engine, dst_engine):
 
     result = mfb.backup_money_flow(src_engine, dst_engine)
     assert result.run_max == 1, "run_max drops to the remaining max source id"
-    assert _dst_ids(dst_engine, bt) == [1], "deleted high-id day must be purged from backup"
+    assert _dst_ids(dst_engine, bt) == [1, 2], "lost high-id day must be retained in backup"
     assert mfb.verify_backup(src_engine, dst_engine, run_max=1).ok
 
 
