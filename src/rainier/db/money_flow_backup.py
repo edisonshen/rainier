@@ -54,6 +54,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -73,6 +74,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.types import JSON
+
+log = logging.getLogger(__name__)
 
 # Columns copied from core/models.py:MoneyFlowSnapshot (in order). ``raw_data``
 # uses the generic JSON type for BINDING (a dict serializes identically whether
@@ -257,6 +260,24 @@ def backup_money_flow(
         hwm = dconn.execute(
             select(func.coalesce(func.max(dst_tbl.c.id), 0))
         ).scalar_one()
+
+    # 2a) Empty-source SAFETY GUARD. The reconcile purges any backup day absent
+    #     from the source, so an EMPTY source (no rows at all) would delete the
+    #     ENTIRE backup in one transaction — the off-site copy of record gone on a
+    #     routine cron. That is never a legitimate reconcile: the QU scraper is the
+    #     only writer and never zeroes the whole table. An empty source means a
+    #     fresh/rebuilt local DB, a failed restore, or a mis-pointed
+    #     LEGACY_DATABASE_URL (a confusion that already caused a prior P0), NOT
+    #     "every day was intentionally dropped". The old insert-only copy was
+    #     immune (it never deleted); preserve that invariant — abort as a no-op and
+    #     leave the backup untouched rather than wipe it from an empty source.
+    if not src_all:
+        log.warning(
+            "backup_money_flow: source is EMPTY — aborting reconcile to avoid "
+            "wiping the backup (backup rows left intact, hwm=%s)",
+            hwm,
+        )
+        return BackupResult(copied=0, hwm_before=hwm, run_max=run_max)
 
     # 3) Read the FULL backup (NOT capped at run_max). A backup-only day must be
     #    purgeable even when dropping it from the source LOWERED run_max below that

@@ -275,3 +275,27 @@ def test_deleted_latest_day_with_high_ids_is_purged(src_engine, dst_engine):
     assert result.run_max == 1, "run_max drops to the remaining max source id"
     assert _dst_ids(dst_engine, bt) == [1], "deleted high-id day must be purged from backup"
     assert mfb.verify_backup(src_engine, dst_engine, run_max=1).ok
+
+
+def test_empty_source_does_not_wipe_backup(src_engine, dst_engine):
+    """Review regression — an EMPTY source must NOT purge the whole backup.
+
+    The reconcile deletes any backup day absent from the source. A source with NO
+    rows (fresh/rebuilt local DB, failed restore, or mis-pointed
+    LEGACY_DATABASE_URL) would otherwise flag EVERY backup day as
+    backup-only-and-gone and wipe the off-site copy of record on a routine cron.
+    The empty-source guard aborts as a no-op and leaves the backup intact."""
+    mfb = _import()
+    _seed(src_engine, [_row(1, data_date=DAY1), _row(2, data_date=DAY2, captured_at=T_DAY2)])
+    mfb.backup_money_flow(src_engine, dst_engine)
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [1, 2]
+
+    # Source goes fully empty (every row gone — the dangerous misconfiguration).
+    with src_engine.begin() as conn:
+        conn.execute(delete(_SRC))
+
+    result = mfb.backup_money_flow(src_engine, dst_engine)
+    assert result.copied == 0
+    assert result.run_max == 0
+    assert _dst_ids(dst_engine, bt) == [1, 2], "empty source must NOT wipe the backup"
