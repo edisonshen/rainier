@@ -19,6 +19,13 @@ _BULLISH_THRESHOLD = 0.3
 _BEARISH_THRESHOLD = -0.3
 _TOP_STOCKS_LIMIT = 5
 
+# QU100 sentiment is built from the two QU100 books ONLY (top100 + bottom100).
+# money_flow_snapshots may one day also hold auxiliary ranking types (e.g.
+# concept/etf boards); those must NOT be folded into QU100 sector sentiment or the
+# screener / SectorMomentumSignal would silently skew. The generation filter is
+# restricted to these two so a stray ranking type can never leak in.
+_QU100_RANKING_TYPES = ("top100", "bottom100")
+
 
 # ---------------------------------------------------------------------------
 # Latest-generation selection (per ranking_type)
@@ -40,7 +47,7 @@ def _latest_generation_filter(session: Session, as_of: date_type | None):
     date_q = session.query(
         MoneyFlowSnapshot.ranking_type,
         func.max(MoneyFlowSnapshot.data_date).label("max_date"),
-    )
+    ).filter(MoneyFlowSnapshot.ranking_type.in_(_QU100_RANKING_TYPES))
     if as_of is not None:
         date_q = date_q.filter(MoneyFlowSnapshot.data_date <= as_of)
     latest_dates = date_q.group_by(MoneyFlowSnapshot.ranking_type).all()

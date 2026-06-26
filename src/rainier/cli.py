@@ -1820,10 +1820,20 @@ async def _recover(settings, dry_run: bool):
             session_name = action.replace("scrape_", "")
             click.echo(f"  Running missed {session_name} scrape...")
             try:
+                # Pin the scrape to the STALE trading day (`today`), not the
+                # scraper's own clock-derived date. With dates=None the QU scraper
+                # derives the API/persist date from market_date(captured_at), which
+                # in the late-evening window (after ET midnight) resolves to the
+                # NEXT, not-yet-traded day — so the rerun would fetch the wrong day
+                # and never refresh `today`, leaving _qu100_day_is_fresh(db, today)
+                # false (Codex P1). Passing the explicit date makes the scraper
+                # query and persist `data_date = today`. (dates set also skips
+                # _run_qu_scrape's inline post-scrape pipeline; recover does its own
+                # freshness-gated Discord resend below, so the report still fires.)
                 await _run_qu_scrape(
                     session=session_name,
                     detail_top=0,
-                    dates=None,
+                    dates=today.isoformat(),
                     days_back=0,
                     start_date=None,
                     delay=None,

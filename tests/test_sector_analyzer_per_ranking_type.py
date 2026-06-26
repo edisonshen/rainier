@@ -124,5 +124,23 @@ def test_ranking_type_on_different_data_date_not_dropped(session):
     assert "Energy" in sectors, "a ranking type stuck on an earlier data_date must survive"
 
 
+def test_non_qu100_ranking_type_excluded_from_sentiment(session):
+    """Codex P1 regression — only the QU100 books (top100 + bottom100) feed sector
+    sentiment. A stray auxiliary ranking type (e.g. 'concept') in the table must
+    NOT be unioned into the analysis, or it would silently skew the screener."""
+    # QU100 books: Technology bullish, Energy bearish.
+    _snap(session, "AAA", "Technology", "Long in", 1, "top100", DAY1, T2)
+    _snap(session, "EEE", "Energy", "Short in", 1, "bottom100", DAY1, T2)
+    # Auxiliary non-QU100 board for a sector that must NOT appear.
+    _snap(session, "CCC", "Materials", "Long in", 1, "concept", DAY1, T2)
+    session.commit()
+
+    trends = _analyze_sectors(session)
+    sectors = {t.sector for t in trends}
+    assert "Technology" in sectors
+    assert "Energy" in sectors
+    assert "Materials" not in sectors, "non-QU100 ranking_type must be excluded"
+
+
 def test_no_snapshots_returns_empty(session):
     assert _analyze_sectors(session) == []
