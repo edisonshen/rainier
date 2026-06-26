@@ -304,3 +304,60 @@ def test_empty_source_does_not_wipe_backup(src_engine, dst_engine):
     assert result.copied == 0
     assert result.run_max == 0
     assert _dst_ids(dst_engine, bt) == [1, 2], "empty source must NOT wipe the backup"
+
+
+def test_lost_book_does_not_disturb_surviving_book(src_engine, dst_engine):
+    """Codex P1 regression — the reconcile keys on (data_date, ranking_type). A
+    partial source-side loss of ONE book (bottom100 dropped by a bad restore) must
+    NOT erase the surviving book from the backup, and the dropped book must be
+    RETAINED. Keying on data_date alone would treat the day as "changed", delete
+    BOTH books, and recopy only the survivor — silently losing bottom100."""
+    mfb = _import()
+    # Same day, two books: top100 (ids 1,2) and bottom100 (ids 3,4).
+    _seed(
+        src_engine,
+        [
+            _row(1, ranking_type="top100", rank=1),
+            _row(2, ranking_type="top100", rank=2),
+            _row(3, ranking_type="bottom100", rank=1),
+            _row(4, ranking_type="bottom100", rank=2),
+        ],
+    )
+    mfb.backup_money_flow(src_engine, dst_engine)
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [1, 2, 3, 4]
+
+    # bottom100 vanishes from source (partial corruption); top100 untouched.
+    with src_engine.begin() as conn:
+        conn.execute(delete(_SRC).where(_SRC.c.ranking_type == "bottom100"))
+
+    result = mfb.backup_money_flow(src_engine, dst_engine)
+    assert result.copied == 0, "top100 unchanged, bottom100 retained -> nothing recopied"
+    assert _dst_ids(dst_engine, bt) == [1, 2, 3, 4], "surviving + lost book both kept"
+    assert mfb.verify_backup(src_engine, dst_engine, run_max=2).ok
+
+
+def test_one_book_rebuild_leaves_other_book_untouched(src_engine, dst_engine):
+    """A same-day rebuild of ONE book recopies only that book; the other book's
+    backup rows are not deleted or rewritten (per-generation delete key)."""
+    mfb = _import()
+    _seed(
+        src_engine,
+        [
+            _row(1, ranking_type="top100", rank=1),
+            _row(3, ranking_type="bottom100", rank=1),
+        ],
+    )
+    mfb.backup_money_flow(src_engine, dst_engine)
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [1, 3]
+
+    # Rebuild top100 only: delete id1, insert id2 with a newer captured_at.
+    with src_engine.begin() as conn:
+        conn.execute(delete(_SRC).where(_SRC.c.id == 1))
+    _seed(src_engine, [_row(2, ranking_type="top100", rank=1, captured_at=T2)])
+
+    result = mfb.backup_money_flow(src_engine, dst_engine)
+    assert result.copied == 1, "only the rebuilt top100 row is recopied"
+    assert _dst_ids(dst_engine, bt) == [2, 3], "top100 -> {2}, bottom100 {3} untouched"
+    assert mfb.verify_backup(src_engine, dst_engine, run_max=3).ok

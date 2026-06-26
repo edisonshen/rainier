@@ -20,26 +20,31 @@ old ids the rebuild deleted (they sit *below* the high-water mark) nor re-copy a
 changed day whose new max-id it already passed — ``verify_backup``'s full-window
 checksum would then fail the nightly cron.
 
-Instead we reconcile per ``data_date`` over the UNION of source and backup days,
-in ONE destination transaction:
+Instead we reconcile per GENERATION ``(data_date, ranking_type)`` — the exact
+unit the scraper rebuilds — over the UNION of source and backup generations, in
+ONE destination transaction:
 
     src = core.database.get_engine()    # legacy -> local TimescaleDB (PR #115)
     dst = db.engine.get_engine()        # canonical -> DATABASE_URL -> Neon
     run_max = MAX(id) on src            # STABLE upper bound (id <= run_max only)
-    for data_date in source_days ∪ backup_days:
-        source-only day         -> copy the day (append)
-        backup-only day         -> RETAIN (never propagate a source-side delete)
-        present on both, DIFFER -> DELETE the day in backup + re-copy from source
+    for gen=(data_date, ranking_type) in source_gens ∪ backup_gens:
+        source-only gen         -> copy the gen (append)
+        backup-only gen         -> RETAIN (never propagate a source-side delete)
+        present on both, DIFFER -> DELETE the gen in backup + re-copy from source
             (differ = row-count mismatch, OR a source captured_at newer than the
-             backup's, OR a per-day canonical checksum mismatch)
+             backup's, OR a per-gen canonical checksum mismatch)
         present on both, equal  -> skip
 
+Keying on ``(data_date, ranking_type)`` — NOT ``data_date`` alone — keeps the two
+books independent: a partial source-side loss of one book (e.g. bottom100 dropped
+by a bad restore while top100 survives) never disturbs the surviving book.
+
 NON-DESTRUCTIVE INVARIANT: this function never propagates a source-side DELETE.
-A backup DELETE is only ever issued to immediately RE-COPY the same day in the
-same txn (the same-day rebuild: the day still exists in source with new ids, so
-its stale backup rows — including the rebuild's orphaned old ids — are replaced
-wholesale). A day the source LOST entirely (bad restore, manual cleanup,
-corruption) is LEFT INTACT in the backup — the off-site copy is disaster
+A backup DELETE is only ever issued to immediately RE-COPY the same generation in
+the same txn (the same-day rebuild: the generation still exists in source with new
+ids, so its stale backup rows — including the rebuild's orphaned old ids — are
+replaced wholesale). A generation the source LOST entirely (bad restore, manual
+cleanup, corruption) is LEFT INTACT in the backup — the off-site copy is disaster
 recovery and must not erase the only recoverable copy of an irreplaceable day.
 
 Only rows with ``id <= run_max`` are considered, so a scrape landing mid-backup
@@ -77,6 +82,7 @@ from sqlalchemy import (
     Table,
     func,
     select,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
@@ -193,23 +199,38 @@ class VerifyReport:
 # ---------------------------------------------------------------------------
 
 
-def _day_fingerprints(rows: list[dict]) -> dict[object, dict]:
-    """Group ``rows`` by ``data_date`` -> ``{count, max_cap, checksum}``.
+def _gen_key(r: dict) -> tuple:
+    """The reconcile/rebuild unit: ``(data_date, ranking_type)``.
+
+    The QU scraper rebuilds a snapshot per ``(data_date, ranking_type)`` (each
+    book independently — a midday top100 rebuild leaves bottom100 untouched), so
+    the backup MUST reconcile on the same composite key. Keying on ``data_date``
+    alone would lump both books: a partial source-side loss of ONE book (e.g.
+    bottom100 dropped by a bad restore while top100 survives) would look like a
+    generic "day changed", delete the whole day, and recopy only the survivor —
+    erasing the backup-only book and defeating the non-destructive invariant.
+    """
+    return (r["data_date"], r["ranking_type"])
+
+
+def _gen_fingerprints(rows: list[dict]) -> dict[tuple, dict]:
+    """Group ``rows`` by ``(data_date, ranking_type)`` -> ``{count, max_cap,
+    checksum}``.
 
     ``max_cap`` is the canonical (UTC-normalized) max ``captured_at`` over the
-    day; ``checksum`` is the order-independent content hash of the day's rows.
-    Used to decide whether a day differs between source and backup.
+    generation; ``checksum`` is the order-independent content hash of its rows.
+    Used to decide whether a generation differs between source and backup.
     """
-    by_day: dict[object, list[dict]] = {}
+    by_gen: dict[tuple, list[dict]] = {}
     for r in rows:
-        by_day.setdefault(r["data_date"], []).append(r)
-    fps: dict[object, dict] = {}
-    for day, day_rows in by_day.items():
-        max_cap = max(_canon_captured_at(r["captured_at"]) for r in day_rows)
-        fps[day] = {
-            "count": len(day_rows),
+        by_gen.setdefault(_gen_key(r), []).append(r)
+    fps: dict[tuple, dict] = {}
+    for key, gen_rows in by_gen.items():
+        max_cap = max(_canon_captured_at(r["captured_at"]) for r in gen_rows)
+        fps[key] = {
+            "count": len(gen_rows),
             "max_cap": max_cap,
-            "checksum": _checksum(day_rows),
+            "checksum": _checksum(gen_rows),
         }
     return fps
 
@@ -288,52 +309,59 @@ def backup_money_flow(
     #    COPY (in-flight inserts past run_max are picked up next run).
     src_rows = [r for r in src_all if r["id"] <= run_max]
     dst_rows = _read_all(dst, dst_tbl)
-    src_fps = _day_fingerprints(src_rows)
-    dst_fps = _day_fingerprints(dst_rows)
+    src_fps = _gen_fingerprints(src_rows)
+    dst_fps = _gen_fingerprints(dst_rows)
 
-    # Decide which days to (re)copy and which to delete-then-recopy.
+    # Decide which generations to (re)copy and which to delete-then-recopy. The
+    # unit is the GENERATION key ``(data_date, ranking_type)`` — the exact unit
+    # the scraper rebuilds — so a partial source-side loss of one book never
+    # disturbs the other (Codex P1).
     #
     # NON-DESTRUCTIVE INVARIANT: the backup NEVER propagates a source-side DELETE
-    # of a whole day. A day present ONLY in the backup (gone from source) is LEFT
-    # INTACT — the off-site copy is disaster recovery, so a source that lost a
-    # historical day (bad restore, manual cleanup, partial corruption) must not
-    # erase the only recoverable copy on the next cron (Codex P1). We only ever
-    # DELETE a backup day to immediately RE-COPY it from source in the SAME txn
-    # (the same-day rebuild case: the day still exists in source with new ids /
-    # content, so its stale backup rows — including the rebuild's orphaned old
-    # ids — are replaced wholesale). Deletion is thus always paired with a recopy;
-    # a backup day is never left empty by this function.
-    days_to_delete: set = set()
-    days_to_copy: set = set()
-    for day in set(src_fps) | set(dst_fps):
-        in_src = day in src_fps
-        in_dst = day in dst_fps
+    # of a whole generation. A generation present ONLY in the backup (gone from
+    # source) is LEFT INTACT — the off-site copy is disaster recovery, so a source
+    # that lost a historical book (bad restore, manual cleanup, partial
+    # corruption) must not erase the only recoverable copy on the next cron
+    # (Codex P1). We only ever DELETE a backup generation to immediately RE-COPY it
+    # from source in the SAME txn (the same-day rebuild: the generation still
+    # exists in source with new ids / content, so its stale backup rows — including
+    # the rebuild's orphaned old ids — are replaced wholesale). Deletion is thus
+    # always paired with a recopy; a backup generation is never left empty here.
+    keys_to_delete: set = set()
+    keys_to_copy: set = set()
+    for key in set(src_fps) | set(dst_fps):
+        in_src = key in src_fps
+        in_dst = key in dst_fps
         if in_src and not in_dst:
-            days_to_copy.add(day)  # brand-new day -> append
+            keys_to_copy.add(key)  # brand-new generation -> append
         elif in_dst and not in_src:
-            continue  # backup-only day: retain (never propagate a source delete)
+            continue  # backup-only generation: retain (never propagate a delete)
         else:
-            s, d = src_fps[day], dst_fps[day]
+            s, d = src_fps[key], dst_fps[key]
             differs = (
                 s["count"] != d["count"]
                 or s["max_cap"] != d["max_cap"]
                 or s["checksum"] != d["checksum"]
             )
             if differs:
-                # Same-day rebuild: purge the day's stale backup rows and recopy
-                # the current source rows in one txn (delete is paired with copy).
-                days_to_delete.add(day)
-                days_to_copy.add(day)
+                # Same-day rebuild: purge this generation's stale backup rows and
+                # recopy the current source rows in one txn (delete paired w/ copy).
+                keys_to_delete.add(key)
+                keys_to_copy.add(key)
 
-    rows_to_copy = [r for r in src_rows if r["data_date"] in days_to_copy]
+    rows_to_copy = [r for r in src_rows if _gen_key(r) in keys_to_copy]
 
     copied = 0
-    # 4) One transaction on the destination: delete changed/dropped days, then
+    # 4) One transaction on the destination: delete changed generations, then
     #    re-insert. Commit once so a mid-run failure leaves the backup unchanged.
     with dst.begin() as dconn:
-        if days_to_delete:
+        if keys_to_delete:
             dconn.execute(
-                dst_tbl.delete().where(dst_tbl.c.data_date.in_(days_to_delete))
+                dst_tbl.delete().where(
+                    tuple_(dst_tbl.c.data_date, dst_tbl.c.ranking_type).in_(
+                        keys_to_delete
+                    )
+                )
             )
         for start in range(0, len(rows_to_copy), chunk_size):
             chunk = rows_to_copy[start : start + chunk_size]

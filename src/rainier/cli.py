@@ -1539,26 +1539,30 @@ def _notify_recover(title: str, description: str, color: int = 0x3498DB):
 _QU100_RANKING_TYPES = ("top100", "bottom100")
 
 
-def _recover_market_today(now: datetime) -> date:
-    """Anchor recover's "today" to the US market trading date (ET), not the
-    app-tz/wall-clock date.
+def _recover_trading_day(now: datetime) -> date:
+    """Anchor recover's "today" to the APP-LOCAL calendar date of ``now`` — the
+    same timezone the schedule slots fire in.
 
-    Stored snapshots are keyed on ``data_date = market_date(captured_at)`` (ET),
-    so the freshness day-filter must use the same ET trading date. A recover
-    firing past ET midnight (e.g. a late-PT or past-midnight-UTC run) would, on a
-    wall-clock date, resolve the WRONG trading day and misjudge freshness — the
-    same rollover hazard ``market_date()`` already solved for the scraper.
+    Recover must compare today's snapshots against the schedule, and the schedule
+    slots are app-tz (the scheduler runs ``AsyncIOScheduler(timezone=app.tz)``).
+    The day key MUST therefore be the app-local date so the latest-due-slot scan
+    (``_latest_due_slot``) and the snapshot day-filter agree.
 
-    The schedule-slot "due" times stay app-tz (the scheduler fires them in the app
-    timezone); only the day key is ET. In the narrow evening window where the two
-    disagree (after ET midnight but before app-tz midnight) a false "stale" is
-    harmless: a recovery scrape of a not-yet-traded day returns empty ->
-    ``_persist_qu100`` no-op, and the daily report is gated on RESTORED freshness,
-    so nothing fires off a stale snapshot.
+    This also matches the STORED ``data_date = market_date(captured_at)`` (ET) for
+    every legitimately-scraped slot: scrapes fire only during US market hours,
+    when the ET calendar date equals the app-local date (market hours are daytime
+    in any reasonable app tz). So a close scrape at 1pm PT stores ``data_date`` =
+    that Monday (ET) and an evening recover at 9pm PT resolves ``today`` = the same
+    Monday (app-local) — they match.
+
+    Using the ET date here (``market_date(now)``) instead would BREAK late-evening
+    recovery: after ~9pm PT the ET clock has rolled to the next calendar day, so
+    ``today`` would point at a not-yet-traded date while the latest due slot still
+    belongs to the day that just ended — a missed Monday close would be checked
+    against Tuesday, and on Friday night it would fall into the weekend fast-path
+    and skip recovery entirely.
     """
-    from rainier.scrapers.qu.scraper import market_date
-
-    return market_date(now)
+    return now.date()
 
 
 def _latest_due_slot(schedule: dict, now):
@@ -1710,19 +1714,10 @@ async def _recover(settings, dry_run: bool):
     # per-session counts can no longer tell which slot ran). ``qu100_stale`` drives
     # both the recovery scrape AND whether the daily outlook is re-sent.
     qu100_stale = False
-    # Anchor the day key to the US market trading date (ET) via market_date(), NOT
-    # the app-tz/wall-clock date: stored rows are keyed on
-    # ``data_date = market_date(captured_at)`` (ET), so the day-filter must match,
-    # and a recover firing past ET midnight must resolve the correct trading day
-    # (the rollover hazard market_date() already solved for the scraper). The
-    # schedule slot strings (sessions_config) stay app-tz — the scheduler fires
-    # them under AsyncIOScheduler(timezone=app.timezone) — so the latest-due-slot
-    # scan keys off the app-tz ``now``. During the scraping window (the only time
-    # freshness truly matters) the ET date equals the app-tz date, so the two
-    # bases agree where it counts; the narrow evening-window disagreement is
-    # harmless (an empty recovery scrape no-ops and the report is gated on
-    # restored freshness).
-    today = _recover_market_today(now)
+    # Anchor the day key to the APP-LOCAL date (the schedule's timezone) so the
+    # latest-due-slot scan and the snapshot day-filter agree, and so late-evening
+    # recovery still targets the day that just ended — see _recover_trading_day.
+    today = _recover_trading_day(now)
     if today.weekday() >= 5:
         click.echo("  Weekend — no scrape sessions to check")
     else:
@@ -1874,7 +1869,7 @@ async def _recover(settings, dry_run: bool):
         # recovered day is always judged against its OWN last due slot, never a
         # fresh next-day clock. The day is fixed; the clock advances within it only.
         now_after = datetime.now(tz)
-        if _recover_market_today(now_after) > today:
+        if _recover_trading_day(now_after) > today:
             now_after = datetime.combine(today, time.max, tzinfo=tz)
         with get_session() as db:
             freshness_restored = _qu100_day_is_fresh(

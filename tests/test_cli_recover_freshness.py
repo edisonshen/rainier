@@ -38,7 +38,7 @@ from rainier.cli import (
     _latest_due_session,
     _latest_due_slot,
     _qu100_day_is_fresh,
-    _recover_market_today,
+    _recover_trading_day,
 )
 from rainier.core.models import MoneyFlowSnapshot
 
@@ -55,22 +55,24 @@ def _dt(h, m):
     return datetime(2026, 6, 1, h, m, tzinfo=TZ)
 
 
-# --- "today" anchored to the market trading date (Acceptance 7e) -----------
+# --- "today" anchored to the app-local schedule date -----------------------
 
 
-def test_recover_today_anchored_to_market_date():
-    """`recover` resolves "today" via the US market trading date, not the
-    app-tz/wall-clock date. A run at a late-PT instant that has already crossed
-    ET midnight must resolve to the NEXT ET trading date — matching the stored
-    `data_date = market_date(captured_at)` keying, so the freshness day filter
-    looks at the right day."""
+def test_recover_today_anchored_to_app_local_date():
+    """Codex P1 regression — `recover` resolves "today" via the APP-LOCAL calendar
+    date (the schedule's timezone), NOT the ET market date. A late-evening run that
+    has crossed ET midnight but is still the same app-local day must resolve to
+    that day, so a missed close is recovered against the day that just ended (using
+    the ET date would point at the next, not-yet-traded day and — on Friday night —
+    fall into the weekend fast-path and skip recovery entirely)."""
     pt = ZoneInfo("America/Los_Angeles")
-    # 2026-06-01 22:30 PT == 2026-06-02 01:30 ET (already the next ET day).
+    # 2026-06-01 22:30 PT == 2026-06-02 01:30 ET. App-local (PT) day is still
+    # Monday 2026-06-01 — recover must judge against Monday's close, not Tuesday.
     late_pt = datetime(2026, 6, 1, 22, 30, tzinfo=pt)
-    assert _recover_market_today(late_pt) == date(2026, 6, 2)
-    # mid-afternoon PT: ET date is the same calendar day.
+    assert _recover_trading_day(late_pt) == date(2026, 6, 1)
+    # mid-afternoon PT (during the scraping window): app-local == ET date anyway.
     afternoon_pt = datetime(2026, 6, 1, 13, 0, tzinfo=pt)
-    assert _recover_market_today(afternoon_pt) == date(2026, 6, 1)
+    assert _recover_trading_day(afternoon_pt) == date(2026, 6, 1)
 
 
 # --- per-book freshness primitive ------------------------------------------
