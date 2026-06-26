@@ -1207,10 +1207,7 @@ def qu(ctx, session, detail_top, dates, days_back, start_date, delay, headed, cd
         sys.exit(1)
 
 
-async def _run_qu_scrape(
-    session, detail_top, dates, days_back, start_date, delay, headed, cdp,
-    run_pipeline=False,
-):
+async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, delay, headed, cdp):
     import asyncio
     from datetime import date, datetime, timedelta
 
@@ -1288,15 +1285,9 @@ async def _run_qu_scrape(
         # scheduler — including the LLM thesis embeds for sessions in
         # settings.llm_thesis.enabled_sessions. Skip during backfill runs
         # (date_list is set) since those replay historical scans and would
-        # spam the channel.
-        #
-        # EXCEPTION: ``run_pipeline=True`` forces the pipeline even with a
-        # date_list. ``recover`` uses this for a single-day recovery of TODAY: it
-        # must PIN the scrape to the stale ``data_date`` (so it can't pass
-        # dates=None) yet still restore the same downstream outputs a scheduled
-        # scrape produces — screened_stocks, LLM theses, the top-20 candidate
-        # alert. Without this the recovered day would have a raw QU snapshot but
-        # none of the derived outputs recover is meant to replace (Codex P1).
+        # spam the channel. ``recover`` also pins a date (single-day replay) but
+        # drives the pipeline ITSELF, gated on restored two-book freshness — see
+        # _recover — so a stale half-book can't fire derived output here.
         #
         # Hand off via asyncio.to_thread because compute_theses_and_persist
         # wraps its async work in asyncio.run(); calling it directly from this
@@ -1307,7 +1298,7 @@ async def _run_qu_scrape(
         # surfaces as a partial-success warning rather than morphing the
         # already-successful scrape into a red "Scrape FAILED" alert. The
         # outer except is for actual scrape errors only.
-        if result.records_created > 0 and (not date_list or run_pipeline):
+        if result.records_created > 0 and not date_list:
             try:
                 await asyncio.to_thread(
                     run_post_scrape_pipeline, settings, session,
@@ -1838,11 +1829,10 @@ async def _recover(settings, dry_run: bool):
                 # NEXT, not-yet-traded day — so the rerun would fetch the wrong day
                 # and never refresh `today`, leaving _qu100_day_is_fresh(db, today)
                 # false (Codex P1). Passing the explicit date makes the scraper
-                # query and persist `data_date = today`. ``run_pipeline=True`` keeps
-                # the post-scrape pipeline (screened_stocks, LLM theses, candidate
-                # alert) running even though a date is pinned — a recovered day must
-                # restore the derived outputs a scheduled scrape produces, not just
-                # the raw snapshot (Codex P1).
+                # query and persist `data_date = today`. The pinned date also keeps
+                # _run_qu_scrape's INLINE post-scrape pipeline OFF — recover runs
+                # the pipeline itself below, gated on RESTORED two-book freshness,
+                # so a stale half-book never fires screener/LLM/candidate output.
                 await _run_qu_scrape(
                     session=session_name,
                     detail_top=0,
@@ -1852,7 +1842,6 @@ async def _recover(settings, dry_run: bool):
                     delay=None,
                     headed=False,
                     cdp="http://127.0.0.1:9222",
-                    run_pipeline=True,
                 )
                 click.echo(f"  {session_name} scrape: done")
                 recovered_scrapes.append(session_name)
@@ -1903,6 +1892,32 @@ async def _recover(settings, dry_run: bool):
             click.echo(
                 "  Discord report: skipped — recovery scrape landed no fresh data"
             )
+    # Restore the DERIVED outputs a scheduled scrape would have produced
+    # (screened_stocks, LLM theses, the top-20 candidate alert) — but ONLY now
+    # that BOTH books are fresh. Running this gated on freshness_restored (not
+    # inline in the recovery scrape) is what prevents a stale half-book from
+    # firing screener/LLM/candidate output (Codex P1). run_post_scrape_pipeline is
+    # sync and internally does asyncio.run, so hand it off via asyncio.to_thread
+    # (same reason as _run_qu_scrape) to avoid a nested-event-loop RuntimeError.
+    if qu100_stale and freshness_restored:
+        import asyncio
+
+        click.echo("  Restoring post-scrape pipeline (screener/LLM/candidates)...")
+        try:
+            await asyncio.to_thread(
+                run_post_scrape_pipeline, settings, recover_session
+            )
+            click.echo("  Post-scrape pipeline: done")
+        except Exception as pipeline_exc:
+            click.echo(
+                f"  Post-scrape pipeline: FAILED ({pipeline_exc})", err=True
+            )
+            _notify_recover(
+                "Post-Scrape Pipeline",
+                f"FAILED during recovery: {pipeline_exc}",
+                color=0xE74C3C,
+            )
+
     if qu100_stale and freshness_restored:
         click.echo("  Sending QU100 Discord report...")
         try:

@@ -560,12 +560,11 @@ class TestCliDelegation:
         mock_pipeline.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cli_run_pipeline_forces_pipeline_for_single_day_recovery(self):
-        """Codex P1 regression — ``recover`` pins the scrape to the stale day
-        (dates=<today>) so it CANNOT pass dates=None, but must still restore the
-        derived outputs (screened_stocks / LLM theses / candidate alert). The
-        ``run_pipeline=True`` flag forces the post-scrape pipeline even with a
-        date_list set, so a recovered day is not left with only the raw snapshot."""
+    async def test_cli_pinned_date_keeps_inline_pipeline_off(self):
+        """``recover`` pins the scrape to the stale day (dates=<today>), so
+        _run_qu_scrape's INLINE pipeline stays OFF — recover runs the pipeline
+        itself, gated on restored two-book freshness, so a stale half-book can't
+        fire screener/LLM/candidate output inline (Codex P1)."""
         from unittest.mock import AsyncMock
 
         mock_result = MagicMock(records_created=200, errors=[], duration_seconds=1.0)
@@ -593,11 +592,10 @@ class TestCliDelegation:
                 delay=None,
                 headed=False,
                 cdp=None,
-                run_pipeline=True,
             )
 
-        # Date pinned, but run_pipeline=True -> pipeline STILL runs for the day.
-        mock_pipeline.assert_called_once_with(settings, "afternoon")
+        # Date pinned -> inline pipeline must NOT run (recover gates it separately).
+        mock_pipeline.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_pipeline_runs_in_thread_so_inner_asyncio_run_is_safe(
