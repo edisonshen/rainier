@@ -327,6 +327,38 @@ class TestSlicing:
         assert len(mock_discord.call_args.args[0]) == 20
         assert len(mock_llm.call_args.args[0]) == 5
 
+    def test_explicit_scan_date_stamps_persisted_artifacts(self):
+        """Codex P1 regression — an explicit ``scan_date`` (recover passes the
+        RECOVERED trading day) is threaded to persist_screened_stocks AND
+        compute_theses_and_persist, so a post-midnight / cross-tz replay stamps
+        derived rows with the day the data is from, not date.today()."""
+        from datetime import date
+
+        recovered_day = date(2026, 5, 22)
+        cands = _candidates(10)
+        settings = _make_settings()
+
+        with (
+            patch(
+                "rainier.pipeline.post_scrape.screen_stocks",
+                return_value=(cands, {}),
+            ),
+            patch(
+                "rainier.pipeline.post_scrape.persist_screened_stocks"
+            ) as mock_persist,
+            patch(
+                "rainier.pipeline.post_scrape.compute_theses_and_persist",
+                return_value={},
+            ) as mock_llm,
+            patch("rainier.pipeline.post_scrape.send_stock_candidates"),
+        ):
+            from rainier.pipeline.post_scrape import run_post_scrape_pipeline
+
+            run_post_scrape_pipeline(settings, "afternoon", recovered_day)
+
+        assert mock_persist.call_args.kwargs["scan_date"] == recovered_day
+        assert mock_llm.call_args.kwargs["scan_date"] == recovered_day
+
     def test_fewer_than_5_candidates_llm_sees_all(self):
         cands = _candidates(3)
         settings = _make_settings()

@@ -1904,8 +1904,12 @@ async def _recover(settings, dry_run: bool):
 
         click.echo("  Restoring post-scrape pipeline (screener/LLM/candidates)...")
         try:
+            # Stamp the derived artifacts with the RECOVERED trading day (`today`),
+            # not date.today(): a post-midnight / cross-timezone replay must label
+            # ScreenedStockRecord / thesis rows with the day the data is from
+            # (the pinned scrape data_date), not the wall-clock run date (Codex P1).
             await asyncio.to_thread(
-                run_post_scrape_pipeline, settings, recover_session
+                run_post_scrape_pipeline, settings, recover_session, today
             )
             click.echo("  Post-scrape pipeline: done")
         except Exception as pipeline_exc:
