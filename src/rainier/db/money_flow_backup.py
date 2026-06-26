@@ -569,7 +569,12 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
       (e) SOURCE-side data-loss alarm: any backup row in ``id <= run_max`` whose
           key is ABSENT from the source. The non-destructive backup retains rows
           the source dropped (data safe), but verify still flags the divergence so
-          a silent source-side row loss / corruption is surfaced loudly.
+          a silent source-side row loss / corruption is surfaced loudly;
+      (f) TRAILING source-loss alarm (uncapped): backup ``MAX(id)`` greater than
+          the source's live ``MAX(id)`` — the source dropped its highest ids /
+          most-recent generation (which (e), bounded to ``id <= run_max``, cannot
+          see). Backup ids only come from the source, so this inequality is itself
+          the loss signal; a normal copy lag is the opposite inequality.
     """
     report = VerifyReport()
     src_tbl = source_table()
@@ -674,6 +679,30 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
             f"SOURCE — the source dropped rows the backup retained (non-destructive "
             f"backup is intact; this flags a source-side data loss / corruption to "
             f"investigate). sample={sample}"
+        )
+
+    # (f) TRAILING source-loss alarm (UNCAPPED). (e) is bounded to id<=run_max, so
+    # it can't see the source dropping its HIGHEST ids / most-recent generation:
+    # run_max shrinks to the surviving max, putting the retained backup rows at
+    # id>run_max where every other check excludes them. Backup ids only ever come
+    # from the source, so a backup MAX(id) GREATER than the source's live MAX(id)
+    # means the source lost its top rows (the backup retained them) — flag it. A
+    # normal lag (source has newer ids the backup hasn't copied yet) is the
+    # opposite inequality and is NOT flagged.
+    with src.connect() as sconn:
+        src_max_all = sconn.execute(
+            select(func.coalesce(func.max(src_tbl.c.id), 0))
+        ).scalar_one()
+    with dst.connect() as dconn:
+        dst_max_all = dconn.execute(
+            select(func.coalesce(func.max(dst_tbl.c.id), 0))
+        ).scalar_one()
+    if dst_max_all > src_max_all:
+        report.failures.append(
+            f"backup MAX(id)={dst_max_all} exceeds source MAX(id)={src_max_all} — "
+            f"the source dropped its most-recent rows that the backup retained "
+            f"(non-destructive backup is intact; flags a trailing source-side data "
+            f"loss to investigate)."
         )
 
     return report

@@ -281,14 +281,14 @@ def test_concurrent_rebuild_does_not_purge_day_from_backup(src_engine, dst_engin
     assert mfb.verify_backup(src_engine, dst_engine, run_max=4).ok
 
 
-def test_deleted_latest_day_with_high_ids_is_retained(src_engine, dst_engine):
+def test_deleted_latest_day_with_high_ids_is_retained_and_alarmed(src_engine, dst_engine):
     """When the day the source lost held the HIGHEST ids, dropping it lowers
-    run_max below those ids. The backup retains that day (non-destructive
-    invariant); the retained ids sit ABOVE the lowered run_max so verify — bounded
-    to id<=run_max — stays green.
+    run_max below those ids. The backup RETAINS that day (non-destructive), and
+    the TRAILING-loss alarm (check f, uncapped) flags it even though it sits above
+    run_max where the id<=run_max checks can't see it.
 
     day1=id1, day2=id2 backed up. Delete day2 (the high-id day) from source ->
-    next run_max=1. day2 is backup-only -> retained, not purged."""
+    next run_max=1. day2 is backup-only -> retained, not purged; verify alarms."""
     mfb = _import()
     _seed(src_engine, [_row(1, data_date=DAY1), _row(2, data_date=DAY2, captured_at=T_DAY2)])
     mfb.backup_money_flow(src_engine, dst_engine)
@@ -301,7 +301,9 @@ def test_deleted_latest_day_with_high_ids_is_retained(src_engine, dst_engine):
     result = mfb.backup_money_flow(src_engine, dst_engine)
     assert result.run_max == 1, "run_max drops to the remaining max source id"
     assert _dst_ids(dst_engine, bt) == [1, 2], "lost high-id day must be retained in backup"
-    assert mfb.verify_backup(src_engine, dst_engine, run_max=1).ok
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=1)
+    assert not report.ok, "trailing source-side loss must be alarmed"
+    assert any("exceeds source MAX(id)" in f for f in report.failures)
 
 
 def test_empty_source_does_not_wipe_backup(src_engine, dst_engine):
@@ -357,7 +359,12 @@ def test_lost_book_does_not_disturb_surviving_book(src_engine, dst_engine):
     result = mfb.backup_money_flow(src_engine, dst_engine)
     assert result.copied == 0, "top100 unchanged, bottom100 retained -> nothing recopied"
     assert _dst_ids(dst_engine, bt) == [1, 2, 3, 4], "surviving + lost book both kept"
-    assert mfb.verify_backup(src_engine, dst_engine, run_max=2).ok
+    # bottom100's ids (3,4) are the highest, so dropping them is a TRAILING loss
+    # the uncapped alarm (f) flags — the surviving book is untouched, the lost book
+    # retained, and verify surfaces the source-side loss.
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=2)
+    assert not report.ok, "lost bottom100 (trailing ids) must be alarmed"
+    assert any("exceeds source MAX(id)" in f for f in report.failures)
 
 
 def test_one_book_rebuild_leaves_other_book_untouched(src_engine, dst_engine):
