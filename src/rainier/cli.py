@@ -1207,7 +1207,10 @@ def qu(ctx, session, detail_top, dates, days_back, start_date, delay, headed, cd
         sys.exit(1)
 
 
-async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, delay, headed, cdp):
+async def _run_qu_scrape(
+    session, detail_top, dates, days_back, start_date, delay, headed, cdp,
+    run_pipeline=False,
+):
     import asyncio
     from datetime import date, datetime, timedelta
 
@@ -1287,6 +1290,14 @@ async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, dela
         # (date_list is set) since those replay historical scans and would
         # spam the channel.
         #
+        # EXCEPTION: ``run_pipeline=True`` forces the pipeline even with a
+        # date_list. ``recover`` uses this for a single-day recovery of TODAY: it
+        # must PIN the scrape to the stale ``data_date`` (so it can't pass
+        # dates=None) yet still restore the same downstream outputs a scheduled
+        # scrape produces — screened_stocks, LLM theses, the top-20 candidate
+        # alert. Without this the recovered day would have a raw QU snapshot but
+        # none of the derived outputs recover is meant to replace (Codex P1).
+        #
         # Hand off via asyncio.to_thread because compute_theses_and_persist
         # wraps its async work in asyncio.run(); calling it directly from this
         # already-running event loop raises RuntimeError. The shared pipeline
@@ -1296,7 +1307,7 @@ async def _run_qu_scrape(session, detail_top, dates, days_back, start_date, dela
         # surfaces as a partial-success warning rather than morphing the
         # already-successful scrape into a red "Scrape FAILED" alert. The
         # outer except is for actual scrape errors only.
-        if result.records_created > 0 and not date_list:
+        if result.records_created > 0 and (not date_list or run_pipeline):
             try:
                 await asyncio.to_thread(
                     run_post_scrape_pipeline, settings, session,
@@ -1827,9 +1838,11 @@ async def _recover(settings, dry_run: bool):
                 # NEXT, not-yet-traded day — so the rerun would fetch the wrong day
                 # and never refresh `today`, leaving _qu100_day_is_fresh(db, today)
                 # false (Codex P1). Passing the explicit date makes the scraper
-                # query and persist `data_date = today`. (dates set also skips
-                # _run_qu_scrape's inline post-scrape pipeline; recover does its own
-                # freshness-gated Discord resend below, so the report still fires.)
+                # query and persist `data_date = today`. ``run_pipeline=True`` keeps
+                # the post-scrape pipeline (screened_stocks, LLM theses, candidate
+                # alert) running even though a date is pinned — a recovered day must
+                # restore the derived outputs a scheduled scrape produces, not just
+                # the raw snapshot (Codex P1).
                 await _run_qu_scrape(
                     session=session_name,
                     detail_top=0,
@@ -1839,6 +1852,7 @@ async def _recover(settings, dry_run: bool):
                     delay=None,
                     headed=False,
                     cdp="http://127.0.0.1:9222",
+                    run_pipeline=True,
                 )
                 click.echo(f"  {session_name} scrape: done")
                 recovered_scrapes.append(session_name)

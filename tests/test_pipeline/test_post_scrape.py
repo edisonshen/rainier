@@ -560,6 +560,46 @@ class TestCliDelegation:
         mock_pipeline.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_cli_run_pipeline_forces_pipeline_for_single_day_recovery(self):
+        """Codex P1 regression — ``recover`` pins the scrape to the stale day
+        (dates=<today>) so it CANNOT pass dates=None, but must still restore the
+        derived outputs (screened_stocks / LLM theses / candidate alert). The
+        ``run_pipeline=True`` flag forces the post-scrape pipeline even with a
+        date_list set, so a recovered day is not left with only the raw snapshot."""
+        from unittest.mock import AsyncMock
+
+        mock_result = MagicMock(records_created=200, errors=[], duration_seconds=1.0)
+        mock_scraper = AsyncMock()
+        mock_scraper.execute = AsyncMock(return_value=mock_result)
+        settings = _make_settings()
+
+        with (
+            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
+            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
+            patch("rainier.core.config.get_settings", return_value=settings),
+            patch("rainier.cli.run_post_scrape_pipeline") as mock_pipeline,
+        ):
+            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            from rainier.cli import _run_qu_scrape
+
+            await _run_qu_scrape(
+                session="afternoon",
+                detail_top=0,
+                dates="2026-05-22",  # pinned single day (recover targets `today`)
+                days_back=0,
+                start_date=None,
+                delay=None,
+                headed=False,
+                cdp=None,
+                run_pipeline=True,
+            )
+
+        # Date pinned, but run_pipeline=True -> pipeline STILL runs for the day.
+        mock_pipeline.assert_called_once_with(settings, "afternoon")
+
+    @pytest.mark.asyncio
     async def test_cli_pipeline_runs_in_thread_so_inner_asyncio_run_is_safe(
         self,
     ):
