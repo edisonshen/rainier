@@ -151,22 +151,31 @@ def test_bootstrap_copies_all_rows(src_engine, dst_engine):
 
 
 # ===========================================================================
-# Test 2 — incremental: only new rows (> hwm) copied
+# Test 2 — incremental: a brand-new DAY appends; the unchanged old day is skipped
 # ===========================================================================
 
+_CAP_DAY2 = datetime(2026, 6, 2, 22, 0, tzinfo=timezone.utc)
 
-def test_incremental_only_new_rows(src_engine, dst_engine):
+
+def test_incremental_new_day_appends(src_engine, dst_engine):
+    """Under the data_date-aware reconcile, genuinely-new rows are a NEW trading
+    day; the unchanged prior day is not recopied."""
     mfb = _import()
-    _seed_src(src_engine, [_row(i) for i in range(1, 4)])
+    _seed_src(src_engine, [_row(i) for i in range(1, 4)])  # day 2026-06-01
     mfb.backup_money_flow(src_engine, dst_engine)
 
-    _seed_src(src_engine, [_row(i) for i in range(4, 7)])
+    # A new trading day (2026-06-02) — distinct data_date + captured_at.
+    _seed_src(
+        src_engine,
+        [_row(i, data_date=date(2026, 6, 2), captured_at=_CAP_DAY2) for i in range(4, 7)],
+    )
     result = mfb.backup_money_flow(src_engine, dst_engine)
 
-    assert result.copied == 3
+    assert result.copied == 3  # only the new day's 3 rows; old day skipped
     assert result.hwm_before == 3
     assert result.run_max == 6
     assert _dst_ids(dst_engine, mfb.backup_table()) == [1, 2, 3, 4, 5, 6]
+    assert mfb.verify_backup(src_engine, dst_engine, run_max=6).ok
 
 
 # ===========================================================================
@@ -214,17 +223,18 @@ def test_stable_upper_bound_race(src_engine, dst_engine):
     _seed_src(src_engine, [_row(i) for i in range(1, 4)])
 
     # Simulate a scrape landing mid-backup: a hook fires AFTER run_max is
-    # captured but BEFORE rows are read, inserting id=99.
+    # captured but BEFORE rows are read, inserting id=99 on a NEW trading day.
     def _mid(stage):
         if stage == "after_run_max":
-            _seed_src(src_engine, [_row(99)])
+            _seed_src(src_engine, [_row(99, data_date=date(2026, 6, 2), captured_at=_CAP_DAY2)])
 
     result = mfb.backup_money_flow(src_engine, dst_engine, _race_hook=_mid)
+    # id=99 > run_max(3) -> excluded this run (not a torn read).
     assert result.run_max == 3
     assert result.copied == 3
     assert _dst_ids(dst_engine, mfb.backup_table()) == [1, 2, 3]
 
-    # Next run picks up id=99.
+    # Next run reconciles the new day and picks up id=99.
     result2 = mfb.backup_money_flow(src_engine, dst_engine)
     assert result2.copied == 1
     assert _dst_ids(dst_engine, mfb.backup_table()) == [1, 2, 3, 99]
@@ -344,28 +354,56 @@ def test_verify_raw_data_value_divergence_fails(src_engine, dst_engine):
     assert any("checksum" in f.lower() for f in report.failures)
 
 
-def test_verify_edited_old_row_caught_by_full_window_checksum(src_engine, dst_engine):
-    """7(d) — an edited OLD source row with id <= hwm (same composite key,
-    different value) is caught by the FULL-window checksum.
+def test_reconcile_does_not_propagate_same_capture_edit(src_engine, dst_engine):
+    """Codex P1 — an in-place edit of a SOURCE row at the SAME captured_at is NOT
+    propagated to the backup; verify REPORTS it loudly instead.
 
-    counts/max-id/missing-row all still pass because the (id, captured_at) key is
-    unchanged — only a full-window (id <= run_max, not just the incremental
-    window) checksum fires. This is the declared drift safety net.
+    A difference at the same captured_at is not a rebuild (a rebuild advances
+    captured_at). It is a source-side shrink / in-place edit / corruption, and the
+    reconcile cannot tell a genuine correction from corruption — so the
+    NON-DESTRUCTIVE invariant forbids overwriting the backup. The edit is detected
+    by verify_backup's content-faithful checksum (loud), never auto-destroyed.
     """
     mfb = _import()
     _seed_src(src_engine, [_row(i) for i in range(1, 4)])
-    mfb.backup_money_flow(src_engine, dst_engine)  # backup now has 1,2,3 (hwm=3)
+    mfb.backup_money_flow(src_engine, dst_engine)  # backup now has 1,2,3
 
-    # Edit an OLD source row in place (id=2, id <= hwm). The backup still holds
-    # the original value. New rows added so there IS an incremental window.
+    # Edit an OLD source row in place (id=2), SAME captured_at (no new rebuild).
     with src_engine.begin() as conn:
         conn.execute(_SRC.update().where(_SRC.c.id == 2).values(rank=777))
-    _seed_src(src_engine, [_row(i) for i in range(4, 6)])
-    mfb.backup_money_flow(src_engine, dst_engine)  # copies 4,5; id=2 NOT recopied
+    mfb.backup_money_flow(src_engine, dst_engine)
 
-    report = mfb.verify_backup(src_engine, dst_engine, run_max=5)
-    assert not report.ok, "full-window checksum must catch an edited id<=hwm row"
-    assert any("checksum" in f.lower() for f in report.failures)
+    # Backup row is NOT overwritten (non-destructive); verify FLAGS the drift.
+    bt = mfb.backup_table()
+    with dst_engine.connect() as conn:
+        rank = conn.execute(select(bt.c.rank).where(bt.c.id == 2)).scalar_one()
+    assert rank == 2, "same-captured_at edit must NOT be propagated to the backup"
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=3)
+    assert not report.ok, "verify must loudly report the source/backup content drift"
+
+
+def test_reconcile_recopies_on_newer_capture_rebuild(src_engine, dst_engine):
+    """The flip side: a row changed under a NEWER captured_at IS a rebuild and the
+    backup DOES recopy it (orphans purged, content aligned)."""
+    mfb = _import()
+    _seed_src(src_engine, [_row(i) for i in range(1, 4)])
+    mfb.backup_money_flow(src_engine, dst_engine)
+
+    # Rebuild the day: drop the old generation, re-insert NEW ids under a NEWER
+    # captured_at with a corrected value (simulates WS A's rebuild generation).
+    newer = datetime(2026, 6, 1, 23, 30, tzinfo=timezone.utc)  # > _CAP (22:00)
+    with src_engine.begin() as conn:
+        conn.execute(_SRC.delete().where(_SRC.c.data_date == _row(1)["data_date"]))
+    _seed_src(
+        src_engine,
+        [_row(i, captured_at=newer, rank=777 if i == 5 else i) for i in (4, 5, 6)],
+    )
+    mfb.backup_money_flow(src_engine, dst_engine)
+
+    report = mfb.verify_backup(src_engine, dst_engine, run_max=6)
+    assert report.ok, report.failures
+    bt = mfb.backup_table()
+    assert _dst_ids(dst_engine, bt) == [4, 5, 6], "newer rebuild purges orphans 1,2,3"
 
 
 def test_verify_duplicate_source_id_fails(src_engine, dst_engine):
@@ -436,11 +474,14 @@ def test_transaction_safety_rolls_back(src_engine, dst_engine):
 # ===========================================================================
 
 
-def test_empty_source_no_op(src_engine, dst_engine):
+def test_empty_source_bootstrap_no_op(src_engine, dst_engine):
+    """Source AND backup both empty -> legitimate bootstrap (fresh deploy / just
+    after db init, before the first scrape). No-op, NOT flagged as data loss."""
     mfb = _import()
     result = mfb.backup_money_flow(src_engine, dst_engine)
     assert result.copied == 0
     assert result.run_max == 0
+    assert result.source_empty is False, "both-empty bootstrap must not be flagged"
 
 
 # ===========================================================================
@@ -508,6 +549,67 @@ def test_cli_backup_copies_to_neon(monkeypatch, tmp_path, _local_src_path):
     check = create_engine(f"sqlite:///{dst_path}")
     assert _count(check, "backup_money_flow_snapshots") == 3
     check.dispose()
+    local_eng.dispose()
+
+
+def test_cli_empty_source_fails_loud_when_backup_has_rows(monkeypatch, tmp_path):
+    """Codex P1 regression — a SOURCE that LOST all its data while the backup
+    already has rows (mispointed LEGACY_DATABASE_URL / failed restore) must FAIL
+    the run (non-zero), NOT print a silent '0 rows' success. Backup left intact."""
+    from rainier.cli import cli
+    from rainier.core import database
+    from rainier.db import engine as db_engine
+
+    local_path = tmp_path / "local.db"
+    local_eng = create_engine(f"sqlite:///{local_path}")
+    _SRC_META.create_all(local_eng)
+    with local_eng.begin() as conn:
+        conn.execute(insert(_SRC), [_row(i) for i in range(1, 4)])
+    monkeypatch.setattr(database, "get_engine", lambda *a, **k: local_eng)
+
+    dst_path = tmp_path / "neon.db"
+    monkeypatch.setattr(
+        db_engine, "get_engine", lambda: create_engine(f"sqlite:///{dst_path}")
+    )
+
+    # First run populates the backup.
+    res1 = CliRunner().invoke(cli, ["db", "backup-money-flow"])
+    assert res1.exit_code == 0, res1.output
+
+    # Source loses all its data (the dangerous misconfiguration) -> fail loud.
+    with local_eng.begin() as conn:
+        conn.execute(_SRC.delete())
+    res2 = CliRunner().invoke(cli, ["db", "backup-money-flow"])
+    assert res2.exit_code != 0, res2.output
+    assert res2.exception is None or isinstance(res2.exception, SystemExit), (
+        f"expected a clean ClickException, got {res2.exception!r}"
+    )
+    assert "empty" in res2.output.lower()
+    # Backup still holds the 3 rows (non-destructive).
+    assert _count(create_engine(f"sqlite:///{dst_path}"), "backup_money_flow_snapshots") == 3
+    local_eng.dispose()
+
+
+def test_cli_empty_source_bootstrap_exits_zero(monkeypatch, tmp_path):
+    """Codex P2 regression — a fresh deploy / just-after-db-init state (source AND
+    backup both empty, before the first scrape) is a legitimate no-op: the nightly
+    cron must exit 0, NOT page on the normal pre-bootstrap empty table."""
+    from rainier.cli import cli
+    from rainier.core import database
+    from rainier.db import engine as db_engine
+
+    local_path = tmp_path / "empty_local.db"
+    local_eng = create_engine(f"sqlite:///{local_path}")
+    _SRC_META.create_all(local_eng)  # schema only, no rows
+    monkeypatch.setattr(database, "get_engine", lambda *a, **k: local_eng)
+
+    dst_path = tmp_path / "neon.db"
+    monkeypatch.setattr(
+        db_engine, "get_engine", lambda: create_engine(f"sqlite:///{dst_path}")
+    )
+
+    res = CliRunner().invoke(cli, ["db", "backup-money-flow"])
+    assert res.exit_code == 0, res.output
     local_eng.dispose()
 
 

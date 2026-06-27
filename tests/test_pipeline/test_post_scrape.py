@@ -327,6 +327,38 @@ class TestSlicing:
         assert len(mock_discord.call_args.args[0]) == 20
         assert len(mock_llm.call_args.args[0]) == 5
 
+    def test_explicit_scan_date_stamps_persisted_artifacts(self):
+        """Codex P1 regression — an explicit ``scan_date`` (recover passes the
+        RECOVERED trading day) is threaded to persist_screened_stocks AND
+        compute_theses_and_persist, so a post-midnight / cross-tz replay stamps
+        derived rows with the day the data is from, not date.today()."""
+        from datetime import date
+
+        recovered_day = date(2026, 5, 22)
+        cands = _candidates(10)
+        settings = _make_settings()
+
+        with (
+            patch(
+                "rainier.pipeline.post_scrape.screen_stocks",
+                return_value=(cands, {}),
+            ),
+            patch(
+                "rainier.pipeline.post_scrape.persist_screened_stocks"
+            ) as mock_persist,
+            patch(
+                "rainier.pipeline.post_scrape.compute_theses_and_persist",
+                return_value={},
+            ) as mock_llm,
+            patch("rainier.pipeline.post_scrape.send_stock_candidates"),
+        ):
+            from rainier.pipeline.post_scrape import run_post_scrape_pipeline
+
+            run_post_scrape_pipeline(settings, "afternoon", recovered_day)
+
+        assert mock_persist.call_args.kwargs["scan_date"] == recovered_day
+        assert mock_llm.call_args.kwargs["scan_date"] == recovered_day
+
     def test_fewer_than_5_candidates_llm_sees_all(self):
         cands = _candidates(3)
         settings = _make_settings()
@@ -557,6 +589,44 @@ class TestCliDelegation:
             )
 
         # date_list is non-empty -> skip post-scrape pipeline.
+        mock_pipeline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_pinned_date_keeps_inline_pipeline_off(self):
+        """``recover`` pins the scrape to the stale day (dates=<today>), so
+        _run_qu_scrape's INLINE pipeline stays OFF — recover runs the pipeline
+        itself, gated on restored two-book freshness, so a stale half-book can't
+        fire screener/LLM/candidate output inline (Codex P1)."""
+        from unittest.mock import AsyncMock
+
+        mock_result = MagicMock(records_created=200, errors=[], duration_seconds=1.0)
+        mock_scraper = AsyncMock()
+        mock_scraper.execute = AsyncMock(return_value=mock_result)
+        settings = _make_settings()
+
+        with (
+            patch("rainier.scrapers.browser.BrowserManager") as MockBM,
+            patch("rainier.scrapers.get_scraper", return_value=mock_scraper),
+            patch("rainier.core.config.get_settings", return_value=settings),
+            patch("rainier.cli.run_post_scrape_pipeline") as mock_pipeline,
+        ):
+            MockBM.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            MockBM.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            from rainier.cli import _run_qu_scrape
+
+            await _run_qu_scrape(
+                session="afternoon",
+                detail_top=0,
+                dates="2026-05-22",  # pinned single day (recover targets `today`)
+                days_back=0,
+                start_date=None,
+                delay=None,
+                headed=False,
+                cdp=None,
+            )
+
+        # Date pinned -> inline pipeline must NOT run (recover gates it separately).
         mock_pipeline.assert_not_called()
 
     @pytest.mark.asyncio

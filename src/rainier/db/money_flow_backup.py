@@ -9,32 +9,55 @@ incrementally and idempotently, into a plain ``backup.money_flow_snapshots``
 table on Neon (which has managed backups). Local stays the primary; Neon holds
 a backup copy.
 
-Copy mechanism (high-water-mark by ``id``, insert-only, idempotent)
--------------------------------------------------------------------
-The QU scraper is insert-only for money flow (it skips already-present
-``(data_date, ranking_type)`` batches and only INSERTs; never UPDATE/DELETE),
-``id`` is a monotonic sequence, so a HWM-by-``id`` copy is correct as long as
-that invariant holds. ``verify_backup`` (full-window canonicalized checksum) is
-the declared drift safety net if the invariant is ever violated.
+Copy mechanism (``data_date``-aware reconcile, idempotent)
+----------------------------------------------------------
+The QU scraper REBUILDS a day on each later same-day scrape: it DELETEs that
+day's ``(data_date, ranking_type)`` rows and re-INSERTs fresh ones with new
+autoincrement ids (see ``scrapers/qu/scraper.py:_persist_qu100``). So a day's
+rows change after first write, and old ids vanish. The previous high-water-mark-
+by-``id`` copy CANNOT cope: an id-forward cursor can neither purge the orphaned
+old ids the rebuild deleted (they sit *below* the high-water mark) nor re-copy a
+changed day whose new max-id it already passed — ``verify_backup``'s full-window
+checksum would then fail the nightly cron.
+
+Instead we reconcile per GENERATION ``(data_date, ranking_type)`` — the exact
+unit the scraper rebuilds — over the UNION of source and backup generations, in
+ONE destination transaction:
 
     src = core.database.get_engine()    # legacy -> local TimescaleDB (PR #115)
     dst = db.engine.get_engine()        # canonical -> DATABASE_URL -> Neon
-    run_max = MAX(id) on src            # STABLE upper bound, captured ONCE
-    hwm     = MAX(id) on dst backup     # high-water mark
-    copy WHERE id > hwm AND id <= run_max, ON CONFLICT (id, captured_at) DO NOTHING
+    run_max = MAX(id) on src            # STABLE upper bound (id <= run_max only)
+    for gen=(data_date, ranking_type) in source_gens ∪ backup_gens:
+        source-only gen         -> copy the gen (append)
+        backup-only gen         -> RETAIN (never propagate a source-side delete)
+        present on both, DIFFER -> DELETE the gen in backup + re-copy from source
+            (differ = row-count mismatch, OR a source captured_at newer than the
+             backup's, OR a per-gen canonical checksum mismatch)
+        present on both, equal  -> skip
 
-A scrape landing rows mid-backup (id > run_max) is NOT torn-read — those rows
-are picked up next run. The whole destination insert runs in ONE transaction so
-a mid-run failure leaves the backup unchanged (next run retries from the same
-hwm). JSONB ``raw_data`` is bound via a typed SQLAlchemy Core column (NOT raw
-text interpolation).
+Keying on ``(data_date, ranking_type)`` — NOT ``data_date`` alone — keeps the two
+books independent: a partial source-side loss of one book (e.g. bottom100 dropped
+by a bad restore while top100 survives) never disturbs the surviving book.
 
-    ASCII (one run):
+NON-DESTRUCTIVE INVARIANT: this function never propagates a source-side DELETE.
+A backup DELETE is only ever issued to immediately RE-COPY the same generation in
+the same txn (the same-day rebuild: the generation still exists in source with new
+ids, so its stale backup rows — including the rebuild's orphaned old ids — are
+replaced wholesale). A generation the source LOST entirely (bad restore, manual
+cleanup, corruption) is LEFT INTACT in the backup — the off-site copy is disaster
+recovery and must not erase the only recoverable copy of an irreplaceable day.
+
+Only rows with ``id <= run_max`` are considered, so a scrape landing mid-backup
+is not a torn read (it is reconciled next run). The whole destination mutation
+runs in ONE transaction, so a mid-run failure leaves the backup unchanged.
+JSONB ``raw_data`` is bound via a typed SQLAlchemy Core column (NOT raw text).
+
+    ASCII (a same-day rebuild):
 
         src.money_flow_snapshots            dst.backup.money_flow_snapshots
         ┌───────────────────────┐           ┌───────────────────────────┐
-        │ id 1..run_max (stable)│  copy >hwm │ id 1..hwm  (already there)│
-        │ id >run_max (ignored) │ ─────────▶ │ + id (hwm, run_max]       │
+        │ day D: ids {3,4} (new)│  D differs │ day D: ids {1,2} (stale)  │
+        │ (ids 1,2 deleted)     │ ─────────▶ │ DELETE day D, re-copy {3,4}│
         └───────────────────────┘  one txn   └───────────────────────────┘
 """
 
@@ -43,6 +66,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -58,10 +82,13 @@ from sqlalchemy import (
     Table,
     func,
     select,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.types import JSON
+
+log = logging.getLogger(__name__)
 
 # Columns copied from core/models.py:MoneyFlowSnapshot (in order). ``raw_data``
 # uses the generic JSON type for BINDING (a dict serializes identically whether
@@ -143,11 +170,24 @@ def _backup_schema_for(engine: Engine) -> str | None:
 
 @dataclass
 class BackupResult:
-    """Outcome of one ``backup_money_flow`` run."""
+    """Outcome of one ``backup_money_flow`` run.
+
+    ``copied`` — rows written this run (new gens + recopied changed gens).
+    ``hwm_before`` — pre-run ``MAX(id)`` in the backup (reported for logging; the
+    reconcile keys on ``(data_date, ranking_type)``, not an id high-water mark).
+    ``run_max`` — the stable ``MAX(id)`` upper bound the run reconciled up to.
+    ``source_empty`` — the source had ZERO rows WHILE the backup already had rows
+    (``hwm > 0``), i.e. the source LOST all its data (mispointed
+    ``LEGACY_DATABASE_URL`` / failed restore). The reconcile was skipped (backup
+    left intact) and the CLI turns this into a NON-ZERO exit — never a silent
+    "0 rows" success. A fresh bootstrap (source AND backup both empty) is NOT
+    flagged (``source_empty=False``): it's a normal pre-first-scrape no-op.
+    """
 
     copied: int
     hwm_before: int
     run_max: int
+    source_empty: bool = False
 
 
 @dataclass
@@ -166,6 +206,59 @@ class VerifyReport:
 # ---------------------------------------------------------------------------
 
 
+def _gen_key(r: dict) -> tuple:
+    """The reconcile/rebuild unit: ``(data_date, ranking_type)``.
+
+    The QU scraper rebuilds a snapshot per ``(data_date, ranking_type)`` (each
+    book independently — a midday top100 rebuild leaves bottom100 untouched), so
+    the backup MUST reconcile on the same composite key. Keying on ``data_date``
+    alone would lump both books: a partial source-side loss of ONE book (e.g.
+    bottom100 dropped by a bad restore while top100 survives) would look like a
+    generic "day changed", delete the whole day, and recopy only the survivor —
+    erasing the backup-only book and defeating the non-destructive invariant.
+    """
+    return (r["data_date"], r["ranking_type"])
+
+
+def _cap_utc(value: object) -> _dt.datetime:
+    """A captured_at value as an ORDER-COMPARABLE aware UTC datetime.
+
+    Aware -> converted to UTC; naive (e.g. a SQLite read-back) -> assumed UTC so a
+    later instant always compares greater. Used to tell a genuine NEWER-generation
+    rebuild (captured_at advanced) from a same-captured_at source-side change.
+    """
+    if isinstance(value, _dt.datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=_dt.timezone.utc)
+        return value.astimezone(_dt.timezone.utc)
+    # Non-datetime captured_at should never occur; fall back to the epoch so it
+    # sorts before any real timestamp rather than raising.
+    return _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+
+
+def _gen_fingerprints(rows: list[dict]) -> dict[tuple, dict]:
+    """Group ``rows`` by ``(data_date, ranking_type)`` -> ``{count, max_cap_dt,
+    checksum}``.
+
+    ``max_cap_dt`` is the max ``captured_at`` (UTC datetime) over the generation —
+    the rebuild-vs-corruption discriminator; ``checksum`` is the order-independent
+    content hash of its rows. Used to decide whether a generation differs between
+    source and backup and whether the difference is a legitimate newer rebuild.
+    """
+    by_gen: dict[tuple, list[dict]] = {}
+    for r in rows:
+        by_gen.setdefault(_gen_key(r), []).append(r)
+    fps: dict[tuple, dict] = {}
+    for key, gen_rows in by_gen.items():
+        max_cap_dt = max(_cap_utc(r["captured_at"]) for r in gen_rows)
+        fps[key] = {
+            "count": len(gen_rows),
+            "max_cap_dt": max_cap_dt,
+            "checksum": _checksum(gen_rows),
+        }
+    return fps
+
+
 def backup_money_flow(
     src: Engine,
     dst: Engine,
@@ -173,18 +266,26 @@ def backup_money_flow(
     chunk_size: int = 5000,
     _race_hook: Callable[[str], None] | None = None,
 ) -> BackupResult:
-    """Copy new ``money_flow_snapshots`` rows from ``src`` to ``dst`` (insert-only).
+    """Reconcile ``money_flow_snapshots`` from ``src`` into ``dst`` per ``data_date``.
 
-    Captures a STABLE ``run_max = MAX(id)`` on ``src`` once at the start, reads
-    the backup high-water mark ``hwm`` from ``dst``, then copies
-    ``id > hwm AND id <= run_max`` into the backup table within ONE transaction
-    with ``ON CONFLICT (id, captured_at) DO NOTHING``. The destination table is
-    created if absent (idempotent bootstrap from an empty backup).
+    Captures a STABLE ``run_max = MAX(id)`` on ``src`` once, then — considering
+    only ``id <= run_max`` — reconciles each ``data_date`` in the union of source
+    and backup days: a day present only in source is copied; a day present only in
+    backup is RETAINED (the backup never propagates a source-side delete — see the
+    non-destructive invariant in the module docstring); a day present in both but
+    DIFFERING (row-count / newer ``captured_at`` / canonical-checksum mismatch —
+    e.g. a same-day rebuild) is delete-then-recopied; an equal day is skipped. All
+    mutations run in ONE destination transaction, so a mid-run failure leaves the
+    backup unchanged. The destination table is created if absent.
 
-    ``_race_hook`` is a test seam called with stage names
-    (``"after_run_max"`` after the stable upper bound is captured;
-    ``"before_commit"`` just before the txn commits) so tests can simulate a
-    concurrent scrape or a forced mid-insert failure without sleeps.
+    ``BackupResult.copied`` counts rows WRITTEN this run (new + recopied days).
+    ``hwm_before`` is the pre-run ``MAX(id)`` in the backup (kept for callers /
+    logging; the reconcile no longer uses an id high-water mark as the cursor).
+
+    ``_race_hook`` is a test seam called with stage names (``"after_run_max"``
+    after the stable upper bound is captured; ``"before_commit"`` just before the
+    txn commits) so tests can simulate a concurrent scrape or a forced mid-run
+    failure without sleeps.
     """
     src_tbl = source_table()
     schema = _backup_schema_for(dst)
@@ -194,41 +295,123 @@ def backup_money_flow(
     # creates it; checkfirst makes this a no-op there and creates it on SQLite.
     dst_tbl.create(dst, checkfirst=True)
 
-    # 1) Stable upper bound on the source, captured ONCE.
-    with src.connect() as sconn:
-        run_max = sconn.execute(select(func.coalesce(func.max(src_tbl.c.id), 0))).scalar_one()
+    # 1) Read the ENTIRE source in ONE snapshot, then derive run_max FROM that
+    #    same read. A same-day rebuild (DELETE day D's ids <= run_max, re-INSERT
+    #    ids > run_max) landing between "capture run_max" and "read src_rows" used
+    #    to make D look source-empty -> the reconcile purged D from the backup
+    #    (Codex P1: torn read). Reading rows and run_max from one consistent
+    #    snapshot closes that window: either we see D's pre-rebuild rows (and
+    #    run_max excludes the new ids), or we see the post-rebuild rows whole.
+    src_all = _read_all(src, src_tbl)
+    run_max = max((r["id"] for r in src_all), default=0)
 
     if _race_hook is not None:
         _race_hook("after_run_max")
 
-    # 2) High-water mark on the destination backup.
+    # 2) Pre-run backup high-water mark (reported, not used as the cursor).
     with dst.connect() as dconn:
         hwm = dconn.execute(
             select(func.coalesce(func.max(dst_tbl.c.id), 0))
         ).scalar_one()
 
+    # 2a) Empty-source early-out. The non-destructive invariant below (a
+    #     backup-only generation is never purged) already makes an empty source a
+    #     safe no-op for the backup data. Whether it's an ALARM depends on the
+    #     backup's state:
+    #       * backup ALSO empty (hwm == 0) -> legitimate BOOTSTRAP: a fresh deploy
+    #         / just after ``db init``, before the first scrape. No-op, NOT an
+    #         alarm (failing here would page the nightly cron for a normal
+    #         pre-bootstrap state — Codex P2).
+    #       * backup NON-empty (hwm > 0) but source empty -> the source LOST all
+    #         its data (mis-pointed LEGACY_DATABASE_URL / failed restore / rebuilt
+    #         local DB — a confusion that already caused a prior P0). That must NOT
+    #         read as a silent "0 rows" success; flag it so the CLI fails loud
+    #         (Codex P1).
+    if not src_all:
+        if hwm > 0:
+            log.warning(
+                "backup_money_flow: source is EMPTY but the backup has rows "
+                "(hwm=%s) — the source lost all its data. Skipping reconcile "
+                "(backup left intact). Check LEGACY_DATABASE_URL / local DB health.",
+                hwm,
+            )
+        else:
+            log.info(
+                "backup_money_flow: source and backup both empty — bootstrap "
+                "no-op (nothing scraped yet)."
+            )
+        return BackupResult(
+            copied=0, hwm_before=hwm, run_max=run_max, source_empty=hwm > 0
+        )
+
+    # 3) Read the FULL backup. Source rows are restricted to id <= run_max for the
+    #    COPY (in-flight inserts past run_max are picked up next run).
+    src_rows = [r for r in src_all if r["id"] <= run_max]
+    dst_rows = _read_all(dst, dst_tbl)
+    src_fps = _gen_fingerprints(src_rows)
+    dst_fps = _gen_fingerprints(dst_rows)
+
+    # Decide which generations to (re)copy and which to delete-then-recopy. The
+    # unit is the GENERATION key ``(data_date, ranking_type)`` — the exact unit
+    # the scraper rebuilds — so a partial source-side loss of one book never
+    # disturbs the other (Codex P1).
+    #
+    # NON-DESTRUCTIVE INVARIANT: the backup NEVER propagates a source-side DELETE.
+    # The discriminator between a legitimate rebuild and source-side corruption is
+    # the generation's max ``captured_at``:
+    #
+    #   * a genuine same-day REBUILD always stamps the generation with a NEWER
+    #     captured_at (the scraper deletes the old rows and re-inserts a fresh
+    #     generation under one new captured_at). Only then do we DELETE the stale
+    #     backup rows — including the rebuild's orphaned old ids — and recopy the
+    #     current source rows wholesale (delete paired with copy in one txn);
+    #   * a difference at the SAME (or older) captured_at is NOT a rebuild — it is a
+    #     source-side shrink / in-place edit / partial corruption (bad restore,
+    #     manual cleanup). We must NOT delete: that would erase the backup's last
+    #     copy of rows the source lost (Codex P1). Instead we additively copy any
+    #     source rows the backup is MISSING (ON CONFLICT DO NOTHING) and leave the
+    #     rest intact; verify_backup REPORTS any residual content drift loudly
+    #     rather than auto-destroying it.
+    #
+    # A generation present ONLY in the backup (whole generation gone from source)
+    # is likewise LEFT INTACT — never propagate a source-side delete.
+    keys_to_delete: set = set()
+    keys_to_copy: set = set()
+    for key in set(src_fps) | set(dst_fps):
+        in_src = key in src_fps
+        in_dst = key in dst_fps
+        if in_src and not in_dst:
+            keys_to_copy.add(key)  # brand-new generation -> append
+        elif in_dst and not in_src:
+            continue  # backup-only generation: retain (never propagate a delete)
+        else:
+            s, d = src_fps[key], dst_fps[key]
+            if s["max_cap_dt"] > d["max_cap_dt"]:
+                # Genuine newer rebuild -> supersede wholesale (purge orphans).
+                keys_to_delete.add(key)
+                keys_to_copy.add(key)
+            elif s["count"] != d["count"] or s["checksum"] != d["checksum"]:
+                # Same/older captured_at but content differs: source-side
+                # shrink/edit/corruption. NON-DESTRUCTIVE -> additive copy only
+                # (ON CONFLICT DO NOTHING completes any missing rows), NEVER delete.
+                keys_to_copy.add(key)
+
+    rows_to_copy = [r for r in src_rows if _gen_key(r) in keys_to_copy]
+
     copied = 0
-    if run_max <= hwm:
-        return BackupResult(copied=0, hwm_before=hwm, run_max=run_max)
-
-    # 3) Read the incremental window from the source, ordered by id.
-    select_cols = [src_tbl.c[name] for name in COLUMNS]
-    with src.connect() as sconn:
-        rows = [
-            dict(m)
-            for m in sconn.execute(
-                select(*select_cols)
-                .where(src_tbl.c.id > hwm, src_tbl.c.id <= run_max)
-                .order_by(src_tbl.c.id)
-            ).mappings()
-        ]
-
-    # 4) One transaction on the destination: chunked typed Core insert with
-    #    ON CONFLICT (id, captured_at) DO NOTHING. Commit once at the end so a
-    #    mid-run failure leaves the backup unchanged.
+    # 4) One transaction on the destination: delete changed generations, then
+    #    re-insert. Commit once so a mid-run failure leaves the backup unchanged.
     with dst.begin() as dconn:
-        for start in range(0, len(rows), chunk_size):
-            chunk = rows[start : start + chunk_size]
+        if keys_to_delete:
+            dconn.execute(
+                dst_tbl.delete().where(
+                    tuple_(dst_tbl.c.data_date, dst_tbl.c.ranking_type).in_(
+                        keys_to_delete
+                    )
+                )
+            )
+        for start in range(0, len(rows_to_copy), chunk_size):
+            chunk = rows_to_copy[start : start + chunk_size]
             if not chunk:
                 continue
             stmt = _conflict_insert(dst, dst_tbl, chunk)
@@ -345,21 +528,53 @@ def _read_window(engine: Engine, tbl: Table, run_max: int) -> list[dict]:
         ]
 
 
+def _read_all(engine: Engine, tbl: Table) -> list[dict]:
+    """Read every row of ``tbl`` (id > 0) in one connection.
+
+    The source read derives ``run_max`` from this same snapshot so a concurrent
+    same-day rebuild can't tear the window; the destination read is uncapped so a
+    backup-only day whose ids exceed a lowered ``run_max`` is still seen (it is
+    retained, not purged — see the non-destructive invariant).
+    """
+    cols = [tbl.c[name] for name in COLUMNS]
+    with engine.connect() as conn:
+        return [
+            dict(m)
+            for m in conn.execute(select(*cols).where(tbl.c.id > 0)).mappings()
+        ]
+
+
 def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
-    """Strong integrity check over the full covered window ``id <= run_max``.
+    """Strong integrity check over the covered window ``id <= run_max``.
 
-    Checks (design §2.3), any failure recorded loudly:
+    The copy is a NON-DESTRUCTIVE ``data_date``-aware reconcile (new days appended,
+    same-day rebuilds delete-then-recopied, days the source LOST left intact), so
+    the backup must CONTAIN every source row over the window with matching content
+    — a SUPERSET, not an exact mirror (it may retain a historical day the source
+    dropped). Checks, any failure recorded loudly:
 
-      (a) ``MAX(id)`` on src vs backup match for ``id <= run_max``;
+      (a) ``MAX(id)`` on src vs backup match for ``id <= run_max`` (source's max
+          row is always mirrored; retained ids > run_max are excluded);
       (b) missing-row reconciliation on the FULL composite key
           ``(id, captured_at)`` — no source row in ``(0, run_max]`` absent from
           the backup;
-      (c) deterministic checksum over the full window ``id <= run_max`` (NOT
-          just the incremental window) with ``raw_data`` canonicalized — catches
-          an edited already-backed-up row (``id <= hwm``) that keeps its key;
+      (c) content-faithful checksum: every source row in ``id <= run_max`` matches
+          its backup copy (``raw_data`` canonicalized), comparing only the backup
+          rows that share a source key so legitimately-retained extras are ignored
+          — catches a copied row whose content drifted;
       (d) ``id``-uniqueness guard: ``COUNT(*) == COUNT(DISTINCT id)`` over
-          ``id <= run_max`` on the source (HWM-by-id relies on global ``id``
-          uniqueness the composite PK does not enforce).
+          ``id <= run_max`` on the source. Autoincrement keeps ``id`` globally
+          unique (the composite PK ``(id, captured_at)`` alone does not enforce
+          it); a duplicate id would make the per-day fingerprints ambiguous;
+      (e) SOURCE-side data-loss alarm: any backup row in ``id <= run_max`` whose
+          key is ABSENT from the source. The non-destructive backup retains rows
+          the source dropped (data safe), but verify still flags the divergence so
+          a silent source-side row loss / corruption is surfaced loudly;
+      (f) TRAILING source-loss alarm (uncapped): backup ``MAX(id)`` greater than
+          the source's live ``MAX(id)`` — the source dropped its highest ids /
+          most-recent generation (which (e), bounded to ``id <= run_max``, cannot
+          see). Backup ids only come from the source, so this inequality is itself
+          the loss signal; a normal copy lag is the opposite inequality.
     """
     report = VerifyReport()
     src_tbl = source_table()
@@ -418,8 +633,8 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
         return (r["id"], _canon_captured_at(r["captured_at"]))
 
     src_keys = {_key(r) for r in src_rows}
-    dst_keys = {_key(r) for r in dst_rows}
-    missing = src_keys - dst_keys
+    dst_by_key = {_key(r): r for r in dst_rows}
+    missing = src_keys - set(dst_by_key)
     if missing:
         sample = sorted(missing)[:5]
         report.failures.append(
@@ -427,13 +642,67 @@ def verify_backup(src: Engine, dst: Engine, *, run_max: int) -> VerifyReport:
             f"backup (composite key id, captured_at). sample={sample}"
         )
 
-    # (c) full-window canonicalized checksum.
-    if _checksum(src_rows) != _checksum(dst_rows):
+    # (c) content-faithful checksum. The backup is a NON-DESTRUCTIVE archive: it
+    # may RETAIN rows the source lost (a historical day a bad restore / corruption
+    # dropped — see the module invariant), so the backup is a SUPERSET of the
+    # source over the window, not an exact mirror. Verify therefore compares the
+    # source against the backup rows that SHARE a source key — every mirrored row
+    # must match content — and ignores retained extras. (b) already guarantees no
+    # source row is missing; together they assert "the backup faithfully contains
+    # every source row". A same-day rebuild's orphaned old ids cannot survive here:
+    # an in-both-differing day is delete-then-recopied in ONE txn, so a successful
+    # reconcile leaves no stale ids for a day still in source.
+    dst_mirrored = [dst_by_key[k] for k in src_keys if k in dst_by_key]
+    if _checksum(src_rows) != _checksum(dst_mirrored):
         report.failures.append(
-            f"checksum mismatch over the full window id<={run_max}: the backup "
-            f"diverges from the source (an edited row, reordered non-raw_data "
-            f"content, or torn copy). raw_data key-order is canonicalized, so "
-            f"this is a genuine content drift."
+            f"checksum mismatch over id<={run_max}: a source row's content "
+            f"diverges from its backup copy (an edited row, reordered "
+            f"non-raw_data content, or torn copy). raw_data key-order is "
+            f"canonicalized, so this is a genuine content drift."
+        )
+
+    # (e) SOURCE-side data-loss alarm. The backup is NON-DESTRUCTIVE: when the
+    # source loses rows from a generation without a newer captured_at (a bad
+    # restore / partial corruption), backup_money_flow RETAINS the backup's copy
+    # rather than propagate the delete. That keeps the data safe, but the operator
+    # must still be ALERTED that the source diverged — otherwise a silent source-
+    # side row loss goes unnoticed (Codex P1). So any backup row in ``id <=
+    # run_max`` whose key is absent from the source is flagged loudly here. In
+    # normal operation (no source loss) there are no such extras; a legitimate
+    # rebuild is delete-then-recopied so its orphans don't survive. This is a
+    # SOURCE health signal, not a backup-integrity failure — the backup is correct.
+    extra = set(dst_by_key) - src_keys
+    if extra:
+        sample = sorted(extra)[:5]
+        report.failures.append(
+            f"{len(extra)} backup row(s) in (0, {run_max}] are absent from the "
+            f"SOURCE — the source dropped rows the backup retained (non-destructive "
+            f"backup is intact; this flags a source-side data loss / corruption to "
+            f"investigate). sample={sample}"
+        )
+
+    # (f) TRAILING source-loss alarm (UNCAPPED). (e) is bounded to id<=run_max, so
+    # it can't see the source dropping its HIGHEST ids / most-recent generation:
+    # run_max shrinks to the surviving max, putting the retained backup rows at
+    # id>run_max where every other check excludes them. Backup ids only ever come
+    # from the source, so a backup MAX(id) GREATER than the source's live MAX(id)
+    # means the source lost its top rows (the backup retained them) — flag it. A
+    # normal lag (source has newer ids the backup hasn't copied yet) is the
+    # opposite inequality and is NOT flagged.
+    with src.connect() as sconn:
+        src_max_all = sconn.execute(
+            select(func.coalesce(func.max(src_tbl.c.id), 0))
+        ).scalar_one()
+    with dst.connect() as dconn:
+        dst_max_all = dconn.execute(
+            select(func.coalesce(func.max(dst_tbl.c.id), 0))
+        ).scalar_one()
+    if dst_max_all > src_max_all:
+        report.failures.append(
+            f"backup MAX(id)={dst_max_all} exceeds source MAX(id)={src_max_all} — "
+            f"the source dropped its most-recent rows that the backup retained "
+            f"(non-destructive backup is intact; flags a trailing source-side data "
+            f"loss to investigate)."
         )
 
     return report

@@ -35,7 +35,9 @@ from rainier.llm_thesis.service import compute_theses_and_persist
 log = structlog.get_logger()
 
 
-def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
+def run_post_scrape_pipeline(
+    settings: Settings, session_name: str, scan_date: date | None = None,
+) -> None:
     """Execute the post-scrape pipeline for one session.
 
     Steps (mirrors the pre-extraction service.py block verbatim):
@@ -58,6 +60,12 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
         settings: Already-loaded ``Settings``. Caller is responsible for
             calling ``load_settings_fresh()`` if it wants hot-reloaded YAML.
         session_name: ``"morning" | "midday" | "afternoon" | "close"``.
+        scan_date: the TRADING day these derived artifacts belong to. Defaults to
+            ``date.today()`` for the live scheduled/cron path (the scrape and the
+            pipeline run on the same trading day). ``recover`` passes the RECOVERED
+            day explicitly so a post-midnight or cross-timezone replay stamps
+            ``ScreenedStockRecord`` / thesis rows with the day the data is from,
+            not the wall-clock date the pipeline happened to run (Codex P1).
 
     Returns:
         None. Logs structured events at each step boundary.
@@ -74,7 +82,8 @@ def run_post_scrape_pipeline(settings: Settings, session_name: str) -> None:
     scan_candidates = all_candidates[:50]
     candidates = all_candidates[:20]
 
-    scan_date = date.today()
+    if scan_date is None:
+        scan_date = date.today()
     log.info(
         "post_scrape_screener_done",
         session=session_name,
