@@ -170,6 +170,40 @@ def test_detects_dropped_constraint(legacy_engine):
     )
 
 
+def test_checks_public_regardless_of_search_path(legacy_engine):
+    """The drift check must inspect ``public`` explicitly (codex 43f3 [P1]):
+    with a non-public-first ``search_path``, unqualified inspection would
+    validate the FRONT schema instead of the one the migration runner stamps
+    and pins DDL to. Here public holds the full schema and the front (shadow)
+    schema is empty — the check must still be clean."""
+    from sqlalchemy import event
+
+    from rainier.core.schema_check import check_schema_drift
+
+    with legacy_engine.begin() as conn:
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS shadow"))
+
+    @event.listens_for(legacy_engine, "connect")
+    def _set_search_path(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("SET search_path TO shadow, public")
+        cur.close()
+
+    # The pool still holds the un-hooked connection that ran CREATE SCHEMA;
+    # dispose so inspection checks out fresh, shadow-first connections.
+    legacy_engine.dispose()
+    with legacy_engine.connect() as conn:
+        search_path = conn.exec_driver_sql("SHOW search_path").scalar()
+    assert "shadow" in search_path, (
+        f"test-harness bug: search_path hook did not apply ({search_path!r})"
+    )
+
+    assert check_schema_drift(legacy_engine) == [], (
+        "public holds the full ORM schema; a shadow-first search_path must "
+        "not make the check inspect (and fail against) the empty front schema"
+    )
+
+
 def test_multiple_stub_columns_all_reported(legacy_engine):
     """The full stub (all 6 non-id/symbol columns dropped) reports each one,
     so an operator sees the complete repair list, not just the first miss."""

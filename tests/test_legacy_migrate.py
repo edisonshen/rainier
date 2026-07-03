@@ -565,6 +565,31 @@ def test_run_refuses_unversioned_existing_schema(throwaway_engine):
     assert run_migrations(throwaway_engine) == []
 
 
+def test_run_refuses_empty_version_table_on_existing_schema(throwaway_engine, tmp_path):
+    """An existing-but-EMPTY schema_migrations table must not disarm the
+    guard (codex 43f3 [P1]): a manually pre-created (or historically leaked)
+    empty version table alongside real legacy tables is still an unversioned
+    schema — replaying 0001..N onto it is the exact unsafe path the guard
+    blocks. Applies to dry-run too."""
+    from rainier.core.legacy_migrate import UnversionedSchemaError, run_migrations
+
+    _make_synthetic_migrations(tmp_path)
+    with throwaway_engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE public.schema_migrations ("
+                " version TEXT PRIMARY KEY,"
+                " applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            )
+        )
+        conn.execute(text("CREATE TABLE legacy_table (id int PRIMARY KEY)"))
+
+    with pytest.raises(UnversionedSchemaError):
+        run_migrations(throwaway_engine, migrations_dir=tmp_path)
+    with pytest.raises(UnversionedSchemaError):
+        run_migrations(throwaway_engine, dry_run=True, migrations_dir=tmp_path)
+
+
 def test_fresh_empty_db_runs_from_0001_despite_guard(throwaway_engine, tmp_path):
     """The guard only blocks a NON-EMPTY unversioned schema; a truly fresh
     (empty) DB still runs from the first migration normally."""

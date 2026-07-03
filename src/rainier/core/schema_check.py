@@ -47,7 +47,11 @@ KNOWN_BENIGN_DRIFT: frozenset[str] = frozenset(
 
 
 def check_schema_drift(engine: Engine) -> list[str]:
-    """Compare the legacy ORM to ``engine``'s live schema.
+    """Compare the legacy ORM to ``engine``'s live ``public`` schema.
+
+    Inspection targets ``public`` explicitly, independent of the engine's
+    ``search_path`` — matching the migration runner, which pins its DDL and
+    ``schema_migrations`` bookkeeping to ``public``.
 
     Returns a list of human-readable findings, each one of:
 
@@ -70,14 +74,20 @@ def check_schema_drift(engine: Engine) -> list[str]:
     the legacy models don't declare. Findings are ordered by ORM
     table-definition order for stable output.
     """
+    # Inspect ``public`` EXPLICITLY (codex 43f3 [P1]): the legacy ORM tables
+    # and the migration runner's bookkeeping/DDL all live in (and are pinned
+    # to) ``public``. Unqualified inspector calls would follow the engine's
+    # ``search_path`` and could validate a DIFFERENT front schema — reporting
+    # "clean" for a schema the runner never stamps.
+    schema = "public"
     insp = inspect(engine)
-    existing_tables = set(insp.get_table_names())
+    existing_tables = set(insp.get_table_names(schema=schema))
     findings: list[str] = []
     for table_name, table in Base.metadata.tables.items():
         if table_name not in existing_tables:
             findings.append(f"missing table: {table_name}")
             continue
-        live_cols = {col["name"] for col in insp.get_columns(table_name)}
+        live_cols = {col["name"] for col in insp.get_columns(table_name, schema=schema)}
         for column in table.columns:
             if column.name not in live_cols:
                 findings.append(f"missing column: {table_name}.{column.name}")
@@ -89,15 +99,21 @@ def check_schema_drift(engine: Engine) -> list[str]:
         # false-positives.
         live_names: set[str] = set()
         live_names.update(
-            ix["name"] for ix in insp.get_indexes(table_name) if ix.get("name")
+            ix["name"]
+            for ix in insp.get_indexes(table_name, schema=schema)
+            if ix.get("name")
         )
         live_names.update(
-            c["name"] for c in insp.get_unique_constraints(table_name) if c.get("name")
+            c["name"]
+            for c in insp.get_unique_constraints(table_name, schema=schema)
+            if c.get("name")
         )
         live_names.update(
-            c["name"] for c in insp.get_check_constraints(table_name) if c.get("name")
+            c["name"]
+            for c in insp.get_check_constraints(table_name, schema=schema)
+            if c.get("name")
         )
-        pk = insp.get_pk_constraint(table_name)
+        pk = insp.get_pk_constraint(table_name, schema=schema)
         if pk and pk.get("name"):
             live_names.add(pk["name"])
 

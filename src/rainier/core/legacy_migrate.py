@@ -169,11 +169,13 @@ def _pin_public(conn) -> None:
 
 
 class UnversionedSchemaError(RuntimeError):
-    """Raised when a non-empty legacy schema has no ``schema_migrations`` table.
+    """Raised when a non-empty legacy schema has no RECORDED versions.
 
-    Replaying ``0001..N`` from scratch on such a DB is unsafe — some historical
-    files don't re-run cleanly on an already-migrated schema. The caller must
-    first ``--baseline`` to adopt the existing prefix.
+    Covers both a missing ``schema_migrations`` table and an
+    existing-but-EMPTY one (a pre-created empty table must not disarm this
+    guard). Replaying ``0001..N`` from scratch on such a DB is unsafe — some
+    historical files don't re-run cleanly on an already-migrated schema. The
+    caller must first ``--baseline`` to adopt the existing prefix.
     """
 
 
@@ -196,15 +198,6 @@ class AlreadyVersionedError(RuntimeError):
     tables/columns drift check cannot see). Baseline exists for exactly one
     state: adopting an UNVERSIONED pre-existing schema.
     """
-
-
-def _version_table_exists(engine: Engine) -> bool:
-    sql = (
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_name = 'schema_migrations'"
-    )
-    with engine.connect() as conn:
-        return conn.execute(text(sql)).first() is not None
 
 
 def _legacy_schema_present(engine: Engine) -> bool:
@@ -360,10 +353,11 @@ def run_migrations(
     SAFETY GUARDS (both raise before any DB write):
 
     * ``UnversionedSchemaError`` — the legacy schema ALREADY has tables but no
-      ``schema_migrations`` table. Refuses to blindly replay ``0001..N``
-      (historical files don't re-run cleanly on an already-migrated schema).
-      Adopt with ``baseline_migrations`` / ``db migrate-legacy --baseline``,
-      then run for the new tail only.
+      RECORDED versions (``schema_migrations`` missing OR existing-but-empty;
+      an empty pre-created table must not disarm the guard). Refuses to
+      blindly replay ``0001..N`` (historical files don't re-run cleanly on an
+      already-migrated schema). Adopt with ``baseline_migrations`` /
+      ``db migrate-legacy --baseline``, then run for the new tail only.
     * ``EmptyDatabaseError`` — the DB is truly EMPTY and the DEFAULT (shipped)
       migration set is in use. The shipped files assume an existing schema
       (0001 ALTERs tables only ``db init`` creates), so a from-scratch replay
@@ -373,14 +367,18 @@ def run_migrations(
     Returns the list of filenames that were applied (dry-run: the filenames
     that WOULD be applied).
     """
-    if not _version_table_exists(engine):
+    # NO recorded versions (the table is missing OR exists but is empty — an
+    # empty pre-created table must not disarm the guard, codex 43f3 [P1]) means
+    # this DB has never been adopted by the runner.
+    if not applied_versions(engine):
         if _legacy_schema_present(engine):
             raise UnversionedSchemaError(
-                "Legacy schema already has tables but no schema_migrations "
-                "table. Refusing to replay 0001..N (some historical files "
-                "don't re-run cleanly on an existing schema). Run 'rainier db "
-                "migrate-legacy --baseline' once to adopt the current schema, "
-                "then re-run to apply any new migrations."
+                "Legacy schema already has tables but no recorded versions in "
+                "schema_migrations. Refusing to replay 0001..N (some "
+                "historical files don't re-run cleanly on an existing "
+                "schema). Run 'rainier db migrate-legacy --baseline' once to "
+                "adopt the current schema, then re-run to apply any new "
+                "migrations."
             )
         if migrations_dir is None:
             raise EmptyDatabaseError(
