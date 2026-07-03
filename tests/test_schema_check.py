@@ -137,6 +137,39 @@ def test_detects_dropped_table(legacy_engine):
     assert "missing table: stock_prices" in findings
 
 
+def test_detects_dropped_index(legacy_engine):
+    """An ORM-declared named index that is absent live must be flagged
+    (codex 43f3 review: an index-only migration that never ran was invisible
+    to the tables/columns check, so --baseline could stamp it as applied)."""
+    from rainier.core.schema_check import check_schema_drift
+
+    with legacy_engine.begin() as conn:
+        conn.execute(text("DROP INDEX ix_signals_symbol_ts"))
+
+    findings = check_schema_drift(legacy_engine)
+    assert "missing index: signals.ix_signals_symbol_ts" in findings
+
+
+def test_detects_dropped_constraint(legacy_engine):
+    """An ORM-declared named constraint that is absent live must be flagged
+    (e.g. a constraint-only migration like 0008's ck_paper_skip_reason rebuild
+    that never ran)."""
+    from rainier.core.schema_check import check_schema_drift
+
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE paper_reclaim_queue "
+                "DROP CONSTRAINT ck_paper_reclaim_status"
+            )
+        )
+
+    findings = check_schema_drift(legacy_engine)
+    assert (
+        "missing constraint: paper_reclaim_queue.ck_paper_reclaim_status" in findings
+    )
+
+
 def test_multiple_stub_columns_all_reported(legacy_engine):
     """The full stub (all 6 non-id/symbol columns dropped) reports each one,
     so an operator sees the complete repair list, not just the first miss."""

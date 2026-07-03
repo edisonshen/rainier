@@ -308,9 +308,9 @@ def test_db_migrate_legacy_baseline_already_versioned_fails_clean(monkeypatch):
 
 
 def test_db_migrate_legacy_baseline_notes_verification_scope(monkeypatch):
-    """A successful `--baseline` prints the honest verification-scope note
-    (codex 43f3 [P2 deferred]: the check covers ORM tables/columns only —
-    migration-only indexes/constraints are not verified)."""
+    """A successful `--baseline` prints the honest verification-scope note:
+    the check covers ORM-declared objects (incl. named indexes/constraints);
+    migration-only DDL without an ORM mirror is not verified."""
     import rainier.core.database as db_mod
     import rainier.core.legacy_migrate as lm_mod
     import rainier.core.schema_check as sc_mod
@@ -328,7 +328,8 @@ def test_db_migrate_legacy_baseline_notes_verification_scope(monkeypatch):
     result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
     assert result.exit_code == 0, result.output
     assert "Baselined 1" in result.output
-    assert "tables/columns only" in result.output
+    assert "ORM-declared objects" in result.output
+    assert "not verified" in result.output
 
 
 def test_db_migrate_legacy_dry_run_and_baseline_conflict(monkeypatch):

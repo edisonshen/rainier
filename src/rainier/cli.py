@@ -2055,12 +2055,14 @@ def db_init(ctx):
             "unversioned schemas, and baseline refuses while drift remains)."
         )
         raise click.ClickException(f"{len(real)} schema-drift finding(s); see above.")
-    # Honest scope: the drift check compares ORM tables/columns ONLY. It cannot
-    # see migration-only DDL (indexes/constraints, e.g. 0001's
-    # idx_llm_analysis_idempotent), and create_all never runs migrations/*.sql.
-    # So a "clean" fresh DB may still be missing that DDL — surface the
-    # unrecorded legacy-migration state instead of implying full health.
-    click.echo("Schema drift check (ORM tables/columns): clean.")
+    # Honest scope: the drift check verifies ORM-DECLARED objects (tables,
+    # columns, named indexes/constraints by name). It cannot see DDL that
+    # exists only in migrations/*.sql without an ORM mirror (e.g. 0001's
+    # idx_llm_analysis_idempotent — absent on the live DB too: its expression
+    # is not runnable on modern Postgres), and create_all never runs
+    # migrations/*.sql. Surface the unrecorded legacy-migration state instead
+    # of implying full health.
+    click.echo("Schema drift check (ORM-declared objects): clean.")
 
     from rainier.core.legacy_migrate import pending_migrations
 
@@ -2089,8 +2091,9 @@ def db_init(ctx):
         "applied WITHOUT running their SQL (alembic 'stamp'). Use once on a DB "
         "that already has the schema but no schema_migrations table, then run "
         "without this flag for genuinely new files. Refuses (stamping nothing) "
-        "if ORM-declared tables/columns are missing; indexes/constraints that "
-        "exist only in migrations/*.sql are not verified."
+        "if ORM-declared objects (tables/columns/named indexes+constraints) "
+        "are missing, or if the DB is already versioned; DDL that exists only "
+        "in migrations/*.sql without an ORM mirror is not verified."
     ),
 )
 def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
@@ -2111,8 +2114,9 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
     expression is not runnable on modern Postgres at all (the live legacy DB
     lacks it too), so a from-0001 replay is not a supported path. ``db init``
     materializes every ORM-declared table/column/index/constraint; baseline
-    then adopts the file history. Migration-only DDL that the ORM does not
-    mirror is NOT verified by the baseline check (tables/columns scope).
+    then adopts the file history after verifying those ORM-declared objects
+    exist (by name). Migration-only DDL the ORM does not mirror is NOT
+    verifiable and is excluded — a documented limitation.
     """
     from rainier.core.database import get_engine
     from rainier.core.legacy_migrate import (
@@ -2181,9 +2185,10 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
         for name in stamped:
             click.echo(f"  - {name}")
         click.echo(
-            "Note: this validation covers ORM tables/columns only — "
-            "indexes/constraints that exist solely in migrations/*.sql are "
-            "not verified."
+            "Note: this validation covers ORM-declared objects (tables, "
+            "columns, named indexes/constraints) — DDL that exists solely in "
+            "migrations/*.sql without an ORM mirror, and same-name definition "
+            "drift, are not verified."
         )
         return
 
