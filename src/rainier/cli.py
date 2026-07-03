@@ -2067,16 +2067,28 @@ def db_init(ctx):
     # of implying full health.
     click.echo("Schema drift check (ORM-declared objects): clean.")
 
-    from rainier.core.legacy_migrate import pending_migrations
+    from rainier.core.legacy_migrate import applied_versions, pending_migrations
 
-    pending = pending_migrations(get_engine())
+    engine = get_engine()
+    pending = pending_migrations(engine)
     if pending:
+        if applied_versions(engine):
+            # Versioned DB: the pending files are new migrations — apply them.
+            hint = "Run 'rainier db migrate-legacy' to apply them."
+        else:
+            # Unversioned (incl. the fresh db-init bootstrap): a plain run
+            # refuses unversioned schemas, so lead with --baseline
+            # (codex 43f3 [P2]: the old wording pointed fresh installs at a
+            # command guaranteed to fail).
+            hint = (
+                "This DB is unversioned; adopt the file history with "
+                "'rainier db migrate-legacy --baseline' (a plain run refuses "
+                "unversioned schemas)."
+            )
         click.echo(
             f"NOTE: {len(pending)} legacy migration file(s) not recorded as applied "
             "in schema_migrations. `db init` (create_all) does NOT run "
-            "migration-only DDL such as indexes/constraints. Run "
-            "'rainier db migrate-legacy' to apply them ('--baseline' to adopt an "
-            "already-migrated schema)."
+            f"migration-only DDL such as indexes/constraints. {hint}"
         )
     click.echo("Database initialized successfully.")
 
@@ -2154,17 +2166,36 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
         return
 
     if baseline:
+        from rainier.core.legacy_migrate import applied_versions, pending_migrations
+        from rainier.core.schema_check import KNOWN_BENIGN_DRIFT, check_schema_drift
+
+        pending = pending_migrations(engine)
+
+        # Already-versioned takes precedence over the drift refusal
+        # (codex 43f3 [P2]): on an adopted DB with a new ORM-backed migration
+        # pending, the right guidance is a plain run — NOT the drift
+        # refusal's "hand-apply then re-run --baseline". Mirrors the guard
+        # inside baseline_migrations (kept there for non-CLI callers).
+        if pending and applied_versions(engine):
+            raise click.ClickException(
+                "schema_migrations already has recorded versions; the "
+                f"{len(pending)} pending file(s) are new migrations that must "
+                "be APPLIED, not stamped. Run 'rainier db migrate-legacy' "
+                "(without --baseline)."
+            )
+
         # Validate BEFORE stamping (codex 43f3 [P1]): baseline records files
         # as applied WITHOUT running them, so adopting a schema that is still
         # missing ORM-declared objects (the 0012/0013 incident state) would
         # permanently mask those migrations from the runner. Refuse with the
         # DB untouched — a stamp-then-fail would mutate bookkeeping into a
-        # harder-to-recover state.
-        from rainier.core.schema_check import KNOWN_BENIGN_DRIFT, check_schema_drift
-
-        missing = [
-            f for f in check_schema_drift(engine) if f not in KNOWN_BENIGN_DRIFT
-        ]
+        # harder-to-recover state. Skipped when nothing is pending (a no-op
+        # baseline stamps nothing, so there is nothing to mask).
+        missing = (
+            [f for f in check_schema_drift(engine) if f not in KNOWN_BENIGN_DRIFT]
+            if pending
+            else []
+        )
         if missing:
             click.echo(
                 "Refusing to baseline — the live schema is missing "

@@ -218,6 +218,12 @@ def test_db_migrate_legacy_baseline_stamps(monkeypatch):
 
     monkeypatch.setattr(db_mod, "get_engine", lambda: object())
     monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod,
+        "pending_migrations",
+        lambda engine: ["0001_llm_thesis_pr1.sql", "0002_llm_thesis_pr2.sql"],
+    )
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
 
     def _fake_baseline(engine, *, migrations_dir=None):
         calls["baseline"] = True
@@ -251,6 +257,10 @@ def test_db_migrate_legacy_baseline_refuses_on_missing_objects(monkeypatch):
     from rainier import cli as cli_mod
 
     monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0012_reclaim_queue.sql"]
+    )
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
 
     def _boom_baseline(*_a, **_k):
         raise AssertionError("baseline_migrations must NOT be called on refusal")
@@ -278,33 +288,43 @@ def test_db_migrate_legacy_baseline_refuses_on_missing_objects(monkeypatch):
 
 
 def test_db_migrate_legacy_baseline_already_versioned_fails_clean(monkeypatch):
-    """When baseline_migrations refuses an already-versioned DB, the CLI
-    surfaces a clean error (non-zero, no traceback) pointing at a plain run."""
+    """`--baseline` on an already-versioned DB with pending files fails clean
+    with plain-run guidance BEFORE the drift refusal (codex 43f3 [P2]: the
+    drift refusal's hand-apply-then-baseline recovery is wrong there), and
+    stamps nothing."""
     import rainier.core.database as db_mod
     import rainier.core.legacy_migrate as lm_mod
     import rainier.core.schema_check as sc_mod
     from rainier import cli as cli_mod
 
     monkeypatch.setattr(db_mod, "get_engine", lambda: object())
-    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0014_future.sql"]
+    )
+    monkeypatch.setattr(
+        lm_mod, "applied_versions", lambda engine: {"0001_llm_thesis_pr1.sql"}
+    )
+    # Drift ALSO present (the new ORM-backed migration's column) — the
+    # already-versioned guidance must still win over the drift refusal.
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: ["missing column: paper_trade.shadow"],
+    )
 
-    def _raise(engine, *, migrations_dir=None):
-        raise lm_mod.AlreadyVersionedError(
-            "schema_migrations already has recorded versions; the 1 pending "
-            "file(s) are new migrations that must be APPLIED, not stamped. "
-            "Run 'rainier db migrate-legacy' (without --baseline)."
-        )
+    def _boom_baseline(*_a, **_k):
+        raise AssertionError("baseline_migrations must NOT be called")
 
-    monkeypatch.setattr(lm_mod, "baseline_migrations", _raise)
+    monkeypatch.setattr(lm_mod, "baseline_migrations", _boom_baseline)
 
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
     assert result.exit_code != 0
     assert "Traceback" not in (result.output or "")
-    assert not isinstance(result.exception, lm_mod.AlreadyVersionedError), (
-        "AlreadyVersionedError must be wrapped in a ClickException, not leaked"
-    )
     assert "must be APPLIED" in result.output
+    assert "Refusing to baseline" not in result.output, (
+        "already-versioned guidance must take precedence over the drift refusal"
+    )
 
 
 def test_db_migrate_legacy_baseline_notes_verification_scope(monkeypatch):
@@ -318,6 +338,10 @@ def test_db_migrate_legacy_baseline_notes_verification_scope(monkeypatch):
 
     monkeypatch.setattr(db_mod, "get_engine", lambda: object())
     monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0012_reclaim_queue.sql"]
+    )
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
     monkeypatch.setattr(
         lm_mod,
         "baseline_migrations",
@@ -513,12 +537,41 @@ def test_db_init_notes_pending_legacy_migrations(monkeypatch):
         "pending_migrations",
         lambda engine: ["0012_reclaim_queue.sql", "0013_paper_trade_shadow.sql"],
     )
+    # Fresh-bootstrap state: nothing recorded yet -> the note must lead with
+    # --baseline (a plain run refuses unversioned schemas, codex 43f3 [P2]).
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
 
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["db", "init"])
     assert result.exit_code == 0, result.output
     assert "NOTE: 2 legacy migration file(s)" in result.output
-    assert "migrate-legacy" in result.output
+    assert "--baseline" in result.output
+
+
+def test_db_init_notes_pending_on_versioned_db_points_at_plain_run(monkeypatch):
+    """On an already-versioned DB with pending files, the db init note points
+    at a plain `migrate-legacy` run (the files are new migrations to apply)."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0014_future.sql"]
+    )
+    monkeypatch.setattr(
+        lm_mod, "applied_versions", lambda engine: {"0001_llm_thesis_pr1.sql"}
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "NOTE: 1 legacy migration file(s)" in result.output
+    assert "Run 'rainier db migrate-legacy' to apply them." in result.output
+    assert "--baseline" not in result.output
 
 
 def test_db_init_ignores_known_benign_drift(monkeypatch):
