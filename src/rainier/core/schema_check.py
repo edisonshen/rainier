@@ -21,29 +21,31 @@ from sqlalchemy.engine import Engine
 from rainier.core.models import Base
 
 # Documented PRE-EXISTING benign drift the loud chokepoints must not block on
-# (every entry verified against the live legacy DB, 2026-07-03):
-#
-# * ``capital_flow_bars.symbol`` (+ its index): the table is an empty (0-row)
-#   orphan of the old stock_id-FK -> symbol refactor. No ``migrations/*.sql``
-#   adds the column, the QU100 pipeline never reads the table, and the
-#   operator's runbook (memory ``project_prod_checkout_staleness``) says to
-#   block only on findings BEYOND it. Without this allowlist ``rainier db
-#   init`` would exit non-zero on the live DB forever, with ``db
-#   migrate-legacy`` unable to clear it.
-# * ``paper_reclaim_queue.ix_paper_reclaim_queue_*``: NAME aliasing, not
-#   missing DDL — migrations/0012_reclaim_queue.sql created these indexes as
-#   ``ix_paper_reclaim_status`` / ``ix_paper_reclaim_symbol`` (verified
-#   present live), while the ORM's ``index=True`` auto-names expect
-#   ``ix_paper_reclaim_queue_<col>``. Same columns, same semantics; a fresh
-#   ``db init`` DB carries the ORM names instead.
+# (verified against the live legacy DB, 2026-07-03): ``capital_flow_bars``
+# (+ its ``symbol`` index) is an empty (0-row) orphan of the old
+# stock_id-FK -> symbol refactor. No ``migrations/*.sql`` adds the column, the
+# QU100 pipeline never reads the table, and the operator's runbook (memory
+# ``project_prod_checkout_staleness``) says to block only on findings BEYOND
+# it. Without this allowlist ``rainier db init`` would exit non-zero on the
+# live DB forever, with ``db migrate-legacy`` unable to clear it.
 KNOWN_BENIGN_DRIFT: frozenset[str] = frozenset(
     {
         "missing column: capital_flow_bars.symbol",
         "missing index: capital_flow_bars.ix_capital_flow_bars_symbol",
-        "missing index: paper_reclaim_queue.ix_paper_reclaim_queue_status",
-        "missing index: paper_reclaim_queue.ix_paper_reclaim_queue_symbol",
     }
 )
+
+# NAME aliasing between the ORM's auto-names and migration-created names
+# (verified live 2026-07-03): migrations/0012_reclaim_queue.sql created its
+# indexes as ``ix_paper_reclaim_status`` / ``ix_paper_reclaim_symbol``, while
+# the ORM's ``index=True`` auto-names expect ``ix_paper_reclaim_queue_<col>``.
+# Same columns, same semantics — EITHER name satisfies the contract. This is
+# deliberately NOT an allowlist entry (codex 43f3 [P2]): a DB where NEITHER
+# name exists (partial/manual 0012 apply) is real drift and must be flagged.
+INDEX_NAME_ALIASES: dict[str, tuple[str, ...]] = {
+    "ix_paper_reclaim_queue_status": ("ix_paper_reclaim_status",),
+    "ix_paper_reclaim_queue_symbol": ("ix_paper_reclaim_symbol",),
+}
 
 
 def check_schema_drift(engine: Engine) -> list[str]:
@@ -118,8 +120,13 @@ def check_schema_drift(engine: Engine) -> list[str]:
             live_names.add(pk["name"])
 
         for index in sorted(table.indexes, key=lambda ix: str(ix.name)):
-            if index.name and str(index.name) not in live_names:
-                findings.append(f"missing index: {table_name}.{index.name}")
+            if not index.name:
+                continue
+            name = str(index.name)
+            aliases = INDEX_NAME_ALIASES.get(name, ())
+            if name in live_names or any(a in live_names for a in aliases):
+                continue
+            findings.append(f"missing index: {table_name}.{name}")
         # table.constraints is a set — sort for stable finding order. Unnamed
         # constraints (None / SQLAlchemy's anonymous-name sentinel, which is
         # not a plain str) can't be checked by name and are skipped.

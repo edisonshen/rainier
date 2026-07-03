@@ -170,6 +170,34 @@ def test_detects_dropped_constraint(legacy_engine):
     )
 
 
+def test_index_alias_satisfies_but_both_missing_flags(legacy_engine):
+    """The 0012 name-aliased reclaim-queue indexes: EITHER name satisfies the
+    contract, but a DB where NEITHER exists is real drift (codex 43f3 [P2] —
+    a static allowlist would have masked the both-missing state)."""
+    from rainier.core.schema_check import check_schema_drift
+
+    # Live-DB shape: migration name instead of the ORM auto-name -> clean.
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER INDEX ix_paper_reclaim_queue_status "
+                "RENAME TO ix_paper_reclaim_status"
+            )
+        )
+    assert check_schema_drift(legacy_engine) == [], (
+        "the migration-created alias name must satisfy the ORM index contract"
+    )
+
+    # Partial-apply shape: NEITHER name exists -> must be flagged.
+    with legacy_engine.begin() as conn:
+        conn.execute(text("DROP INDEX ix_paper_reclaim_status"))
+    findings = check_schema_drift(legacy_engine)
+    assert (
+        "missing index: paper_reclaim_queue.ix_paper_reclaim_queue_status"
+        in findings
+    )
+
+
 def test_checks_public_regardless_of_search_path(legacy_engine):
     """The drift check must inspect ``public`` explicitly (codex 43f3 [P1]):
     with a non-public-first ``search_path``, unqualified inspection would
