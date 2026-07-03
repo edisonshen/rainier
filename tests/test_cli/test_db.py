@@ -374,6 +374,30 @@ def test_db_migrate_legacy_unversioned_schema_fails_clean(monkeypatch):
     assert "--baseline" in (result.output or "")
 
 
+def test_db_migrate_legacy_dry_run_failure_fails_clean(monkeypatch):
+    """An unexpected probe failure during --dry-run (unhealthy DB) surfaces
+    as a clean `Error:` line, not a raw traceback (codex 43f3 [P2])."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _raise(engine, *, dry_run=False):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--dry-run"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    assert not isinstance(result.exception, RuntimeError), (
+        "dry-run probe failures must be wrapped in a ClickException, not leaked"
+    )
+    assert "dry-run failed" in result.output
+
+
 def test_db_migrate_legacy_apply_failure_fails_clean(monkeypatch):
     """A real apply failure (bad migration SQL, dropped connection) surfaces
     as a clean `Error:` line, never a raw traceback (codex 43f3 [P2] —
@@ -443,6 +467,9 @@ def test_db_init_exits_loud_on_drift(monkeypatch):
     assert "screened_stocks.bearish_invalidation_level" in result.output
     assert "paper_reclaim_queue" in result.output
     assert "migrate-legacy" in result.output
+    # The success banner must NOT be printed on the drift-failure path
+    # (codex 43f3 [P2]: scripts reading stdout saw "success" then non-zero).
+    assert "Database initialized successfully" not in result.output
 
 
 def test_db_init_clean_when_no_drift(monkeypatch):
@@ -463,6 +490,8 @@ def test_db_init_clean_when_no_drift(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "clean" in result.output.lower()
     assert "NOTE:" not in result.output, "no pending files must mean no note"
+    # Success banner prints only after all checks pass.
+    assert "Database initialized successfully" in result.output
 
 
 def test_db_init_notes_pending_legacy_migrations(monkeypatch):

@@ -2029,7 +2029,10 @@ def db_init(ctx):
 
     click.echo("Initializing database...")
     init_db()
-    click.echo("Database initialized successfully.")
+    # Success banner is printed only AFTER the drift gate below passes —
+    # printing it here would tell operators/scripts "success" on the exact
+    # drifted state this chokepoint exists to catch (codex 43f3 [P2]).
+    click.echo("Tables created (create_all complete).")
 
     # Split out the documented pre-existing benign drift (KNOWN_BENIGN_DRIFT):
     # the operator runbook blocks only on findings BEYOND it. Hard-failing on
@@ -2075,6 +2078,7 @@ def db_init(ctx):
             "'rainier db migrate-legacy' to apply them ('--baseline' to adopt an "
             "already-migrated schema)."
         )
+    click.echo("Database initialized successfully.")
 
 
 @db.command(name="migrate-legacy")
@@ -2137,6 +2141,10 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
             pending = run_migrations(engine, dry_run=True)
         except (UnversionedSchemaError, EmptyDatabaseError) as exc:
             raise click.ClickException(str(exc)) from exc
+        except Exception as exc:  # unhealthy DB during the probe, etc.
+            raise click.ClickException(
+                f"legacy migration dry-run failed: {exc.__class__.__name__}: {exc}"
+            ) from exc
         if not pending:
             click.echo("No pending legacy migrations.")
             return
