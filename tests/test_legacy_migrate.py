@@ -335,6 +335,41 @@ def test_baseline_then_run_applies_only_new(throwaway_engine, tmp_path):
     assert "mig_new" in inspect(throwaway_engine).get_table_names()
 
 
+def test_baseline_refuses_already_versioned_db(throwaway_engine, tmp_path):
+    """Baseline on a DB that already has recorded versions must refuse
+    (codex 43f3 [P1]): pending files there are genuinely NEW migrations that
+    must be APPLIED — stamping would permanently skip their DDL (the
+    tables/columns drift check can't see an index/constraint-only file)."""
+    from rainier.core.legacy_migrate import (
+        AlreadyVersionedError,
+        applied_versions,
+        baseline_migrations,
+        run_migrations,
+    )
+
+    _make_synthetic_migrations(tmp_path)
+    first = baseline_migrations(throwaway_engine, migrations_dir=tmp_path)
+    assert len(first) == 3
+
+    # A genuinely new migration lands after adoption.
+    _write_migration(
+        tmp_path,
+        "0004_new.sql",
+        "BEGIN;\nCREATE TABLE IF NOT EXISTS mig_new (id int PRIMARY KEY);\nCOMMIT;\n",
+    )
+
+    with pytest.raises(AlreadyVersionedError):
+        baseline_migrations(throwaway_engine, migrations_dir=tmp_path)
+    assert applied_versions(throwaway_engine) == set(first), (
+        "the refused baseline must not stamp the new file"
+    )
+
+    # The correct path still works: a plain run APPLIES the new file.
+    assert run_migrations(throwaway_engine, migrations_dir=tmp_path) == [
+        "0004_new.sql"
+    ]
+
+
 def test_baseline_is_all_or_nothing(throwaway_engine, tmp_path):
     """A failed/interrupted baseline must stamp NOTHING (review 43f3 iter-1).
 

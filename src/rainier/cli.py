@@ -2047,8 +2047,12 @@ def db_init(ctx):
             click.echo(f"  - {finding}")
         click.echo("")
         click.echo(
-            "Run 'rainier db migrate-legacy' to apply pending migrations/*.sql, "
-            "or repair the drifted table by hand."
+            "Recovery: if this DB is already versioned (schema_migrations "
+            "exists), run 'rainier db migrate-legacy' to apply the pending "
+            "files. If it is UNVERSIONED, hand-apply the missing "
+            "migrations/*.sql to the legacy engine first, then adopt with "
+            "'rainier db migrate-legacy --baseline' (a plain run refuses "
+            "unversioned schemas, and baseline refuses while drift remains)."
         )
         raise click.ClickException(f"{len(real)} schema-drift finding(s); see above.")
     # Honest scope: the drift check compares ORM tables/columns ONLY. It cannot
@@ -2112,6 +2116,7 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
     """
     from rainier.core.database import get_engine
     from rainier.core.legacy_migrate import (
+        AlreadyVersionedError,
         UnversionedSchemaError,
         baseline_migrations,
         run_migrations,
@@ -2160,7 +2165,10 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
                 f"{len(missing)} missing ORM object(s); nothing was stamped."
             )
 
-        stamped = baseline_migrations(engine)
+        try:
+            stamped = baseline_migrations(engine)
+        except AlreadyVersionedError as exc:
+            raise click.ClickException(str(exc)) from exc
         if not stamped:
             click.echo("Nothing to baseline (all migrations already recorded).")
             return

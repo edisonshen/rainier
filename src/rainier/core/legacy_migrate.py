@@ -177,6 +177,17 @@ class UnversionedSchemaError(RuntimeError):
     """
 
 
+class AlreadyVersionedError(RuntimeError):
+    """Raised when baseline is invoked on a DB that already has recorded versions.
+
+    Pending files on an already-versioned DB are genuinely NEW migrations that
+    must be APPLIED (``run_migrations``), not stamped — stamping would record
+    them as done and permanently skip their DDL (e.g. a constraint rebuild the
+    tables/columns drift check cannot see). Baseline exists for exactly one
+    state: adopting an UNVERSIONED pre-existing schema.
+    """
+
+
 def _version_table_exists(engine: Engine) -> bool:
     sql = (
         "SELECT 1 FROM information_schema.tables "
@@ -283,9 +294,23 @@ def baseline_migrations(
     onto the already-migrated live schema. All-or-nothing means an interrupted
     baseline leaves the DB exactly as it was, and the guard still fires.
 
+    REFUSES on an already-versioned DB (codex 43f3 [P1]): when
+    ``schema_migrations`` already has recorded versions, any pending file is a
+    genuinely NEW migration that must be applied by ``run_migrations`` — a
+    baseline there would stamp it as done without ever executing its DDL, and
+    the tables/columns drift check cannot catch index/constraint-only files
+    (e.g. 0008's ``ck_paper_skip_reason`` rebuild).
+
     Returns the filenames that were stamped (recorded without running).
     """
     pending = pending_migrations(engine, migrations_dir)
+    if pending and applied_versions(engine):
+        raise AlreadyVersionedError(
+            "schema_migrations already has recorded versions; the "
+            f"{len(pending)} pending file(s) are new migrations that must be "
+            "APPLIED, not stamped. Run 'rainier db migrate-legacy' (without "
+            "--baseline). Baseline only adopts an unversioned existing schema."
+        )
     stamped: list[str] = []
     with engine.begin() as conn:
         _pin_public(conn)

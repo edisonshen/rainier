@@ -277,6 +277,36 @@ def test_db_migrate_legacy_baseline_refuses_on_missing_objects(monkeypatch):
     assert "Baselined" not in result.output
 
 
+def test_db_migrate_legacy_baseline_already_versioned_fails_clean(monkeypatch):
+    """When baseline_migrations refuses an already-versioned DB, the CLI
+    surfaces a clean error (non-zero, no traceback) pointing at a plain run."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+
+    def _raise(engine, *, migrations_dir=None):
+        raise lm_mod.AlreadyVersionedError(
+            "schema_migrations already has recorded versions; the 1 pending "
+            "file(s) are new migrations that must be APPLIED, not stamped. "
+            "Run 'rainier db migrate-legacy' (without --baseline)."
+        )
+
+    monkeypatch.setattr(lm_mod, "baseline_migrations", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    assert not isinstance(result.exception, lm_mod.AlreadyVersionedError), (
+        "AlreadyVersionedError must be wrapped in a ClickException, not leaked"
+    )
+    assert "must be APPLIED" in result.output
+
+
 def test_db_migrate_legacy_baseline_notes_verification_scope(monkeypatch):
     """A successful `--baseline` prints the honest verification-scope note
     (codex 43f3 [P2 deferred]: the check covers ORM tables/columns only —
