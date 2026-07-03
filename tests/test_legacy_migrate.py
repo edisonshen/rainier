@@ -255,6 +255,42 @@ def test_failed_migration_records_nothing(throwaway_engine, tmp_path):
     assert "mig_boom" not in insp.get_table_names()
 
 
+def test_failed_first_migration_leaves_guard_armed(throwaway_engine, tmp_path):
+    """A run that fails on its FIRST file must leave the DB untouched
+    (review 43f3 iter-2).
+
+    The version table used to be committed in its own up-front transaction; a
+    first-apply failure (the real 0001 does an ALTER on a table only ``db
+    init`` creates, so this is the guaranteed fresh-DB outcome) left an EMPTY
+    ``schema_migrations`` behind. That permanently disarmed the
+    ``UnversionedSchemaError`` guard: after the operator's natural recovery
+    (``db init``, retry) the runner would replay non-rerunnable historical SQL
+    instead of routing to ``--baseline``.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    from rainier.core.legacy_migrate import UnversionedSchemaError, run_migrations
+
+    # Mirrors real 0001 on an empty DB: ALTER on a table no migration creates.
+    _write_migration(
+        tmp_path,
+        "0001_alter_missing.sql",
+        "BEGIN;\nALTER TABLE not_there ADD COLUMN x int;\nCOMMIT;\n",
+    )
+    with pytest.raises(ProgrammingError):
+        run_migrations(throwaway_engine, migrations_dir=tmp_path)
+
+    # The failed run left NOTHING behind — especially no empty version table.
+    assert "schema_migrations" not in inspect(throwaway_engine).get_table_names()
+
+    # Operator recovery: schema gets created out-of-band (db init). The guard
+    # must still fire and route to --baseline instead of replaying.
+    with throwaway_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE not_there (id int)"))
+    with pytest.raises(UnversionedSchemaError):
+        run_migrations(throwaway_engine, migrations_dir=tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Baseline: adopt an existing schema WITHOUT replaying SQL (codex 43f3 [P1])
 # ---------------------------------------------------------------------------

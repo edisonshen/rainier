@@ -24,6 +24,7 @@ committed) the runner strips that outer ``BEGIN;``/``COMMIT;`` and runs the
 file body + the version INSERT inside ONE transaction it controls:
 
     ┌─ engine.begin() (one transaction per file) ─────────────┐
+    │  CREATE TABLE IF NOT EXISTS schema_migrations …          │
     │  <stripped file body, e.g. CREATE TABLE IF NOT EXISTS …> │
     │  INSERT INTO schema_migrations (version) VALUES (<file>) │
     └─────────────────────────────────────────────────────────┘
@@ -141,8 +142,10 @@ def _strip_outer_transaction(sql: str) -> str:
 # tables all live in ``public``, so the version table belongs there too.
 _VERSION_TABLE = "public.schema_migrations"
 
-# Shared by _ensure_version_table (its own transaction) and baseline_migrations
-# (inside the single all-or-nothing stamp transaction).
+# Executed by _apply_one (inside each per-file apply transaction) and
+# baseline_migrations (inside the single all-or-nothing stamp transaction).
+# NEVER in its own up-front transaction: a pre-committed empty version table
+# surviving a failed first apply would disarm the UnversionedSchemaError guard.
 _CREATE_VERSION_TABLE_SQL = (
     f"CREATE TABLE IF NOT EXISTS {_VERSION_TABLE} ("
     "  version TEXT PRIMARY KEY,"
@@ -163,13 +166,6 @@ def _pin_public(conn) -> None:
     the same schema. ``SET LOCAL`` is transaction-scoped, so it reverts on commit.
     """
     conn.exec_driver_sql("SET LOCAL search_path TO public")
-
-
-def _ensure_version_table(engine: Engine) -> None:
-    """Create ``public.schema_migrations`` if absent (idempotent)."""
-    with engine.begin() as conn:
-        _pin_public(conn)
-        conn.execute(text(_CREATE_VERSION_TABLE_SQL))
 
 
 class UnversionedSchemaError(RuntimeError):
@@ -236,13 +232,24 @@ def pending_migrations(
 def _apply_one(engine: Engine, path: Path) -> None:
     """Apply a single migration file and record it, atomically.
 
-    The file body (minus its own ``BEGIN;``/``COMMIT;``) and the bookkeeping
-    INSERT run in ONE ``engine.begin()`` transaction. ``exec_driver_sql`` runs
-    the multi-statement body as a single script via the DBAPI driver.
+    The version-table CREATE IF NOT EXISTS, the file body (minus its own
+    ``BEGIN;``/``COMMIT;``) and the bookkeeping INSERT run in ONE
+    ``engine.begin()`` transaction. ``exec_driver_sql`` runs the
+    multi-statement body as a single script via the DBAPI driver.
+
+    Creating the version table HERE (not in a separate up-front transaction)
+    is load-bearing (review 43f3 iter-2): if the very first apply on a fresh
+    DB fails, a pre-committed empty ``schema_migrations`` would survive the
+    rollback and permanently disarm ``run_migrations``'s
+    ``UnversionedSchemaError`` guard — the operator's natural recovery
+    (``db init``, retry) would then replay non-rerunnable historical SQL
+    instead of being routed to ``--baseline``. In-transaction, a failed first
+    apply leaves the DB exactly as it was.
     """
     body = _strip_outer_transaction(path.read_text())
     with engine.begin() as conn:
         _pin_public(conn)
+        conn.execute(text(_CREATE_VERSION_TABLE_SQL))
         if body.strip():
             conn.exec_driver_sql(body)
         conn.execute(
@@ -302,9 +309,12 @@ def run_migrations(
 ) -> list[str]:
     """Apply all pending legacy migrations in filename order.
 
-    Creates ``schema_migrations`` if absent, then applies each not-yet-recorded
-    forward migration in its own transaction, recording the filename on success.
-    Already-applied files are skipped, so a second run is a no-op.
+    Applies each not-yet-recorded forward migration in its own transaction
+    (which also creates ``schema_migrations`` if absent — inside that same
+    transaction, see ``_apply_one``), recording the filename on success.
+    Already-applied files are skipped, so a second run is a no-op. A run that
+    fails on its FIRST file leaves the DB untouched — no half-created version
+    table survives to disarm the safety guard below.
 
     ``dry_run=True`` lists the pending filenames WITHOUT creating the version
     table or applying anything.
@@ -332,7 +342,6 @@ def run_migrations(
             "any new migrations."
         )
 
-    _ensure_version_table(engine)
     pending = pending_migrations(engine, migrations_dir)
     applied: list[str] = []
     for path in pending:
