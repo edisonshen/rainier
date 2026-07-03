@@ -2117,6 +2117,7 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
     from rainier.core.database import get_engine
     from rainier.core.legacy_migrate import (
         AlreadyVersionedError,
+        EmptyDatabaseError,
         UnversionedSchemaError,
         baseline_migrations,
         run_migrations,
@@ -2127,7 +2128,11 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
 
     engine = get_engine()
     if dry_run:
-        pending = run_migrations(engine, dry_run=True)
+        # The same guards as a real run apply, so the preview is truthful.
+        try:
+            pending = run_migrations(engine, dry_run=True)
+        except (UnversionedSchemaError, EmptyDatabaseError) as exc:
+            raise click.ClickException(str(exc)) from exc
         if not pending:
             click.echo("No pending legacy migrations.")
             return
@@ -2184,7 +2189,7 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
 
     try:
         applied = run_migrations(engine)
-    except UnversionedSchemaError as exc:
+    except (UnversionedSchemaError, EmptyDatabaseError) as exc:
         raise click.ClickException(str(exc)) from exc
     if not applied:
         click.echo("Legacy migrations already up to date (no-op).")

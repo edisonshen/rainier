@@ -483,8 +483,12 @@ def test_real_migrations_discovered_in_order():
 
 def test_real_migrations_all_pending_on_fresh_db(throwaway_engine):
     """On a fresh DB, ``pending_migrations`` returns every shipped forward file
-    (nothing recorded yet), and ``--dry-run`` lists them without applying."""
+    (nothing recorded yet) — but a run/dry-run with the DEFAULT (shipped) set
+    raises ``EmptyDatabaseError`` steering to ``db init`` + ``--baseline``
+    (codex 43f3 [P2]: 0001 ALTERs tables only ``db init`` creates, so a
+    from-scratch replay would die at file 1 with a raw SQL error)."""
     from rainier.core.legacy_migrate import (
+        EmptyDatabaseError,
         discover_migrations,
         pending_migrations,
         run_migrations,
@@ -494,10 +498,12 @@ def test_real_migrations_all_pending_on_fresh_db(throwaway_engine):
     pending = [p.name for p in pending_migrations(throwaway_engine)]
     assert pending == all_names
 
-    dry = run_migrations(throwaway_engine, dry_run=True)
-    assert dry == all_names
+    with pytest.raises(EmptyDatabaseError):
+        run_migrations(throwaway_engine, dry_run=True)
+    with pytest.raises(EmptyDatabaseError):
+        run_migrations(throwaway_engine)
 
-    # Dry-run created nothing.
+    # Neither attempt created anything.
     insp = inspect(throwaway_engine)
     assert "schema_migrations" not in insp.get_table_names()
 
@@ -533,7 +539,8 @@ def test_real_migration_recorded_when_driven(throwaway_engine):
 
 def test_run_refuses_unversioned_existing_schema(throwaway_engine):
     """run_migrations raises on an existing schema with no schema_migrations
-    table — it must NOT replay 0001..N (codex 43f3 round-3 [P1])."""
+    table — it must NOT replay 0001..N (codex 43f3 round-3 [P1]). The same
+    guard fires for --dry-run so the preview is truthful (codex [P2])."""
     from rainier.core.legacy_migrate import (
         UnversionedSchemaError,
         applied_versions,
@@ -544,6 +551,8 @@ def test_run_refuses_unversioned_existing_schema(throwaway_engine):
     Base.metadata.create_all(throwaway_engine)  # tables present, no version table
     with pytest.raises(UnversionedSchemaError):
         run_migrations(throwaway_engine)
+    with pytest.raises(UnversionedSchemaError):
+        run_migrations(throwaway_engine, dry_run=True)
 
     # Nothing was created or recorded — the guard fired before any work.
     assert applied_versions(throwaway_engine) == set()

@@ -177,6 +177,16 @@ class UnversionedSchemaError(RuntimeError):
     """
 
 
+class EmptyDatabaseError(RuntimeError):
+    """Raised when a plain run targets a truly EMPTY DB with the shipped files.
+
+    The shipped ``migrations/*.sql`` assume an existing schema (0001 starts
+    with ``ALTER TABLE analysis_results``, a table only ``db init`` creates),
+    so a from-scratch replay dies at file 1 with a raw SQL error. The
+    supported bootstrap is ``db init`` then ``--baseline``.
+    """
+
+
 class AlreadyVersionedError(RuntimeError):
     """Raised when baseline is invoked on a DB that already has recorded versions.
 
@@ -342,30 +352,48 @@ def run_migrations(
     table survives to disarm the safety guard below.
 
     ``dry_run=True`` lists the pending filenames WITHOUT creating the version
-    table or applying anything.
+    table or applying anything. The safety guards below run for dry-run too,
+    so a dry-run is a TRUTHFUL preview of what a real run would do (codex 43f3
+    [P2]: listing "13 pending" on a DB the real run refuses was misleading in
+    the exact recovery scenario this runner targets).
 
-    SAFETY GUARD: if the legacy schema ALREADY has tables but no
-    ``schema_migrations`` table, this raises ``UnversionedSchemaError`` instead
-    of blindly replaying ``0001..N`` (which can fail on an already-migrated
-    schema). Adopt such a DB with ``baseline_migrations`` /
-    ``db migrate-legacy --baseline`` first, then run for the new tail only. A
-    truly fresh DB (no tables) runs from 0001 normally.
+    SAFETY GUARDS (both raise before any DB write):
+
+    * ``UnversionedSchemaError`` — the legacy schema ALREADY has tables but no
+      ``schema_migrations`` table. Refuses to blindly replay ``0001..N``
+      (historical files don't re-run cleanly on an already-migrated schema).
+      Adopt with ``baseline_migrations`` / ``db migrate-legacy --baseline``,
+      then run for the new tail only.
+    * ``EmptyDatabaseError`` — the DB is truly EMPTY and the DEFAULT (shipped)
+      migration set is in use. The shipped files assume an existing schema
+      (0001 ALTERs tables only ``db init`` creates), so a from-scratch replay
+      dies at file 1; steer to ``db init`` + ``--baseline`` instead. A custom
+      ``migrations_dir`` skips this guard (self-contained sets bootstrap fine).
 
     Returns the list of filenames that were applied (dry-run: the filenames
     that WOULD be applied).
     """
+    if not _version_table_exists(engine):
+        if _legacy_schema_present(engine):
+            raise UnversionedSchemaError(
+                "Legacy schema already has tables but no schema_migrations "
+                "table. Refusing to replay 0001..N (some historical files "
+                "don't re-run cleanly on an existing schema). Run 'rainier db "
+                "migrate-legacy --baseline' once to adopt the current schema, "
+                "then re-run to apply any new migrations."
+            )
+        if migrations_dir is None:
+            raise EmptyDatabaseError(
+                "Empty legacy database: the shipped migrations/*.sql assume an "
+                "existing schema (0001 ALTERs tables only 'rainier db init' "
+                "creates) and cannot bootstrap from scratch. Run 'rainier db "
+                "init' first, then 'rainier db migrate-legacy --baseline' to "
+                "adopt the file history."
+            )
+
     if dry_run:
         pending = pending_migrations(engine, migrations_dir)
         return [p.name for p in pending]
-
-    if not _version_table_exists(engine) and _legacy_schema_present(engine):
-        raise UnversionedSchemaError(
-            "Legacy schema already has tables but no schema_migrations table. "
-            "Refusing to replay 0001..N (some historical files don't re-run "
-            "cleanly on an existing schema). Run 'rainier db migrate-legacy "
-            "--baseline' once to adopt the current schema, then re-run to apply "
-            "any new migrations."
-        )
 
     pending = pending_migrations(engine, migrations_dir)
     applied: list[str] = []
