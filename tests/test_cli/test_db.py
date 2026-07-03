@@ -239,24 +239,23 @@ def test_db_migrate_legacy_baseline_stamps(monkeypatch):
     assert "WARNING" not in result.output, "clean drift must not warn"
 
 
-def test_db_migrate_legacy_baseline_fails_loud_on_missing_objects(monkeypatch):
-    """`--baseline` exits NON-ZERO when the ORM contract says stamped
-    bookkeeping now covers objects the live schema doesn't have (review 43f3
-    iter-1 + codex [P1]: a blanket baseline over the '0012/0013 never ran'
-    state would otherwise silently mark the missing migrations as applied, and
-    an exit-0 warning would let automation sail past the partial-adoption
-    state). Known-benign drift is excluded from the warning."""
+def test_db_migrate_legacy_baseline_refuses_on_missing_objects(monkeypatch):
+    """`--baseline` refuses BEFORE stamping when the live schema is missing
+    ORM-declared objects (codex 43f3 [P1]: stamping first would record the
+    missing migrations as applied, so a stamp-then-fail mutates bookkeeping
+    into a harder-to-recover state — the runner would permanently skip them).
+    Nothing is stamped, exit non-zero. Known-benign drift is excluded."""
     import rainier.core.database as db_mod
     import rainier.core.legacy_migrate as lm_mod
     import rainier.core.schema_check as sc_mod
     from rainier import cli as cli_mod
 
     monkeypatch.setattr(db_mod, "get_engine", lambda: object())
-    monkeypatch.setattr(
-        lm_mod,
-        "baseline_migrations",
-        lambda engine, *, migrations_dir=None: ["0012_reclaim_queue.sql"],
-    )
+
+    def _boom_baseline(*_a, **_k):
+        raise AssertionError("baseline_migrations must NOT be called on refusal")
+
+    monkeypatch.setattr(lm_mod, "baseline_migrations", _boom_baseline)
     monkeypatch.setattr(
         sc_mod,
         "check_schema_drift",
@@ -269,14 +268,37 @@ def test_db_migrate_legacy_baseline_fails_loud_on_missing_objects(monkeypatch):
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
     assert result.exit_code != 0, result.output
-    assert "WARNING" in result.output
+    assert "Refusing to baseline" in result.output
     assert "paper_reclaim_queue" in result.output
     assert "capital_flow_bars.symbol" not in result.output, (
-        "known-benign drift must not appear in the baseline warning"
+        "known-benign drift must not trigger the baseline refusal"
     )
-    assert "Hand-apply" in result.output
-    # The stamps happened and are reported before the loud failure.
+    assert "nothing was stamped" in result.output
+    assert "Baselined" not in result.output
+
+
+def test_db_migrate_legacy_baseline_notes_verification_scope(monkeypatch):
+    """A successful `--baseline` prints the honest verification-scope note
+    (codex 43f3 [P2 deferred]: the check covers ORM tables/columns only —
+    migration-only indexes/constraints are not verified)."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod,
+        "baseline_migrations",
+        lambda engine, *, migrations_dir=None: ["0012_reclaim_queue.sql"],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code == 0, result.output
     assert "Baselined 1" in result.output
+    assert "tables/columns only" in result.output
 
 
 def test_db_migrate_legacy_dry_run_and_baseline_conflict(monkeypatch):

@@ -2084,7 +2084,9 @@ def db_init(ctx):
         "Adopt an existing pre-versioned DB: RECORD all pending migrations as "
         "applied WITHOUT running their SQL (alembic 'stamp'). Use once on a DB "
         "that already has the schema but no schema_migrations table, then run "
-        "without this flag for genuinely new files."
+        "without this flag for genuinely new files. Refuses (stamping nothing) "
+        "if ORM-declared tables/columns are missing; indexes/constraints that "
+        "exist only in migrations/*.sql are not verified."
     ),
 )
 def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
@@ -2096,7 +2098,17 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
     order, recording it in ``schema_migrations``. Idempotent: already-recorded
     files are skipped, so a second run is a no-op. ``--dry-run`` lists pending
     files without touching the DB; ``--baseline`` stamps pending files as applied
-    without running them (to adopt an already-migrated DB).
+    without running them (to adopt an already-migrated DB) after validating that
+    no ORM-declared object is missing.
+
+    BOOTSTRAP (fresh legacy DB): ``rainier db init`` then ``rainier db
+    migrate-legacy --baseline``. The historical files assume an existing schema
+    (0001 ALTERs tables only ``db init`` creates) and 0001's idempotency-index
+    expression is not runnable on modern Postgres at all (the live legacy DB
+    lacks it too), so a from-0001 replay is not a supported path. ``db init``
+    materializes every ORM-declared table/column/index/constraint; baseline
+    then adopts the file history. Migration-only DDL that the ORM does not
+    mirror is NOT verified by the baseline check (tables/columns scope).
     """
     from rainier.core.database import get_engine
     from rainier.core.legacy_migrate import (
@@ -2120,6 +2132,34 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
         return
 
     if baseline:
+        # Validate BEFORE stamping (codex 43f3 [P1]): baseline records files
+        # as applied WITHOUT running them, so adopting a schema that is still
+        # missing ORM-declared objects (the 0012/0013 incident state) would
+        # permanently mask those migrations from the runner. Refuse with the
+        # DB untouched — a stamp-then-fail would mutate bookkeeping into a
+        # harder-to-recover state.
+        from rainier.core.schema_check import KNOWN_BENIGN_DRIFT, check_schema_drift
+
+        missing = [
+            f for f in check_schema_drift(engine) if f not in KNOWN_BENIGN_DRIFT
+        ]
+        if missing:
+            click.echo(
+                "Refusing to baseline — the live schema is missing "
+                "ORM-declared objects:"
+            )
+            for finding in missing:
+                click.echo(f"  - {finding}")
+            click.echo(
+                "Stamping now would record their migrations as applied and "
+                "permanently skip them. Create missing tables with 'rainier "
+                "db init', hand-apply the migrations for missing columns to "
+                "the legacy engine, then re-run --baseline."
+            )
+            raise click.ClickException(
+                f"{len(missing)} missing ORM object(s); nothing was stamped."
+            )
+
         stamped = baseline_migrations(engine)
         if not stamped:
             click.echo("Nothing to baseline (all migrations already recorded).")
@@ -2127,37 +2167,11 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
         click.echo(f"Baselined {len(stamped)} migration(s) (recorded, NOT run):")
         for name in stamped:
             click.echo(f"  - {name}")
-        # Baseline records files as applied WITHOUT running them, so it can
-        # paper over a migration whose DDL genuinely never ran (the 0012/0013
-        # incident state). Cross-check the ORM contract and scream if stamped
-        # bookkeeping now claims objects that the live schema doesn't have —
-        # a stamped-but-missing object can no longer be applied by this runner.
-        from rainier.core.schema_check import KNOWN_BENIGN_DRIFT, check_schema_drift
-
-        missing = [
-            f for f in check_schema_drift(engine) if f not in KNOWN_BENIGN_DRIFT
-        ]
-        if missing:
-            click.echo("")
-            click.echo(
-                "WARNING: baseline stamped the files above, but the live schema "
-                "is still missing ORM-declared objects:"
-            )
-            for finding in missing:
-                click.echo(f"  - {finding}")
-            click.echo(
-                "A stamped migration's DDL may never have run — and because it "
-                "is now recorded as applied, a plain run will permanently skip "
-                "it. Hand-apply the relevant migrations/*.sql to the legacy "
-                "engine, then verify with 'rainier db init'."
-            )
-            # Exit non-zero (codex 43f3 review [P1]): the stamps are already
-            # committed, so automation must STOP here for manual repair instead
-            # of sailing past an incomplete adoption with exit 0.
-            raise click.ClickException(
-                f"baseline stamped {len(stamped)} file(s) but {len(missing)} "
-                "ORM object(s) are still missing; see above."
-            )
+        click.echo(
+            "Note: this validation covers ORM tables/columns only — "
+            "indexes/constraints that exist solely in migrations/*.sql are "
+            "not verified."
+        )
         return
 
     try:
