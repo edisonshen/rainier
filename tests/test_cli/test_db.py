@@ -214,8 +214,10 @@ def test_db_migrate_legacy_baseline_stamps(monkeypatch):
 
     import rainier.core.database as db_mod
     import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
 
     monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
 
     def _fake_baseline(engine, *, migrations_dir=None):
         calls["baseline"] = True
@@ -234,6 +236,44 @@ def test_db_migrate_legacy_baseline_stamps(monkeypatch):
     assert calls.get("baseline") is True
     assert "Baselined 2" in result.output
     assert "NOT run" in result.output
+    assert "WARNING" not in result.output, "clean drift must not warn"
+
+
+def test_db_migrate_legacy_baseline_warns_on_missing_objects(monkeypatch):
+    """`--baseline` warns loudly when the ORM contract says stamped bookkeeping
+    now covers objects the live schema doesn't have (review 43f3 iter-1: a
+    blanket baseline over the '0012/0013 never ran' state would otherwise
+    silently mark the missing migrations as applied). Known-benign drift is
+    excluded from the warning."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        lm_mod,
+        "baseline_migrations",
+        lambda engine, *, migrations_dir=None: ["0012_reclaim_queue.sql"],
+    )
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: [
+            "missing column: capital_flow_bars.symbol",  # known-benign: excluded
+            "missing table: paper_reclaim_queue",
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code == 0, result.output
+    assert "WARNING" in result.output
+    assert "paper_reclaim_queue" in result.output
+    assert "capital_flow_bars.symbol" not in result.output, (
+        "known-benign drift must not appear in the baseline warning"
+    )
+    assert "Hand-apply" in result.output
 
 
 def test_db_migrate_legacy_dry_run_and_baseline_conflict(monkeypatch):
@@ -338,6 +378,60 @@ def test_db_init_clean_when_no_drift(monkeypatch):
     result = runner.invoke(cli_mod.cli, ["db", "init"])
     assert result.exit_code == 0, result.output
     assert "clean" in result.output.lower()
+
+
+def test_db_init_ignores_known_benign_drift(monkeypatch):
+    """`db init` must NOT fail on the documented pre-existing benign drift
+    (review 43f3 iter-1): the live legacy DB's `capital_flow_bars` lacks
+    `symbol` (orphaned 0-row table, no migration adds it), and the operator
+    runbook blocks only on findings beyond it. Hard-failing would make
+    `db init` exit non-zero on the live DB forever."""
+    import rainier.core.database as db_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: ["missing column: capital_flow_bars.symbol"],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "Known-benign drift (ignored)" in result.output
+    assert "capital_flow_bars.symbol" in result.output
+    assert "SCHEMA DRIFT DETECTED" not in result.output
+
+
+def test_db_init_fails_on_drift_beyond_benign(monkeypatch):
+    """`db init` still fails loud when real drift exists alongside the benign
+    finding — only the real findings are counted and listed in the failure."""
+    import rainier.core.database as db_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: [
+            "missing column: capital_flow_bars.symbol",
+            "missing table: paper_reclaim_queue",
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code != 0, result.output
+    assert "SCHEMA DRIFT DETECTED" in result.output
+    assert "paper_reclaim_queue" in result.output
+    assert "1 schema-drift finding(s)" in result.output, (
+        "the benign finding must not be counted in the failure total"
+    )
 
 
 def test_db_migrate_help_exposes_downgrade_flag():

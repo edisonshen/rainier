@@ -141,6 +141,15 @@ def _strip_outer_transaction(sql: str) -> str:
 # tables all live in ``public``, so the version table belongs there too.
 _VERSION_TABLE = "public.schema_migrations"
 
+# Shared by _ensure_version_table (its own transaction) and baseline_migrations
+# (inside the single all-or-nothing stamp transaction).
+_CREATE_VERSION_TABLE_SQL = (
+    f"CREATE TABLE IF NOT EXISTS {_VERSION_TABLE} ("
+    "  version TEXT PRIMARY KEY,"
+    "  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    ")"
+)
+
 
 def _pin_public(conn) -> None:
     """Pin this transaction's ``search_path`` to ``public``.
@@ -160,14 +169,7 @@ def _ensure_version_table(engine: Engine) -> None:
     """Create ``public.schema_migrations`` if absent (idempotent)."""
     with engine.begin() as conn:
         _pin_public(conn)
-        conn.execute(
-            text(
-                f"CREATE TABLE IF NOT EXISTS {_VERSION_TABLE} ("
-                "  version TEXT PRIMARY KEY,"
-                "  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()"
-                ")"
-            )
-        )
+        conn.execute(text(_CREATE_VERSION_TABLE_SQL))
 
 
 class UnversionedSchemaError(RuntimeError):
@@ -266,20 +268,29 @@ def baseline_migrations(
     file as applied, executing NONE of their SQL. After baselining, the operator
     runs ``run_migrations`` for any genuinely new files only.
 
+    ATOMIC: the table creation and ALL stamps run in ONE transaction. A
+    per-file (or ensure-then-stamp) split would let an interrupt leave a
+    partial/empty ``schema_migrations`` behind — which defeats
+    ``run_migrations``'s ``UnversionedSchemaError`` guard (the table now
+    exists), so the next plain run would replay the un-stamped historical SQL
+    onto the already-migrated live schema. All-or-nothing means an interrupted
+    baseline leaves the DB exactly as it was, and the guard still fires.
+
     Returns the filenames that were stamped (recorded without running).
     """
-    _ensure_version_table(engine)
     pending = pending_migrations(engine, migrations_dir)
     stamped: list[str] = []
-    for path in pending:
-        with engine.begin() as conn:
-            _pin_public(conn)
+    with engine.begin() as conn:
+        _pin_public(conn)
+        conn.execute(text(_CREATE_VERSION_TABLE_SQL))
+        for path in pending:
             conn.execute(
                 text(f"INSERT INTO {_VERSION_TABLE} (version) VALUES (:v)"),
                 {"v": path.name},
             )
-        log.info("legacy_migration_baselined", version=path.name)
-        stamped.append(path.name)
+            stamped.append(path.name)
+    for name in stamped:
+        log.info("legacy_migration_baselined", version=name)
     return stamped
 
 

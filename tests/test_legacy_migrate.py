@@ -244,7 +244,9 @@ def test_failed_migration_records_nothing(throwaway_engine, tmp_path):
         "0002_boom.sql",
         "BEGIN;\nCREATE TABLE mig_boom (id int);\nSELECT 1/0;\nCOMMIT;\n",
     )
-    with pytest.raises(Exception):
+    from sqlalchemy.exc import DBAPIError
+
+    with pytest.raises(DBAPIError):
         run_migrations(throwaway_engine, migrations_dir=tmp_path)
 
     insp = inspect(throwaway_engine)
@@ -297,6 +299,38 @@ def test_baseline_then_run_applies_only_new(throwaway_engine, tmp_path):
     assert "mig_new" in inspect(throwaway_engine).get_table_names()
 
 
+def test_baseline_is_all_or_nothing(throwaway_engine, tmp_path):
+    """A failed/interrupted baseline must stamp NOTHING (review 43f3 iter-1).
+
+    A partially-stamped ``schema_migrations`` defeats the
+    ``UnversionedSchemaError`` guard (the table now exists), so the next plain
+    run would replay the un-stamped tail's SQL onto the already-migrated
+    schema. Force a mid-stamp failure via a CHECK that rejects the LAST pending
+    file and assert no prefix was recorded.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from rainier.core.legacy_migrate import applied_versions, baseline_migrations
+
+    _make_synthetic_migrations(tmp_path)
+    with throwaway_engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE public.schema_migrations ("
+                " version TEXT PRIMARY KEY,"
+                " applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),"
+                " CHECK (version <> '0003_add_col.sql'))"
+            )
+        )
+
+    with pytest.raises(IntegrityError):
+        baseline_migrations(throwaway_engine, migrations_dir=tmp_path)
+
+    assert applied_versions(throwaway_engine) == set(), (
+        "a failed baseline must roll back every stamp, not leave a prefix"
+    )
+
+
 # ---------------------------------------------------------------------------
 # search_path independence — version table is always public.schema_migrations
 # (codex 43f3 [P2]): an unqualified table under a non-public search_path would
@@ -316,10 +350,22 @@ def test_idempotent_under_non_public_search_path(throwaway_engine, tmp_path):
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS shadow"))
 
     @event.listens_for(throwaway_engine, "connect")
-    def _set_search_path(dbapi_conn, _record):  # pragma: no cover - tiny hook
+    def _set_search_path(dbapi_conn, _record):
         cur = dbapi_conn.cursor()
         cur.execute("SET search_path TO shadow, public")
         cur.close()
+
+    # The pool already holds the DBAPI connection that ran CREATE SCHEMA above,
+    # and the "connect" hook fires only on NEW connections — without a dispose,
+    # every later checkout reuses the un-hooked pooled connection and this test
+    # passes vacuously even with _pin_public removed. Dispose so run_migrations
+    # checks out fresh, shadow-first connections, and sanity-check the hook took.
+    throwaway_engine.dispose()
+    with throwaway_engine.connect() as conn:
+        search_path = conn.exec_driver_sql("SHOW search_path").scalar()
+    assert "shadow" in search_path, (
+        f"test-harness bug: search_path hook did not apply ({search_path!r})"
+    )
 
     _make_synthetic_migrations(tmp_path)
     first = run_migrations(throwaway_engine, migrations_dir=tmp_path)

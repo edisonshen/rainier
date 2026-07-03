@@ -20,6 +20,19 @@ from sqlalchemy.engine import Engine
 
 from rainier.core.models import Base
 
+# Documented PRE-EXISTING benign drift the loud chokepoints must not block on.
+# ``capital_flow_bars`` on the live legacy DB is an empty (0-row) table orphaned
+# by the old stock_id-FK -> symbol refactor: no ``migrations/*.sql`` adds the
+# column, the QU100 pipeline never reads the table, and the operator's runbook
+# (memory ``project_prod_checkout_staleness``) says to block only on findings
+# BEYOND it. Without this allowlist ``rainier db init`` would exit non-zero on
+# the live DB forever, with ``db migrate-legacy`` unable to clear it.
+KNOWN_BENIGN_DRIFT: frozenset[str] = frozenset(
+    {
+        "missing column: capital_flow_bars.symbol",
+    }
+)
+
 
 def check_schema_drift(engine: Engine) -> list[str]:
     """Compare the legacy ORM to ``engine``'s live schema.

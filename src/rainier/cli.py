@@ -2025,26 +2025,32 @@ def db_init(ctx):
     missing object and exit non-zero so it screams instead.
     """
     from rainier.core.database import get_engine, init_db
-    from rainier.core.schema_check import check_schema_drift
+    from rainier.core.schema_check import KNOWN_BENIGN_DRIFT, check_schema_drift
 
     click.echo("Initializing database...")
     init_db()
     click.echo("Database initialized successfully.")
 
+    # Split out the documented pre-existing benign drift (KNOWN_BENIGN_DRIFT):
+    # the operator runbook blocks only on findings BEYOND it. Hard-failing on
+    # the benign finding would make `db init` exit non-zero on the live legacy
+    # DB forever, with no migrations/*.sql able to clear it.
     findings = check_schema_drift(get_engine())
-    if findings:
+    benign = [f for f in findings if f in KNOWN_BENIGN_DRIFT]
+    real = [f for f in findings if f not in KNOWN_BENIGN_DRIFT]
+    for finding in benign:
+        click.echo(f"Known-benign drift (ignored): {finding}")
+    if real:
         click.echo("")
         click.echo("SCHEMA DRIFT DETECTED — the live DB is behind the ORM:")
-        for finding in findings:
+        for finding in real:
             click.echo(f"  - {finding}")
         click.echo("")
         click.echo(
             "Run 'rainier db migrate-legacy' to apply pending migrations/*.sql, "
             "or repair the drifted table by hand."
         )
-        raise click.ClickException(
-            f"{len(findings)} schema-drift finding(s); see above."
-        )
+        raise click.ClickException(f"{len(real)} schema-drift finding(s); see above.")
     click.echo("Schema drift check: clean.")
 
 
@@ -2104,6 +2110,29 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
         click.echo(f"Baselined {len(stamped)} migration(s) (recorded, NOT run):")
         for name in stamped:
             click.echo(f"  - {name}")
+        # Baseline records files as applied WITHOUT running them, so it can
+        # paper over a migration whose DDL genuinely never ran (the 0012/0013
+        # incident state). Cross-check the ORM contract and scream if stamped
+        # bookkeeping now claims objects that the live schema doesn't have —
+        # a stamped-but-missing object can no longer be applied by this runner.
+        from rainier.core.schema_check import KNOWN_BENIGN_DRIFT, check_schema_drift
+
+        missing = [
+            f for f in check_schema_drift(engine) if f not in KNOWN_BENIGN_DRIFT
+        ]
+        if missing:
+            click.echo("")
+            click.echo(
+                "WARNING: baseline stamped the files above, but the live schema "
+                "is still missing ORM-declared objects:"
+            )
+            for finding in missing:
+                click.echo(f"  - {finding}")
+            click.echo(
+                "A stamped migration's DDL may never have run. Hand-apply the "
+                "relevant migrations/*.sql to the legacy engine, then verify "
+                "with 'rainier db init'."
+            )
         return
 
     try:
