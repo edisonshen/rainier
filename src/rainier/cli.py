@@ -2178,6 +2178,10 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
             stamped = baseline_migrations(engine)
         except AlreadyVersionedError as exc:
             raise click.ClickException(str(exc)) from exc
+        except Exception as exc:  # mirror db_migrate's wrapping idiom
+            raise click.ClickException(
+                f"legacy baseline failed: {exc.__class__.__name__}: {exc}"
+            ) from exc
         if not stamped:
             click.echo("Nothing to baseline (all migrations already recorded).")
             return
@@ -2196,6 +2200,14 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
         applied = run_migrations(engine)
     except (UnversionedSchemaError, EmptyDatabaseError) as exc:
         raise click.ClickException(str(exc)) from exc
+    except Exception as exc:
+        # A real apply failure (bad future migration, permissions, dropped
+        # connection) surfaces as a clean `Error:` line, not a raw traceback —
+        # mirrors db_migrate's wrapping idiom. The failed file's transaction
+        # rolled back whole, so a re-run resumes at the same file.
+        raise click.ClickException(
+            f"legacy migration failed: {exc.__class__.__name__}: {exc}"
+        ) from exc
     if not applied:
         click.echo("Legacy migrations already up to date (no-op).")
         return
