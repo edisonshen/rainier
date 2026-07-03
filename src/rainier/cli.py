@@ -2051,7 +2051,24 @@ def db_init(ctx):
             "or repair the drifted table by hand."
         )
         raise click.ClickException(f"{len(real)} schema-drift finding(s); see above.")
-    click.echo("Schema drift check: clean.")
+    # Honest scope: the drift check compares ORM tables/columns ONLY. It cannot
+    # see migration-only DDL (indexes/constraints, e.g. 0001's
+    # idx_llm_analysis_idempotent), and create_all never runs migrations/*.sql.
+    # So a "clean" fresh DB may still be missing that DDL — surface the
+    # unrecorded legacy-migration state instead of implying full health.
+    click.echo("Schema drift check (ORM tables/columns): clean.")
+
+    from rainier.core.legacy_migrate import pending_migrations
+
+    pending = pending_migrations(get_engine())
+    if pending:
+        click.echo(
+            f"NOTE: {len(pending)} legacy migration file(s) not recorded as applied "
+            "in schema_migrations. `db init` (create_all) does NOT run "
+            "migration-only DDL such as indexes/constraints. Run "
+            "'rainier db migrate-legacy' to apply them ('--baseline' to adopt an "
+            "already-migrated schema)."
+        )
 
 
 @db.command(name="migrate-legacy")
@@ -2129,9 +2146,17 @@ def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
             for finding in missing:
                 click.echo(f"  - {finding}")
             click.echo(
-                "A stamped migration's DDL may never have run. Hand-apply the "
-                "relevant migrations/*.sql to the legacy engine, then verify "
-                "with 'rainier db init'."
+                "A stamped migration's DDL may never have run — and because it "
+                "is now recorded as applied, a plain run will permanently skip "
+                "it. Hand-apply the relevant migrations/*.sql to the legacy "
+                "engine, then verify with 'rainier db init'."
+            )
+            # Exit non-zero (codex 43f3 review [P1]): the stamps are already
+            # committed, so automation must STOP here for manual repair instead
+            # of sailing past an incomplete adoption with exit 0.
+            raise click.ClickException(
+                f"baseline stamped {len(stamped)} file(s) but {len(missing)} "
+                "ORM object(s) are still missing; see above."
             )
         return
 

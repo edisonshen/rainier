@@ -239,12 +239,13 @@ def test_db_migrate_legacy_baseline_stamps(monkeypatch):
     assert "WARNING" not in result.output, "clean drift must not warn"
 
 
-def test_db_migrate_legacy_baseline_warns_on_missing_objects(monkeypatch):
-    """`--baseline` warns loudly when the ORM contract says stamped bookkeeping
-    now covers objects the live schema doesn't have (review 43f3 iter-1: a
-    blanket baseline over the '0012/0013 never ran' state would otherwise
-    silently mark the missing migrations as applied). Known-benign drift is
-    excluded from the warning."""
+def test_db_migrate_legacy_baseline_fails_loud_on_missing_objects(monkeypatch):
+    """`--baseline` exits NON-ZERO when the ORM contract says stamped
+    bookkeeping now covers objects the live schema doesn't have (review 43f3
+    iter-1 + codex [P1]: a blanket baseline over the '0012/0013 never ran'
+    state would otherwise silently mark the missing migrations as applied, and
+    an exit-0 warning would let automation sail past the partial-adoption
+    state). Known-benign drift is excluded from the warning."""
     import rainier.core.database as db_mod
     import rainier.core.legacy_migrate as lm_mod
     import rainier.core.schema_check as sc_mod
@@ -267,13 +268,15 @@ def test_db_migrate_legacy_baseline_warns_on_missing_objects(monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0, result.output
     assert "WARNING" in result.output
     assert "paper_reclaim_queue" in result.output
     assert "capital_flow_bars.symbol" not in result.output, (
         "known-benign drift must not appear in the baseline warning"
     )
     assert "Hand-apply" in result.output
+    # The stamps happened and are reported before the loud failure.
+    assert "Baselined 1" in result.output
 
 
 def test_db_migrate_legacy_dry_run_and_baseline_conflict(monkeypatch):
@@ -365,19 +368,49 @@ def test_db_init_exits_loud_on_drift(monkeypatch):
 
 def test_db_init_clean_when_no_drift(monkeypatch):
     """`db init` succeeds and reports a clean drift check when there are no
-    findings."""
+    findings and no pending legacy migrations."""
     import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
     import rainier.core.schema_check as sc_mod
     from rainier import cli as cli_mod
 
     monkeypatch.setattr(db_mod, "init_db", lambda: None)
     monkeypatch.setattr(db_mod, "get_engine", lambda: object())
     monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(lm_mod, "pending_migrations", lambda engine: [])
 
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["db", "init"])
     assert result.exit_code == 0, result.output
     assert "clean" in result.output.lower()
+    assert "NOTE:" not in result.output, "no pending files must mean no note"
+
+
+def test_db_init_notes_pending_legacy_migrations(monkeypatch):
+    """`db init` must not imply full health when legacy migration files are
+    unrecorded (codex 43f3 review [P1]): create_all never runs migration-only
+    DDL (indexes/constraints), so a fresh DB that passes the tables/columns
+    drift check still needs `db migrate-legacy`. The success path prints a
+    NOTE pointing there."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod,
+        "pending_migrations",
+        lambda engine: ["0012_reclaim_queue.sql", "0013_paper_trade_shadow.sql"],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "NOTE: 2 legacy migration file(s)" in result.output
+    assert "migrate-legacy" in result.output
 
 
 def test_db_init_ignores_known_benign_drift(monkeypatch):
@@ -387,6 +420,7 @@ def test_db_init_ignores_known_benign_drift(monkeypatch):
     runbook blocks only on findings beyond it. Hard-failing would make
     `db init` exit non-zero on the live DB forever."""
     import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
     import rainier.core.schema_check as sc_mod
     from rainier import cli as cli_mod
 
@@ -397,6 +431,7 @@ def test_db_init_ignores_known_benign_drift(monkeypatch):
         "check_schema_drift",
         lambda engine: ["missing column: capital_flow_bars.symbol"],
     )
+    monkeypatch.setattr(lm_mod, "pending_migrations", lambda engine: [])
 
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["db", "init"])
