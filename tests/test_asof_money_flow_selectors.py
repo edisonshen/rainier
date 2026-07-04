@@ -549,6 +549,27 @@ def test_capital_flow_as_of_limit_counts_days_not_rows(db_session):
     ]
 
 
+def test_capital_flow_as_of_exact_dupes_do_not_compress_window(db_session):
+    """EXACT (flow_date, captured_at) duplicate rows must not consume limit
+    slots: the limit selects distinct DAYS, so 6 days with the newest day
+    written twice still yield 5 distinct days."""
+    ts = datetime(2026, 6, 6, 22, 0)
+    for i in range(1, 7):
+        _insert_capital_flow(
+            db_session, symbol="NVDA", flow_date=f"2026-06-0{i}", captured_at=ts,
+        )
+    # Newest day again — same captured_at, an exact duplicate row.
+    _insert_capital_flow(
+        db_session, symbol="NVDA", flow_date="2026-06-06", captured_at=ts,
+    )
+
+    rows = capital_flow_as_of(db_session, "NVDA", date(2026, 6, 6), limit=5)
+    assert [r.flow_date for r in rows] == [
+        date(2026, 6, 6), date(2026, 6, 5), date(2026, 6, 4),
+        date(2026, 6, 3), date(2026, 6, 2),
+    ]
+
+
 def test_dup_capital_flow_rows_do_not_inflate_streak(db_session):
     """days_in_top100 counts consecutive '+' DAYS, not raw duplicate rows.
 

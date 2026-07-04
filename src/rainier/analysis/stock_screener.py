@@ -453,6 +453,9 @@ def capital_flow_as_of(
 
     Returns entries newest-first.
     """
+    # The LIMIT lives on the per-day subquery (newest `limit` DISTINCT days),
+    # not on the joined rows — exact (flow_date, captured_at) duplicate rows
+    # must never consume window slots and compress the day count below limit.
     latest_per_day = (
         session.query(
             StockCapitalFlow.flow_date.label("flow_date"),
@@ -464,6 +467,8 @@ def capital_flow_as_of(
             StockCapitalFlow.flow_date <= as_of_date,
         )
         .group_by(StockCapitalFlow.flow_date)
+        .order_by(StockCapitalFlow.flow_date.desc())
+        .limit(limit)
         .subquery()
     )
     rows = (
@@ -485,7 +490,6 @@ def capital_flow_as_of(
         # id tiebreak: exact (flow_date, captured_at) dupes would otherwise
         # come back in DB-dependent order and break replay reproducibility.
         .order_by(StockCapitalFlow.flow_date.desc(), StockCapitalFlow.id.desc())
-        .limit(limit)
         .all()
     )
     # Belt over the join: if one scrape run somehow wrote the same
