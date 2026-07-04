@@ -364,8 +364,9 @@ def load_spec(path: str | Path) -> ExperimentSpec:
             raw = yaml.safe_load(fh)
     except yaml.YAMLError as exc:
         raise ExperimentSpecError(f"{p}: invalid YAML — {exc}") from exc
-    except OSError as exc:
-        # PermissionError, IsADirectoryError, … — same contract exception.
+    except (OSError, UnicodeDecodeError) as exc:
+        # PermissionError, IsADirectoryError, non-UTF8 bytes, … — same
+        # contract exception.
         raise ExperimentSpecError(f"{p}: unreadable — {exc}") from exc
     return parse_spec(raw, source=str(p))
 

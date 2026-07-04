@@ -449,3 +449,11 @@ def test_empty_string_guardrail_rejected():
     raw["guardrails"] = ["max_drawdown", ""]
     with pytest.raises(experiment.ExperimentSpecError, match="guardrails"):
         experiment.parse_spec(raw)
+
+
+def test_non_utf8_spec_file_raises_spec_error(tmp_path):
+    # An editor-mangled encoding (UTF-16 BOM, stray high bytes) fails during
+    # stream decode before yaml sees it — still the contract exception.
+    (tmp_path / "mangled.yaml").write_bytes(b"\xff\xfe\x00garbage")
+    with pytest.raises(experiment.ExperimentSpecError, match="unreadable"):
+        experiment.load_active_specs(tmp_path)
