@@ -8,6 +8,7 @@ new verb adds a block (not by inventing fields ad-hoc in CLI code).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -69,18 +70,8 @@ def _coerce_fields(schema: dict[str, Any]) -> list[_FieldSpec]:
     return out
 
 
-def validate(name: str, payload: dict[str, Any], strict: bool = True) -> None:
-    """Validate ``payload`` against the schema named ``name``.
-
-    Strict mode (default) rejects any extra field not declared in the schema.
-    Non-strict mode tolerates forward-compatible extras — used at runtime so
-    a new field added in a future commit doesn't blow up an older CLI.
-    """
-    data = load()
-    schemas = data["schemas"]
-    if name not in schemas:
-        raise SchemaError(f"unknown schema {name!r}; known: {sorted(schemas)}")
-    specs = _coerce_fields(schemas[name])
+def _check_payload(specs: list[_FieldSpec], payload: dict[str, Any], strict: bool) -> None:
+    """Shared field checks: presence, strict extras, types, enums."""
     declared = {spec.name for spec in specs}
 
     missing = declared - payload.keys()
@@ -105,6 +96,53 @@ def validate(name: str, payload: dict[str, Any], strict: bool = True) -> None:
             raise SchemaError(
                 f"field {spec.name!r}: value {val!r} not in enum {spec.enum}"
             )
+
+
+def validate(name: str, payload: dict[str, Any], strict: bool = True) -> None:
+    """Validate ``payload`` against the schema named ``name``.
+
+    Strict mode (default) rejects any extra field not declared in the schema.
+    Non-strict mode tolerates forward-compatible extras — used at runtime so
+    a new field added in a future commit doesn't blow up an older CLI.
+    """
+    data = load()
+    schemas = data["schemas"]
+    if name not in schemas:
+        raise SchemaError(f"unknown schema {name!r}; known: {sorted(schemas)}")
+    _check_payload(_coerce_fields(schemas[name]), payload, strict)
+
+
+def validate_composed(
+    base: str,
+    payload: dict[str, Any],
+    extensions: Sequence[str] = (),
+    strict: bool = True,
+) -> None:
+    """Validate ``payload`` against a base schema plus optional extensions.
+
+    A/B-substrate scorecards (design §10.5) compose a candidate-agnostic
+    ``base_scorecard`` with optional per-candidate-type extensions (e.g.
+    ``llm_extension``). The composed field set is the union of the named
+    schemas: every field of the base AND every named extension is required;
+    extras beyond the union fail strict mode. An extension payload alone
+    fails on the missing base fields — the extension is never standalone.
+    """
+    data = load()
+    schemas = data["schemas"]
+    specs: list[_FieldSpec] = []
+    seen: set[str] = set()
+    for name in (base, *extensions):
+        if name not in schemas:
+            raise SchemaError(f"unknown schema {name!r}; known: {sorted(schemas)}")
+        for spec in _coerce_fields(schemas[name]):
+            if spec.name in seen:
+                raise SchemaError(
+                    f"field {spec.name!r} declared by more than one of "
+                    f"{[base, *extensions]}"
+                )
+            seen.add(spec.name)
+            specs.append(spec)
+    _check_payload(specs, payload, strict)
 
 
 def format_block(name: str, payload: dict[str, Any]) -> str:
