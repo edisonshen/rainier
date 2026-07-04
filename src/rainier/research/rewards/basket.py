@@ -73,8 +73,20 @@ def _day_returns(outcomes: BasketOutcomes, horizon: int) -> list[float]:
     _require_horizon(outcomes, horizon)
     out: list[float] = []
     for day in outcomes.days:
-        returns = day.fwd_return.get(horizon, {})
-        available = [r for s in day.symbols if (r := returns.get(s)) is not None]
+        if horizon not in day.fwd_return:
+            continue  # this day lacks the horizon entirely — skipped, like None
+        returns = day.fwd_return[horizon]
+        # Contract (§10.3): a selected symbol with no return is emitted as
+        # None, never omitted. A missing KEY is a malformed payload —
+        # silently dropping it from the equal-weight mean would bias every
+        # basket metric (loud, never silent).
+        missing = [s for s in day.symbols if s not in returns]
+        if missing:
+            raise ValueError(
+                f"selected symbols {missing} absent from fwd_return[{horizon}] on "
+                f"{day.date} — malformed payload (emit None for no-data symbols)"
+            )
+        available = [r for s in day.symbols if (r := returns[s]) is not None]
         for r in available:
             if not math.isfinite(r):
                 raise ValueError(

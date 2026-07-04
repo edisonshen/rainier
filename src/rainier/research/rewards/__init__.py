@@ -103,6 +103,14 @@ def register(
         # before either decorator is applied must not silently clobber.
         if name in REGISTRY:
             raise ValueError(f"reward {name!r} already registered")
+        if role == "guardrail" and getattr(fn, "_is_ratio", False):
+            # A ratio's ±inf zero-denominator sentinel collides with
+            # guardrail_breached's non-finite rejection: the promote gate
+            # would raise on the BEST candidate instead of passing it.
+            raise ValueError(
+                f"reward {name!r}: ratio rewards cannot be guardrails "
+                f"(±inf sentinel vs non-finite rejection)"
+            )
         REGISTRY[name] = RewardSpec(
             name=name,
             fn=fn,
@@ -183,9 +191,10 @@ def make_ratio(numerator: str, denominator: str) -> Callable[..., float]:
     0/0 → 0.0 (no data). Register the result under its own name to make
     it selectable.
 
-    Do NOT register a ratio as a guardrail: the ``inf`` sentinel collides
-    with ``guardrail_breached``'s non-finite rejection — the promote gate
-    would raise on the best candidate instead of passing it.
+    Ratios cannot be registered as guardrails — register() rejects the
+    combination: the ``inf`` sentinel collides with ``guardrail_breached``'s
+    non-finite rejection (the promote gate would raise on the best
+    candidate instead of passing it).
     """
     num, den = get(numerator), get(denominator)
     if num.input_type != den.input_type:
@@ -204,6 +213,7 @@ def make_ratio(numerator: str, denominator: str) -> Callable[..., float]:
         return num.fn(payload, **kwargs) / d
 
     _ratio.__name__ = f"ratio_{numerator}_over_{denominator}"
+    _ratio._is_ratio = True  # register() rejects guardrail role for ratios
     return _ratio
 
 

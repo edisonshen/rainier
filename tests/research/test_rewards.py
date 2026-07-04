@@ -353,6 +353,25 @@ class TestNoneHandling:
         # total_return pins this: 0.06 - 0.04 + 0.06 = 0.08.
         assert score("basket", "total_return", basket) == pytest.approx(0.08)
 
+    def test_selected_symbol_missing_from_map_raises(self):
+        # Regression (codex): a selected symbol whose KEY is absent from
+        # fwd_return[H] used to be silently dropped from the equal-weight
+        # mean (0.10 instead of loud failure). §10.3 pins "None, never
+        # omitted" for no-data symbols — a missing key is malformed.
+        outcomes = BasketOutcomes(
+            days=[
+                BasketDay(
+                    date=date(2026, 1, 5),
+                    symbols=["AAA", "BBB"],
+                    fwd_return={5: {"AAA": 0.10}},  # BBB key omitted, not None
+                    regime="bull",
+                ),
+            ]
+        )
+        for name in ("total_return", "sharpe", "hit_rate", "max_drawdown"):
+            with pytest.raises(ValueError, match="BBB"):
+                score("basket", name, outcomes)
+
 
 # ---------------------------------------------------------------------------
 # Non-finite input rejection (§4.2: loud, never silent)
@@ -528,6 +547,21 @@ class TestRatio:
     def test_ratio_closure_has_descriptive_name(self):
         fn = make_ratio("total_return", "max_drawdown")
         assert fn.__name__ == "ratio_total_return_over_max_drawdown"
+
+    def test_ratio_cannot_be_registered_as_guardrail(self):
+        # Regression (codex): the ratio ±inf sentinel collides with
+        # guardrail_breached's non-finite rejection — the promote gate
+        # would crash on the BEST candidate. register() must refuse.
+        fn = make_ratio("total_return", "max_drawdown")
+        with pytest.raises(ValueError, match="guardrail"):
+            register(
+                "ratio_guard",
+                input_type="basket",
+                role="guardrail",
+                direction="decrease",
+                threshold=0.5,
+            )(fn)
+        assert "ratio_guard" not in names()  # nothing half-registered
 
     def test_ratio_requires_matching_input_types(self):
         @register("trades_num", input_type="trades", role="secondary", direction="increase")
