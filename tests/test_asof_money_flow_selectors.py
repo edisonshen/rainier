@@ -463,4 +463,5 @@ def test_live_staleness_guard_retained(db_session):
 
     assert _screen_money_flow(db_session) == []
     # Same data via the as-of path (replay) still returns.
-    assert [s.symbol for s in _screen_money_flow_as_of(db_session, date.today())] == ["NVDA"]
+    today_utc = datetime.now(timezone.utc).date()
+    assert [s.symbol for s in _screen_money_flow_as_of(db_session, today_utc)] == ["NVDA"]
