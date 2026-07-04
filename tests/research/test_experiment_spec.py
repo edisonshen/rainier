@@ -381,3 +381,56 @@ def test_disjoint_pattern_weight_keys_across_specs_allowed(tmp_path):
     _write_spec(tmp_path, "b.yaml", b)
     specs = experiment.load_active_specs(tmp_path)
     assert sorted(s.id for s in specs) == ["bear-weight", "bull-weight"]
+
+
+# ---------------------------------------------------------------------------
+# Review iter-2: empty nested pattern_weights + non-str keys + falsy guardrails
+# ---------------------------------------------------------------------------
+
+
+def test_empty_nested_pattern_weights_rejected():
+    # {"pattern_weights": {}} is a non-empty override MAPPING that translates
+    # to an EMPTY override — a silent no-op challenger that would also escape
+    # cross-spec mutual exclusion (override_keys == empty set).
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {"pattern_weights": {}}
+    with pytest.raises(experiment.ExperimentSpecError, match="non-empty"):
+        experiment.parse_spec(raw)
+
+
+def test_non_str_top_level_key_rejected():
+    # YAML 1.1 parses a bare `on:` as boolean True.
+    raw = _spec_dict()
+    raw[True] = "x"
+    with pytest.raises(experiment.ExperimentSpecError, match="must be str"):
+        experiment.parse_spec(raw)
+
+
+def test_non_str_override_key_rejected():
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {1: 0.5}
+    with pytest.raises(experiment.ExperimentSpecError, match="must be str"):
+        experiment.parse_spec(raw)
+
+
+def test_non_str_pattern_weights_key_rejected():
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {"pattern_weights": {1: 0.5}}
+    with pytest.raises(experiment.ExperimentSpecError, match="must be str"):
+        experiment.parse_spec(raw)
+
+
+def test_non_str_window_key_rejected():
+    raw = _spec_dict()
+    raw["window"][True] = "x"
+    with pytest.raises(experiment.ExperimentSpecError, match="must be str"):
+        experiment.parse_spec(raw)
+
+
+@pytest.mark.parametrize("bad", [False, 0, ""], ids=["false", "zero", "empty-str"])
+def test_falsy_non_list_guardrails_rejected(bad):
+    # `guardrails: false` must be a type error, not silently "no guardrails".
+    raw = _spec_dict()
+    raw["guardrails"] = bad
+    with pytest.raises(experiment.ExperimentSpecError, match="guardrails"):
+        experiment.parse_spec(raw)

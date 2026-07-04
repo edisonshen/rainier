@@ -138,6 +138,13 @@ def _validate_override(
     known_patterns = set(StockScreenerConfig().pattern_weights)
     out: dict[str, Any] = {}
     for key, value in override.items():
+        if not isinstance(key, str):
+            # YAML 1.1 quirks (`on:` → True, bare ints) must surface as the
+            # spec-contract exception, not a downstream TypeError.
+            raise ExperimentSpecError(
+                f"{ctx}: override keys must be str, got {key!r} "
+                f"({type(key).__name__})"
+            )
         if key.startswith("pattern_weights."):
             pattern = key.split(".", 1)[1]
             if pattern not in known_patterns:
@@ -154,10 +161,18 @@ def _validate_override(
                 )
             pw[pattern] = value
         elif key == "pattern_weights":
-            if not isinstance(value, dict):
+            if not isinstance(value, dict) or not value:
+                # An EMPTY mapping would translate to an empty override —
+                # a challenger identical to the champion (silent no-op A/B)
+                # that would also escape cross-spec mutual exclusion.
                 raise ExperimentSpecError(
-                    f"{ctx}: pattern_weights override must be a mapping, "
-                    f"got {type(value).__name__}"
+                    f"{ctx}: pattern_weights override must be a non-empty "
+                    f"mapping, got {value!r}"
+                )
+            non_str_pw = [p for p in value if not isinstance(p, str)]
+            if non_str_pw:
+                raise ExperimentSpecError(
+                    f"{ctx}: pattern_weights keys must be str, got {non_str_pw!r}"
                 )
             unknown_pw = sorted(set(value) - known_patterns)
             if unknown_pw:
@@ -214,6 +229,12 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
         raise ExperimentSpecError(
             f"{source}: spec must be a YAML mapping, got {type(raw).__name__}"
         )
+    non_str = [k for k in raw if not isinstance(k, str)]
+    if non_str:
+        raise ExperimentSpecError(
+            f"{source}: spec keys must be str, got {non_str!r} "
+            f"(YAML 1.1 parses bare `on`/`yes` as booleans — quote them)"
+        )
     unknown_keys = sorted(set(raw) - _ALLOWED_SPEC_KEYS)
     if unknown_keys:
         raise ExperimentSpecError(
@@ -232,7 +253,9 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
     layer = _require_str(raw, "layer", source)
     primary = _require_str(raw, "primary", source)
 
-    guardrails_raw = raw.get("guardrails") or []
+    guardrails_raw = raw.get("guardrails")
+    if guardrails_raw is None:
+        guardrails_raw = []
     if not isinstance(guardrails_raw, list) or not all(
         isinstance(g, str) for g in guardrails_raw
     ):
@@ -245,6 +268,12 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
         raise ExperimentSpecError(
             f"{source}: experiment {spec_id!r}: window must be a mapping with "
             f"train/holdout (got {window_raw!r})"
+        )
+    non_str_w = [k for k in window_raw if not isinstance(k, str)]
+    if non_str_w:
+        raise ExperimentSpecError(
+            f"{source}: experiment {spec_id!r}: window keys must be str, "
+            f"got {non_str_w!r}"
         )
     unknown_window = sorted(set(window_raw) - _ALLOWED_WINDOW_KEYS)
     if unknown_window:
@@ -279,6 +308,12 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
             raise ExperimentSpecError(
                 f"{source}: experiment {spec_id!r}: each challenger needs an "
                 f"`id` and an `override` mapping (got {entry!r})"
+            )
+        non_str_c = [k for k in entry if not isinstance(k, str)]
+        if non_str_c:
+            raise ExperimentSpecError(
+                f"{source}: experiment {spec_id!r}: challenger keys must be "
+                f"str, got {non_str_c!r}"
             )
         unknown_c = sorted(set(entry) - _ALLOWED_CHALLENGER_KEYS)
         if unknown_c:
