@@ -127,6 +127,13 @@ def validate_composed(
     extras beyond the union fail strict mode. An extension payload alone
     fails on the missing base fields — the extension is never standalone.
     """
+    if isinstance(extensions, str):
+        # str is itself a Sequence[str]; a bare 'llm_extension' would iterate
+        # per-character and fail with a baffling "unknown schema 'l'".
+        raise SchemaError(
+            f"extensions must be a sequence of schema names, "
+            f"got bare string {extensions!r} — wrap it in a list"
+        )
     data = load()
     schemas = data["schemas"]
     specs: list[_FieldSpec] = []

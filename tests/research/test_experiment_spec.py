@@ -121,7 +121,7 @@ def test_empty_override_rejected():
     # exactly the silent no-op A/B the interpreter exists to prevent.
     raw = _spec_dict()
     raw["challengers"][0]["override"] = {}
-    with pytest.raises(experiment.ExperimentSpecError, match="mf35"):
+    with pytest.raises(experiment.ExperimentSpecError, match="non-empty mapping"):
         experiment.parse_spec(raw)
 
 
@@ -263,3 +263,121 @@ def test_duplicate_active_experiment_ids_rejected(tmp_path):
 
 def test_load_active_specs_empty_dir_returns_empty(tmp_path):
     assert experiment.load_active_specs(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# Strict spec shape (review iter-1): unknown keys at every level are loud —
+# a typo'd `guardrail:` must not yield a guardrail-free experiment.
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_top_level_spec_key_rejected():
+    raw = _spec_dict()
+    raw["guardrail"] = ["max_drawdown"]  # singular typo of `guardrails`
+    with pytest.raises(experiment.ExperimentSpecError, match="guardrail"):
+        experiment.parse_spec(raw)
+
+
+def test_unknown_window_key_rejected():
+    raw = _spec_dict()
+    raw["window"]["embargo_dayz"] = 5  # typo would silently keep default 20
+    with pytest.raises(experiment.ExperimentSpecError, match="embargo_dayz"):
+        experiment.parse_spec(raw)
+
+
+def test_unknown_challenger_key_rejected():
+    raw = _spec_dict()
+    raw["challengers"][0]["overrride"] = {"buy_threshold": 0.7}
+    with pytest.raises(experiment.ExperimentSpecError, match="overrride"):
+        experiment.parse_spec(raw)
+
+
+def test_empty_challenger_id_rejected():
+    raw = _spec_dict()
+    raw["challengers"][0]["id"] = ""
+    with pytest.raises(experiment.ExperimentSpecError, match="non-empty"):
+        experiment.parse_spec(raw)
+
+
+@pytest.mark.parametrize("bad", [-1, True, "20", 2.5])
+def test_bad_embargo_days_rejected(bad):
+    raw = _spec_dict()
+    raw["window"]["embargo_days"] = bad
+    with pytest.raises(experiment.ExperimentSpecError, match="embargo_days"):
+        experiment.parse_spec(raw)
+
+
+# ---------------------------------------------------------------------------
+# Override ambiguity + value validation (review iter-1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"pattern_weights.bull_flag": 0.9, "pattern_weights": {"bull_flag": 0.5}},
+        {"pattern_weights": {"bull_flag": 0.5}, "pattern_weights.bull_flag": 0.9},
+    ],
+    ids=["dotted-then-nested", "nested-then-dotted"],
+)
+def test_dotted_and_nested_same_pattern_conflict_rejected(override):
+    # Silent last-write-wins for the same pattern is exactly the ambiguity
+    # class the interpreter rejects everywhere else.
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = override
+    with pytest.raises(experiment.ExperimentSpecError, match="bull_flag"):
+        experiment.parse_spec(raw)
+
+
+def test_override_value_type_rejected_at_parse_time():
+    # Bad VALUES fail at spec-load time as ExperimentSpecError — not at cron
+    # runtime inside materialize_challengers as a raw pydantic error.
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {"layer_weight_money_flow": "not-a-number"}
+    with pytest.raises(experiment.ExperimentSpecError, match="layer_weight_money_flow"):
+        experiment.parse_spec(raw)
+
+
+# ---------------------------------------------------------------------------
+# Discovery hardening (review iter-1)
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_yaml_file_raises_spec_error(tmp_path):
+    (tmp_path / "broken.yaml").write_text("id: [unclosed\n")
+    with pytest.raises(experiment.ExperimentSpecError, match="invalid YAML"):
+        experiment.load_active_specs(tmp_path)
+
+
+def test_overlapping_override_keys_across_layer_labels_rejected(tmp_path):
+    # Layer labels are just names — two active specs contending the SAME
+    # config knob under different labels must be rejected, or the A/B
+    # results entangle silently.
+    _write_spec(tmp_path, "a.yaml", _spec_dict())
+    other = _spec_dict(
+        id="relabeled-weights",
+        layer="weights",  # different label, same contended knob
+        challengers=[{"id": "mf45", "override": {"layer_weight_money_flow": 0.45}}],
+    )
+    _write_spec(tmp_path, "b.yaml", other)
+    with pytest.raises(experiment.ExperimentSpecError, match="layer_weight_money_flow"):
+        experiment.load_active_specs(tmp_path)
+
+
+def test_disjoint_pattern_weight_keys_across_specs_allowed(tmp_path):
+    # pattern_weights is expanded per-pattern: touching DIFFERENT patterns
+    # in two active experiments is not a conflict.
+    a = _spec_dict(
+        id="bull-weight",
+        layer="pw-bull",
+        challengers=[{"id": "b9", "override": {"pattern_weights.bull_flag": 0.9}}],
+    )
+    b = _spec_dict(
+        id="bear-weight",
+        layer="pw-bear",
+        challengers=[{"id": "k9", "override": {"pattern_weights.bear_flag": 0.9}}],
+    )
+    _write_spec(tmp_path, "a.yaml", a)
+    _write_spec(tmp_path, "b.yaml", b)
+    specs = experiment.load_active_specs(tmp_path)
+    assert sorted(s.id for s in specs) == ["bear-weight", "bull-weight"]

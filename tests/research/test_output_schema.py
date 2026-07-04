@@ -208,3 +208,26 @@ def test_existing_schemas_unchanged_regression():
             "ledger_sha": "0" * 40,
         },
     )
+
+
+def test_composed_duplicate_field_across_schemas_rejected():
+    # base_scorecard and the pre-existing backtest schema both declare
+    # deflated_sharpe/evaluator_sha — composing them must fail loudly.
+    with pytest.raises(output_schema.SchemaError, match="declared by more than one"):
+        output_schema.validate_composed("base_scorecard", {}, extensions=["backtest"])
+
+
+def test_composed_non_strict_tolerates_extras():
+    block = {**_valid_base_scorecard(), **_valid_llm_extension()}
+    block["future_field"] = 1
+    output_schema.validate_composed(
+        "base_scorecard", block, extensions=["llm_extension"], strict=False
+    )
+
+
+def test_composed_bare_string_extensions_rejected():
+    # str is a Sequence[str]; without the guard this iterates per-character.
+    with pytest.raises(output_schema.SchemaError, match="bare string"):
+        output_schema.validate_composed(
+            "base_scorecard", _valid_base_scorecard(), extensions="llm_extension"
+        )

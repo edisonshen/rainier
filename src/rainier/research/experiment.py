@@ -10,7 +10,8 @@ shadow arm, evaluator CLI).
                             │             (model_fields +            (existing
                             │              pattern names;             merge_stock_
                             │              reject unknown)            screener_config)
-                            └──► layer = declared field set → mutual exclusion
+                            └──► mutual exclusion across ACTIVE specs:
+                                 layer label unique AND override-key sets disjoint
 
 The override-key validation is load-bearing and CANNOT be delegated
 downstream: ``merge_stock_screener_config`` performs no key validation,
@@ -44,6 +45,16 @@ DEFAULT_EXPERIMENTS_DIR = Path("config/experiments")
 DEFAULT_EMBARGO_DAYS = 20
 
 _VALID_STATUSES = ("active", "retired")
+
+# Design §10.4 pins the exact spec shape — unknown keys are rejected loudly.
+# Without this, a typo'd `guardrail:` (singular) would parse cleanly into a
+# guardrail-free experiment, and `embargo_dayz:` would silently keep the
+# default embargo — the same silent-no-op class the override-key check kills.
+_ALLOWED_SPEC_KEYS = frozenset(
+    {"id", "status", "champion", "layer", "challengers", "primary", "guardrails", "window"}
+)
+_ALLOWED_WINDOW_KEYS = frozenset({"train", "holdout", "embargo_days"})
+_ALLOWED_CHALLENGER_KEYS = frozenset({"id", "override"})
 
 
 class ExperimentSpecError(ValueError):
@@ -85,6 +96,23 @@ class ExperimentSpec:
     def is_active(self) -> bool:
         return self.status == "active"
 
+    @property
+    def override_keys(self) -> frozenset[str]:
+        """Granular knob set this experiment contends, across all challengers.
+
+        ``pattern_weights`` is expanded to per-pattern ``pattern_weights.<p>``
+        keys so two experiments touching DIFFERENT patterns don't conflict.
+        Used by :func:`load_active_specs` for cross-spec mutual exclusion.
+        """
+        keys: set[str] = set()
+        for challenger in self.challengers:
+            for key, value in challenger.override.items():
+                if key == "pattern_weights" and isinstance(value, dict):
+                    keys.update(f"pattern_weights.{p}" for p in value)
+                else:
+                    keys.add(key)
+        return frozenset(keys)
+
 
 def _validate_override(
     override: Any, *, spec_id: str, challenger_id: str, source: str
@@ -117,7 +145,14 @@ def _validate_override(
                     f"{ctx}: unknown pattern_weights key {pattern!r} "
                     f"(typo? known: {sorted(known_patterns)})"
                 )
-            out.setdefault("pattern_weights", {})[pattern] = value
+            pw = out.setdefault("pattern_weights", {})
+            if pattern in pw:
+                raise ExperimentSpecError(
+                    f"{ctx}: pattern {pattern!r} assigned twice (dotted "
+                    f"`pattern_weights.{pattern}` AND nested `pattern_weights:`) "
+                    f"— last-write-wins would be silent; declare it once"
+                )
+            pw[pattern] = value
         elif key == "pattern_weights":
             if not isinstance(value, dict):
                 raise ExperimentSpecError(
@@ -130,7 +165,15 @@ def _validate_override(
                     f"{ctx}: unknown pattern_weights key(s): "
                     f"{', '.join(unknown_pw)} (typo? known: {sorted(known_patterns)})"
                 )
-            out.setdefault("pattern_weights", {}).update(value)
+            pw = out.setdefault("pattern_weights", {})
+            dup = sorted(set(value) & set(pw))
+            if dup:
+                raise ExperimentSpecError(
+                    f"{ctx}: pattern(s) {', '.join(dup)} assigned twice (dotted "
+                    f"`pattern_weights.<p>` AND nested `pattern_weights:`) "
+                    f"— last-write-wins would be silent; declare each once"
+                )
+            pw.update(value)
         elif key in known_fields:
             out[key] = value
         else:
@@ -139,6 +182,20 @@ def _validate_override(
                 f"real StockScreenerConfig fields (or pattern_weights.<pattern> "
                 f"dotted paths); the interpreter never invents config paths"
             )
+
+    # Value smoke-check at parse time: a bad value (e.g. a non-numeric weight)
+    # must fail at spec-authoring/load time as ExperimentSpecError, not at
+    # 8am inside the cron shadow arm as a raw pydantic ValidationError.
+    from pydantic import ValidationError
+
+    from rainier.core.champion import merge_stock_screener_config
+
+    try:
+        StockScreenerConfig(**merge_stock_screener_config(None, out))
+    except ValidationError as exc:
+        raise ExperimentSpecError(
+            f"{ctx}: override value(s) rejected by StockScreenerConfig — {exc}"
+        ) from exc
     return out
 
 
@@ -156,6 +213,13 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
     if not isinstance(raw, dict):
         raise ExperimentSpecError(
             f"{source}: spec must be a YAML mapping, got {type(raw).__name__}"
+        )
+    unknown_keys = sorted(set(raw) - _ALLOWED_SPEC_KEYS)
+    if unknown_keys:
+        raise ExperimentSpecError(
+            f"{source}: unknown spec key(s): {', '.join(unknown_keys)} — the "
+            f"§10.4 spec shape is exact (allowed: {sorted(_ALLOWED_SPEC_KEYS)}); "
+            f"a typo'd key (e.g. `guardrail:`) would otherwise be silently ignored"
         )
     spec_id = _require_str(raw, "id", source)
     status = _require_str(raw, "status", source)
@@ -181,6 +245,13 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
         raise ExperimentSpecError(
             f"{source}: experiment {spec_id!r}: window must be a mapping with "
             f"train/holdout (got {window_raw!r})"
+        )
+    unknown_window = sorted(set(window_raw) - _ALLOWED_WINDOW_KEYS)
+    if unknown_window:
+        raise ExperimentSpecError(
+            f"{source}: experiment {spec_id!r}: unknown window key(s): "
+            f"{', '.join(unknown_window)} (allowed: {sorted(_ALLOWED_WINDOW_KEYS)}; "
+            f"a typo'd `embargo_dayz:` would otherwise silently keep the default)"
         )
     train = window_raw.get("train")
     holdout = window_raw.get("holdout")
@@ -209,7 +280,18 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
                 f"{source}: experiment {spec_id!r}: each challenger needs an "
                 f"`id` and an `override` mapping (got {entry!r})"
             )
+        unknown_c = sorted(set(entry) - _ALLOWED_CHALLENGER_KEYS)
+        if unknown_c:
+            raise ExperimentSpecError(
+                f"{source}: experiment {spec_id!r}: unknown challenger key(s): "
+                f"{', '.join(unknown_c)} (allowed: id, override)"
+            )
         cid = entry["id"]
+        if not cid:
+            raise ExperimentSpecError(
+                f"{source}: experiment {spec_id!r}: challenger id must be a "
+                f"non-empty str"
+            )
         if cid in seen_ids:
             raise ExperimentSpecError(
                 f"{source}: experiment {spec_id!r}: duplicate challenger id {cid!r}"
@@ -234,10 +316,18 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
 
 
 def load_spec(path: str | Path) -> ExperimentSpec:
-    """Load + validate one experiment spec YAML file."""
+    """Load + validate one experiment spec YAML file.
+
+    Every failure — including a YAML syntax error — surfaces as
+    :class:`ExperimentSpecError`, so consumers catching the spec-contract
+    exception can't miss a broken file.
+    """
     p = Path(path)
     with p.open("r") as fh:
-        raw = yaml.safe_load(fh)
+        try:
+            raw = yaml.safe_load(fh)
+        except yaml.YAMLError as exc:
+            raise ExperimentSpecError(f"{p}: invalid YAML — {exc}") from exc
     return parse_spec(raw, source=str(p))
 
 
@@ -248,12 +338,16 @@ def load_active_specs(directory: str | Path | None = None) -> list[ExperimentSpe
     directory must parse (a malformed spec — bad status, unknown override
     key — fails the whole load loudly; retired-but-broken specs don't get to
     rot silently). Mutual exclusion is evaluated across the ACTIVE set:
-    two active specs claiming the same ``layer`` is an error, and so are
-    duplicate active experiment ids. Retired specs never conflict.
+    two active specs claiming the same ``layer`` label is an error, duplicate
+    active experiment ids are an error, and — because a layer label is just a
+    name — two active specs overriding the SAME config knob under different
+    labels is ALSO an error (entangled experiments would contaminate
+    attribution silently). Retired specs never conflict.
     """
     base = Path(directory) if directory is not None else DEFAULT_EXPERIMENTS_DIR
     active: list[ExperimentSpec] = []
     layer_owner: dict[str, str] = {}
+    key_owner: dict[str, str] = {}
     seen_ids: dict[str, str] = {}
     for path in sorted(base.glob("*.yaml")):
         spec = load_spec(path)
@@ -272,6 +366,17 @@ def load_active_specs(directory: str | Path | None = None) -> list[ExperimentSpe
                 f"retire one before activating the other"
             )
         layer_owner[spec.layer] = spec.id
+        overlap = sorted(k for k in spec.override_keys if k in key_owner)
+        if overlap:
+            raise ExperimentSpecError(
+                f"mutual exclusion: override key(s) {', '.join(overlap)} "
+                f"contended by two active experiments: "
+                f"{key_owner[overlap[0]]!r} and {spec.id!r} — a knob belongs "
+                f"to at most one active experiment (layer labels don't "
+                f"substitute for disjoint key sets)"
+            )
+        for k in spec.override_keys:
+            key_owner[k] = spec.id
         active.append(spec)
     return active
 
