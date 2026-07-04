@@ -236,9 +236,17 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
     PINNED and passed through, so the rows screened are exactly the rows the
     guard vetted (no re-resolution race, no double query).
 
-    One intentional divergence from the old unbounded ``max(data_date)``: the
-    resolution is now bounded ``data_date <= today`` (UTC), so a pathologically
-    future-stamped row is ignored instead of hijacking the "latest" day.
+    Two intentional divergences from the pre-extraction selector:
+      1. Resolution is bounded ``data_date <= today`` (UTC) instead of the old
+         unbounded ``max(data_date)`` — a pathologically future-stamped row is
+         ignored instead of hijacking the "latest" day.
+      2. Capital-flow enrichment goes through `capital_flow_as_of`, which
+         dedups duplicate ``(symbol, flow_date)`` rows (newest ``captured_at``
+         wins) — the old query counted raw rows. Vacuous live as of
+         2026-07-04: prod ``stock_capital_flow`` holds ZERO daily rows
+         (verified against the live DB), so live output is unchanged today.
+         Once qu-detail populates the table this is a correctness guard
+         (streaks count days, not re-scraped duplicates), not a scoring flip.
     """
     today = datetime.now(timezone.utc).date()
     generation = _resolve_top100_generation(session, today)
@@ -438,6 +446,11 @@ def capital_flow_as_of(
     and make ``cf_rows[0]`` — hence `capital_flow_direction` and its +0.2
     score — nondeterministic across identical replays.
 
+    Event-time, not point-in-time: max(``captured_at``) per day means a replay
+    of day t uses the newest restatement of day-t rows even if it was scraped
+    after t. Rows still describe days <= t (no market look-ahead); a
+    ``captured_at <= t`` bound is impossible for backfill-stamped history.
+
     Returns entries newest-first.
     """
     latest_per_day = (
@@ -469,7 +482,9 @@ def capital_flow_as_of(
             StockCapitalFlow.symbol == symbol,
             StockCapitalFlow.period_type == "daily",
         )
-        .order_by(StockCapitalFlow.flow_date.desc())
+        # id tiebreak: exact (flow_date, captured_at) dupes would otherwise
+        # come back in DB-dependent order and break replay reproducibility.
+        .order_by(StockCapitalFlow.flow_date.desc(), StockCapitalFlow.id.desc())
         .limit(limit)
         .all()
     )
