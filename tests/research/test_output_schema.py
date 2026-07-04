@@ -86,3 +86,125 @@ def test_verdict_enum_is_pinned():
     schema = output_schema.load()["schemas"]["cost_pilot"]
     # PASS / CONDITIONAL / FAIL are the three values Slice 0 ships with.
     assert set(schema["fields"]["verdict"]["enum"]) == {"PASS", "CONDITIONAL", "FAIL"}
+
+
+# ---------------------------------------------------------------------------
+# A/B substrate scorecards (design §10.5) — candidate-agnostic base +
+# optional LLM extension, composed via validate_composed(). Additive: the
+# LLM-shaped `backtest` entry stays untouched for its existing consumer.
+# ---------------------------------------------------------------------------
+
+
+def _valid_base_scorecard() -> dict:
+    return {
+        "candidate_id": "mf35",
+        "candidate_type": "screener",
+        "window": "2025-05-27..2026-03-31",
+        "n_selection_days": 210,
+        "corpus_hash": "a" * 40,
+        "rewards": {
+            "primary": {"sharpe": 1.12},
+            "guardrails": {"max_drawdown": -0.14, "turnover": 0.32},
+        },
+        "regime_scores": {"risk_on": {"sharpe": 1.30}, "risk_off": {"sharpe": 0.41}},
+        # null until the §11-task-6 DSR spec lands — never a naive number.
+        "deflated_sharpe": None,
+        "evaluator_sha": "b" * 40,
+    }
+
+
+def _valid_llm_extension() -> dict:
+    return {
+        "valid_thesis_rate": 0.92,
+        "cost_usd": 4.31,
+        "filled_R": 3.4,
+        "filled_rate": 0.71,
+        "tqqq_bh_R": 2.1,
+        "skill_yaml_sha": "c" * 40,
+    }
+
+
+def test_base_scorecard_validates_without_llm_fields():
+    output_schema.validate("base_scorecard", _valid_base_scorecard())
+
+
+def test_base_scorecard_deflated_sharpe_null_validates():
+    block = _valid_base_scorecard()
+    assert block["deflated_sharpe"] is None
+    output_schema.validate("base_scorecard", block)
+
+
+def test_base_scorecard_deflated_sharpe_float_also_validates():
+    block = _valid_base_scorecard()
+    block["deflated_sharpe"] = 0.87
+    output_schema.validate("base_scorecard", block)
+
+
+def test_composed_base_plus_llm_extension_validates():
+    block = {**_valid_base_scorecard(), **_valid_llm_extension()}
+    output_schema.validate_composed("base_scorecard", block, extensions=["llm_extension"])
+
+
+def test_llm_extension_alone_is_rejected():
+    # The extension is not a standalone scorecard — base fields are required.
+    with pytest.raises(output_schema.SchemaError) as exc:
+        output_schema.validate_composed(
+            "base_scorecard", _valid_llm_extension(), extensions=["llm_extension"]
+        )
+    assert "candidate_id" in str(exc.value)
+
+
+def test_composed_rejects_extension_fields_when_extension_not_named():
+    block = {**_valid_base_scorecard(), **_valid_llm_extension()}
+    with pytest.raises(output_schema.SchemaError):
+        output_schema.validate_composed("base_scorecard", block)
+
+
+def test_composed_rejects_undeclared_extra_field():
+    block = {**_valid_base_scorecard(), **_valid_llm_extension()}
+    block["never_declared"] = 1
+    with pytest.raises(output_schema.SchemaError) as exc:
+        output_schema.validate_composed("base_scorecard", block, extensions=["llm_extension"])
+    assert "never_declared" in str(exc.value)
+
+
+def test_composed_unknown_extension_name_rejected():
+    with pytest.raises(output_schema.SchemaError):
+        output_schema.validate_composed(
+            "base_scorecard", _valid_base_scorecard(), extensions=["no_such_extension"]
+        )
+
+
+def test_existing_schemas_unchanged_regression():
+    """The pre-existing entries still validate their canonical payloads."""
+    output_schema.validate("cost_pilot", _valid_cost_pilot_block())
+    output_schema.validate(
+        "survivorship",
+        {
+            "from_date": "2025-05-27",
+            "to_date": "2026-06-25",
+            "verdict": "PASS",
+            "delisted_tickers": [],
+            "missing_days": [],
+            "next_step": None,
+        },
+    )
+    output_schema.validate(
+        "backtest",
+        {
+            "skill_id": "qu100_v1",
+            "reward_fn": "filled_R",
+            "filled_R": 3.4,
+            "all_call_R": 2.9,
+            "calls": 120,
+            "valid_thesis_rate": 0.92,
+            "filled_rate": 0.71,
+            "cost_usd": 4.31,
+            "tqqq_bh_R": 2.1,
+            "delta_vs_tqqq": 1.3,
+            "deflated_sharpe": 0.87,
+            "evaluator_sha": "b" * 40,
+            "skill_yaml_sha": "c" * 40,
+            "ledger_sha": "0" * 40,
+        },
+    )
