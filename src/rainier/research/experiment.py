@@ -257,10 +257,11 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
     if guardrails_raw is None:
         guardrails_raw = []
     if not isinstance(guardrails_raw, list) or not all(
-        isinstance(g, str) for g in guardrails_raw
+        isinstance(g, str) and g for g in guardrails_raw
     ):
         raise ExperimentSpecError(
-            f"{source}: experiment {spec_id!r}: guardrails must be a list of strings"
+            f"{source}: experiment {spec_id!r}: guardrails must be a list of "
+            f"non-empty strings"
         )
 
     window_raw = raw.get("window")
@@ -358,11 +359,14 @@ def load_spec(path: str | Path) -> ExperimentSpec:
     exception can't miss a broken file.
     """
     p = Path(path)
-    with p.open("r") as fh:
-        try:
+    try:
+        with p.open("r") as fh:
             raw = yaml.safe_load(fh)
-        except yaml.YAMLError as exc:
-            raise ExperimentSpecError(f"{p}: invalid YAML — {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ExperimentSpecError(f"{p}: invalid YAML — {exc}") from exc
+    except OSError as exc:
+        # PermissionError, IsADirectoryError, … — same contract exception.
+        raise ExperimentSpecError(f"{p}: unreadable — {exc}") from exc
     return parse_spec(raw, source=str(p))
 
 

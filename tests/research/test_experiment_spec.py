@@ -434,3 +434,18 @@ def test_falsy_non_list_guardrails_rejected(bad):
     raw["guardrails"] = bad
     with pytest.raises(experiment.ExperimentSpecError, match="guardrails"):
         experiment.parse_spec(raw)
+
+
+def test_unreadable_spec_path_raises_spec_error(tmp_path):
+    # A directory named *.yaml (or a permission failure) must surface as the
+    # contract exception, not a raw OSError.
+    (tmp_path / "adir.yaml").mkdir()
+    with pytest.raises(experiment.ExperimentSpecError, match="unreadable"):
+        experiment.load_active_specs(tmp_path)
+
+
+def test_empty_string_guardrail_rejected():
+    raw = _spec_dict()
+    raw["guardrails"] = ["max_drawdown", ""]
+    with pytest.raises(experiment.ExperimentSpecError, match="guardrails"):
+        experiment.parse_spec(raw)
