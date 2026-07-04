@@ -229,10 +229,16 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
     """LIVE money-flow screen: staleness-guarded delegation to the as-of
     selector at today's date.
 
-    Behavior is byte-identical to the pre-extraction selector: same generation
-    resolution, same exact-match 'Long in' casing (``normalize_casing=False``),
-    same 24h staleness guard. The guard lives HERE (live only) — the as-of
-    path replays history and must not care about wall-clock age.
+    Behavior matches the pre-extraction selector: same generation resolution,
+    same exact-match 'Long in' casing (``normalize_casing=False``), same 24h
+    staleness guard. The guard lives HERE (live only) — the as-of path replays
+    history and must not care about wall-clock age. The resolved generation is
+    PINNED and passed through, so the rows screened are exactly the rows the
+    guard vetted (no re-resolution race, no double query).
+
+    One intentional divergence from the old unbounded ``max(data_date)``: the
+    resolution is now bounded ``data_date <= today`` (UTC), so a pathologically
+    future-stamped row is ignored instead of hijacking the "latest" day.
     """
     today = datetime.now(timezone.utc).date()
     generation = _resolve_top100_generation(session, today)
@@ -256,7 +262,9 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
         )
         return []
 
-    return _screen_money_flow_as_of(session, today, normalize_casing=False)
+    return _screen_money_flow_as_of(
+        session, today, normalize_casing=False, _generation=generation
+    )
 
 
 def _screen_money_flow_as_of(
@@ -264,6 +272,7 @@ def _screen_money_flow_as_of(
     as_of_date: date_type,
     *,
     normalize_casing: bool = False,
+    _generation: tuple[date_type, datetime] | None = None,
 ) -> list[MoneyFlowSignal]:
     """Screen stocks as they would have been screened on ``as_of_date``.
 
@@ -285,9 +294,14 @@ def _screen_money_flow_as_of(
     No staleness guard: replay reads arbitrarily old history. The live 24h
     guard belongs to `_screen_money_flow`.
 
+    ``_generation`` (internal): a pre-resolved ``(data_date, captured_at)``
+    pair. The live path passes the generation its staleness guard just vetted
+    so the vetted rows are exactly the screened rows — re-resolving here could
+    race a concurrent delete/rebuild onto an unvetted older generation.
+
     Returns list of MoneyFlowSignal sorted by signal_strength descending.
     """
-    generation = _resolve_top100_generation(session, as_of_date)
+    generation = _generation or _resolve_top100_generation(session, as_of_date)
     if generation is None:
         log.warning("No money flow snapshots on or before %s", as_of_date)
         return []
@@ -313,7 +327,9 @@ def _screen_money_flow_as_of(
             MoneyFlowSnapshot.data_date == latest_date,
             MoneyFlowSnapshot.captured_at == latest_ts,
         )
-        .order_by(MoneyFlowSnapshot.rank.asc())
+        # Secondary symbol sort: equal ranks otherwise come back in
+        # DB-dependent order, and the replay corpus must be reproducible.
+        .order_by(MoneyFlowSnapshot.rank.asc(), MoneyFlowSnapshot.symbol.asc())
         .all()
     )
 
@@ -406,15 +422,37 @@ def capital_flow_as_of(
     *,
     normalize_casing: bool = False,
 ) -> list[CapitalFlowEntry]:
-    """Latest ``limit`` daily capital-flow rows with ``flow_date <= as_of_date``.
+    """Latest ``limit`` daily capital-flow DAYS with ``flow_date <= as_of_date``.
 
     The date bound closes the replay look-ahead (the pre-extraction live query
     had no date filter — harmless live where no future-dated rows exist, a
     leak when replaying a past day). ``normalize_casing=True`` canonicalizes
     ``long_short`` ('Long In' -> 'Long in'), same convention as the selector.
 
-    Returns rows newest-first.
+    One entry per ``flow_date`` — the row from the NEWEST ``captured_at`` for
+    that day. `stock_capital_flow` has no unique key on (symbol, flow_date,
+    period_type) and the qu-detail scraper blind-inserts the page's trailing
+    multi-day window on every run, so any symbol scraped twice accumulates
+    duplicate daily rows. Without the dedup those duplicates compress the
+    ``limit`` window, inflate the consecutive-"+" streak count (rows != days),
+    and make ``cf_rows[0]`` — hence `capital_flow_direction` and its +0.2
+    score — nondeterministic across identical replays.
+
+    Returns entries newest-first.
     """
+    latest_per_day = (
+        session.query(
+            StockCapitalFlow.flow_date.label("flow_date"),
+            func.max(StockCapitalFlow.captured_at).label("captured_at"),
+        )
+        .filter(
+            StockCapitalFlow.symbol == symbol,
+            StockCapitalFlow.period_type == "daily",
+            StockCapitalFlow.flow_date <= as_of_date,
+        )
+        .group_by(StockCapitalFlow.flow_date)
+        .subquery()
+    )
     rows = (
         session.query(
             StockCapitalFlow.flow_date,
@@ -422,28 +460,40 @@ def capital_flow_as_of(
             StockCapitalFlow.long_short,
             StockCapitalFlow.rank,
         )
+        .join(
+            latest_per_day,
+            (StockCapitalFlow.flow_date == latest_per_day.c.flow_date)
+            & (StockCapitalFlow.captured_at == latest_per_day.c.captured_at),
+        )
         .filter(
             StockCapitalFlow.symbol == symbol,
             StockCapitalFlow.period_type == "daily",
-            StockCapitalFlow.flow_date <= as_of_date,
         )
         .order_by(StockCapitalFlow.flow_date.desc())
         .limit(limit)
         .all()
     )
-    return [
-        CapitalFlowEntry(
-            flow_date=r.flow_date,
-            capital_flow_direction=r.capital_flow_direction,
-            long_short=(
-                r.long_short.capitalize()
-                if normalize_casing and r.long_short is not None
-                else r.long_short
-            ),
-            rank=r.rank,
+    # Belt over the join: if one scrape run somehow wrote the same
+    # (flow_date, captured_at) twice, keep the first row per day.
+    seen_days: set[date_type] = set()
+    entries: list[CapitalFlowEntry] = []
+    for r in rows:
+        if r.flow_date in seen_days:
+            continue
+        seen_days.add(r.flow_date)
+        entries.append(
+            CapitalFlowEntry(
+                flow_date=r.flow_date,
+                capital_flow_direction=r.capital_flow_direction,
+                long_short=(
+                    r.long_short.capitalize()
+                    if normalize_casing and r.long_short is not None
+                    else r.long_short
+                ),
+                rank=r.rank,
+            )
         )
-        for r in rows
-    ]
+    return entries
 
 
 def _compute_money_flow_score(

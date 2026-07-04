@@ -114,7 +114,7 @@ def _insert_snapshot(
     data_date: str,
     captured_at: datetime,
     ranking_type: str = "top100",
-    long_short: str = "Long in",
+    long_short: str | None = "Long in",
     sector: str = "Technology",
     daily_change: int = 0,
 ):
@@ -146,9 +146,10 @@ def _insert_capital_flow(
     symbol: str,
     flow_date: str,
     direction: str = "+",
-    long_short: str = "Long in",
+    long_short: str | None = "Long in",
     rank: int = 1,
     period_type: str = "daily",
+    captured_at: datetime = datetime(2026, 6, 4, 22, 0),
 ):
     session.execute(
         text(
@@ -160,7 +161,7 @@ def _insert_capital_flow(
         ),
         {
             "symbol": symbol,
-            "captured_at": _ts_param(datetime(2026, 6, 4, 22, 0)),
+            "captured_at": _ts_param(captured_at),
             "flow_date": flow_date,
             "period_type": period_type,
             "direction": direction,
@@ -465,3 +466,168 @@ def test_live_staleness_guard_retained(db_session):
     # Same data via the as-of path (replay) still returns.
     today_utc = datetime.now(timezone.utc).date()
     assert [s.symbol for s in _screen_money_flow_as_of(db_session, today_utc)] == ["NVDA"]
+
+
+def test_live_resolves_generation_once(db_session, monkeypatch):
+    """The live path pins the staleness-vetted generation into the as-of
+    selector — exactly ONE resolution per call. A second resolution could race
+    a concurrent delete/rebuild onto an unvetted older generation (and doubles
+    the aggregate queries for nothing)."""
+    import rainier.analysis.stock_screener as ss
+
+    _insert_snapshot(
+        db_session, symbol="NVDA", rank=1,
+        data_date=datetime.now(timezone.utc).date().isoformat(),
+        captured_at=_recent_ts(),
+    )
+
+    calls: list[date] = []
+    real = ss._resolve_top100_generation
+
+    def counting(session, as_of_date):
+        calls.append(as_of_date)
+        return real(session, as_of_date)
+
+    monkeypatch.setattr(ss, "_resolve_top100_generation", counting)
+    signals = ss._screen_money_flow(db_session)
+    assert [s.symbol for s in signals] == ["NVDA"]
+    assert len(calls) == 1
+
+
+def test_live_ignores_future_data_date(db_session):
+    """A pathologically future-stamped data_date must not hijack the live
+    'latest' day (intentional divergence from the old unbounded max)."""
+    today = datetime.now(timezone.utc).date()
+    _insert_snapshot(
+        db_session, symbol="NVDA", rank=1, data_date=today.isoformat(),
+        captured_at=_recent_ts(),
+    )
+    _insert_snapshot(
+        db_session, symbol="HACK", rank=1,
+        data_date=(today + timedelta(days=30)).isoformat(),
+        captured_at=_recent_ts(),
+    )
+
+    assert [s.symbol for s in _screen_money_flow(db_session)] == ["NVDA"]
+
+
+# ---------------------------------------------------------------------------
+# Duplicate capital-flow rows (no unique key on symbol/flow_date/period_type;
+# the qu-detail scraper blind-inserts a trailing window every run)
+# ---------------------------------------------------------------------------
+
+
+def test_capital_flow_as_of_dedups_rescraped_days(db_session):
+    """One entry per flow_date; the newest captured_at wins deterministically."""
+    _insert_capital_flow(
+        db_session, symbol="NVDA", flow_date="2026-06-04", direction="-",
+        captured_at=datetime(2026, 6, 4, 15, 45),
+    )
+    _insert_capital_flow(
+        db_session, symbol="NVDA", flow_date="2026-06-04", direction="+",
+        captured_at=datetime(2026, 6, 4, 22, 0),
+    )
+
+    rows = capital_flow_as_of(db_session, "NVDA", T)
+    assert [r.flow_date for r in rows] == [date(2026, 6, 4)]
+    assert rows[0].capital_flow_direction == "+"  # newest scrape wins
+
+
+def test_capital_flow_as_of_limit_counts_days_not_rows(db_session):
+    """Duplicated days must not compress the limit window below `limit`
+    distinct days."""
+    for i in range(1, 7):  # 6 days, each inserted twice (re-scrape)
+        for ts in (datetime(2026, 6, 6, 15, 45), datetime(2026, 6, 6, 22, 0)):
+            _insert_capital_flow(
+                db_session, symbol="NVDA", flow_date=f"2026-06-0{i}", captured_at=ts,
+            )
+
+    rows = capital_flow_as_of(db_session, "NVDA", date(2026, 6, 6), limit=5)
+    assert [r.flow_date for r in rows] == [
+        date(2026, 6, 6), date(2026, 6, 5), date(2026, 6, 4),
+        date(2026, 6, 3), date(2026, 6, 2),
+    ]
+
+
+def test_dup_capital_flow_rows_do_not_inflate_streak(db_session):
+    """days_in_top100 counts consecutive '+' DAYS, not raw duplicate rows.
+
+    Two '+' days duplicated into four rows must NOT fire the >= 3-day streak
+    bonus (+0.05)."""
+    _insert_snapshot(db_session, symbol="NVDA", rank=1, data_date="2026-06-04", captured_at=TS_LATE)
+    for d in ("2026-06-04", "2026-06-03"):
+        for ts in (datetime(2026, 6, 4, 15, 45), datetime(2026, 6, 4, 22, 0)):
+            _insert_capital_flow(
+                db_session, symbol="NVDA", flow_date=d, direction="+", captured_at=ts,
+            )
+
+    signals = _screen_money_flow_as_of(db_session, T)
+    assert [s.symbol for s in signals] == ["NVDA"]
+    sig = signals[0]
+    assert sig.days_in_top100 == 2
+    # 0.5 base + 0.2 '+' direction + 0.15 rank; NO 0.05 streak bonus.
+    assert sig.signal_strength == pytest.approx(0.85)
+
+
+# ---------------------------------------------------------------------------
+# normalize_casing hardening
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_true_excludes_short_rows(db_session):
+    """Case-insensitive admission stays scoped to 'long in' — shorts of either
+    casing must not leak into the replay basket."""
+    _insert_snapshot(
+        db_session, symbol="NVDA", rank=1, data_date="2026-06-04",
+        captured_at=TS_LATE, long_short="Long In",
+    )
+    _insert_snapshot(
+        db_session, symbol="META", rank=2, data_date="2026-06-04",
+        captured_at=TS_LATE, long_short="Short in",
+    )
+    _insert_snapshot(
+        db_session, symbol="XOM", rank=3, data_date="2026-06-04",
+        captured_at=TS_LATE, long_short="Short In",
+    )
+
+    signals = _screen_money_flow_as_of(db_session, T, normalize_casing=True)
+    assert [s.symbol for s in signals] == ["NVDA"]
+
+
+def test_sector_leg_normalize_null_long_short_safe(db_session):
+    """NULL long_short rows must not crash the normalize branch and count
+    neither long nor short."""
+    _insert_snapshot(
+        db_session, symbol="NVDA", rank=1, data_date="2026-06-04",
+        captured_at=TS_LATE, long_short=None, sector="Technology",
+    )
+
+    trends = analyze_sectors_at(T, session=db_session, normalize_casing=True)
+    tech = next(t for t in trends if t.sector == "Technology")
+    assert tech.long_in_count == 0
+    assert tech.short_in_count == 0
+
+
+def test_capital_flow_as_of_normalize_null_long_short(db_session):
+    """NULL long_short passes through the normalize branch as None."""
+    _insert_capital_flow(
+        db_session, symbol="NVDA", flow_date="2026-06-04", long_short=None,
+    )
+
+    rows = capital_flow_as_of(db_session, "NVDA", T, normalize_casing=True)
+    assert rows[0].long_short is None
+
+
+# ---------------------------------------------------------------------------
+# Replay determinism
+# ---------------------------------------------------------------------------
+
+
+def test_equal_rank_ties_order_by_symbol(db_session):
+    """Equal-rank, equal-score rows come back symbol-ascending — the corpus
+    must be byte-reproducible across runs."""
+    _insert_snapshot(db_session, symbol="ZZZ", rank=1, data_date="2026-06-04", captured_at=TS_LATE)
+    _insert_snapshot(db_session, symbol="AAA", rank=1, data_date="2026-06-04", captured_at=TS_LATE)
+
+    signals = _screen_money_flow_as_of(db_session, T)
+    assert [s.symbol for s in signals] == ["AAA", "ZZZ"]
