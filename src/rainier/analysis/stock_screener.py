@@ -8,7 +8,9 @@ Layer 3: Technical pattern detection (Caisen methodology)
 from __future__ import annotations
 
 import logging
+from datetime import date as date_type
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 import pandas as pd
 import yfinance as yf
@@ -177,36 +179,40 @@ def screen_stocks(
 # ---------------------------------------------------------------------------
 
 
-def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
-    """Screen stocks from latest QU100 snapshot + capital flow history.
+def _resolve_top100_generation(
+    session: Session, as_of_date: date_type
+) -> tuple[date_type, datetime] | None:
+    """Resolve the latest top100 snapshot generation on or before ``as_of_date``.
 
-    Step 1: Get latest 'Long in' stocks from MoneyFlowSnapshot.
-    Step 2: Enrich with capital flow direction from StockCapitalFlow.
+    Mirrors the #148 per-(data_date, ranking_type) convention
+    (``sector_analyzer._latest_generation_filter``), scoped to top100:
 
-    Returns list of MoneyFlowSignal sorted by signal_strength descending.
+        as_of = max(data_date) where data_date <= t and ranking_type='top100'
+        ts    = max(captured_at) within that (data_date, 'top100') generation
+
+    Scope "latest" by trading DAY, not insert time. The 2026-06-04 backfill
+    stamped all 1,373 historical days with one shared `captured_at`, so a
+    global `captured_at == max(captured_at)` selected every backfilled day at
+    once (duplicate symbols across days -> CardinalityViolation downstream).
+
+    Both the date and the timestamp are scoped to ranking_type == "top100"
+    (the same scope as the selector's row query). A day whose newest scrape
+    held only bottom100 (or another non-top100 partial) must NOT become the
+    "latest" date — otherwise the top100 row filter returns nothing and the
+    report blanks even though a fresh top100 snapshot exists on a prior day.
+
+    Returns ``(data_date, captured_at)`` or ``None`` when nothing matches.
     """
-    # Step 1: Latest QU100 snapshot — "Long in" stocks only.
-    #
-    # Scope "latest" by trading DAY, not insert time. The 2026-06-04 backfill
-    # stamped all 1,373 historical days with one shared `captured_at`, so the
-    # old `captured_at == max(captured_at)` selected every backfilled day at
-    # once (duplicate symbols across days -> CardinalityViolation downstream).
-    # Pick the most recent `data_date`, then the latest `captured_at` WITHIN
-    # that date — one clean trading-day snapshot regardless of insert collisions.
-    #
-    # Both the date and the timestamp are scoped to ranking_type == "top100"
-    # (the same scope as the row query below). A day whose newest scrape held
-    # only bottom100 (or another non-top100 partial) must NOT become the
-    # "latest" date — otherwise the top100 row filter returns nothing and the
-    # report blanks even though a fresh top100 snapshot exists on a prior day.
     latest_date = (
         session.query(func.max(MoneyFlowSnapshot.data_date))
-        .filter(MoneyFlowSnapshot.ranking_type == "top100")
+        .filter(
+            MoneyFlowSnapshot.ranking_type == "top100",
+            MoneyFlowSnapshot.data_date <= as_of_date,
+        )
         .scalar()
     )
     if latest_date is None:
-        log.warning("No money flow snapshots in database")
-        return []
+        return None
 
     latest_ts = (
         session.query(func.max(MoneyFlowSnapshot.captured_at))
@@ -216,6 +222,24 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
         )
         .scalar()
     )
+    return latest_date, latest_ts
+
+
+def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
+    """LIVE money-flow screen: staleness-guarded delegation to the as-of
+    selector at today's date.
+
+    Behavior is byte-identical to the pre-extraction selector: same generation
+    resolution, same exact-match 'Long in' casing (``normalize_casing=False``),
+    same 24h staleness guard. The guard lives HERE (live only) — the as-of
+    path replays history and must not care about wall-clock age.
+    """
+    today = datetime.now(timezone.utc).date()
+    generation = _resolve_top100_generation(session, today)
+    if generation is None:
+        log.warning("No money flow snapshots in database")
+        return []
+    latest_date, latest_ts = generation
 
     # Staleness check: reject data older than 24 hours. Age is judged on the
     # latest trading day's captured_at (when that day's snapshot was scraped).
@@ -232,6 +256,48 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
         )
         return []
 
+    return _screen_money_flow_as_of(session, today, normalize_casing=False)
+
+
+def _screen_money_flow_as_of(
+    session: Session,
+    as_of_date: date_type,
+    *,
+    normalize_casing: bool = False,
+) -> list[MoneyFlowSignal]:
+    """Screen stocks as they would have been screened on ``as_of_date``.
+
+    Step 1: 'Long in' stocks from the latest top100 generation with
+            data_date <= as_of_date (#148 convention, `_resolve_top100_generation`).
+    Step 2: Enrich with capital flow history via `capital_flow_as_of`
+            (flow_date <= as_of_date — no look-ahead).
+
+    ``normalize_casing`` is the live/replay split for the `long_short` casing
+    trap ('Long in' 1,011 historical days vs 'Long In' 406):
+      * False (default, live): exact-match 'Long in' — byte-identical to the
+        pre-extraction live behavior.
+      * True (replay): case-insensitive admission, and the emitted signals
+        carry the canonical 'Long in' spelling so the downstream scorer's
+        exact match (`_compute_money_flow_score`) prices the row correctly.
+        Admitting without canonicalizing would silently mis-score every
+        'Long In' day — the corpus-corruption trap this flag exists to close.
+
+    No staleness guard: replay reads arbitrarily old history. The live 24h
+    guard belongs to `_screen_money_flow`.
+
+    Returns list of MoneyFlowSignal sorted by signal_strength descending.
+    """
+    generation = _resolve_top100_generation(session, as_of_date)
+    if generation is None:
+        log.warning("No money flow snapshots on or before %s", as_of_date)
+        return []
+    latest_date, latest_ts = generation
+
+    if normalize_casing:
+        long_in_filter = func.lower(MoneyFlowSnapshot.long_short) == "long in"
+    else:
+        long_in_filter = MoneyFlowSnapshot.long_short == "Long in"
+
     rows = (
         session.query(
             MoneyFlowSnapshot.symbol,
@@ -243,7 +309,7 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
         )
         .filter(
             MoneyFlowSnapshot.ranking_type == "top100",
-            MoneyFlowSnapshot.long_short == "Long in",
+            long_in_filter,
             MoneyFlowSnapshot.data_date == latest_date,
             MoneyFlowSnapshot.captured_at == latest_ts,
         )
@@ -261,35 +327,26 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
 
     # Defensive dedup by symbol: even within one (data_date, captured_at) a
     # symbol must appear once. Rows are rank-ascending, so the first occurrence
-    # is the best-ranked — keep it.
+    # is the best-ranked — keep it. (Mirrors the live guard.)
     seen: set[str] = set()
     rows = [r for r in rows if not (r.symbol in seen or seen.add(r.symbol))]
 
-    # Step 2: Enrich each stock with capital flow data
+    # Step 2: Enrich each stock with capital flow data (as-of bounded)
     signals: list[MoneyFlowSignal] = []
     for row in rows:
         symbol = row.symbol
         rank = row.rank
         daily_change = row.daily_change or 0
         long_short = row.long_short or "Long in"
+        if normalize_casing:
+            # Canonicalize ('Long In' -> 'Long in') so the exact-match scorer
+            # and every downstream consumer see one consistent spelling.
+            long_short = long_short.capitalize()
         sector = row.sector or "Unknown"
         industry = row.industry or "Unknown"
 
-        # Get recent capital flow history
-        cf_rows = (
-            session.query(
-                StockCapitalFlow.flow_date,
-                StockCapitalFlow.capital_flow_direction,
-                StockCapitalFlow.long_short,
-                StockCapitalFlow.rank,
-            )
-            .filter(
-                StockCapitalFlow.symbol == symbol,
-                StockCapitalFlow.period_type == "daily",
-            )
-            .order_by(StockCapitalFlow.flow_date.desc())
-            .limit(5)
-            .all()
+        cf_rows = capital_flow_as_of(
+            session, symbol, as_of_date, limit=5, normalize_casing=normalize_casing
         )
 
         # Determine capital flow direction from most recent entry
@@ -330,6 +387,63 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
 
     signals.sort(key=lambda s: s.signal_strength, reverse=True)
     return signals
+
+
+class CapitalFlowEntry(NamedTuple):
+    """One daily `stock_capital_flow` row as seen by the screener."""
+
+    flow_date: date_type
+    capital_flow_direction: str | None
+    long_short: str | None
+    rank: int | None
+
+
+def capital_flow_as_of(
+    session: Session,
+    symbol: str,
+    as_of_date: date_type,
+    limit: int = 5,
+    *,
+    normalize_casing: bool = False,
+) -> list[CapitalFlowEntry]:
+    """Latest ``limit`` daily capital-flow rows with ``flow_date <= as_of_date``.
+
+    The date bound closes the replay look-ahead (the pre-extraction live query
+    had no date filter — harmless live where no future-dated rows exist, a
+    leak when replaying a past day). ``normalize_casing=True`` canonicalizes
+    ``long_short`` ('Long In' -> 'Long in'), same convention as the selector.
+
+    Returns rows newest-first.
+    """
+    rows = (
+        session.query(
+            StockCapitalFlow.flow_date,
+            StockCapitalFlow.capital_flow_direction,
+            StockCapitalFlow.long_short,
+            StockCapitalFlow.rank,
+        )
+        .filter(
+            StockCapitalFlow.symbol == symbol,
+            StockCapitalFlow.period_type == "daily",
+            StockCapitalFlow.flow_date <= as_of_date,
+        )
+        .order_by(StockCapitalFlow.flow_date.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        CapitalFlowEntry(
+            flow_date=r.flow_date,
+            capital_flow_direction=r.capital_flow_direction,
+            long_short=(
+                r.long_short.capitalize()
+                if normalize_casing and r.long_short is not None
+                else r.long_short
+            ),
+            rank=r.rank,
+        )
+        for r in rows
+    ]
 
 
 def _compute_money_flow_score(

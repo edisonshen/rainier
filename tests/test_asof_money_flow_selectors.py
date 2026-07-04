@@ -81,6 +81,17 @@ TS_EARLY = datetime(2026, 6, 4, 15, 45)
 TS_LATE = datetime(2026, 6, 4, 22, 0)
 
 
+def _ts_param(ts: datetime) -> str:
+    """Bind-format a captured_at for raw INSERT (SQLite harness artifact).
+
+    sqlite3's default datetime adapter omits a zero microsecond field
+    ('... 22:00:00') while SQLAlchemy's DateTime equality bind always emits
+    it ('... 22:00:00.000000') — a raw-inserted whole-second timestamp would
+    never equality-match. Store the SQLAlchemy spelling.
+    """
+    return ts.isoformat(sep=" ", timespec="microseconds")
+
+
 @pytest.fixture
 def db_session():
     eng = create_engine("sqlite://")
@@ -116,7 +127,7 @@ def _insert_snapshot(
             " :symbol, :rank, :daily_change, :sector, 'X', :long_short)"
         ),
         {
-            "captured_at": captured_at,
+            "captured_at": _ts_param(captured_at),
             "data_date": data_date,
             "ranking_type": ranking_type,
             "symbol": symbol,
@@ -149,7 +160,7 @@ def _insert_capital_flow(
         ),
         {
             "symbol": symbol,
-            "captured_at": datetime(2026, 6, 4, 22, 0),
+            "captured_at": _ts_param(datetime(2026, 6, 4, 22, 0)),
             "flow_date": flow_date,
             "period_type": period_type,
             "direction": direction,
