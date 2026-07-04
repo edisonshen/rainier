@@ -580,6 +580,20 @@ class TestRatio:
         )(make_ratio("total_return", "max_drawdown"))
         assert score("basket", "return_over_drawdown", basket) == pytest.approx(2.0)
 
+    def test_ratio_cannot_be_registered_under_wrong_input_type(self):
+        # Regression (codex): make_ratio's input_type was discarded, so a
+        # basket-composed ratio could register as input_type="trades" and
+        # score() would route a trades payload into the basket aggregators.
+        fn = make_ratio("total_return", "max_drawdown")
+        with pytest.raises(ValueError, match="input_type"):
+            register(
+                "ratio_wrong_type",
+                input_type="trades",
+                role="secondary",
+                direction="increase",
+            )(fn)
+        assert "ratio_wrong_type" not in names()
+
 
 # ---------------------------------------------------------------------------
 # Determinism + purity

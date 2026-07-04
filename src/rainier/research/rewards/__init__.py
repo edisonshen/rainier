@@ -111,6 +111,15 @@ def register(
                 f"reward {name!r}: ratio rewards cannot be guardrails "
                 f"(±inf sentinel vs non-finite rejection)"
             )
+        fn_input_type = getattr(fn, "_input_type", None)
+        if fn_input_type is not None and fn_input_type != input_type:
+            # A make_ratio closure carries its constituents' input_type;
+            # registering it under a different one would let score() route
+            # the wrong payload into the aggregators (silent mis-scoring).
+            raise ValueError(
+                f"reward {name!r}: fn is bound to input_type {fn_input_type!r}, "
+                f"cannot register as {input_type!r}"
+            )
         REGISTRY[name] = RewardSpec(
             name=name,
             fn=fn,
@@ -214,6 +223,7 @@ def make_ratio(numerator: str, denominator: str) -> Callable[..., float]:
 
     _ratio.__name__ = f"ratio_{numerator}_over_{denominator}"
     _ratio._is_ratio = True  # register() rejects guardrail role for ratios
+    _ratio._input_type = num.input_type  # register() enforces matching input_type
     return _ratio
 
 
