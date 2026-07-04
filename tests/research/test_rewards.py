@@ -181,6 +181,19 @@ class TestRegister:
         with pytest.raises(ValueError, match="threshold"):
             register("bad", input_type="basket", role="guardrail", direction="decrease")
 
+    def test_guardrail_non_finite_threshold_rejected(self):
+        # Regression: a NaN threshold fails every >/< comparison, so the
+        # guardrail would silently never breach.
+        for bad in (math.nan, math.inf, -math.inf):
+            with pytest.raises(ValueError, match="finite"):
+                register(
+                    "bad",
+                    input_type="basket",
+                    role="guardrail",
+                    direction="decrease",
+                    threshold=bad,
+                )
+
     def test_non_guardrail_with_threshold_rejected(self):
         with pytest.raises(ValueError, match="threshold"):
             register(

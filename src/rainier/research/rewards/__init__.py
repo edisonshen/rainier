@@ -86,6 +86,13 @@ def register(
         )
     if role == "guardrail" and threshold is None:
         raise ValueError(f"reward {name!r}: guardrail role requires a threshold")
+    if role == "guardrail" and threshold is not None and not math.isfinite(threshold):
+        # NaN threshold fails every >/< comparison -> guardrail silently
+        # never breaches; inf is "unbounded" better expressed by not being
+        # a guardrail at all. Same failure family as non-finite values.
+        raise ValueError(
+            f"reward {name!r}: guardrail threshold must be finite (got {threshold!r})"
+        )
     if role != "guardrail" and threshold is not None:
         raise ValueError(f"reward {name!r}: threshold is guardrail-only (role={role!r})")
     if name in REGISTRY:
@@ -175,6 +182,10 @@ def make_ratio(numerator: str, denominator: str) -> Callable[..., float]:
     flawless candidate ranks first, not last), negative → ``-inf``, and
     0/0 → 0.0 (no data). Register the result under its own name to make
     it selectable.
+
+    Do NOT register a ratio as a guardrail: the ``inf`` sentinel collides
+    with ``guardrail_breached``'s non-finite rejection — the promote gate
+    would raise on the best candidate instead of passing it.
     """
     num, den = get(numerator), get(denominator)
     if num.input_type != den.input_type:
