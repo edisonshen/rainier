@@ -29,9 +29,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+if TYPE_CHECKING:  # runtime imports stay local (config load cost, cycle safety)
+    from rainier.core.config import StockScreenerConfig
 
 # Spec home (pinned in the task plan; consumed by the shadow arm + evaluator).
 DEFAULT_EXPERIMENTS_DIR = Path("config/experiments")
@@ -139,12 +142,11 @@ def _validate_override(
     return out
 
 
-def _require(raw: dict[str, Any], key: str, typ: type, source: str) -> Any:
+def _require_str(raw: dict[str, Any], key: str, source: str) -> str:
     val = raw.get(key)
-    if not isinstance(val, typ) or (typ is str and not val):
+    if not isinstance(val, str) or not val:
         raise ExperimentSpecError(
-            f"{source}: spec field {key!r} must be a non-empty {typ.__name__}, "
-            f"got {val!r}"
+            f"{source}: spec field {key!r} must be a non-empty str, got {val!r}"
         )
     return val
 
@@ -155,16 +157,16 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
         raise ExperimentSpecError(
             f"{source}: spec must be a YAML mapping, got {type(raw).__name__}"
         )
-    spec_id = _require(raw, "id", str, source)
-    status = _require(raw, "status", str, source)
+    spec_id = _require_str(raw, "id", source)
+    status = _require_str(raw, "status", source)
     if status not in _VALID_STATUSES:
         raise ExperimentSpecError(
             f"{source}: experiment {spec_id!r} has invalid status {status!r} "
             f"(must be one of {list(_VALID_STATUSES)})"
         )
-    champion = _require(raw, "champion", str, source)
-    layer = _require(raw, "layer", str, source)
-    primary = _require(raw, "primary", str, source)
+    champion = _require_str(raw, "champion", source)
+    layer = _require_str(raw, "layer", source)
+    primary = _require_str(raw, "primary", source)
 
     guardrails_raw = raw.get("guardrails") or []
     if not isinstance(guardrails_raw, list) or not all(
@@ -277,7 +279,7 @@ def load_active_specs(directory: str | Path | None = None) -> list[ExperimentSpe
 def materialize_challengers(
     spec: ExperimentSpec,
     base_overrides: dict[str, Any] | None = None,
-) -> tuple[Any, dict[str, Any]]:
+) -> tuple["StockScreenerConfig", dict[str, "StockScreenerConfig"]]:
     """Materialize (champion_config, {challenger_id: config}) for a spec.
 
     ``base_overrides`` is the champion-effective override layer (e.g.
@@ -295,7 +297,7 @@ def materialize_challengers(
     champion_cfg = StockScreenerConfig(
         **merge_stock_screener_config(base_overrides, None)
     )
-    challenger_cfgs: dict[str, Any] = {}
+    challenger_cfgs: dict[str, StockScreenerConfig] = {}
     for challenger in spec.challengers:
         merged = merge_stock_screener_config(base_overrides, challenger.override)
         challenger_cfgs[challenger.id] = StockScreenerConfig(**merged)
