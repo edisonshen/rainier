@@ -52,7 +52,7 @@ def _day_returns(outcomes: BasketOutcomes, horizon: int) -> list[float]:
     out: list[float] = []
     for day in outcomes.days:
         returns = day.fwd_return.get(horizon, {})
-        available = [returns[s] for s in day.symbols if returns.get(s) is not None]
+        available = [r for s in day.symbols if (r := returns.get(s)) is not None]
         if available:
             out.append(sum(available) / len(available))
     return out
