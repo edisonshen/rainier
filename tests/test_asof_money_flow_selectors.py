@@ -27,6 +27,7 @@ tests/test_stock_screener_latest_snapshot.py).
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -175,6 +176,12 @@ def _insert_capital_flow(
 def _recent_ts() -> datetime:
     """A captured_at within the live 24h staleness window (tz-naive UTC)."""
     return (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+
+
+def _market_today() -> date:
+    """The ET market day — the calendar `data_date` is stored in and the
+    live path bounds by (see stock_screener._MARKET_TZ)."""
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +433,7 @@ def test_live_delegates_to_as_of_identically(db_session):
     """_screen_money_flow == _screen_money_flow_as_of(today, normalize=False)
     on a fresh fixture — the extraction changes nothing live."""
     ts = _recent_ts()
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = _market_today().isoformat()
     for i, sym in enumerate(["NVDA", "TSLA", "AMD"], start=1):
         _insert_snapshot(
             db_session, symbol=sym, rank=i, data_date=today,
@@ -442,12 +449,12 @@ def test_live_delegates_to_as_of_identically(db_session):
         captured_at=ts, long_short="Long In",
     )
     for d_off in range(4):
-        d = (datetime.now(timezone.utc).date() - timedelta(days=d_off)).isoformat()
+        d = (_market_today() - timedelta(days=d_off)).isoformat()
         _insert_capital_flow(db_session, symbol="NVDA", flow_date=d, direction="+")
 
     live = _screen_money_flow(db_session)
     as_of = _screen_money_flow_as_of(
-        db_session, datetime.now(timezone.utc).date(), normalize_casing=False
+        db_session, _market_today(), normalize_casing=False
     )
     assert live  # non-vacuous
     assert live == as_of
@@ -477,7 +484,7 @@ def test_live_resolves_generation_once(db_session, monkeypatch):
 
     _insert_snapshot(
         db_session, symbol="NVDA", rank=1,
-        data_date=datetime.now(timezone.utc).date().isoformat(),
+        data_date=_market_today().isoformat(),
         captured_at=_recent_ts(),
     )
 
@@ -497,13 +504,21 @@ def test_live_resolves_generation_once(db_session, monkeypatch):
 def test_live_ignores_future_data_date(db_session):
     """A pathologically future-stamped data_date must not hijack the live
     'latest' day (intentional divergence from the old unbounded max)."""
-    today = datetime.now(timezone.utc).date()
+    today = _market_today()
     _insert_snapshot(
         db_session, symbol="NVDA", rank=1, data_date=today.isoformat(),
         captured_at=_recent_ts(),
     )
+    # +1 day is the sharpest case: after 00:00 UTC the UTC date already
+    # equals market-today+1, so a UTC-date bound would admit this row —
+    # the ET market-day bound must not.
     _insert_snapshot(
         db_session, symbol="HACK", rank=1,
+        data_date=(today + timedelta(days=1)).isoformat(),
+        captured_at=_recent_ts(),
+    )
+    _insert_snapshot(
+        db_session, symbol="HACK2", rank=1,
         data_date=(today + timedelta(days=30)).isoformat(),
         captured_at=_recent_ts(),
     )

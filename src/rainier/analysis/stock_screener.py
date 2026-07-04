@@ -11,6 +11,7 @@ import logging
 from datetime import date as date_type
 from datetime import datetime, timezone
 from typing import NamedTuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -31,6 +32,11 @@ from rainier.core.types import (
 )
 
 log = logging.getLogger(__name__)
+
+# `data_date` is stored as the US-market calendar day (see
+# scrapers.qu.scraper.MARKET_TZ / market_date()); mirrored here rather than
+# imported because analysis/ must not pull the scrapers/ (Playwright) stack.
+_MARKET_TZ = ZoneInfo("America/New_York")
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +243,12 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
     guard vetted (no re-resolution race, no double query).
 
     Two intentional divergences from the pre-extraction selector:
-      1. Resolution is bounded ``data_date <= today`` (UTC) instead of the old
+      1. Resolution is bounded ``data_date <= today`` instead of the old
          unbounded ``max(data_date)`` — a pathologically future-stamped row is
-         ignored instead of hijacking the "latest" day.
+         ignored instead of hijacking the "latest" day. "Today" is the ET
+         market day (the calendar ``data_date`` is stored in), not the UTC
+         date: between 00:00 UTC and ET midnight the UTC date is one day
+         ahead, which would let a next-market-day stamp slip under the bound.
       2. Capital-flow enrichment goes through `capital_flow_as_of`, which
          dedups duplicate ``(symbol, flow_date)`` rows (newest ``captured_at``
          wins) — the old query counted raw rows. Vacuous live as of
@@ -248,7 +257,7 @@ def _screen_money_flow(session: Session) -> list[MoneyFlowSignal]:
          Once qu-detail populates the table this is a correctness guard
          (streaks count days, not re-scraped duplicates), not a scoring flip.
     """
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(timezone.utc).astimezone(_MARKET_TZ).date()
     generation = _resolve_top100_generation(session, today)
     if generation is None:
         log.warning("No money flow snapshots in database")
