@@ -30,6 +30,7 @@ that consumes ``guardrail_breached`` is ab-registry-promote-84a7's scope.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -50,8 +51,9 @@ class RewardSpec:
     threshold: float | None = None
 
 
-#: name → RewardSpec. Populated by @register at import time (see the
-#: ``basket`` import at the bottom of this module) and by callers.
+#: name → RewardSpec. Populated ONLY via @register (see the ``basket``
+#: import at the bottom of this module). Never insert directly — register()
+#: is the sole write path; it enforces every metadata invariant.
 REGISTRY: dict[str, RewardSpec] = {}
 
 
@@ -90,6 +92,10 @@ def register(
         raise ValueError(f"reward {name!r} already registered")
 
     def _decorator(fn: Callable[..., float]) -> Callable[..., float]:
+        # Re-check at insertion time: two register(...) factories obtained
+        # before either decorator is applied must not silently clobber.
+        if name in REGISTRY:
+            raise ValueError(f"reward {name!r} already registered")
         REGISTRY[name] = RewardSpec(
             name=name,
             fn=fn,
@@ -122,6 +128,11 @@ def score(candidate_type: str, reward_name: str, payload: Any, **kwargs: Any) ->
     screener ``basket``) with a loud ValueError — no silent mis-scoring.
     Extra kwargs (e.g. ``horizon=``) are forwarded to the reward.
     """
+    if candidate_type not in INPUT_TYPES:
+        raise ValueError(
+            f"unknown candidate_type {candidate_type!r} (expected one of "
+            f"{sorted(INPUT_TYPES)})"
+        )
     spec = get(reward_name)
     if spec.input_type != candidate_type:
         raise ValueError(
@@ -136,12 +147,21 @@ def guardrail_breached(reward_name: str, value: float) -> bool:
 
     direction="decrease" (lower is better): breach when value > threshold.
     direction="increase" (higher is better): breach when value < threshold.
-    At-threshold is clean. Non-guardrail rewards are rejected.
+    At-threshold is clean. Non-guardrail rewards are rejected. A non-finite
+    value (NaN/inf) is corrupt input and raises — NaN fails every ``>``/``<``
+    comparison, so it would otherwise read as "clean" and silently disarm
+    the guardrail (§4.2: loud, never silent).
     """
     spec = get(reward_name)
     if spec.role != "guardrail":
         raise ValueError(f"reward {reward_name!r} is not a guardrail (role={spec.role!r})")
-    assert spec.threshold is not None  # enforced at registration
+    if spec.threshold is None:  # unreachable via register(); guards direct REGISTRY writes
+        raise ValueError(f"guardrail {reward_name!r} has no threshold")
+    if not math.isfinite(value):
+        raise ValueError(
+            f"guardrail {reward_name!r}: non-finite value {value!r} — refusing to "
+            f"evaluate breach on corrupt input"
+        )
     if spec.direction == "decrease":
         return value > spec.threshold
     return value < spec.threshold
@@ -150,9 +170,11 @@ def guardrail_breached(reward_name: str, value: float) -> bool:
 def make_ratio(numerator: str, denominator: str) -> Callable[..., float]:
     """Compose two registered aggregations into a ratio reward (§4.2).
 
-    Both must share an input_type. A zero denominator yields 0.0 (never a
-    ZeroDivisionError mid-evaluation). Register the result under its own
-    name to make it selectable.
+    Both must share an input_type. Zero denominator is sign-aware (never a
+    ZeroDivisionError mid-evaluation): positive numerator → ``inf`` (a
+    flawless candidate ranks first, not last), negative → ``-inf``, and
+    0/0 → 0.0 (no data). Register the result under its own name to make
+    it selectable.
     """
     num, den = get(numerator), get(denominator)
     if num.input_type != den.input_type:
@@ -164,9 +186,13 @@ def make_ratio(numerator: str, denominator: str) -> Callable[..., float]:
     def _ratio(payload: Any, **kwargs: Any) -> float:
         d = den.fn(payload, **kwargs)
         if d == 0.0:
-            return 0.0
+            n = num.fn(payload, **kwargs)
+            if n == 0.0:
+                return 0.0
+            return math.inf if n > 0 else -math.inf
         return num.fn(payload, **kwargs) / d
 
+    _ratio.__name__ = f"ratio_{numerator}_over_{denominator}"
     return _ratio
 
 

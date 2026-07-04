@@ -14,6 +14,7 @@ enter any mean, stdev, or hit-rate denominator).
 
 from __future__ import annotations
 
+import math
 import statistics
 from dataclasses import dataclass
 from datetime import date as date_type
@@ -47,12 +48,39 @@ class BasketOutcomes:
     days: list[BasketDay]
 
 
+def _require_horizon(outcomes: BasketOutcomes, horizon: int) -> None:
+    """Raise when a horizon is absent from EVERY day (config typo, §4.2 loud).
+
+    Silently returning 0.0 for a typo'd/unconfigured horizon would make every
+    candidate score 0.0 with clean guardrails — valid-looking noise. Days may
+    individually lack the key (skipped, like None returns); all-absent with a
+    non-empty window is a configuration error.
+    """
+    if outcomes.days and not any(horizon in day.fwd_return for day in outcomes.days):
+        known = sorted({h for day in outcomes.days for h in day.fwd_return})
+        raise ValueError(
+            f"horizon {horizon} absent from every BasketDay (available horizons: {known})"
+        )
+
+
 def _day_returns(outcomes: BasketOutcomes, horizon: int) -> list[float]:
-    """Equal-weight basket return per day; days with no data are skipped."""
+    """Equal-weight basket return per day; days with no data are skipped.
+
+    Non-finite returns (NaN/inf, e.g. from a corrupt upstream price) raise:
+    NaN propagates through mean/stdev/drawdown comparisons in ways that read
+    as "clean" (NaN fails every ``>``), silently disarming guardrails.
+    """
+    _require_horizon(outcomes, horizon)
     out: list[float] = []
     for day in outcomes.days:
         returns = day.fwd_return.get(horizon, {})
         available = [r for s in day.symbols if (r := returns.get(s)) is not None]
+        for r in available:
+            if not math.isfinite(r):
+                raise ValueError(
+                    f"non-finite forward return {r!r} on {day.date} (horizon {horizon}) — "
+                    f"corrupt input, refusing to aggregate"
+                )
         if available:
             out.append(sum(available) / len(available))
     return out
@@ -137,10 +165,16 @@ def dodged_loss(outcomes: BasketOutcomes, horizon: int = DEFAULT_HORIZON) -> flo
     evaluator to populate ``fwd_return`` with the wider screened pool; if it
     only carries the selected symbols, dodged_loss is 0.0.
     """
+    _require_horizon(outcomes, horizon)
     total = 0.0
     for day in outcomes.days:
         selected = set(day.symbols)
         for symbol, ret in day.fwd_return.get(horizon, {}).items():
+            if ret is not None and not math.isfinite(ret):
+                raise ValueError(
+                    f"non-finite forward return {ret!r} for {symbol} on {day.date} "
+                    f"(horizon {horizon}) — corrupt input, refusing to aggregate"
+                )
             if symbol not in selected and ret is not None and ret < 0:
                 total += -ret
     return total

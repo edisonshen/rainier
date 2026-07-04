@@ -10,6 +10,7 @@ hand-computed expected value.
 
 from __future__ import annotations
 
+import math
 from datetime import date
 
 import pytest
@@ -87,6 +88,21 @@ def empty_basket() -> BasketOutcomes:
     return BasketOutcomes(days=[])
 
 
+def _uniform_basket(day_returns: list[float], horizon: int = 5) -> BasketOutcomes:
+    """One-symbol basket with the given per-day forward returns."""
+    return BasketOutcomes(
+        days=[
+            BasketDay(
+                date=date(2026, 1, 5 + i),
+                symbols=["AAA"],
+                fwd_return={horizon: {"AAA": r}},
+                regime="bull",
+            )
+            for i, r in enumerate(day_returns)
+        ]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registration + metadata
 # ---------------------------------------------------------------------------
@@ -130,6 +146,24 @@ class TestRegister:
             @register("dup", input_type="basket", role="secondary", direction="increase")
             def second(outcomes):
                 return 0.0
+
+    def test_duplicate_name_rejected_at_decoration_time(self):
+        # Regression: two factories obtained BEFORE either decorator is
+        # applied must not silently clobber — the dup check must also run
+        # at insertion time, not only in the factory.
+        deco_a = register("dup2", input_type="basket", role="secondary", direction="increase")
+        deco_b = register("dup2", input_type="basket", role="secondary", direction="increase")
+
+        def first(outcomes):
+            return 1.0
+
+        def second(outcomes):
+            return 2.0
+
+        deco_a(first)
+        with pytest.raises(ValueError, match="dup2"):
+            deco_b(second)
+        assert get("dup2").fn is first  # first registration survives intact
 
     def test_invalid_input_type_rejected(self):
         with pytest.raises(ValueError, match="input_type"):
@@ -179,6 +213,12 @@ class TestInputTypeRefusal:
     def test_matching_input_type_scores(self, basket):
         assert score("basket", "total_return", basket) == pytest.approx(0.08)
 
+    def test_unknown_candidate_type_rejected(self, basket):
+        # A typo'd candidate_type must be flagged as such, not blamed on
+        # the reward's input_type.
+        with pytest.raises(ValueError, match="candidate_type"):
+            score("baskets", "total_return", basket)
+
 
 # ---------------------------------------------------------------------------
 # Shipped basket rewards — hand-computed fixtures
@@ -203,10 +243,10 @@ class TestShippedRewards:
         assert get("sharpe").role == "primary"
         assert get("max_drawdown").role == "guardrail"
         assert get("max_drawdown").direction == "decrease"
-        assert get("max_drawdown").threshold is not None
+        assert get("max_drawdown").threshold == 0.20  # design-pinned promote-gate bound
         assert get("turnover").role == "guardrail"
         assert get("turnover").direction == "decrease"
-        assert get("turnover").threshold is not None
+        assert get("turnover").threshold == 0.50  # design-pinned promote-gate bound
         assert get("total_return").direction == "increase"
         assert get("dodged_loss").direction == "increase"
 
@@ -232,6 +272,38 @@ class TestShippedRewards:
         for name in ("total_return", "sharpe", "hit_rate", "max_drawdown", "turnover"):
             assert score("basket", name, empty_basket) == 0.0
         assert score("basket", "dodged_loss", empty_basket) == 0.0
+
+    def test_sharpe_single_day_zero(self):
+        outcomes = _uniform_basket([0.10])
+        assert score("basket", "sharpe", outcomes) == 0.0
+
+    def test_sharpe_zero_stdev_zero(self):
+        # Identical day returns -> stdev 0 -> 0.0, not ZeroDivisionError.
+        outcomes = _uniform_basket([0.05, 0.05, 0.05])
+        assert score("basket", "sharpe", outcomes) == 0.0
+
+    def test_turnover_skips_empty_symbol_days(self):
+        # [A,B], [], [A,B]: the empty day is dropped, so day1->day3 is the
+        # consecutive pair — nothing entered — turnover 0.0 (pinned skip
+        # semantics; the empty day never enters the denominator).
+        outcomes = BasketOutcomes(
+            days=[
+                BasketDay(
+                    date=date(2026, 1, 5),
+                    symbols=["AAA", "BBB"],
+                    fwd_return={5: {"AAA": 0.01, "BBB": 0.01}},
+                    regime="bull",
+                ),
+                BasketDay(date=date(2026, 1, 6), symbols=[], fwd_return={5: {}}, regime="bull"),
+                BasketDay(
+                    date=date(2026, 1, 7),
+                    symbols=["AAA", "BBB"],
+                    fwd_return={5: {"AAA": 0.01, "BBB": 0.01}},
+                    regime="bull",
+                ),
+            ]
+        )
+        assert score("basket", "turnover", outcomes) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +342,102 @@ class TestNoneHandling:
 
 
 # ---------------------------------------------------------------------------
+# Non-finite input rejection (§4.2: loud, never silent)
+# ---------------------------------------------------------------------------
+
+
+class TestNonFiniteRejection:
+    def test_nan_return_raises_not_disarms_drawdown(self):
+        # Regression: NaN on day 1 then two -30% days used to yield
+        # max_drawdown == 0.0 (equity *= nan; max(worst, nan) keeps worst)
+        # — a clean-looking guardrail on corrupt data.
+        outcomes = _uniform_basket([math.nan, -0.30, -0.30])
+        with pytest.raises(ValueError, match="non-finite"):
+            score("basket", "max_drawdown", outcomes)
+
+    def test_nan_return_raises_for_aggregations(self):
+        outcomes = _uniform_basket([0.10, math.nan])
+        for name in ("total_return", "sharpe", "hit_rate"):
+            with pytest.raises(ValueError, match="non-finite"):
+                score("basket", name, outcomes)
+
+    def test_inf_return_raises(self):
+        outcomes = _uniform_basket([math.inf])
+        with pytest.raises(ValueError, match="non-finite"):
+            score("basket", "total_return", outcomes)
+
+    def test_nan_in_dodged_loss_pool_raises(self):
+        outcomes = BasketOutcomes(
+            days=[
+                BasketDay(
+                    date=date(2026, 1, 5),
+                    symbols=["AAA"],
+                    fwd_return={5: {"AAA": 0.01, "CCC": math.nan}},
+                    regime="bull",
+                ),
+            ]
+        )
+        with pytest.raises(ValueError, match="non-finite"):
+            score("basket", "dodged_loss", outcomes)
+
+
+# ---------------------------------------------------------------------------
+# Horizon handling (kwargs forwarding + missing-horizon loudness)
+# ---------------------------------------------------------------------------
+
+
+class TestHorizon:
+    def test_kwargs_horizon_forwarded(self):
+        # Two horizons with different returns: score() must forward horizon=
+        # to the reward and aggregate the requested one.
+        outcomes = BasketOutcomes(
+            days=[
+                BasketDay(
+                    date=date(2026, 1, 5),
+                    symbols=["AAA"],
+                    fwd_return={5: {"AAA": 0.10}, 10: {"AAA": 0.25}},
+                    regime="bull",
+                ),
+            ]
+        )
+        assert score("basket", "total_return", outcomes) == pytest.approx(0.10)
+        assert score("basket", "total_return", outcomes, horizon=10) == pytest.approx(0.25)
+
+    def test_horizon_absent_from_every_day_raises(self, basket):
+        # A typo'd/unconfigured horizon must not silently score 0.0 for
+        # every candidate (valid-looking noise).
+        with pytest.raises(ValueError, match="horizon 10"):
+            score("basket", "total_return", basket, horizon=10)
+        with pytest.raises(ValueError, match="horizon 10"):
+            score("basket", "dodged_loss", basket, horizon=10)
+
+    def test_horizon_missing_on_some_days_skips_them(self):
+        # Partially missing horizon: days without the key are skipped
+        # (like None returns), not fatal.
+        outcomes = BasketOutcomes(
+            days=[
+                BasketDay(
+                    date=date(2026, 1, 5),
+                    symbols=["AAA"],
+                    fwd_return={5: {"AAA": 0.10}},
+                    regime="bull",
+                ),
+                BasketDay(
+                    date=date(2026, 1, 6),
+                    symbols=["AAA"],
+                    fwd_return={5: {"AAA": 0.02}, 10: {"AAA": 0.30}},
+                    regime="bull",
+                ),
+            ]
+        )
+        assert score("basket", "total_return", outcomes, horizon=10) == pytest.approx(0.30)
+
+    def test_empty_basket_any_horizon_zero(self, empty_basket):
+        # No days at all -> nothing to validate against; stays 0.0.
+        assert score("basket", "total_return", empty_basket, horizon=10) == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Guardrail evaluation helper
 # ---------------------------------------------------------------------------
 
@@ -295,10 +463,19 @@ class TestGuardrail:
 
         assert guardrail_breached("gd_inc", 0.4) is True
         assert guardrail_breached("gd_inc", 0.6) is False
+        assert guardrail_breached("gd_inc", 0.5) is False  # at threshold = clean
 
     def test_non_guardrail_rejected(self):
         with pytest.raises(ValueError, match="guardrail"):
             guardrail_breached("sharpe", 1.0)
+
+    def test_non_finite_value_rejected(self):
+        # Regression: NaN fails every >/< comparison, so it used to read as
+        # "clean" — silently disarming the guardrail on corrupt input.
+        with pytest.raises(ValueError, match="non-finite"):
+            guardrail_breached("max_drawdown", math.nan)
+        with pytest.raises(ValueError, match="non-finite"):
+            guardrail_breached("max_drawdown", math.inf)
 
 
 # ---------------------------------------------------------------------------
@@ -311,9 +488,33 @@ class TestRatio:
         fn = make_ratio("total_return", "max_drawdown")
         assert fn(basket) == pytest.approx(0.08 / 0.04)
 
-    def test_ratio_zero_denominator_is_zero(self, empty_basket):
+    def test_ratio_zero_over_zero_is_zero(self, empty_basket):
+        # Empty window: numerator and denominator both 0 -> 0.0 (no data).
         fn = make_ratio("total_return", "max_drawdown")
         assert fn(empty_basket) == 0.0
+
+    def test_ratio_positive_over_zero_is_inf(self):
+        # Regression: a flawless candidate (positive return, zero drawdown)
+        # used to score 0.0 — ranking BELOW every mediocre candidate.
+        fn = make_ratio("total_return", "max_drawdown")
+        outcomes = _uniform_basket([0.05, 0.10])
+        assert fn(outcomes) == math.inf
+
+    def test_ratio_negative_over_zero_is_neg_inf(self):
+        @register("neg_const", input_type="basket", role="secondary", direction="increase")
+        def neg_const(outcomes, **kwargs):
+            return -1.0
+
+        @register("zero_const", input_type="basket", role="secondary", direction="increase")
+        def zero_const(outcomes, **kwargs):
+            return 0.0
+
+        fn = make_ratio("neg_const", "zero_const")
+        assert fn(BasketOutcomes(days=[])) == -math.inf
+
+    def test_ratio_closure_has_descriptive_name(self):
+        fn = make_ratio("total_return", "max_drawdown")
+        assert fn.__name__ == "ratio_total_return_over_max_drawdown"
 
     def test_ratio_requires_matching_input_types(self):
         @register("trades_num", input_type="trades", role="secondary", direction="increase")
@@ -366,6 +567,8 @@ class TestBasketOutcomesShape:
         with pytest.raises(AttributeError):
             basket.days[0].regime = "bear"
 
+
+class TestModuleSurface:
     def test_names_sorted(self):
         assert names() == sorted(names())
 
