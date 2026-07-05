@@ -74,6 +74,10 @@ class _NoDuplicateKeysLoader(yaml.SafeLoader):
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
         seen: list[Any] = []
         for key_node, _value_node in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                # `<<:` merge keys are flattened by SafeLoader with documented
+                # override semantics (explicit keys win) — not author duplicates.
+                continue
             key = self.construct_object(key_node, deep=deep)
             if key in seen:
                 raise yaml.constructor.ConstructorError(
@@ -247,22 +251,33 @@ def _validate_override(
     # Strict mode still admits `.nan` / `.inf` YAML floats: a NaN threshold
     # makes every score comparison False and a NaN weight poisons composite
     # scores — the same silent-corruption class, so reject non-finite here.
+    _require_finite_values(out, ctx)
+    return out
+
+
+def _require_finite_values(overrides: dict[str, Any], ctx: str) -> None:
+    """Reject nan/inf floats in an override layer (incl. nested pattern_weights).
+
+    pydantic strict mode admits ``.nan`` / ``.inf`` floats; non-finite
+    thresholds/weights poison score comparisons silently instead of failing.
+    Used for spec-authored overrides at parse time AND caller-supplied
+    ``base_overrides`` at materialization time.
+    """
     import math
 
-    def _reject_non_finite(label: str, value: Any) -> None:
+    def _check(label: str, value: Any) -> None:
         if isinstance(value, float) and not math.isfinite(value):
             raise ExperimentSpecError(
-                f"{ctx}: override {label!r} is {value!r} — non-finite values "
+                f"{ctx}: {label!r} is {value!r} — non-finite values "
                 f"(nan/inf) poison score comparisons silently"
             )
 
-    for key, value in out.items():
+    for key, value in overrides.items():
         if key == "pattern_weights" and isinstance(value, dict):
             for pattern, weight in value.items():
-                _reject_non_finite(f"pattern_weights.{pattern}", weight)
+                _check(f"pattern_weights.{pattern}", weight)
         else:
-            _reject_non_finite(key, value)
-    return out
+            _check(key, value)
 
 
 def _require_str(raw: dict[str, Any], key: str, source: str) -> str:
@@ -625,6 +640,13 @@ def materialize_challengers(
                     f"experiment {spec.id!r}: unknown base_overrides "
                     f"pattern_weights key(s): {', '.join(unknown_pw)}"
                 )
+        # A nan/inf in the base layer would materialize a champion (and every
+        # challenger inheriting the field) with non-finite thresholds/weights
+        # — the same silent-poisoning _validate_override guards against for
+        # spec-authored values.
+        _require_finite_values(
+            base_overrides, f"experiment {spec.id!r}: base_overrides"
+        )
 
     try:
         champion_cfg = StockScreenerConfig(

@@ -658,6 +658,44 @@ def test_materialize_rejects_unknown_base_pattern_weights_key():
         )
 
 
+def test_yaml_merge_keys_still_supported(tmp_path):
+    # `<<:` merge keys are valid SafeLoader YAML (flattened with documented
+    # override semantics) — the duplicate-key loader must not reject them.
+    (tmp_path / "merge.yaml").write_text(
+        "id: merge-experiment\n"
+        "status: active\n"
+        "champion: champion.yaml\n"
+        "layer: layer_weights\n"
+        "primary: sharpe\n"
+        "window:\n"
+        "  train: 2025-05-27..2026-03-31\n"
+        "  holdout: 2026-04-01..2026-06-25\n"
+        "challengers:\n"
+        "  - id: c1\n"
+        "    override: &base\n"
+        "      layer_weight_money_flow: 0.35\n"
+        "  - id: c2\n"
+        "    override:\n"
+        "      <<: *base\n"
+        "      layer_weight_pattern: 0.5\n"
+    )
+    specs = experiment.load_active_specs(tmp_path)
+    assert len(specs) == 1
+    c2 = {c.id: c for c in specs[0].challengers}["c2"]
+    assert c2.override == {
+        "layer_weight_money_flow": 0.35,
+        "layer_weight_pattern": 0.5,
+    }
+
+
+def test_materialize_rejects_non_finite_base_override_value():
+    # A nan in the caller's base layer would poison the champion AND every
+    # challenger inheriting the field — same class as spec-authored nan.
+    spec = experiment.parse_spec(_spec_dict())
+    with pytest.raises(experiment.ExperimentSpecError, match="non-finite"):
+        experiment.materialize_challengers(spec, {"buy_threshold": float("nan")})
+
+
 def test_cross_spec_duplicate_challenger_id_rejected(tmp_path):
     # Scorecards key on candidate_id (no experiment_id field): two live arms
     # sharing an id would emit indistinguishable scorecards.
