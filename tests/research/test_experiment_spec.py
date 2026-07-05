@@ -696,6 +696,16 @@ def test_materialize_rejects_non_finite_base_override_value():
         experiment.materialize_challengers(spec, {"buy_threshold": float("nan")})
 
 
+@pytest.mark.parametrize("bad", [True, "0.35"], ids=["bool", "numeric-str"])
+def test_materialize_rejects_coercible_base_override_value(bad):
+    # Lax construction would silently coerce `buy_threshold: true` → 1.0 or
+    # "0.35" → 0.35 in the champion — a malformed base config must fail
+    # loudly, mirroring the strict parse-time check on spec overrides.
+    spec = experiment.parse_spec(_spec_dict())
+    with pytest.raises(experiment.ExperimentSpecError, match="StockScreenerConfig"):
+        experiment.materialize_challengers(spec, {"buy_threshold": bad})
+
+
 def test_cross_spec_duplicate_challenger_id_rejected(tmp_path):
     # Scorecards key on candidate_id (no experiment_id field): two live arms
     # sharing an id would emit indistinguishable scorecards.

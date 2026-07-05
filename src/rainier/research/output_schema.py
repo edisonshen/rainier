@@ -194,6 +194,35 @@ def format_block(name: str, payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_block_composed(
+    base: str,
+    payload: dict[str, Any],
+    extensions: Sequence[str] = (),
+) -> str:
+    """Render a composed (base + extensions) payload as a fenced YAML block.
+
+    Mirrors :func:`format_block` for the composed-scorecard case (§10.5) —
+    without this, an evaluator emitting ``base_scorecard + llm_extension``
+    would have no serializer (plain ``format_block`` rejects the extension
+    fields as extras). Field order is base-schema declaration order, then
+    each extension's declaration order, so byte-identical inputs produce
+    byte-identical output. ``parse_block`` is the shared inverse.
+    """
+    validate_composed(base, payload, extensions=extensions, strict=True)
+    data = load()
+    lines = ["---"]
+    for name in (base, *extensions):
+        for spec in _coerce_fields(data["schemas"][name]):
+            val = payload[spec.name]
+            dumped = yaml.safe_dump(val, default_flow_style=True).strip()
+            if dumped.endswith("\n..."):
+                dumped = dumped[: -len("\n...")]
+            lines.append(f"{spec.name}: {dumped}")
+    lines.append("---")
+    lines.append("")  # trailing newline
+    return "\n".join(lines)
+
+
 def parse_block(text: str) -> dict[str, Any]:
     """Inverse of ``format_block`` — extract a single fenced YAML block.
 

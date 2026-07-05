@@ -649,9 +649,14 @@ def materialize_challengers(
         )
 
     try:
-        champion_cfg = StockScreenerConfig(
-            **merge_stock_screener_config(base_overrides, None)
-        )
+        merged_champion = merge_stock_screener_config(base_overrides, None)
+        # Value smoke-check the base layer STRICTLY, mirroring the parse-time
+        # check on spec-authored overrides: lax construction would silently
+        # coerce `buy_threshold: true` → 1.0 or "0.35" → 0.35 in the champion
+        # (and every challenger inheriting the field). A malformed base
+        # config fails loudly here instead of skewing the A/B comparison.
+        StockScreenerConfig.model_validate(merged_champion, strict=True)
+        champion_cfg = StockScreenerConfig(**merged_champion)
     except ValidationError as exc:
         raise ExperimentSpecError(
             f"experiment {spec.id!r}: champion base overrides rejected by "

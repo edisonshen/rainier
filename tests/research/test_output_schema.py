@@ -258,6 +258,35 @@ def test_base_alone_rejected_when_extension_named():
         )
 
 
+def test_format_block_composed_round_trips():
+    # Composed scorecards need a serializer too — plain format_block rejects
+    # the extension fields as extras.
+    block = {**_valid_base_scorecard(), **_valid_llm_extension()}
+    text = output_schema.format_block_composed(
+        "base_scorecard", block, extensions=["llm_extension"]
+    )
+    assert text.startswith("---\n")
+    assert text.endswith("---\n")
+    assert output_schema.parse_block(text) == block
+
+
+def test_format_block_composed_orders_base_fields_before_extension():
+    block = {**_valid_base_scorecard(), **_valid_llm_extension()}
+    text = output_schema.format_block_composed(
+        "base_scorecard", block, extensions=["llm_extension"]
+    )
+    assert text.index("candidate_id:") < text.index("valid_thesis_rate:")
+
+
+def test_format_block_composed_rejects_missing_extension_field():
+    block = {**_valid_base_scorecard(), **_valid_llm_extension()}
+    del block["valid_thesis_rate"]
+    with pytest.raises(output_schema.SchemaError, match="valid_thesis_rate"):
+        output_schema.format_block_composed(
+            "base_scorecard", block, extensions=["llm_extension"]
+        )
+
+
 def test_parse_block_wraps_invalid_yaml_as_schema_error():
     # A truncated block (process killed mid-write) must surface as the module
     # contract exception, not a raw yaml.parser.ParserError.
