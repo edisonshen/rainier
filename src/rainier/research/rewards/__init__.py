@@ -213,13 +213,22 @@ def make_ratio(numerator: str, denominator: str) -> Callable[..., float]:
         )
 
     def _ratio(payload: Any, **kwargs: Any) -> float:
+        n = num.fn(payload, **kwargs)
         d = den.fn(payload, **kwargs)
+        # A non-finite constituent would launder NaN/±inf straight into a
+        # candidate score: NaN/1.0 -> NaN, NaN/0.0 -> -inf (NaN>0 is False).
+        # The aggregators self-reject non-finite, but make_ratio composes ANY
+        # registered reward, so guard here too — loud, never silent (§4.2).
+        if not math.isfinite(n) or not math.isfinite(d):
+            raise ValueError(
+                f"ratio {numerator!r}/{denominator!r}: non-finite constituent "
+                f"(numerator={n!r}, denominator={d!r}) — refusing to aggregate"
+            )
         if d == 0.0:
-            n = num.fn(payload, **kwargs)
             if n == 0.0:
                 return 0.0
             return math.inf if n > 0 else -math.inf
-        return num.fn(payload, **kwargs) / d
+        return n / d
 
     _ratio.__name__ = f"ratio_{numerator}_over_{denominator}"
     _ratio._is_ratio = True  # register() rejects guardrail role for ratios

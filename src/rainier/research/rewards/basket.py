@@ -63,6 +63,24 @@ def _require_horizon(outcomes: BasketOutcomes, horizon: int) -> None:
         )
 
 
+def _reject_duplicate_symbols(day: BasketDay) -> None:
+    """A rank-ordered selection must not list a symbol twice (design §10.3).
+
+    A duplicate would double-weight that symbol in every equal-weight mean and,
+    worse, EVADE the turnover guardrail — turnover's numerator dedups via
+    ``set`` while its denominator counts duplicates, so padding the basket with
+    repeats reports a fraction below the true replacement rate and slips under
+    the threshold. Same malformed-payload family as the missing-key guard:
+    loud, never silent (§4.2).
+    """
+    if len(set(day.symbols)) != len(day.symbols):
+        dupes = sorted({s for s in day.symbols if day.symbols.count(s) > 1})
+        raise ValueError(
+            f"duplicate symbols {dupes} in selected basket on {day.date} — "
+            f"malformed payload (a rank-ordered selection must be unique)"
+        )
+
+
 def _day_returns(outcomes: BasketOutcomes, horizon: int) -> list[float]:
     """Equal-weight basket return per day; days with no data are skipped.
 
@@ -73,6 +91,7 @@ def _day_returns(outcomes: BasketOutcomes, horizon: int) -> list[float]:
     _require_horizon(outcomes, horizon)
     out: list[float] = []
     for day in outcomes.days:
+        _reject_duplicate_symbols(day)
         if horizon not in day.fwd_return:
             continue  # this day lacks the horizon entirely — skipped, like None
         returns = day.fwd_return[horizon]
@@ -158,6 +177,8 @@ def turnover(outcomes: BasketOutcomes, horizon: int = DEFAULT_HORIZON) -> float:
     Horizon-independent (basket composition only); the parameter exists so
     every basket reward shares one call shape.
     """
+    for day in outcomes.days:
+        _reject_duplicate_symbols(day)
     days = [d for d in outcomes.days if d.symbols]
     if len(days) < 2:
         return 0.0
@@ -180,6 +201,7 @@ def dodged_loss(outcomes: BasketOutcomes, horizon: int = DEFAULT_HORIZON) -> flo
     _require_horizon(outcomes, horizon)
     total = 0.0
     for day in outcomes.days:
+        _reject_duplicate_symbols(day)
         selected = set(day.symbols)
         for symbol, ret in day.fwd_return.get(horizon, {}).items():
             if ret is not None and not math.isfinite(ret):

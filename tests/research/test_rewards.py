@@ -374,6 +374,55 @@ class TestNoneHandling:
 
 
 # ---------------------------------------------------------------------------
+# Duplicate-symbol rejection (§4.2: loud, never silent)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateSymbols:
+    def test_duplicate_symbol_raises_for_aggregations(self):
+        # Regression (review): a symbol listed twice used to double-weight the
+        # equal-weight mean silently — total_return (0.30+0.30+0)/3 = 0.20
+        # instead of the deduped 0.15.
+        outcomes = BasketOutcomes(
+            days=[
+                BasketDay(
+                    date=date(2026, 1, 5),
+                    symbols=["AAA", "AAA", "BBB"],
+                    fwd_return={5: {"AAA": 0.30, "BBB": 0.00}},
+                    regime="bull",
+                ),
+            ]
+        )
+        for name in ("total_return", "sharpe", "hit_rate", "max_drawdown", "dodged_loss"):
+            with pytest.raises(ValueError, match="duplicate symbols"):
+                score("basket", name, outcomes)
+
+    def test_duplicate_symbols_cannot_evade_turnover_guardrail(self):
+        # Regression (review): turnover's numerator dedups via set() while its
+        # denominator counts duplicates, so padding a 100%-replaced basket with
+        # repeats reported 0.333 — under the 0.50 guardrail it should breach.
+        # The duplicate payload must now raise, never silently disarm.
+        outcomes = BasketOutcomes(
+            days=[
+                BasketDay(
+                    date=date(2026, 1, 5),
+                    symbols=["A", "B"],
+                    fwd_return={5: {"A": 0.01, "B": 0.01}},
+                    regime="bull",
+                ),
+                BasketDay(
+                    date=date(2026, 1, 6),
+                    symbols=["C", "D", "C", "D", "C", "D"],
+                    fwd_return={5: {"C": 0.01, "D": 0.01}},
+                    regime="bull",
+                ),
+            ]
+        )
+        with pytest.raises(ValueError, match="duplicate symbols"):
+            score("basket", "turnover", outcomes)
+
+
+# ---------------------------------------------------------------------------
 # Non-finite input rejection (§4.2: loud, never silent)
 # ---------------------------------------------------------------------------
 
@@ -593,6 +642,35 @@ class TestRatio:
                 direction="increase",
             )(fn)
         assert "ratio_wrong_type" not in names()
+
+    def test_ratio_rejects_non_finite_constituent(self):
+        # Regression (review): make_ratio composes ANY registered reward, and a
+        # non-finite constituent used to launder straight into a score
+        # (nan/1.0 -> nan, nan/0.0 -> -inf since nan>0 is False) — corrupt input
+        # silently ranking a candidate. The shipped basket rewards self-reject,
+        # so use custom aggregations to exercise the composer's own guard.
+        @register("nan_const", input_type="basket", role="secondary", direction="increase")
+        def nan_const(outcomes, **kwargs):
+            return math.nan
+
+        @register("one_const", input_type="basket", role="secondary", direction="increase")
+        def one_const(outcomes, **kwargs):
+            return 1.0
+
+        @register("zero_const2", input_type="basket", role="secondary", direction="increase")
+        def zero_const2(outcomes, **kwargs):
+            return 0.0
+
+        outcomes = BasketOutcomes(days=[])
+        # non-finite numerator, finite (non-zero) denominator -> would be nan
+        with pytest.raises(ValueError, match="non-finite constituent"):
+            make_ratio("nan_const", "one_const")(outcomes)
+        # non-finite numerator, zero denominator -> would be silently sentinel'd
+        with pytest.raises(ValueError, match="non-finite constituent"):
+            make_ratio("nan_const", "zero_const2")(outcomes)
+        # non-finite denominator -> would be nan
+        with pytest.raises(ValueError, match="non-finite constituent"):
+            make_ratio("one_const", "nan_const")(outcomes)
 
 
 # ---------------------------------------------------------------------------
