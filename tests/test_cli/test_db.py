@@ -40,7 +40,14 @@ def test_db_group_does_not_shadow_legacy_subcommands():
     result = runner.invoke(cli, ["db", "--help"])
     assert result.exit_code == 0, result.output
 
-    for subcmd in ("init", "backfill-prices", "ping", "migrate", "gc-test-schemas"):
+    for subcmd in (
+        "init",
+        "backfill-prices",
+        "ping",
+        "migrate",
+        "migrate-legacy",
+        "gc-test-schemas",
+    ):
         assert subcmd in result.output, (
             f"`rainier db --help` is missing `{subcmd}` — likely caused by a "
             f"duplicate `@cli.group() def db()` shadowing the original. "
@@ -142,6 +149,485 @@ def test_db_gc_test_schemas_apply_surfaces_failures(monkeypatch):
     result = runner.invoke(cli_mod.cli, ["db", "gc-test-schemas", "--apply"])
     assert result.exit_code != 0
     assert "FAILED" in result.output
+
+
+def test_db_migrate_legacy_dry_run_lists_pending(monkeypatch):
+    """`db migrate-legacy --dry-run` lists pending files and applies nothing.
+
+    Stubs the legacy engine + the runner so no live DB is needed. The command
+    must call ``run_migrations(engine, dry_run=True)`` and echo each pending file.
+    """
+    from rainier import cli as cli_mod
+
+    calls = {}
+
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _fake_run(engine, *, dry_run=False):
+        calls["dry_run"] = dry_run
+        return ["0012_reclaim_queue.sql", "0013_paper_trade_shadow.sql"]
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _fake_run)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert calls["dry_run"] is True
+    assert "0012_reclaim_queue.sql" in result.output
+    assert "0013_paper_trade_shadow.sql" in result.output
+    assert "pending" in result.output.lower()
+
+
+def test_db_migrate_legacy_applies_and_reports(monkeypatch):
+    """`db migrate-legacy` (no flag) applies pending files and lists them."""
+    from rainier import cli as cli_mod
+
+    calls = {}
+
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _fake_run(engine, *, dry_run=False):
+        calls["dry_run"] = dry_run
+        return ["0012_reclaim_queue.sql"]
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _fake_run)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy"])
+    assert result.exit_code == 0, result.output
+    assert calls["dry_run"] is False
+    assert "Applied 1" in result.output
+    assert "0012_reclaim_queue.sql" in result.output
+
+
+def test_db_migrate_legacy_baseline_stamps(monkeypatch):
+    """`db migrate-legacy --baseline` records pending files without running them."""
+    from rainier import cli as cli_mod
+
+    calls = {}
+
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod,
+        "pending_migrations",
+        lambda engine: ["0001_llm_thesis_pr1.sql", "0002_llm_thesis_pr2.sql"],
+    )
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
+
+    def _fake_baseline(engine, *, migrations_dir=None):
+        calls["baseline"] = True
+        return ["0001_llm_thesis_pr1.sql", "0002_llm_thesis_pr2.sql"]
+
+    # run_migrations must NOT be called on the baseline path.
+    def _boom_run(*_a, **_k):
+        raise AssertionError("run_migrations must not run on --baseline")
+
+    monkeypatch.setattr(lm_mod, "baseline_migrations", _fake_baseline)
+    monkeypatch.setattr(lm_mod, "run_migrations", _boom_run)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code == 0, result.output
+    assert calls.get("baseline") is True
+    assert "Baselined 2" in result.output
+    assert "NOT run" in result.output
+    assert "WARNING" not in result.output, "clean drift must not warn"
+
+
+def test_db_migrate_legacy_baseline_refuses_on_missing_objects(monkeypatch):
+    """`--baseline` refuses BEFORE stamping when the live schema is missing
+    ORM-declared objects (codex 43f3 [P1]: stamping first would record the
+    missing migrations as applied, so a stamp-then-fail mutates bookkeeping
+    into a harder-to-recover state — the runner would permanently skip them).
+    Nothing is stamped, exit non-zero. Known-benign drift is excluded."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0012_reclaim_queue.sql"]
+    )
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
+
+    def _boom_baseline(*_a, **_k):
+        raise AssertionError("baseline_migrations must NOT be called on refusal")
+
+    monkeypatch.setattr(lm_mod, "baseline_migrations", _boom_baseline)
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: [
+            "missing column: capital_flow_bars.symbol",  # known-benign: excluded
+            "missing table: paper_reclaim_queue",
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code != 0, result.output
+    assert "Refusing to baseline" in result.output
+    assert "paper_reclaim_queue" in result.output
+    assert "capital_flow_bars.symbol" not in result.output, (
+        "known-benign drift must not trigger the baseline refusal"
+    )
+    assert "nothing was stamped" in result.output
+    assert "Baselined" not in result.output
+
+
+def test_db_migrate_legacy_baseline_already_versioned_fails_clean(monkeypatch):
+    """`--baseline` on an already-versioned DB with pending files fails clean
+    with plain-run guidance BEFORE the drift refusal (codex 43f3 [P2]: the
+    drift refusal's hand-apply-then-baseline recovery is wrong there), and
+    stamps nothing."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0014_future.sql"]
+    )
+    monkeypatch.setattr(
+        lm_mod, "applied_versions", lambda engine: {"0001_llm_thesis_pr1.sql"}
+    )
+    # Drift ALSO present (the new ORM-backed migration's column) — the
+    # already-versioned guidance must still win over the drift refusal.
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: ["missing column: paper_trade.shadow"],
+    )
+
+    def _boom_baseline(*_a, **_k):
+        raise AssertionError("baseline_migrations must NOT be called")
+
+    monkeypatch.setattr(lm_mod, "baseline_migrations", _boom_baseline)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    assert "must be APPLIED" in result.output
+    assert "Refusing to baseline" not in result.output, (
+        "already-versioned guidance must take precedence over the drift refusal"
+    )
+
+
+def test_db_migrate_legacy_baseline_notes_verification_scope(monkeypatch):
+    """A successful `--baseline` prints the honest verification-scope note:
+    the check covers ORM-declared objects (incl. named indexes/constraints);
+    migration-only DDL without an ORM mirror is not verified."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0012_reclaim_queue.sql"]
+    )
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
+    monkeypatch.setattr(
+        lm_mod,
+        "baseline_migrations",
+        lambda engine, *, migrations_dir=None: ["0012_reclaim_queue.sql"],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--baseline"])
+    assert result.exit_code == 0, result.output
+    assert "Baselined 1" in result.output
+    assert "ORM-declared objects" in result.output
+    assert "not verified" in result.output
+
+
+def test_db_migrate_legacy_dry_run_and_baseline_conflict(monkeypatch):
+    """`--dry-run --baseline` together is rejected (mutually exclusive)."""
+    import rainier.core.database as db_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mod.cli, ["db", "migrate-legacy", "--dry-run", "--baseline"]
+    )
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output
+
+
+def test_db_migrate_legacy_unversioned_schema_fails_clean(monkeypatch):
+    """When run_migrations raises UnversionedSchemaError, the CLI surfaces a
+    clean error (non-zero, no traceback) pointing at --baseline."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _raise(engine):
+        raise lm_mod.UnversionedSchemaError(
+            "Legacy schema already has tables but no schema_migrations table. "
+            "Run 'rainier db migrate-legacy --baseline' once ..."
+        )
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    assert not isinstance(result.exception, lm_mod.UnversionedSchemaError), (
+        "UnversionedSchemaError must be wrapped in a ClickException, not leaked"
+    )
+    assert "--baseline" in (result.output or "")
+
+
+def test_db_migrate_legacy_dry_run_failure_fails_clean(monkeypatch):
+    """An unexpected probe failure during --dry-run (unhealthy DB) surfaces
+    as a clean `Error:` line, not a raw traceback (codex 43f3 [P2])."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _raise(engine, *, dry_run=False):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy", "--dry-run"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    assert not isinstance(result.exception, RuntimeError), (
+        "dry-run probe failures must be wrapped in a ClickException, not leaked"
+    )
+    assert "dry-run failed" in result.output
+
+
+def test_db_migrate_legacy_apply_failure_fails_clean(monkeypatch):
+    """A real apply failure (bad migration SQL, dropped connection) surfaces
+    as a clean `Error:` line, never a raw traceback (codex 43f3 [P2] —
+    mirrors db_migrate's wrapping idiom)."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+
+    def _raise(engine, *, dry_run=False):
+        raise RuntimeError("relation \"boom\" does not exist")
+
+    monkeypatch.setattr(lm_mod, "run_migrations", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy"])
+    assert result.exit_code != 0
+    assert "Traceback" not in (result.output or "")
+    assert not isinstance(result.exception, RuntimeError), (
+        "apply failures must be wrapped in a ClickException, not leaked"
+    )
+    assert "legacy migration failed" in result.output
+    assert "boom" in result.output
+
+
+def test_db_migrate_legacy_noop_when_up_to_date(monkeypatch):
+    """`db migrate-legacy` reports a no-op when nothing is pending."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(lm_mod, "run_migrations", lambda engine, *, dry_run=False: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "migrate-legacy"])
+    assert result.exit_code == 0, result.output
+    assert "up to date" in result.output.lower()
+
+
+def test_db_init_exits_loud_on_drift(monkeypatch):
+    """`db init` exits non-zero and prints every missing object when the drift
+    checker reports findings (the loud chokepoint).
+
+    Stubs ``init_db`` (no live DB) + ``check_schema_drift`` to return findings.
+    """
+    import rainier.core.database as db_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: [
+            "missing column: screened_stocks.bearish_invalidation_level",
+            "missing table: paper_reclaim_queue",
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code != 0, result.output
+    assert "SCHEMA DRIFT DETECTED" in result.output
+    assert "screened_stocks.bearish_invalidation_level" in result.output
+    assert "paper_reclaim_queue" in result.output
+    assert "migrate-legacy" in result.output
+    # The success banner must NOT be printed on the drift-failure path
+    # (codex 43f3 [P2]: scripts reading stdout saw "success" then non-zero).
+    assert "Database initialized successfully" not in result.output
+
+
+def test_db_init_clean_when_no_drift(monkeypatch):
+    """`db init` succeeds and reports a clean drift check when there are no
+    findings and no pending legacy migrations."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(lm_mod, "pending_migrations", lambda engine: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "clean" in result.output.lower()
+    assert "NOTE:" not in result.output, "no pending files must mean no note"
+    # Success banner prints only after all checks pass.
+    assert "Database initialized successfully" in result.output
+
+
+def test_db_init_notes_pending_legacy_migrations(monkeypatch):
+    """`db init` must not imply full health when legacy migration files are
+    unrecorded (codex 43f3 review [P1]): create_all never runs migration-only
+    DDL (indexes/constraints), so a fresh DB that passes the tables/columns
+    drift check still needs `db migrate-legacy`. The success path prints a
+    NOTE pointing there."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod,
+        "pending_migrations",
+        lambda engine: ["0012_reclaim_queue.sql", "0013_paper_trade_shadow.sql"],
+    )
+    # Fresh-bootstrap state: nothing recorded yet -> the note must lead with
+    # --baseline (a plain run refuses unversioned schemas, codex 43f3 [P2]).
+    monkeypatch.setattr(lm_mod, "applied_versions", lambda engine: set())
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "NOTE: 2 legacy migration file(s)" in result.output
+    assert "--baseline" in result.output
+
+
+def test_db_init_notes_pending_on_versioned_db_points_at_plain_run(monkeypatch):
+    """On an already-versioned DB with pending files, the db init note points
+    at a plain `migrate-legacy` run (the files are new migrations to apply)."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(sc_mod, "check_schema_drift", lambda engine: [])
+    monkeypatch.setattr(
+        lm_mod, "pending_migrations", lambda engine: ["0014_future.sql"]
+    )
+    monkeypatch.setattr(
+        lm_mod, "applied_versions", lambda engine: {"0001_llm_thesis_pr1.sql"}
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "NOTE: 1 legacy migration file(s)" in result.output
+    assert "Run 'rainier db migrate-legacy' to apply them." in result.output
+    assert "--baseline" not in result.output
+
+
+def test_db_init_ignores_known_benign_drift(monkeypatch):
+    """`db init` must NOT fail on the documented pre-existing benign drift
+    (review 43f3 iter-1): the live legacy DB's `capital_flow_bars` lacks
+    `symbol` (orphaned 0-row table, no migration adds it), and the operator
+    runbook blocks only on findings beyond it. Hard-failing would make
+    `db init` exit non-zero on the live DB forever."""
+    import rainier.core.database as db_mod
+    import rainier.core.legacy_migrate as lm_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: ["missing column: capital_flow_bars.symbol"],
+    )
+    monkeypatch.setattr(lm_mod, "pending_migrations", lambda engine: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code == 0, result.output
+    assert "Known-benign drift (ignored)" in result.output
+    assert "capital_flow_bars.symbol" in result.output
+    assert "SCHEMA DRIFT DETECTED" not in result.output
+
+
+def test_db_init_fails_on_drift_beyond_benign(monkeypatch):
+    """`db init` still fails loud when real drift exists alongside the benign
+    finding — only the real findings are counted and listed in the failure."""
+    import rainier.core.database as db_mod
+    import rainier.core.schema_check as sc_mod
+    from rainier import cli as cli_mod
+
+    monkeypatch.setattr(db_mod, "init_db", lambda: None)
+    monkeypatch.setattr(db_mod, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        sc_mod,
+        "check_schema_drift",
+        lambda engine: [
+            "missing column: capital_flow_bars.symbol",
+            "missing table: paper_reclaim_queue",
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["db", "init"])
+    assert result.exit_code != 0, result.output
+    assert "SCHEMA DRIFT DETECTED" in result.output
+    assert "paper_reclaim_queue" in result.output
+    assert "1 schema-drift finding(s)" in result.output, (
+        "the benign finding must not be counted in the failure total"
+    )
 
 
 def test_db_migrate_help_exposes_downgrade_flag():
@@ -268,6 +754,46 @@ def test_wheel_packages_db_assets_under_rainier_db_assets():
     # Sanity: the source dir referenced by force-include actually exists.
     assert (repo_root / "db" / "alembic.ini").exists()
     assert (repo_root / "db" / "alembic").is_dir()
+
+
+def test_wheel_packages_legacy_migrations_under_db_assets():
+    """Regression (codex 43f3 [P1]): pyproject must force-include the top-level
+    `migrations/` tree at `rainier/_db_assets/migrations/` so a packaged
+    (non-editable) install of `rainier db migrate-legacy` finds the numbered
+    SQL files. Without it, `discover_migrations()` returns [] in a wheel and the
+    command falsely reports "up to date", never applying 0001..N.
+
+    Asserts the static config (no wheel build) — same approach as the db-assets
+    test above. The matching resolver is
+    `legacy_migrate._resolve_migrations_dir()`.
+    """
+    from pathlib import Path
+
+    try:
+        import tomllib  # py311+
+    except ImportError:  # pragma: no cover
+        import tomli as tomllib
+
+    repo_root = Path(__file__).resolve().parents[2]
+    with (repo_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    force_include = (
+        pyproject.get("tool", {})
+        .get("hatch", {})
+        .get("build", {})
+        .get("targets", {})
+        .get("wheel", {})
+        .get("force-include", {})
+    )
+    assert force_include.get("migrations") == "rainier/_db_assets/migrations", (
+        "pyproject.toml's [tool.hatch.build.targets.wheel] must force-include "
+        '`"migrations" = "rainier/_db_assets/migrations"` so wheels ship the '
+        "legacy migrations/*.sql. Got: " + repr(force_include)
+    )
+
+    # Sanity: the source dir referenced by force-include actually exists.
+    assert (repo_root / "migrations").is_dir()
 
 
 def test_alembic_ini_script_location_is_config_relative(tmp_path, monkeypatch):

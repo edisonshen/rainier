@@ -137,6 +137,101 @@ def test_detects_dropped_table(legacy_engine):
     assert "missing table: stock_prices" in findings
 
 
+def test_detects_dropped_index(legacy_engine):
+    """An ORM-declared named index that is absent live must be flagged
+    (codex 43f3 review: an index-only migration that never ran was invisible
+    to the tables/columns check, so --baseline could stamp it as applied)."""
+    from rainier.core.schema_check import check_schema_drift
+
+    with legacy_engine.begin() as conn:
+        conn.execute(text("DROP INDEX ix_signals_symbol_ts"))
+
+    findings = check_schema_drift(legacy_engine)
+    assert "missing index: signals.ix_signals_symbol_ts" in findings
+
+
+def test_detects_dropped_constraint(legacy_engine):
+    """An ORM-declared named constraint that is absent live must be flagged
+    (e.g. a constraint-only migration like 0008's ck_paper_skip_reason rebuild
+    that never ran)."""
+    from rainier.core.schema_check import check_schema_drift
+
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE paper_reclaim_queue "
+                "DROP CONSTRAINT ck_paper_reclaim_status"
+            )
+        )
+
+    findings = check_schema_drift(legacy_engine)
+    assert (
+        "missing constraint: paper_reclaim_queue.ck_paper_reclaim_status" in findings
+    )
+
+
+def test_index_alias_satisfies_but_both_missing_flags(legacy_engine):
+    """The 0012 name-aliased reclaim-queue indexes: EITHER name satisfies the
+    contract, but a DB where NEITHER exists is real drift (codex 43f3 [P2] —
+    a static allowlist would have masked the both-missing state)."""
+    from rainier.core.schema_check import check_schema_drift
+
+    # Live-DB shape: migration name instead of the ORM auto-name -> clean.
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER INDEX ix_paper_reclaim_queue_status "
+                "RENAME TO ix_paper_reclaim_status"
+            )
+        )
+    assert check_schema_drift(legacy_engine) == [], (
+        "the migration-created alias name must satisfy the ORM index contract"
+    )
+
+    # Partial-apply shape: NEITHER name exists -> must be flagged.
+    with legacy_engine.begin() as conn:
+        conn.execute(text("DROP INDEX ix_paper_reclaim_status"))
+    findings = check_schema_drift(legacy_engine)
+    assert (
+        "missing index: paper_reclaim_queue.ix_paper_reclaim_queue_status"
+        in findings
+    )
+
+
+def test_checks_public_regardless_of_search_path(legacy_engine):
+    """The drift check must inspect ``public`` explicitly (codex 43f3 [P1]):
+    with a non-public-first ``search_path``, unqualified inspection would
+    validate the FRONT schema instead of the one the migration runner stamps
+    and pins DDL to. Here public holds the full schema and the front (shadow)
+    schema is empty — the check must still be clean."""
+    from sqlalchemy import event
+
+    from rainier.core.schema_check import check_schema_drift
+
+    with legacy_engine.begin() as conn:
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS shadow"))
+
+    @event.listens_for(legacy_engine, "connect")
+    def _set_search_path(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("SET search_path TO shadow, public")
+        cur.close()
+
+    # The pool still holds the un-hooked connection that ran CREATE SCHEMA;
+    # dispose so inspection checks out fresh, shadow-first connections.
+    legacy_engine.dispose()
+    with legacy_engine.connect() as conn:
+        search_path = conn.exec_driver_sql("SHOW search_path").scalar()
+    assert "shadow" in search_path, (
+        f"test-harness bug: search_path hook did not apply ({search_path!r})"
+    )
+
+    assert check_schema_drift(legacy_engine) == [], (
+        "public holds the full ORM schema; a shadow-first search_path must "
+        "not make the check inspect (and fail against) the empty front schema"
+    )
+
+
 def test_multiple_stub_columns_all_reported(legacy_engine):
     """The full stub (all 6 non-id/symbol columns dropped) reports each one,
     so an operator sees the complete repair list, not just the first miss."""
