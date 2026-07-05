@@ -79,11 +79,21 @@ def _latest_generation_filter(session: Session, as_of: date_type | None):
 
 def _build_sector_trends(
     rows: list[tuple[str | None, str | None, int, str]],
+    *,
+    normalize_casing: bool = False,
 ) -> list[SectorTrend]:
-    """Group rows ``(sector, long_short, rank, symbol)`` into ranked SectorTrends."""
+    """Group rows ``(sector, long_short, rank, symbol)`` into ranked SectorTrends.
+
+    ``normalize_casing=True`` canonicalizes ``long_short`` at ingestion
+    ('Long In' -> 'Long in', 'Short In' -> 'Short in') so the exact-match
+    counts below admit the 406 historical title-cased days. Default ``False``
+    preserves live behavior byte-identically.
+    """
     sector_data: dict[str, list[tuple[str, str | None, int]]] = defaultdict(list)
     for sector, long_short, rank, symbol in rows:
         sector_key = sector or "Unknown"
+        if normalize_casing and long_short is not None:
+            long_short = long_short.capitalize()
         sector_data[sector_key].append((symbol, long_short, rank))
 
     sector_trends: list[SectorTrend] = []
@@ -176,7 +186,10 @@ def _analyze_sectors(session: Session) -> list[SectorTrend]:
 
 
 def analyze_sectors_at(
-    as_of: date_type, session: Session | None = None,
+    as_of: date_type,
+    session: Session | None = None,
+    *,
+    normalize_casing: bool = False,
 ) -> list[SectorTrend]:
     """Analyze sector trends as of a given data DATE (latest generation on or
     before ``as_of``, resolved INDEPENDENTLY per ranking_type).
@@ -187,14 +200,31 @@ def analyze_sectors_at(
     ``captured_at`` per ``(data_date, ranking_type)``, so a single timestamp
     could only match ONE ranking type. We pick each ranking type's latest
     generation with ``data_date <= as_of`` and union the books.
+
+    ``normalize_casing=True`` (A/B replay only) canonicalizes ``long_short``
+    casing before the sentiment counts, admitting the 406 historical
+    'Long In'/'Short In' days. The sector leg queries MoneyFlowSnapshot rows
+    itself, so it needs the flag directly — accessor-level normalization in
+    the screener cannot reach it.
+
+    The default ``False`` keeps live behavior byte-identical — including the
+    recorded design-§9.5 decision: `sector_momentum` live-consumes this
+    function over PRIOR data_dates, so historical 'Long In' days already go
+    uncounted in one live output today. That accepted exposure is resolved
+    later through the substrate's designated first experiment, not here.
     """
     if session is not None:
-        return _analyze_sectors_as_of(session, as_of)
+        return _analyze_sectors_as_of(session, as_of, normalize_casing=normalize_casing)
     with get_session() as s:
-        return _analyze_sectors_as_of(s, as_of)
+        return _analyze_sectors_as_of(s, as_of, normalize_casing=normalize_casing)
 
 
-def _analyze_sectors_as_of(session: Session, as_of: date_type) -> list[SectorTrend]:
+def _analyze_sectors_as_of(
+    session: Session,
+    as_of: date_type,
+    *,
+    normalize_casing: bool = False,
+) -> list[SectorTrend]:
     """Latest generation per ranking_type with ``data_date <= as_of``."""
     predicate = _latest_generation_filter(session, as_of=as_of)
     if predicate is None:
@@ -210,7 +240,7 @@ def _analyze_sectors_as_of(session: Session, as_of: date_type) -> list[SectorTre
         .filter(predicate)
         .all()
     )
-    return _build_sector_trends(rows)
+    return _build_sector_trends(rows, normalize_casing=normalize_casing)
 
 
 def get_sector_boost(sector: str, sector_trends: list[SectorTrend]) -> float:
