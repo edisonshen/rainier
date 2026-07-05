@@ -256,3 +256,17 @@ def test_base_alone_rejected_when_extension_named():
         output_schema.validate_composed(
             "base_scorecard", _valid_base_scorecard(), extensions=["llm_extension"]
         )
+
+
+def test_parse_block_wraps_invalid_yaml_as_schema_error():
+    # A truncated block (process killed mid-write) must surface as the module
+    # contract exception, not a raw yaml.parser.ParserError.
+    with pytest.raises(output_schema.SchemaError, match="not valid YAML"):
+        output_schema.parse_block("---\nkey: [unclosed\n---")
+
+
+def test_load_wraps_invalid_yaml_as_schema_error(tmp_path):
+    broken = tmp_path / "broken_schema.yaml"
+    broken.write_text("schemas: [unclosed\n")
+    with pytest.raises(output_schema.SchemaError, match="invalid YAML"):
+        output_schema.load(broken)

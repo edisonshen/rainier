@@ -565,3 +565,113 @@ def test_materialize_wraps_validation_error():
     spec = experiment.parse_spec(_spec_dict())
     with pytest.raises(experiment.ExperimentSpecError, match="StockScreenerConfig"):
         experiment.materialize_challengers(spec, {"buy_threshold": "garbage"})
+
+
+# ---------------------------------------------------------------------------
+# Review iter-6 (red team): duplicate YAML keys, non-finite values, uppercase
+# extensions, editor lockfiles, base_overrides keys, cross-spec arm ids
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_yaml_key_in_spec_file_rejected(tmp_path):
+    # yaml.safe_load silently last-write-wins on duplicate keys — a spec with
+    # two `layer_weight_money_flow:` lines would load the second and drop the
+    # first without a sound.
+    (tmp_path / "dup.yaml").write_text(
+        "id: dup-experiment\n"
+        "status: active\n"
+        "champion: champion.yaml\n"
+        "layer: thresholds\n"
+        "primary: sharpe\n"
+        "window:\n"
+        "  train: 2025-05-27..2026-03-31\n"
+        "  holdout: 2026-04-01..2026-06-25\n"
+        "challengers:\n"
+        "  - id: c1\n"
+        "    override:\n"
+        "      layer_weight_money_flow: 0.35\n"
+        "      layer_weight_money_flow: 0.99\n"
+    )
+    with pytest.raises(experiment.ExperimentSpecError, match="duplicate key"):
+        experiment.load_active_specs(tmp_path)
+
+
+@pytest.mark.parametrize("bad", [".nan", ".inf", "-.inf"], ids=["nan", "inf", "-inf"])
+def test_non_finite_override_value_rejected(tmp_path, bad):
+    # pydantic strict mode still admits nan/inf floats; a NaN threshold makes
+    # every comparison False — silent corruption of the A/B result.
+    (tmp_path / "nf.yaml").write_text(
+        "id: nf-experiment\n"
+        "status: active\n"
+        "champion: champion.yaml\n"
+        "layer: thresholds\n"
+        "primary: sharpe\n"
+        "window:\n"
+        "  train: 2025-05-27..2026-03-31\n"
+        "  holdout: 2026-04-01..2026-06-25\n"
+        "challengers:\n"
+        "  - id: c1\n"
+        f"    override: {{buy_threshold: {bad}}}\n"
+    )
+    with pytest.raises(experiment.ExperimentSpecError, match="non-finite"):
+        experiment.load_active_specs(tmp_path)
+
+
+def test_non_finite_nested_pattern_weight_rejected():
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {"pattern_weights": {"bull_flag": float("nan")}}
+    with pytest.raises(experiment.ExperimentSpecError, match="non-finite"):
+        experiment.parse_spec(raw)
+
+
+@pytest.mark.parametrize("filename", ["a.YAML", "a.YML", "a.Yaml"])
+def test_uppercase_extension_spec_rejected_loudly(tmp_path, filename):
+    # pathlib glob is case-sensitive: *.yaml won't match a.YAML, silently
+    # re-opening the ignored-spec hole the .yml guard closed.
+    _write_spec(tmp_path, filename, _spec_dict())
+    with pytest.raises(experiment.ExperimentSpecError, match=filename):
+        experiment.load_active_specs(tmp_path)
+
+
+def test_editor_lockfile_dotfile_is_ignored(tmp_path):
+    # An emacs-style lockfile (dangling symlink `.#spec.yaml`) at cron time
+    # must not fail the run — dotfiles aren't specs.
+    _write_spec(tmp_path, "good.yaml", _spec_dict())
+    (tmp_path / ".#good.yaml").symlink_to(tmp_path / "nonexistent-target")
+    specs = experiment.load_active_specs(tmp_path)
+    assert [s.id for s in specs] == ["layer-weights-rebalance"]
+
+
+def test_materialize_rejects_unknown_base_override_key():
+    # StockScreenerConfig silently drops unknown kwargs — a typo'd base key
+    # would materialize a "champion" that doesn't match the live config.
+    spec = experiment.parse_spec(_spec_dict())
+    with pytest.raises(experiment.ExperimentSpecError, match="buy_threshhold"):
+        experiment.materialize_challengers(spec, {"buy_threshhold": 0.99})
+
+
+def test_materialize_rejects_unknown_base_pattern_weights_key():
+    spec = experiment.parse_spec(_spec_dict())
+    with pytest.raises(experiment.ExperimentSpecError, match="bulll_flag"):
+        experiment.materialize_challengers(
+            spec, {"pattern_weights": {"bulll_flag": 0.9}}
+        )
+
+
+def test_cross_spec_duplicate_challenger_id_rejected(tmp_path):
+    # Scorecards key on candidate_id (no experiment_id field): two live arms
+    # sharing an id would emit indistinguishable scorecards.
+    a = _spec_dict(
+        id="bull-weight",
+        layer="pw-bull",
+        challengers=[{"id": "arm-1", "override": {"pattern_weights.bull_flag": 0.9}}],
+    )
+    b = _spec_dict(
+        id="bear-weight",
+        layer="pw-bear",
+        challengers=[{"id": "arm-1", "override": {"pattern_weights.bear_flag": 0.9}}],
+    )
+    _write_spec(tmp_path, "a.yaml", a)
+    _write_spec(tmp_path, "b.yaml", b)
+    with pytest.raises(experiment.ExperimentSpecError, match="arm-1"):
+        experiment.load_active_specs(tmp_path)

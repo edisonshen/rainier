@@ -62,6 +62,31 @@ class ExperimentSpecError(ValueError):
     """Raised when an experiment spec fails parse or validation."""
 
 
+class _NoDuplicateKeysLoader(yaml.SafeLoader):
+    """SafeLoader that rejects duplicate mapping keys.
+
+    Plain ``yaml.safe_load`` silently last-write-wins on duplicate keys —
+    a spec with two ``buy_threshold:`` lines (or two ``window:`` blocks)
+    would load the second and drop the first without a sound, defeating
+    the interpreter's declare-it-once stance.
+    """
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        seen: list[Any] = []
+        for key_node, _value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    f"found duplicate key {key!r} — last-write-wins would be "
+                    f"silent; declare it once",
+                    key_node.start_mark,
+                )
+            seen.append(key)
+        return super().construct_mapping(node, deep)
+
+
 @dataclass(frozen=True)
 class ExperimentWindow:
     """Train/holdout ranges (``start..end`` strings) + embargo gap."""
@@ -218,6 +243,25 @@ def _validate_override(
         raise ExperimentSpecError(
             f"{ctx}: override value(s) rejected by StockScreenerConfig — {exc}"
         ) from exc
+
+    # Strict mode still admits `.nan` / `.inf` YAML floats: a NaN threshold
+    # makes every score comparison False and a NaN weight poisons composite
+    # scores — the same silent-corruption class, so reject non-finite here.
+    import math
+
+    def _reject_non_finite(label: str, value: Any) -> None:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ExperimentSpecError(
+                f"{ctx}: override {label!r} is {value!r} — non-finite values "
+                f"(nan/inf) poison score comparisons silently"
+            )
+
+    for key, value in out.items():
+        if key == "pattern_weights" and isinstance(value, dict):
+            for pattern, weight in value.items():
+                _reject_non_finite(f"pattern_weights.{pattern}", weight)
+        else:
+            _reject_non_finite(key, value)
     return out
 
 
@@ -425,7 +469,7 @@ def load_spec(path: str | Path) -> ExperimentSpec:
     p = Path(path)
     try:
         with p.open("r") as fh:
-            raw = yaml.safe_load(fh)
+            raw = yaml.load(fh, Loader=_NoDuplicateKeysLoader)  # noqa: S506 — SafeLoader subclass
     except yaml.YAMLError as exc:
         raise ExperimentSpecError(f"{p}: invalid YAML — {exc}") from exc
     except (OSError, UnicodeDecodeError) as exc:
@@ -462,18 +506,32 @@ def load_active_specs(directory: str | Path | None = None) -> list[ExperimentSpe
             f"(indistinguishable from an empty queue); create it or pass "
             f"the right path"
         )
-    stray_yml = sorted(base.glob("*.yml"))
-    if stray_yml:
+    # Any yaml-ish file that `*.yaml` won't match (.yml, .YAML, .YML, …) is
+    # rejected loudly instead of silently skipped. Dotfiles (editor lockfiles
+    # like `.#spec.yaml`, backups) are not specs and are ignored entirely —
+    # an operator merely having a spec open in an editor at cron time must
+    # not fail the run.
+    stray = sorted(
+        p.name
+        for p in base.iterdir()
+        if not p.name.startswith(".")
+        and p.suffix.lower() in {".yml", ".yaml"}
+        and p.suffix != ".yaml"
+    )
+    if stray:
         raise ExperimentSpecError(
-            f"stray .yml spec file(s) in {base}: "
-            f"{', '.join(p.name for p in stray_yml)} — discovery only reads "
-            f"*.yaml; rename to .yaml so the spec isn't silently ignored"
+            f"stray spec file(s) in {base}: {', '.join(stray)} — discovery "
+            f"only reads *.yaml (lowercase); rename so the spec isn't "
+            f"silently ignored"
         )
     active: list[ExperimentSpec] = []
     layer_owner: dict[str, str] = {}
     key_owner: dict[str, str] = {}
+    challenger_owner: dict[str, str] = {}
     seen_ids: dict[str, str] = {}
     for path in sorted(base.glob("*.yaml")):
+        if path.name.startswith("."):
+            continue  # editor lockfiles / backups, not specs
         spec = load_spec(path)
         if not spec.is_active:
             continue
@@ -501,6 +559,17 @@ def load_active_specs(directory: str | Path | None = None) -> list[ExperimentSpe
             )
         for k in spec.override_keys:
             key_owner[k] = spec.id
+        for challenger in spec.challengers:
+            if challenger.id in challenger_owner:
+                # Scorecards key on candidate_id (base_scorecard carries no
+                # experiment_id), so two live arms sharing an id would emit
+                # indistinguishable scorecards — misattribution, silently.
+                raise ExperimentSpecError(
+                    f"challenger id {challenger.id!r} used by two active "
+                    f"experiments: {challenger_owner[challenger.id]!r} and "
+                    f"{spec.id!r} — arm ids must be unique across the active set"
+                )
+            challenger_owner[challenger.id] = spec.id
         active.append(spec)
     return active
 
@@ -531,6 +600,31 @@ def materialize_challengers(
 
     from rainier.core.champion import merge_stock_screener_config
     from rainier.core.config import StockScreenerConfig
+
+    if base_overrides:
+        # Key-check the caller's layer too: StockScreenerConfig silently
+        # drops unknown kwargs, so a typo'd base key would materialize a
+        # "champion" that doesn't match the live config — the silent-no-op
+        # class this module never delegates downstream.
+        known = set(StockScreenerConfig.model_fields)
+        unknown = sorted(
+            repr(k) for k in base_overrides if not isinstance(k, str) or k not in known
+        )
+        if unknown:
+            raise ExperimentSpecError(
+                f"experiment {spec.id!r}: unknown base_overrides key(s): "
+                f"{', '.join(unknown)} — StockScreenerConfig would silently "
+                f"drop them (materialized champion would not match the live config)"
+            )
+        base_pw = base_overrides.get("pattern_weights")
+        if isinstance(base_pw, dict):
+            known_patterns = set(StockScreenerConfig().pattern_weights)
+            unknown_pw = sorted(repr(p) for p in set(base_pw) - known_patterns)
+            if unknown_pw:
+                raise ExperimentSpecError(
+                    f"experiment {spec.id!r}: unknown base_overrides "
+                    f"pattern_weights key(s): {', '.join(unknown_pw)}"
+                )
 
     try:
         champion_cfg = StockScreenerConfig(

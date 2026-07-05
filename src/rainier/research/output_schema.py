@@ -43,8 +43,13 @@ class _FieldSpec:
 def load(path: str | Path | None = None) -> dict[str, Any]:
     """Read the schema YAML; returned dict is the raw shape (schemas: {...})."""
     p = Path(path) if path is not None else SCHEMA_PATH
-    with p.open("r") as fh:
-        data = yaml.safe_load(fh)
+    try:
+        with p.open("r") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        # Consumers catch SchemaError (the module contract) — a raw
+        # ParserError from a broken schema file must not bypass them.
+        raise SchemaError(f"{p}: invalid YAML — {exc}") from exc
     if not isinstance(data, dict) or "schemas" not in data:
         raise SchemaError(f"{p} has no top-level `schemas:` key")
     return data
@@ -200,7 +205,12 @@ def parse_block(text: str) -> dict[str, Any]:
         raise SchemaError("block is not `---` fenced")
     # Drop the fences.
     inner = stripped[3:-3].strip()
-    parsed = yaml.safe_load(inner)
+    try:
+        parsed = yaml.safe_load(inner)
+    except yaml.YAMLError as exc:
+        # A truncated block (process killed mid-write) must surface as the
+        # module contract exception, not a raw yaml ParserError.
+        raise SchemaError(f"block is not valid YAML — {exc}") from exc
     if not isinstance(parsed, dict):
         raise SchemaError(f"block must parse to a dict; got {type(parsed).__name__}")
     return parsed
