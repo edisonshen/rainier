@@ -231,3 +231,28 @@ def test_composed_bare_string_extensions_rejected():
         output_schema.validate_composed(
             "base_scorecard", _valid_base_scorecard(), extensions="llm_extension"
         )
+
+
+def test_bool_rejected_for_int_field():
+    # bool is a subclass of int: `n_selection_days: true` would otherwise
+    # pass the int check and land as 1 in promotion artifacts.
+    block = _valid_base_scorecard()
+    block["n_selection_days"] = True
+    with pytest.raises(output_schema.SchemaError, match="n_selection_days"):
+        output_schema.validate("base_scorecard", block)
+
+
+def test_bool_rejected_for_float_field():
+    block = _valid_base_scorecard()
+    block["deflated_sharpe"] = True
+    with pytest.raises(output_schema.SchemaError, match="deflated_sharpe"):
+        output_schema.validate("base_scorecard", block)
+
+
+def test_base_alone_rejected_when_extension_named():
+    # Converse of the extension-alone case: naming an extension makes ALL of
+    # its fields required, so a base-only payload must fail on them.
+    with pytest.raises(output_schema.SchemaError, match="valid_thesis_rate"):
+        output_schema.validate_composed(
+            "base_scorecard", _valid_base_scorecard(), extensions=["llm_extension"]
+        )

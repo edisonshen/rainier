@@ -87,6 +87,14 @@ def _check_payload(specs: list[_FieldSpec], payload: dict[str, Any], strict: boo
         val = payload[spec.name]
         if val is None and spec.nullable:
             continue
+        allowed = spec.py_type if isinstance(spec.py_type, tuple) else (spec.py_type,)
+        if isinstance(val, bool) and bool not in allowed:
+            # bool is a subclass of int: `n_selection_days: true` would
+            # otherwise pass the int/float check and land as 1/1.0 in
+            # promotion artifacts — silent type corruption.
+            raise SchemaError(
+                f"field {spec.name!r}: expected {spec.py_type}, got bool ({val!r})"
+            )
         if not isinstance(val, spec.py_type):  # type: ignore[arg-type]
             raise SchemaError(
                 f"field {spec.name!r}: expected {spec.py_type}, got "

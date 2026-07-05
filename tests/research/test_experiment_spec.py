@@ -257,7 +257,10 @@ def test_duplicate_active_experiment_ids_rejected(tmp_path):
     _write_spec(tmp_path, "a.yaml", _spec_dict())
     dup = _spec_dict(layer="thresholds")
     _write_spec(tmp_path, "b.yaml", dup)
-    with pytest.raises(experiment.ExperimentSpecError, match="layer-weights-rebalance"):
+    # Match the message unique to the duplicate-id branch: the spec id alone
+    # also appears in the override-key mutual-exclusion error, so a looser
+    # match would stay green if the duplicate-id guard were deleted.
+    with pytest.raises(experiment.ExperimentSpecError, match="duplicate active experiment id"):
         experiment.load_active_specs(tmp_path)
 
 
@@ -457,3 +460,108 @@ def test_non_utf8_spec_file_raises_spec_error(tmp_path):
     (tmp_path / "mangled.yaml").write_bytes(b"\xff\xfe\x00garbage")
     with pytest.raises(experiment.ExperimentSpecError, match="unreadable"):
         experiment.load_active_specs(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Review iter-5: window value validation, strict override values, loud
+# discovery (missing dir / stray .yml), guardrail hygiene, materialize wrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["", "garbage", "2026-01-01", "2026-01-01..not-a-date", "2026-99-01..2026-12-31"],
+    ids=["empty", "garbage", "no-separator", "bad-end-date", "bad-month"],
+)
+def test_malformed_window_range_rejected(bad):
+    raw = _spec_dict()
+    raw["window"]["train"] = bad
+    with pytest.raises(experiment.ExperimentSpecError, match="window.train"):
+        experiment.parse_spec(raw)
+
+
+def test_reversed_window_range_rejected():
+    raw = _spec_dict()
+    raw["window"]["train"] = "2026-03-31..2025-05-27"
+    with pytest.raises(experiment.ExperimentSpecError, match="reversed"):
+        experiment.parse_spec(raw)
+
+
+def test_overlapping_train_holdout_rejected():
+    # Holdout starting inside the train window leaks train data into the
+    # holdout — must fail at parse time, not silently mis-slice at cron time.
+    raw = _spec_dict()
+    raw["window"]["holdout"] = "2026-03-01..2026-06-25"
+    with pytest.raises(experiment.ExperimentSpecError, match="leak"):
+        experiment.parse_spec(raw)
+
+
+def test_bool_override_value_rejected_at_parse_time():
+    # YAML `buy_threshold: true` would lax-coerce to 1.0 — a plausible-looking
+    # losing challenger (silent corruption of the A/B result).
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {"buy_threshold": True}
+    with pytest.raises(experiment.ExperimentSpecError, match="buy_threshold"):
+        experiment.parse_spec(raw)
+
+
+def test_numeric_string_override_value_rejected_at_parse_time():
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {"buy_threshold": "0.35"}
+    with pytest.raises(experiment.ExperimentSpecError, match="buy_threshold"):
+        experiment.parse_spec(raw)
+
+
+def test_int_override_value_for_float_field_still_accepted():
+    # Strict mode still allows int where a float is declared — `weight: 1`
+    # is valid YAML for a float knob.
+    raw = _spec_dict()
+    raw["challengers"][0]["override"] = {"layer_weight_money_flow": 1}
+    spec = experiment.parse_spec(raw)
+    assert spec.challengers[0].override == {"layer_weight_money_flow": 1}
+
+
+def test_nonexistent_experiments_dir_raises(tmp_path):
+    # A missing directory (wrong CWD, lost deploy dir) must NOT read as an
+    # empty experiment queue — that silently disables the whole substrate.
+    with pytest.raises(experiment.ExperimentSpecError, match="does not exist"):
+        experiment.load_active_specs(tmp_path / "nope")
+
+
+def test_stray_yml_extension_rejected_loudly(tmp_path):
+    # Discovery reads *.yaml only; a spec saved as .yml must fail loudly
+    # instead of being silently skipped.
+    _write_spec(tmp_path, "a.yml", _spec_dict())
+    with pytest.raises(experiment.ExperimentSpecError, match="a.yml"):
+        experiment.load_active_specs(tmp_path)
+
+
+def test_empty_yaml_spec_file_rejected(tmp_path):
+    # A zero-byte/truncated file parses to None — must be the contract
+    # exception naming the file, not a silent skip.
+    (tmp_path / "empty.yaml").write_text("")
+    with pytest.raises(experiment.ExperimentSpecError, match="mapping"):
+        experiment.load_active_specs(tmp_path)
+
+
+def test_duplicate_guardrails_rejected():
+    raw = _spec_dict()
+    raw["guardrails"] = ["max_drawdown", "max_drawdown"]
+    with pytest.raises(experiment.ExperimentSpecError, match="duplicate guardrail"):
+        experiment.parse_spec(raw)
+
+
+def test_primary_also_in_guardrails_rejected():
+    raw = _spec_dict()
+    raw["guardrails"] = ["sharpe", "max_drawdown"]  # primary is "sharpe"
+    with pytest.raises(experiment.ExperimentSpecError, match="primary"):
+        experiment.parse_spec(raw)
+
+
+def test_materialize_wraps_validation_error():
+    # base_overrides come from the caller (settings/champion layer), not the
+    # spec — a bad value there must still surface as the contract exception,
+    # not a raw pydantic ValidationError inside the unattended cron shadow arm.
+    spec = experiment.parse_spec(_spec_dict())
+    with pytest.raises(experiment.ExperimentSpecError, match="StockScreenerConfig"):
+        experiment.materialize_challengers(spec, {"buy_threshold": "garbage"})

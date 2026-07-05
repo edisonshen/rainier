@@ -29,6 +29,7 @@ module (keeps this contract independent of the registry task).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -201,12 +202,18 @@ def _validate_override(
     # Value smoke-check at parse time: a bad value (e.g. a non-numeric weight)
     # must fail at spec-authoring/load time as ExperimentSpecError, not at
     # 8am inside the cron shadow arm as a raw pydantic ValidationError.
+    # STRICT validation: lax construction would coerce `buy_threshold: true`
+    # to 1.0 (a plausible-looking losing challenger — silent corruption of
+    # the A/B result) and accept numeric strings like "0.35". Strict mode
+    # still accepts int where a float is declared, so `weight: 1` stays valid.
     from pydantic import ValidationError
 
     from rainier.core.champion import merge_stock_screener_config
 
     try:
-        StockScreenerConfig(**merge_stock_screener_config(None, out))
+        StockScreenerConfig.model_validate(
+            merge_stock_screener_config(None, out), strict=True
+        )
     except ValidationError as exc:
         raise ExperimentSpecError(
             f"{ctx}: override value(s) rejected by StockScreenerConfig — {exc}"
@@ -221,6 +228,43 @@ def _require_str(raw: dict[str, Any], key: str, source: str) -> str:
             f"{source}: spec field {key!r} must be a non-empty str, got {val!r}"
         )
     return val
+
+
+_WINDOW_RANGE_HINT = "YYYY-MM-DD..YYYY-MM-DD"
+
+
+def _parse_date_range(value: Any, *, field: str, ctx: str) -> tuple[date, date]:
+    """Parse one ``start..end`` window string into (start, end) dates.
+
+    A garbage/empty/reversed range would otherwise parse cleanly here and
+    detonate (or worse, silently mis-slice) downstream in the evaluator at
+    cron time — the exact failure class the parse-time value smoke-check
+    exists to prevent for override values.
+    """
+    if not isinstance(value, str) or not value:
+        raise ExperimentSpecError(
+            f"{ctx}: window.{field} is a required non-empty string "
+            f"({_WINDOW_RANGE_HINT}), got {value!r}"
+        )
+    parts = value.split("..")
+    if len(parts) != 2:
+        raise ExperimentSpecError(
+            f"{ctx}: window.{field} must be {_WINDOW_RANGE_HINT!r} "
+            f"(exactly one `..` separator), got {value!r}"
+        )
+    try:
+        start, end = date.fromisoformat(parts[0]), date.fromisoformat(parts[1])
+    except ValueError as exc:
+        raise ExperimentSpecError(
+            f"{ctx}: window.{field} must be {_WINDOW_RANGE_HINT!r}, "
+            f"got {value!r} — {exc}"
+        ) from exc
+    if start > end:
+        raise ExperimentSpecError(
+            f"{ctx}: window.{field} start {parts[0]} is after end {parts[1]} "
+            f"— reversed range"
+        )
+    return start, end
 
 
 def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
@@ -263,6 +307,18 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
             f"{source}: experiment {spec_id!r}: guardrails must be a list of "
             f"non-empty strings"
         )
+    dup_guardrails = sorted({g for g in guardrails_raw if guardrails_raw.count(g) > 1})
+    if dup_guardrails:
+        raise ExperimentSpecError(
+            f"{source}: experiment {spec_id!r}: duplicate guardrail(s): "
+            f"{', '.join(dup_guardrails)}"
+        )
+    if primary in guardrails_raw:
+        raise ExperimentSpecError(
+            f"{source}: experiment {spec_id!r}: primary reward {primary!r} is "
+            f"also listed in guardrails — a reward key is either the "
+            f"optimization target or a guardrail, not both"
+        )
 
     window_raw = raw.get("window")
     if not isinstance(window_raw, dict):
@@ -283,12 +339,20 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
             f"{', '.join(unknown_window)} (allowed: {sorted(_ALLOWED_WINDOW_KEYS)}; "
             f"a typo'd `embargo_dayz:` would otherwise silently keep the default)"
         )
+    ctx = f"{source}: experiment {spec_id!r}"
     train = window_raw.get("train")
     holdout = window_raw.get("holdout")
-    if not isinstance(train, str) or not isinstance(holdout, str):
+    _, train_end = _parse_date_range(train, field="train", ctx=ctx)
+    holdout_start, _ = _parse_date_range(holdout, field="holdout", ctx=ctx)
+    if holdout_start <= train_end:
+        # Overlapping (or reversed) train/holdout leaks training data into
+        # the holdout. The embargo gap in TRADING days is enforced by the
+        # evaluator, which owns the trading calendar — here we can only pin
+        # the calendar-level ordering invariant.
         raise ExperimentSpecError(
-            f"{source}: experiment {spec_id!r}: window.train and window.holdout "
-            f"are required strings (start..end)"
+            f"{ctx}: window.holdout ({holdout}) must start after window.train "
+            f"ends ({train}) — overlapping windows leak train data into the "
+            f"holdout"
         )
     embargo_days = window_raw.get("embargo_days", DEFAULT_EMBARGO_DAYS)
     if not isinstance(embargo_days, int) or isinstance(embargo_days, bool) or embargo_days < 0:
@@ -383,8 +447,28 @@ def load_active_specs(directory: str | Path | None = None) -> list[ExperimentSpe
     name — two active specs overriding the SAME config knob under different
     labels is ALSO an error (entangled experiments would contaminate
     attribution silently). Retired specs never conflict.
+
+    Discovery itself fails loudly too: a MISSING directory raises (a wrong
+    CWD or a deploy that lost ``config/experiments`` would otherwise be
+    indistinguishable from a legitimately empty queue — the same silent-no-op
+    class the interpreter exists to kill), and stray ``*.yml`` files are
+    rejected rather than silently skipped.
     """
     base = Path(directory) if directory is not None else DEFAULT_EXPERIMENTS_DIR
+    if not base.is_dir():
+        raise ExperimentSpecError(
+            f"experiments directory {base} does not exist — a missing "
+            f"directory would silently disable every experiment "
+            f"(indistinguishable from an empty queue); create it or pass "
+            f"the right path"
+        )
+    stray_yml = sorted(base.glob("*.yml"))
+    if stray_yml:
+        raise ExperimentSpecError(
+            f"stray .yml spec file(s) in {base}: "
+            f"{', '.join(p.name for p in stray_yml)} — discovery only reads "
+            f"*.yaml; rename to .yaml so the spec isn't silently ignored"
+        )
     active: list[ExperimentSpec] = []
     layer_owner: dict[str, str] = {}
     key_owner: dict[str, str] = {}
@@ -435,15 +519,36 @@ def materialize_challengers(
     and a partial ``pattern_weights`` override keeps every other pattern's
     weight. Deep-merge happens only AFTER override-key validation (done at
     parse time); this function never sees unvalidated keys.
+
+    ``base_overrides`` come from the CALLER (settings/champion layer), not
+    the spec, so they are validated here — a bad value must still surface as
+    the contract exception, not a raw pydantic ``ValidationError`` inside the
+    unattended cron shadow arm. Construction stays lax (parity with the live
+    config loaders); spec-authored values were already strict-checked at
+    parse time.
     """
+    from pydantic import ValidationError
+
     from rainier.core.champion import merge_stock_screener_config
     from rainier.core.config import StockScreenerConfig
 
-    champion_cfg = StockScreenerConfig(
-        **merge_stock_screener_config(base_overrides, None)
-    )
+    try:
+        champion_cfg = StockScreenerConfig(
+            **merge_stock_screener_config(base_overrides, None)
+        )
+    except ValidationError as exc:
+        raise ExperimentSpecError(
+            f"experiment {spec.id!r}: champion base overrides rejected by "
+            f"StockScreenerConfig — {exc}"
+        ) from exc
     challenger_cfgs: dict[str, StockScreenerConfig] = {}
     for challenger in spec.challengers:
         merged = merge_stock_screener_config(base_overrides, challenger.override)
-        challenger_cfgs[challenger.id] = StockScreenerConfig(**merged)
+        try:
+            challenger_cfgs[challenger.id] = StockScreenerConfig(**merged)
+        except ValidationError as exc:
+            raise ExperimentSpecError(
+                f"experiment {spec.id!r} challenger {challenger.id!r}: merged "
+                f"config rejected by StockScreenerConfig — {exc}"
+            ) from exc
     return champion_cfg, challenger_cfgs
