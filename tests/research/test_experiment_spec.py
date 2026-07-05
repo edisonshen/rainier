@@ -439,6 +439,23 @@ def test_falsy_non_list_guardrails_rejected(bad):
         experiment.parse_spec(raw)
 
 
+def test_explicit_null_guardrails_rejected():
+    # A bare `guardrails:` line parses as null — must not silently load as
+    # "no guardrails" (that quietly drops the experiment's risk checks).
+    raw = _spec_dict()
+    raw["guardrails"] = None
+    with pytest.raises(experiment.ExperimentSpecError, match="guardrails"):
+        experiment.parse_spec(raw)
+
+
+def test_missing_guardrails_key_defaults_to_empty():
+    # Omitting the key entirely stays legal: guardrails are optional.
+    raw = _spec_dict()
+    del raw["guardrails"]
+    spec = experiment.parse_spec(raw)
+    assert spec.guardrails == ()
+
+
 def test_unreadable_spec_path_raises_spec_error(tmp_path):
     # A directory named *.yaml (or a permission failure) must surface as the
     # contract exception, not a raw OSError.

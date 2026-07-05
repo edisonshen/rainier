@@ -371,9 +371,15 @@ def parse_spec(raw: Any, source: str = "<memory>") -> ExperimentSpec:
     layer = _require_str(raw, "layer", source)
     primary = _require_str(raw, "primary", source)
 
-    guardrails_raw = raw.get("guardrails")
-    if guardrails_raw is None:
-        guardrails_raw = []
+    if "guardrails" in raw and raw["guardrails"] is None:
+        # A bare `guardrails:` line parses as null — silently loading it as
+        # "no guardrails" would quietly drop the experiment's risk checks.
+        raise ExperimentSpecError(
+            f"{source}: experiment {spec_id!r}: `guardrails:` with no value "
+            f"parses as null — write `guardrails: []` to explicitly declare "
+            f"none, or list the reward keys"
+        )
+    guardrails_raw = raw.get("guardrails", [])
     if not isinstance(guardrails_raw, list) or not all(
         isinstance(g, str) and g for g in guardrails_raw
     ):
