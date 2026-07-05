@@ -706,6 +706,19 @@ def test_materialize_rejects_coercible_base_override_value(bad):
         experiment.materialize_challengers(spec, {"buy_threshold": bad})
 
 
+def test_materialize_base_overrides_is_required():
+    # No default value: a production caller must not be able to forget the
+    # champion-effective layer and silently baseline challengers on pydantic
+    # code defaults instead of the live champion (explicit None = synthetic
+    # code-defaults replay, an intentional choice).
+    import inspect
+
+    param = inspect.signature(experiment.materialize_challengers).parameters[
+        "base_overrides"
+    ]
+    assert param.default is inspect.Parameter.empty
+
+
 def test_cross_spec_duplicate_challenger_id_rejected(tmp_path):
     # Scorecards key on candidate_id (no experiment_id field): two live arms
     # sharing an id would emit indistinguishable scorecards.

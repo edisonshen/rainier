@@ -50,6 +50,10 @@ if TYPE_CHECKING:  # runtime imports stay local (config load cost, cycle safety)
     from rainier.core.config import StockScreenerConfig
 
 # Spec home (pinned in the task plan; consumed by the shadow arm + evaluator).
+# CWD-relative by project convention — matches DEFAULT_MODEL_DIR in
+# core/champion.py; cron jobs run from the repo root (scripts/cron-wrapper.sh).
+# A wrong CWD fails LOUD (load_active_specs raises on a missing directory),
+# never as a silently empty experiment queue.
 DEFAULT_EXPERIMENTS_DIR = Path("config/experiments")
 
 # Default purge/embargo gap for walk-forward validation = the max
@@ -602,13 +606,17 @@ def load_active_specs(directory: str | Path | None = None) -> list[ExperimentSpe
 
 def materialize_challengers(
     spec: ExperimentSpec,
-    base_overrides: dict[str, Any] | None = None,
+    base_overrides: dict[str, Any] | None,
 ) -> tuple["StockScreenerConfig", dict[str, "StockScreenerConfig"]]:
     """Materialize (champion_config, {challenger_id: config}) for a spec.
 
     ``base_overrides`` is the champion-effective override layer (e.g.
     ``settings.yaml:stock_screener`` already merged with ``champion.yaml``
-    via the existing loaders). Each challenger = that layer deep-merged with
+    via the existing loaders). It is deliberately REQUIRED — no default —
+    so a production caller cannot forget it and silently baseline every
+    challenger on pydantic code defaults instead of the live champion.
+    Passing ``None`` explicitly means "code-defaults baseline" and is for
+    synthetic/test replays only. Each challenger = that layer deep-merged with
     its validated override via the existing ``merge_stock_screener_config``
     — so a challenger differs from the champion ONLY in the overridden keys,
     and a partial ``pattern_weights`` override keeps every other pattern's
