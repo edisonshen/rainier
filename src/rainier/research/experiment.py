@@ -24,6 +24,17 @@ as a ``StockScreenerConfig`` field before it can be experimented on.
 Reward keys (``primary`` / ``guardrails``) are opaque strings here,
 resolved at run time by the reward registry — no import of the rewards
 module (keeps this contract independent of the registry task).
+
+``champion:`` names the champion model file the experiment was authored
+against (``champion.yaml`` — a file reference, not a version pin; §10.4
+has no version field). Champion-drift attribution across promotions is
+NOT this layer's job: the evaluator replays champion + challengers from
+ONE :func:`materialize_challengers` call over one corpus (so within any
+evaluation they share the exact base), and every result row is stamped
+with the champion ``version`` + ``corpus_hash`` in the results registry
+(§10.5) — a promotion mid-experiment changes future rows' recorded
+baseline, never silently mixes baselines within one comparison. The
+operator-gated promote flow is a separate task and does not exist yet.
 """
 
 from __future__ import annotations
@@ -610,6 +621,14 @@ def materialize_challengers(
     unattended cron shadow arm. Construction stays lax (parity with the live
     config loaders); spec-authored values were already strict-checked at
     parse time.
+
+    CONSUMER CONTRACT (champion-drift attribution, §10.5): every evaluation
+    must take champion AND challengers from ONE call to this function over
+    one corpus — never mix configs materialized before and after a champion
+    promotion — and must stamp the champion ``version`` + ``corpus_hash``
+    into the results registry row. ``spec.champion`` is a file reference,
+    not a version pin (§10.4 defines no version field); baseline identity is
+    recorded per-result by the registry, not frozen at parse time.
     """
     from pydantic import ValidationError
 
