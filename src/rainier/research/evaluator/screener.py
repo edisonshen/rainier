@@ -374,6 +374,17 @@ def run_experiment(
         raise ValueError(
             f"unknown segment {segment!r} (expected 'train' or 'holdout')"
         )
+    # An empty scored segment (window range outside the corpus, or embargo
+    # purging every train day) would emit all-zero scorecards that LOOK valid —
+    # a silent no-op contrary to this substrate's loud-never-silent stance
+    # (§4.2/§4.5). Fail loud so a misconfigured window can't be scored blind.
+    if not scored_days:
+        rng = spec.window.train if segment == "train" else spec.window.holdout
+        raise ValueError(
+            f"segment {segment!r} selected zero trading days for window {rng!r} — "
+            f"refusing to emit all-zero scorecards (check the window range and "
+            f"embargo against the corpus span)"
+        )
 
     corpus_hash_value = corpus_hash(prices_by_symbol)
     evaluator_sha_value = evaluator_sha()

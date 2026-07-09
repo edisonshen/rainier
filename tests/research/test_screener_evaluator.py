@@ -304,10 +304,14 @@ def test_no_look_ahead_future_bars_do_not_change_selection():
 
 
 def test_regime_scores_match_hand_sliced_fixture_and_dsr_null():
-    frames = {"AAA": _ohlcv([100.0 + i for i in range(60)])}
-    days = [date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8)]
+    # closes 100..139 on a daily index; forward_return(pos, H=5) = 5 / (100+pos)
+    # exactly. Basket is [AAA] each day, so total_return per regime = the sum of
+    # its sliced days' single-symbol forward returns — hand-computable.
+    df = _ohlcv([100.0 + i for i in range(40)])
+    days = [df.index[i].date() for i in range(4)]     # positions 0..3 (t+5 in range)
+    frames = {"AAA": df}
     raw = [_signal("AAA", 0.9)]
-    # two bull days, two bear days
+    # two bull days (pos 0,1), two bear days (pos 2,3)
     regime_map = {days[0]: "bull", days[1]: "bull", days[2]: "bear", days[3]: "bear"}
     spec = _spec(
         [{"id": "c1", "override": {"layer_weight_money_flow": 0.35}}],
@@ -322,8 +326,10 @@ def test_regime_scores_match_hand_sliced_fixture_and_dsr_null():
         )
     champ = next(c for c in cards if c["candidate_id"] == "champion")
     assert set(champ["regime_scores"]) == {"bull", "bear"}
-    # each regime slice carries the primary reward, hand-verifiable (non-null).
-    assert "total_return" in champ["regime_scores"]["bull"]
+    # exact per-regime values, not just key presence — the slice must carry the
+    # right days (a mis-slice keeping the {bull,bear} key set would be caught).
+    assert champ["regime_scores"]["bull"]["total_return"] == pytest.approx(5 / 100 + 5 / 101)
+    assert champ["regime_scores"]["bear"]["total_return"] == pytest.approx(5 / 102 + 5 / 103)
     assert champ["deflated_sharpe"] is None       # null until the DSR spec lands
 
 
@@ -333,7 +339,7 @@ def test_regime_scores_match_hand_sliced_fixture_and_dsr_null():
 
 
 def test_split_windows_disjoint_and_embargo_purge():
-    # 30 consecutive business days spanning the train and holdout ranges.
+    # 40 consecutive business days spanning the train and holdout ranges.
     days = [d.date() for d in pd.bdate_range("2026-01-01", periods=40, tz="UTC")]
     window = ExperimentWindow(
         train=f"{days[0]}..{days[19]}",
@@ -572,3 +578,140 @@ def test_run_experiment_rejects_challenger_named_champion():
             prices_by_symbol=frames, trading_days=days,
             regime_fn=lambda d: "bull", segment="train",
         )
+
+
+def test_run_experiment_rejects_empty_scored_segment():
+    # An empty scored segment (train range disjoint from the corpus days) must
+    # fail loud rather than emit all-zero scorecards.
+    frames = {"AAA": _ohlcv([100.0] * 30)}
+    raw = [_signal("AAA", 0.9)]
+    spec = _spec(
+        [{"id": "c1", "override": {"layer_weight_money_flow": 0.35}}],
+        primary="total_return", guardrails=(), train="2026-01-01..2026-01-31",
+    )
+    days = [date(2026, 3, 10), date(2026, 3, 11)]   # outside the train range
+    p1, p2 = _patch_selectors(raw)
+    with p1, p2, pytest.raises(ValueError, match="zero trading days"):
+        run_experiment(
+            spec, base_overrides=None, session=object(),
+            prices_by_symbol=frames, trading_days=days,
+            regime_fn=lambda d: "bull", segment="train",
+        )
+
+
+# ---------------------------------------------------------------------------
+# corpus_hash — deterministic (symbol-order-independent) + content-sensitive.
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_hash_deterministic_and_content_sensitive():
+    a = _ohlcv([100.0, 101.0, 102.0])
+    b = _ohlcv([50.0, 51.0, 52.0])
+    # symbol insertion order must not change the hash (symbols sorted internally)
+    assert corpus_hash({"AAA": a, "BBB": b}) == corpus_hash({"BBB": b, "AAA": a})
+    # a changed close changes the hash — it is content-sensitive, not a constant
+    b2 = _ohlcv([50.0, 51.0, 999.0])
+    assert corpus_hash({"AAA": a, "BBB": b}) != corpus_hash({"AAA": a, "BBB": b2})
+
+
+# ---------------------------------------------------------------------------
+# segment routing — holdout scores the holdout window; unknown segment raises.
+# ---------------------------------------------------------------------------
+
+
+def test_run_experiment_holdout_segment_and_unknown_segment():
+    frames = {"AAA": _ohlcv([100.0] * 30)}
+    raw = [_signal("AAA", 0.9)]
+    spec = _spec(
+        [{"id": "c1", "override": {"layer_weight_money_flow": 0.35}}],
+        primary="total_return", guardrails=(),
+    )
+    trading_days = [
+        date(2026, 1, 5), date(2026, 1, 6),        # train range
+        date(2026, 5, 5), date(2026, 5, 6),        # holdout range
+    ]
+    p1, p2 = _patch_selectors(raw)
+    with p1, p2:
+        cards = run_experiment(
+            spec, base_overrides=None, session=object(),
+            prices_by_symbol=frames, trading_days=trading_days,
+            regime_fn=lambda d: "bull", segment="holdout",
+        )
+    champ = next(c for c in cards if c["candidate_id"] == "champion")
+    assert "[holdout]" in champ["window"]                 # labeled with the segment
+    assert spec.window.holdout in champ["window"]
+    assert champ["n_selection_days"] == 2                 # only the 2 holdout days
+    # an unknown segment is rejected loudly (before any scoring).
+    p1b, p2b = _patch_selectors(raw)
+    with p1b, p2b, pytest.raises(ValueError, match="unknown segment"):
+        run_experiment(
+            spec, base_overrides=None, session=object(),
+            prices_by_symbol=frames, trading_days=trading_days,
+            regime_fn=lambda d: "bull", segment="weekly",
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI parquet output — nested reward/regime dicts round-trip as JSON strings.
+# ---------------------------------------------------------------------------
+
+
+def test_cli_experiment_run_writes_parquet(tmp_path):
+    import json
+
+    from click.testing import CliRunner
+
+    from rainier.cli import cli
+
+    (tmp_path / "settings.yaml").write_text(
+        "stock_screener:\n  layer_weight_pattern: 0.70\n"
+    )
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "champion.yaml").write_text("version: 1\n")
+    spec_file = tmp_path / "exp.yaml"
+    spec_file.write_text(
+        "id: cli-test\n"
+        "status: active\n"
+        "champion: champion.yaml\n"
+        "layer: layer_weights\n"
+        "challengers:\n"
+        "  - id: c1\n"
+        "    override: {layer_weight_money_flow: 0.35}\n"
+        "primary: sharpe\n"
+        "guardrails: [max_drawdown]\n"
+        "window: {train: 2026-01-01..2026-03-31, holdout: 2026-05-01..2026-06-25, "
+        "embargo_days: 20}\n"
+    )
+    out = tmp_path / "cards.parquet"
+    fixture_cards = [
+        {
+            "candidate_id": "champion", "candidate_type": "screener",
+            "window": "2026-01-01..2026-03-31 [train]", "n_selection_days": 3,
+            "corpus_hash": "abc", "rewards": {"horizon": 5, "primary": {"sharpe": 1.0}},
+            "regime_scores": {"bull": {"sharpe": 1.0}}, "deflated_sharpe": None,
+            "evaluator_sha": "def",
+        }
+    ]
+
+    cm = MagicMock()
+    cm.__enter__.return_value = MagicMock()
+    cm.__exit__.return_value = False
+    with patch("rainier.paper.pattern_audit.universe_symbols", return_value=["AAA"]), \
+         patch("rainier.paper.pattern_replay.load_prices",
+               return_value={"AAA": _ohlcv([100.0] * 30)}), \
+         patch("rainier.core.database.get_session", return_value=cm), \
+         patch.object(screener, "run_experiment", return_value=fixture_cards):
+        result = CliRunner().invoke(
+            cli,
+            ["experiment", "run", str(spec_file),
+             "--config", str(tmp_path / "settings.yaml"),
+             "--output", str(out)],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    back = pd.read_parquet(out)
+    # nested dicts are JSON-encoded per row so the columnar schema stays flat.
+    assert json.loads(back.iloc[0]["rewards"]) == {"horizon": 5, "primary": {"sharpe": 1.0}}
+    assert json.loads(back.iloc[0]["regime_scores"]) == {"bull": {"sharpe": 1.0}}

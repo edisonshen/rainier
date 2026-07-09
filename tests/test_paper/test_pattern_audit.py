@@ -548,12 +548,28 @@ def test_as_of_index_resolves_last_bar_on_or_before():
     df = _make_ohlcv([100.0, 101.0, 102.0])  # 2025-01-01..03, tz-aware UTC index
     assert as_of_index(df, date(2025, 1, 1)) == 0
     assert as_of_index(df, date(2025, 1, 3)) == 2
-    # a non-trading as_of resolves to the nearest bar strictly before it
+    # an as_of that IS a trading day resolves to that day's own bar
     assert as_of_index(df, date(2025, 1, 2)) == 1
     # before the first bar → None (symbol not yet trading as-of that date)
     assert as_of_index(df, date(2024, 12, 31)) is None
     # after the last bar → last bar (as-of clamps to newest available)
     assert as_of_index(df, date(2025, 6, 1)) == 2
+
+
+def test_as_of_index_guard_branches():
+    # non-DatetimeIndex frame → None (no calendar axis to align a bar to)
+    plain = pd.DataFrame({"close": [1.0, 2.0]})  # RangeIndex
+    assert as_of_index(plain, date(2025, 1, 1)) is None
+    # empty (0-row) frame → None even with a DatetimeIndex
+    empty = pd.DataFrame({"close": []}, index=pd.DatetimeIndex([], tz="UTC"))
+    assert as_of_index(empty, date(2025, 1, 1)) is None
+    # tz-NAIVE index resolves against a calendar date (heterogeneous-tz path)
+    naive = pd.DataFrame(
+        {"close": [1.0, 2.0, 3.0]},
+        index=pd.date_range("2025-01-01", periods=3, freq="D"),  # tz-naive
+    )
+    assert as_of_index(naive, date(2025, 1, 2)) == 1
+    assert as_of_index(naive, date(2024, 12, 31)) is None
 
 
 def test_forward_returns_by_symbol_covers_every_requested_symbol():
