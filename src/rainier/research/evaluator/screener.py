@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -92,11 +93,13 @@ def _default_regime_fn(as_of: date) -> str:
 # ---------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
 def evaluator_sha() -> str:
     """Content SHA of THIS evaluator module.
 
     Stamped on every scorecard so a result traces to the exact scoring code
-    (registry §10.5); it moves whenever the evaluator's logic changes.
+    (registry §10.5); it moves whenever the evaluator's logic changes. Cached —
+    the module bytes are fixed for the process lifetime.
     """
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
