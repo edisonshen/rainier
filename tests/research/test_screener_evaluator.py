@@ -46,9 +46,12 @@ from rainier.research.rewards.basket import dodged_loss
 # ranking is identical between the live path and the driver.
 # ---------------------------------------------------------------------------
 
+# min_daily_bars=10: the synthetic fixtures below are 24-40 bars by design, so
+# pin the live Layer-3 gate below them to keep them pattern-eligible (the driver
+# mirrors _fetch_stock_data's min_daily_bars cut — see the short-history test).
 _CONFIG = StockScreenerConfig(
     swing_lookback=3, min_pattern_bars=3, max_pattern_bars=50,
-    neckline_tolerance_pct=0.05,
+    neckline_tolerance_pct=0.05, min_daily_bars=10,
 )
 
 
@@ -469,3 +472,71 @@ def test_cli_experiment_run_resolves_champion_base_and_writes(tmp_path):
     # NOT None/code-defaults — the §4.5 silent-no-op guard at the composition root.
     base_arg = mock_run.call_args.args[1]
     assert base_arg["layer_weight_pattern"] == 0.70
+
+
+# ---------------------------------------------------------------------------
+# short-history parity — a symbol whose as-of window has fewer than
+# config.min_daily_bars bars is money-flow-only in the driver, exactly as the
+# live _fetch_stock_data(symbols, config.min_daily_bars) gate drops it. Without
+# the cut it would earn pattern credit the live ranking never grants.
+# ---------------------------------------------------------------------------
+
+
+def test_short_history_symbol_is_money_flow_only_like_live_gate():
+    # STRONG carries a strong actionable pattern but only 24 bars; PLAIN is flat
+    # (no pattern) with 80 bars and a slightly higher money-flow strength.
+    strong = _ohlcv(_false_breakdown())            # 24 bars, w_bottom pattern
+    plain = _ohlcv([100.0] * 80)                   # 80 flat bars, no pattern
+    frames = {"STRONG": strong, "PLAIN": plain}
+    as_of = strong.index[-1].date()
+    raw = [_signal("STRONG", 0.50), _signal("PLAIN", 0.55)]
+
+    eligible = StockScreenerConfig(
+        swing_lookback=3, min_pattern_bars=3, max_pattern_bars=50,
+        neckline_tolerance_pct=0.05, min_daily_bars=10,  # 24-bar STRONG passes
+    )
+    gated = eligible.model_copy(update={"min_daily_bars": 60})  # 24-bar STRONG fails
+
+    p1, p2 = _patch_selectors(raw)
+    with p1, p2:
+        pattern_credited = build_basket_outcomes(
+            session=object(), config=eligible, days=[as_of],
+            prices_by_symbol=frames, regime_fn=lambda d: "bull",
+            basket_size=2, horizons=(5,),
+        ).days[0]
+        money_flow_only = build_basket_outcomes(
+            session=object(), config=gated, days=[as_of],
+            prices_by_symbol=frames, regime_fn=lambda d: "bull",
+            basket_size=2, horizons=(5,),
+        ).days[0]
+
+    # min_daily_bars=10: STRONG's pattern credit (w_pattern=0.65) lifts it first.
+    assert pattern_credited.symbols == ["STRONG", "PLAIN"]
+    # min_daily_bars=60: STRONG has too little history → money-flow-only, so its
+    # lower money-flow strength ranks it BELOW PLAIN — the live-gate parity.
+    assert money_flow_only.symbols == ["PLAIN", "STRONG"]
+
+
+# ---------------------------------------------------------------------------
+# horizon guard — a non-positive primary horizon is a look-ahead footgun
+# (forward_return would read the as-of bar or wrap to a future bar); reject it.
+# ---------------------------------------------------------------------------
+
+
+def test_run_experiment_rejects_nonpositive_primary_horizon():
+    frames = {"AAA": _ohlcv([100.0] * 30)}
+    days = [date(2026, 1, 5), date(2026, 1, 6)]
+    raw = [_signal("AAA", 0.9)]
+    spec = _spec(
+        [{"id": "c1", "override": {"layer_weight_money_flow": 0.35}}],
+        primary="total_return", guardrails=(),
+    )
+    for bad_horizon in (0, -5):
+        p1, p2 = _patch_selectors(raw)
+        with p1, p2, pytest.raises(ValueError, match="positive"):
+            run_experiment(
+                spec, base_overrides=None, session=object(),
+                prices_by_symbol=frames, trading_days=days,
+                regime_fn=lambda d: "bull", segment="train",
+                primary_horizon=bad_horizon,
+            )

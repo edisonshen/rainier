@@ -220,8 +220,17 @@ def build_basket_outcomes(
             if df is None:
                 continue  # money-flow-only symbol — ranks with best_confidence=0
             pos = as_of_index(df, as_of)
-            if pos is not None:
-                windows_by_symbol[sig.symbol] = window_as_of(df, pos)
+            if pos is None:
+                continue  # no bar on/before t — money-flow-only, no pattern credit
+            windowed = window_as_of(df, pos)
+            # Mirror the live Layer-3 gate: screen_stocks feeds patterns via
+            # _fetch_stock_data(symbols, config.min_daily_bars), which DROPS any
+            # symbol whose as-of window carries < min_daily_bars bars and treats
+            # it as money-flow-only. Without this same cut a short-history symbol
+            # would earn pattern credit here that the live ranking never grants —
+            # a parity break in the A/B measuring instrument (best_confidence=0).
+            if len(windowed) >= config.min_daily_bars:
+                windows_by_symbol[sig.symbol] = windowed
 
         selections = replay_screen(
             signals_by_symbol=signals_by_symbol,

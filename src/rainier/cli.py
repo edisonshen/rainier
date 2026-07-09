@@ -6650,11 +6650,11 @@ def experiment_group() -> None:
     help="Walk-forward window to score (holdout stays reserved for promotion).",
 )
 @click.option(
-    "--basket-size", default=5, show_default=True, type=int,
+    "--basket-size", default=5, show_default=True, type=click.IntRange(min=1),
     help="Selected-basket size (top-N of the composite ranking).",
 )
 @click.option(
-    "--horizon", default=5, show_default=True, type=int,
+    "--horizon", default=5, show_default=True, type=click.IntRange(min=1),
     help="Primary reward forward-return horizon (trading days).",
 )
 def experiment_run(

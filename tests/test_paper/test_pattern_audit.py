@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
+import pytest
 
 from rainier.core.config import StockScreenerConfig
 from rainier.paper.pattern_audit import (
@@ -584,3 +585,12 @@ def test_forward_returns_by_symbol_all_horizons_present():
     assert set(out.keys()) == set(HORIZONS)
     for h in HORIZONS:
         assert out[h]["X"] is not None
+
+
+def test_forward_returns_by_symbol_rejects_nonpositive_horizon():
+    """horizon <= 0 would read close[t_idx] (bogus 0) or wrap iloc to a FUTURE
+    bar (look-ahead) — reject it loudly rather than emit a leaked scorecard."""
+    up = _make_ohlcv([100.0 + i for i in range(10)])
+    for bad in ((0,), (-5,), (5, 0)):
+        with pytest.raises(ValueError, match="positive"):
+            forward_returns_by_symbol({"X": up}, date(2025, 1, 1), ["X"], horizons=bad)

@@ -161,7 +161,17 @@ def forward_returns_by_symbol(
     key guard never fires. A symbol with no price frame (money-flow-only), no bar
     on/before ``as_of``, or fewer than H bars ahead → ``None`` — never 0, never
     omitted.
+
+    A non-positive horizon is rejected loudly: ``forward_return`` reads
+    ``close[t_idx + horizon]``, so ``horizon <= 0`` would read the as-of bar
+    itself (a bogus 0.0 return) or, for a negative horizon, wrap ``iloc`` to a
+    FUTURE bar — a silent look-ahead leak into the scorecards.
     """
+    bad = sorted(h for h in horizons if h < 1)
+    if bad:
+        raise ValueError(
+            f"forward-return horizons must be positive trading-day counts, got {bad}"
+        )
     out: dict[int, dict[str, float | None]] = {h: {} for h in horizons}
     for symbol in symbols:
         df = prices_by_symbol.get(symbol)
