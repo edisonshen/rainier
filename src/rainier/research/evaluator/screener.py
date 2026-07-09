@@ -354,6 +354,16 @@ def run_experiment(
     first, then challengers in spec order).
     """
     champion_cfg, challenger_cfgs = materialize_challengers(spec, base_overrides)
+    # ``candidate_id`` is the scorecard/registry identity key. A challenger that
+    # (re)uses the reserved champion id would emit a SECOND card under the same
+    # id — the two arms become indistinguishable in the co-evaluation output and
+    # the registry cannot attribute a result to the right config (§4.5). Reject.
+    if CHAMPION_CANDIDATE_ID in challenger_cfgs:
+        raise ValueError(
+            f"challenger id {CHAMPION_CANDIDATE_ID!r} is reserved for the champion "
+            f"arm — rename it so the two scorecards stay distinguishable in the "
+            f"co-evaluation output/registry (§4.5)"
+        )
 
     split = split_windows(trading_days, spec.window)
     if segment == "train":
@@ -424,10 +434,19 @@ def load_base_overrides(config_path: str | Path = "config/settings.yaml") -> dic
     )
 
     path = Path(config_path)
-    yaml_config: dict[str, Any] = {}
-    if path.exists():
-        with open(path) as f:
-            yaml_config = yaml.safe_load(f) or {}
+    # Unlike core.config.load_settings (which tolerates a missing file and falls
+    # back to code-defaults), this loader's SOLE purpose is to resolve the live
+    # champion baseline. A missing file (typo'd --config, wrong cwd) would return
+    # {} → challengers baseline on pydantic code-defaults with no champion — the
+    # exact §4.5 silent no-op this whole substrate exists to prevent. Fail loud.
+    if not path.exists():
+        raise FileNotFoundError(
+            f"experiment settings file {path} does not exist — refusing to "
+            f"baseline challengers on code-defaults (§4.5); pass the live "
+            f"config path via --config"
+        )
+    with open(path) as f:
+        yaml_config = yaml.safe_load(f) or {}
     yaml_screener = yaml_config.get("stock_screener")
     champion_overrides = load_champion_overrides(path.parent / "model")
     return merge_stock_screener_config(yaml_screener, champion_overrides)

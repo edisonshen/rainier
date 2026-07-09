@@ -540,3 +540,35 @@ def test_run_experiment_rejects_nonpositive_primary_horizon():
                 regime_fn=lambda d: "bull", segment="train",
                 primary_horizon=bad_horizon,
             )
+
+
+# ---------------------------------------------------------------------------
+# baseline integrity — a missing --config must NOT silently baseline on
+# code-defaults (§4.5); the champion id is reserved from challenger reuse.
+# ---------------------------------------------------------------------------
+
+
+def test_load_base_overrides_missing_config_raises(tmp_path):
+    # A typo'd/absent settings file would return {} → challengers baseline on
+    # code-defaults with no champion — the exact silent no-op §4.5 prevents.
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        load_base_overrides(tmp_path / "nope.yaml")
+
+
+def test_run_experiment_rejects_challenger_named_champion():
+    frames = {"AAA": _ohlcv([100.0] * 30)}
+    days = [date(2026, 1, 5), date(2026, 1, 6)]
+    raw = [_signal("AAA", 0.9)]
+    # parse_spec allows id: champion; the driver must reject it so the two arms
+    # do not collide on candidate_id in the co-evaluation output/registry.
+    spec = _spec(
+        [{"id": "champion", "override": {"layer_weight_money_flow": 0.35}}],
+        primary="total_return", guardrails=(),
+    )
+    p1, p2 = _patch_selectors(raw)
+    with p1, p2, pytest.raises(ValueError, match="reserved"):
+        run_experiment(
+            spec, base_overrides=None, session=object(),
+            prices_by_symbol=frames, trading_days=days,
+            regime_fn=lambda d: "bull", segment="train",
+        )
