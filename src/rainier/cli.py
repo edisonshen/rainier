@@ -6622,3 +6622,108 @@ def db_backup_money_flow(do_verify: bool, skip_if_unconfigured: bool) -> None:
             click.echo("backup-money-flow — verify OK")
     finally:
         dst.dispose()
+
+
+# ---------------------------------------------------------------------------
+# experiment — A/B substrate: replay + score challengers vs champion (§4.4).
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="experiment")
+def experiment_group() -> None:
+    """QU100 A/B substrate — replay + score challengers against the champion."""
+
+
+@experiment_group.command(name="run")
+@click.argument("spec_path", type=click.Path(exists=True))
+@click.option(
+    "--config", "config_path", default="config/settings.yaml", show_default=True,
+    help="Settings file; its sibling model/ dir carries champion.yaml.",
+)
+@click.option(
+    "--output", "output_path", default=None,
+    help="Scorecard output (.json or .parquet). Default: JSON to stdout.",
+)
+@click.option(
+    "--segment", default="train", show_default=True,
+    type=click.Choice(["train", "holdout"]),
+    help="Walk-forward window to score (holdout stays reserved for promotion).",
+)
+@click.option(
+    "--basket-size", default=5, show_default=True, type=int,
+    help="Selected-basket size (top-N of the composite ranking).",
+)
+@click.option(
+    "--horizon", default=5, show_default=True, type=int,
+    help="Primary reward forward-return horizon (trading days).",
+)
+def experiment_run(
+    spec_path, config_path, output_path, segment, basket_size, horizon
+) -> None:
+    """Replay + score an experiment SPEC over the corpus (composition root).
+
+    Loads the spec, resolves the LIVE champion base layer (settings +
+    champion.yaml), replays the 3-layer ranking as-of each corpus day for the
+    champion AND every challenger, and writes one base scorecard per candidate.
+    Registry append + promote arrive with ab-registry-promote-84a7.
+    """
+    import json
+    from datetime import date as _date
+    from datetime import timedelta
+
+    from rainier.core.database import get_session
+    from rainier.paper.pattern_audit import universe_symbols
+    from rainier.paper.pattern_replay import LIVE_LOOKBACK_BARS, load_prices
+    from rainier.research.evaluator.screener import load_base_overrides, run_experiment
+    from rainier.research.experiment import load_spec
+
+    spec = load_spec(spec_path)
+    base_overrides = load_base_overrides(config_path)
+
+    # Bound the corpus to the spec's span; pad the SQL load left by the detector
+    # lookback so the earliest scored day still sees its full ~6-month window.
+    train_start = _date.fromisoformat(spec.window.train.split("..")[0])
+    holdout_end = _date.fromisoformat(spec.window.holdout.split("..")[1])
+    pad_days = LIVE_LOOKBACK_BARS * 2 + 14
+    load_start = pd.Timestamp(train_start - timedelta(days=pad_days), tz="UTC")
+
+    with get_session() as session:
+        universe = universe_symbols(session)
+        prices = load_prices(session, universe, start_date=load_start)
+        trading_days = sorted(
+            {
+                (ts.date() if hasattr(ts, "date") else ts)
+                for df in prices.values()
+                for ts in df.index
+                if train_start <= (ts.date() if hasattr(ts, "date") else ts) <= holdout_end
+            }
+        )
+        cards = run_experiment(
+            spec,
+            base_overrides,
+            session=session,
+            prices_by_symbol=prices,
+            trading_days=trading_days,
+            basket_size=basket_size,
+            primary_horizon=horizon,
+            segment=segment,
+        )
+
+    if not output_path:
+        click.echo(json.dumps(cards, indent=2, default=str))
+        return
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.suffix == ".parquet":
+        # Nested reward/regime dicts are JSON-encoded per row (registry
+        # metrics_json convention) so the columnar schema stays flat + stable.
+        rows = []
+        for card in cards:
+            row = dict(card)
+            row["rewards"] = json.dumps(card["rewards"], sort_keys=True)
+            row["regime_scores"] = json.dumps(card["regime_scores"], sort_keys=True)
+            rows.append(row)
+        pd.DataFrame(rows).to_parquet(out, index=False)
+    else:
+        out.write_text(json.dumps(cards, indent=2, default=str), encoding="utf-8")
+    click.echo(f"wrote {len(cards)} scorecard(s) -> {out}")

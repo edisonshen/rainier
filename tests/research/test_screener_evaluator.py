@@ -412,3 +412,60 @@ def test_scorecard_validates_against_base_schema():
         assert card["rewards"]["horizon"] == 5
         assert "sharpe" in card["rewards"]["primary"]
         assert set(card["rewards"]["guardrails"]) == {"max_drawdown", "turnover"}
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring (composition root) — spec load + LIVE base_overrides + output write.
+# ---------------------------------------------------------------------------
+
+
+def test_cli_experiment_run_resolves_champion_base_and_writes(tmp_path):
+    from click.testing import CliRunner
+
+    from rainier.cli import cli
+
+    # Hermetic champion layer: settings.yaml (non-default weight) + champion.yaml.
+    (tmp_path / "settings.yaml").write_text(
+        "stock_screener:\n  layer_weight_pattern: 0.70\n"
+    )
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "champion.yaml").write_text("version: 1\n")
+    spec_file = tmp_path / "exp.yaml"
+    spec_file.write_text(
+        "id: cli-test\n"
+        "status: active\n"
+        "champion: champion.yaml\n"
+        "layer: layer_weights\n"
+        "challengers:\n"
+        "  - id: c1\n"
+        "    override: {layer_weight_money_flow: 0.35}\n"
+        "primary: sharpe\n"
+        "guardrails: [max_drawdown]\n"
+        "window: {train: 2026-01-01..2026-03-31, holdout: 2026-05-01..2026-06-25, "
+        "embargo_days: 20}\n"
+    )
+    out = tmp_path / "cards.json"
+    fixture_cards = [{"candidate_id": "champion", "n_selection_days": 3}]
+
+    cm = MagicMock()
+    cm.__enter__.return_value = MagicMock()
+    cm.__exit__.return_value = False
+    with patch("rainier.paper.pattern_audit.universe_symbols", return_value=["AAA"]), \
+         patch("rainier.paper.pattern_replay.load_prices",
+               return_value={"AAA": _ohlcv([100.0] * 30)}), \
+         patch("rainier.core.database.get_session", return_value=cm), \
+         patch.object(screener, "run_experiment", return_value=fixture_cards) as mock_run:
+        result = CliRunner().invoke(
+            cli,
+            ["experiment", "run", str(spec_file),
+             "--config", str(tmp_path / "settings.yaml"),
+             "--output", str(out)],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    # The driver received the LIVE champion base layer (settings lw_pattern=0.70),
+    # NOT None/code-defaults — the §4.5 silent-no-op guard at the composition root.
+    base_arg = mock_run.call_args.args[1]
+    assert base_arg["layer_weight_pattern"] == 0.70

@@ -120,6 +120,57 @@ def forward_return(df: pd.DataFrame, t_idx: int, horizon: int) -> float | None:
     return float(cH) / float(c0) - 1.0
 
 
+def as_of_index(df: pd.DataFrame, as_of: date) -> int | None:
+    """Positional index of the as-of bar = last bar with ``date <= as_of``.
+
+    Aligns a CALENDAR as-of date to a symbol's positional row so the evaluator
+    can window (`window_as_of`) and score forward returns across symbols with
+    heterogeneous trading-day coverage from ONE shared trading-day axis. Returns
+    ``None`` when the symbol has no bar on/before ``as_of`` (not yet trading) or
+    the frame is not date-indexed. An ``as_of`` after the last bar clamps to the
+    newest bar (the live screen also reads the latest available bar).
+    """
+    if not isinstance(df.index, pd.DatetimeIndex) or len(df) == 0:
+        return None
+    ts = pd.Timestamp(as_of)
+    if df.index.tz is not None and ts.tz is None:
+        ts = ts.tz_localize(df.index.tz)
+    elif df.index.tz is None and ts.tz is not None:
+        ts = ts.tz_localize(None)
+    # side="right" → count of bars with date <= ts; minus 1 = last such row.
+    pos = int(df.index.searchsorted(ts, side="right")) - 1
+    if pos < 0:
+        return None
+    return pos
+
+
+def forward_returns_by_symbol(
+    prices_by_symbol: dict[str, pd.DataFrame],
+    as_of: date,
+    symbols,
+    *,
+    horizons: tuple[int, ...] = HORIZONS,
+) -> dict[int, dict[str, float | None]]:
+    """Per-symbol forward returns at each horizon, as-of ``as_of``.
+
+    Returns ``{H: {symbol: return | None}}`` covering EVERY requested symbol at
+    EVERY horizon. This is the screened-pool fan-out of the single-symbol
+    :func:`forward_return`: the evaluator feeds it the wider screened pool (not
+    just the selected basket) so ``dodged_loss`` can see the non-selected losers,
+    and every SELECTED symbol is guaranteed a key so the basket rewards' missing-
+    key guard never fires. A symbol with no price frame (money-flow-only), no bar
+    on/before ``as_of``, or fewer than H bars ahead → ``None`` — never 0, never
+    omitted.
+    """
+    out: dict[int, dict[str, float | None]] = {h: {} for h in horizons}
+    for symbol in symbols:
+        df = prices_by_symbol.get(symbol)
+        pos = as_of_index(df, as_of) if df is not None else None
+        for h in horizons:
+            out[h][symbol] = None if pos is None else forward_return(df, pos, h)
+    return out
+
+
 def directional_correct(direction: str, fwd_return: float | None) -> bool | None:
     """Did the pattern's direction match the realized move?
 
