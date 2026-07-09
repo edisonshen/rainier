@@ -273,29 +273,41 @@ def test_co_evaluation_equal_corpus_hash_all_candidates():
 
 
 def test_no_look_ahead_future_bars_do_not_change_selection():
-    base_prices = _false_breakdown()
-    df = _ohlcv(base_prices)
-    as_of = df.index[-1].date()
-    raw = [_signal("AAA", 0.95), _signal("BBB", 0.70, rank=20)]
-    frames_now = {"AAA": df, "BBB": _ohlcv([100.0] * 40)}
+    # AAA has LOWER money-flow than BBB; its as-of pattern credit is the ONLY
+    # thing lifting it above BBB. So the ranking depends on the as-of pattern
+    # window — a look-ahead leak that changed AAA's pattern would flip the order.
+    base_prices = _false_breakdown()                       # 24 bars, actionable as-of t
+    hist = _ohlcv(base_prices)                             # pos 23 = 2026-03-31 = as_of
+    as_of = hist.index[-1].date()
+    raw = [_signal("AAA", 0.50), _signal("BBB", 0.55, rank=20)]
+    frames_hist = {"AAA": hist, "BBB": _ohlcv([100.0] * 40)}   # BBB flat, no pattern
 
-    with (p := _patch_selectors(raw))[0], p[1]:
+    p1, p2 = _patch_selectors(raw)
+    with p1, p2:
         before = build_basket_outcomes(
             session=object(), config=_CONFIG, days=[as_of],
-            prices_by_symbol=frames_now, regime_fn=lambda d: "bull", basket_size=10,
+            prices_by_symbol=frames_hist, regime_fn=lambda d: "bull", basket_size=10,
         ).days[0]
+    assert before.symbols == ["AAA", "BBB"]                # pattern credit lifts AAA
 
-    # append wildly different FUTURE bars (dates strictly after as_of)
-    future = _ohlcv(base_prices + [200.0, 5.0, 250.0, 1.0, 300.0], end="2026-04-07")
-    frames_future = {"AAA": future, "BBB": _ohlcv([100.0] * 45, end="2026-04-07")}
-    with (p := _patch_selectors(raw))[0], p[1]:
+    # Append 5 WILD future bars to the SAME index: shift end forward by 5 days so
+    # positions 0..23 keep their exact dates + prices and 24..28 are strictly
+    # after t. The as-of window (bars <= t) is therefore byte-identical — if the
+    # driver leaked future bars into the detector, AAA's pattern (and the order)
+    # would change.
+    future_end = (hist.index[-1] + pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+    ext = _ohlcv(base_prices + [200.0, 5.0, 250.0, 1.0, 300.0], end=future_end)
+    assert ext.index[23].date() == as_of                  # shared prefix preserved
+    frames_future = {"AAA": ext, "BBB": _ohlcv([100.0] * 45, end=future_end)}
+    p1b, p2b = _patch_selectors(raw)
+    with p1b, p2b:
         after = build_basket_outcomes(
             session=object(), config=_CONFIG, days=[as_of],
             prices_by_symbol=frames_future, regime_fn=lambda d: "bull", basket_size=10,
         ).days[0]
 
-    # the as-of ranking is identical — only bars <= t fed the detector.
-    assert after.symbols == before.symbols
+    # identical as-of ranking — only bars <= t fed the detector; future bars ignored.
+    assert after.symbols == before.symbols == ["AAA", "BBB"]
 
 
 # ---------------------------------------------------------------------------
