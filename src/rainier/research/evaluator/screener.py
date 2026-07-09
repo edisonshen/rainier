@@ -240,6 +240,14 @@ def build_basket_outcomes(
             config=config,
         )
         screened_pool = [s.symbol for s in selections]
+        # The basket is the top-N of the COMPOSITE ranking — faithfully mirroring
+        # the live pipeline/post_scrape.py windows (all_candidates[:50/:20/:5] over
+        # the same composite-sorted list). The recommendation thresholds
+        # (strong_buy/buy/watch) only set a DISPLAY LABEL via _classify; live
+        # selection never filters the traded/LLM'd basket by them. So a
+        # threshold-only challenger correctly scores as a basket no-op here — that
+        # is faithful parity, NOT a silent bug (gating the basket by threshold
+        # would DIVERGE from the live top-N selection).
         basket = screened_pool[:basket_size]
         fwd = forward_returns_by_symbol(
             prices_by_symbol, as_of, screened_pool, horizons=horizons
