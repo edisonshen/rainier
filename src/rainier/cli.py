@@ -6687,6 +6687,13 @@ def experiment_run(
     pad_days = LIVE_LOOKBACK_BARS * 2 + 14
     load_start = pd.Timestamp(train_start - timedelta(days=pad_days), tz="UTC")
 
+    # NOTE: `--config` selects only the CHAMPION LAYER (settings.yaml:stock_screener
+    # + sibling champion.yaml) via load_base_overrides. The corpus DB is orthogonal:
+    # core.database.get_session binds to `legacy_database_url`, sourced from the
+    # env var LEGACY_DATABASE_URL (never from settings.yaml — load_settings maps no
+    # yaml key onto it), so it is identical across every --config. --config cannot
+    # desync champion-vs-corpus. Rebinding the process-singleton engine per-config
+    # is a cross-cutting change out of this task's scope.
     with get_session() as session:
         universe = universe_symbols(session)
         prices = load_prices(session, universe, start_date=load_start)
