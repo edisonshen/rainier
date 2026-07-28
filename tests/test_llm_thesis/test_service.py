@@ -439,6 +439,68 @@ def test_tier1_lookup_hits_when_signals_used_matches():
     assert rec_id == 123
 
 
+def test_tier1_lookup_invalidates_when_thinking_budget_differs():
+    """Retuning llm_thesis.thinking_budget_tokens must invalidate a same-day
+    cached thesis — it was generated with a different amount of reasoning."""
+    payload = {
+        **_valid_thesis_dict(),
+        "_session_name": "afternoon",
+        "_thinking_budget_tokens": 24000,
+    }
+    q, _ = _stub_query_returning([(123, payload, "afternoon")])
+    cm = _patched_get_session(q)
+    with patch("rainier.llm_thesis.service.get_session", return_value=cm):
+        result = _tier1_lookup(
+            "NVDA",
+            date(2026, 5, 7),
+            "v1",
+            session_name="afternoon",
+            llm_model="test-model",
+            thinking_budget_tokens=8000,  # budget was retuned down
+        )
+    assert result is None
+
+
+def test_tier1_lookup_hits_when_thinking_budget_matches():
+    payload = {
+        **_valid_thesis_dict(),
+        "_session_name": "afternoon",
+        "_thinking_budget_tokens": 24000,
+    }
+    q, _ = _stub_query_returning([(123, payload, "afternoon")])
+    cm = _patched_get_session(q)
+    with patch("rainier.llm_thesis.service.get_session", return_value=cm):
+        result = _tier1_lookup(
+            "NVDA",
+            date(2026, 5, 7),
+            "v1",
+            session_name="afternoon",
+            llm_model="test-model",
+            thinking_budget_tokens=24000,
+        )
+    assert result is not None
+    assert result[0] == 123
+
+
+def test_tier1_lookup_hits_legacy_row_without_budget_stamp():
+    """Rows written before the budget stamp (no _thinking_budget_tokens) stay
+    reusable — PROMPT_VERSION already gates out pre-thinking rows."""
+    payload = {**_valid_thesis_dict(), "_session_name": "afternoon"}
+    q, _ = _stub_query_returning([(123, payload, "afternoon")])
+    cm = _patched_get_session(q)
+    with patch("rainier.llm_thesis.service.get_session", return_value=cm):
+        result = _tier1_lookup(
+            "NVDA",
+            date(2026, 5, 7),
+            "v1",
+            session_name="afternoon",
+            llm_model="test-model",
+            thinking_budget_tokens=24000,
+        )
+    assert result is not None
+    assert result[0] == 123
+
+
 def test_tier1_lookup_session_column_takes_precedence_over_jsonb_legacy():
     """[P3] fix #6: with the new session_name column populated, the lookup
     must filter on the column directly. A row whose JSONB stamp says one
@@ -532,7 +594,7 @@ async def test_generate_thesis_close_session_misses_afternoon_cache():
 
     def _fake_lookup(
         symbol, scan_date, prompt_version, *, session_name, llm_model,
-        enabled_signals=None,
+        enabled_signals=None, **_kwargs,
     ):
         captured_kwargs["session_name"] = session_name
         captured_kwargs["llm_model"] = llm_model
@@ -577,7 +639,7 @@ async def test_generate_thesis_same_session_hits_cache_no_llm_call():
 
     def _fake_lookup(
         symbol, scan_date, prompt_version, *, session_name, llm_model,
-        enabled_signals=None,
+        enabled_signals=None, **_kwargs,
     ):
         # Hit only when session+model match.
         if session_name == "afternoon" and llm_model == "claude-sonnet-4-6":

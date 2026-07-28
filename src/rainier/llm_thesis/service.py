@@ -148,6 +148,7 @@ def _tier1_lookup(
     session_name: str,
     llm_model: str,
     enabled_signals: list[str] | None = None,
+    thinking_budget_tokens: int | None = None,
 ) -> tuple[int, dict[str, Any]] | None:
     """Cheap cache lookup — match (date, symbol, prompt, session, model).
 
@@ -220,6 +221,18 @@ def _tier1_lookup(
                 if isinstance(cached_signals, list):
                     if frozenset(cached_signals) != enabled_set:
                         continue
+            # Thinking-budget drift check: a row stamped with a different
+            # _thinking_budget_tokens was generated with a different amount of
+            # reasoning, so retuning the budget mid-day must regenerate rather
+            # than serve the stale thesis. Rows written before the budget was
+            # stamped carry no key and are left reusable (PROMPT_VERSION already
+            # gates out all pre-thinking rows).
+            if thinking_budget_tokens is not None and isinstance(output, dict):
+                cached_budget = output.get("_thinking_budget_tokens")
+                if cached_budget is not None and int(cached_budget) != int(
+                    thinking_budget_tokens
+                ):
+                    continue
             return int(rec_id), dict(output)
         return None
 
@@ -381,6 +394,7 @@ async def generate_thesis(
         session_name=session_name,
         llm_model=thesis_cfg.model,
         enabled_signals=enabled_signal_names,
+        thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
     )
     if cached is not None:
         record_id, raw_output = cached
@@ -554,6 +568,9 @@ def _persist_thesis(
     # Stash the originating session inside structured_output so Tier-1
     # can refuse cross-session reuse on later same-day scans.
     payload["_session_name"] = session_name
+    # Stamp the thinking budget so Tier-1 can refuse to reuse a thesis that was
+    # generated with a different amount of reasoning after the budget is retuned.
+    payload["_thinking_budget_tokens"] = int(settings.llm_thesis.thinking_budget_tokens)
     with get_session() as session:
         rec = LLMAnalysisRecord(
             llm_provider="anthropic",
