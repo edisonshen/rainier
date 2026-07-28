@@ -400,6 +400,13 @@ _EMBED_FOOTER_MAX = 2048
 # in the middle of a chip.
 _CHIP_LINE_MAX = 200
 
+# Per-bullet cap for the WHY field. Full thesis sentences run ~80-160 chars;
+# 220 shows them whole instead of chopping mid-sentence (the old 60-char cap
+# truncated nearly every real bullet). With <=4 bullets, 4 * 220 = 880 < 1024,
+# so the field-level _EMBED_FIELD_VALUE_MAX backstop at the call site still
+# guarantees Discord compliance without a mid-word chop in the common case.
+_WHY_BULLET_MAX = 220
+
 
 def _truncate_at_word(text: str, max_chars: int) -> str:
     """Word-boundary safe truncation. Appends ``…`` when shortened.
@@ -541,8 +548,8 @@ def _why_bullets(thesis: dict) -> list[str]:
     """Top 3-4 short bullets pulled from the thesis prose.
 
     Strategy: split paragraph_radar + paragraph_evidence on sentence
-    boundaries, drop blanks, keep the first 4, cap each at 60 chars
-    (word-boundary safe).
+    boundaries, drop blanks, keep the first 4, cap each at
+    ``_WHY_BULLET_MAX`` chars (word-boundary safe).
 
     PR5 review iter-1: LLM-generated paragraphs flow into Discord text;
     scrub ``@everyone`` / ``@here`` / backticks before emitting so an
@@ -561,7 +568,7 @@ def _why_bullets(thesis: dict) -> list[str]:
             piece = piece.strip().rstrip(".;")
             if piece:
                 chunks.append(piece)
-    bullets = [_truncate_at_word(c, 60) for c in chunks[:4] if c]
+    bullets = [_truncate_at_word(c, _WHY_BULLET_MAX) for c in chunks[:4] if c]
     return bullets
 
 
