@@ -302,14 +302,29 @@ class LLMThesisConfig(BaseModel):
 
     enabled: bool = True
     model: str = "claude-sonnet-4-6"
-    max_usd_per_scan: float = 1.0
+    # Raised 1.0 -> 2.5 when the thesis call switched to xhigh extended thinking
+    # (thinking_budget_tokens below). At the xhigh budget a 5-ticker scan bills
+    # ~$1.0-1.9 (thinking tokens are billed as OUTPUT at $15/M); the old $1.00
+    # cap would trip the per-scan kill switch mid-scan and silently drop tickers.
+    max_usd_per_scan: float = 2.5
+    # Extended-thinking budget for the daily thesis call ("xhigh" tier = 24000).
+    # Passed to litellm.completion as thinking={"type": "enabled",
+    # "budget_tokens": <this>} (deterministic form — litellm's reasoning_effort
+    # low/medium/high map to much smaller anthropic budgets, not xhigh). When
+    # thinking is enabled the anthropic API requires temperature==1.0 and
+    # max_tokens > budget_tokens; both are handled in service._call_llm.
+    # Floor is Anthropic's documented minimum thinking budget (1024) — a smaller
+    # value loads fine but the provider rejects every thesis call, so we fail
+    # fast at config load instead.
+    thinking_budget_tokens: int = Field(24000, ge=1024)
     # Bumped v1->v2 with the D7a calibration block, v2->v3 with the R-A
-    # reflections block. The Tier-1 cache key is built from THIS runtime value
-    # (service.generate_thesis reads settings.llm_thesis.prompt_version), so it
-    # must track prompt.PROMPT_VERSION — the module constant alone never busts
-    # the cache. Keep the two (plus settings.yaml) in lockstep
+    # reflections block, v3->v4 with the switch to xhigh extended thinking. The
+    # Tier-1 cache key is built from THIS runtime value (service.generate_thesis
+    # reads settings.llm_thesis.prompt_version), so it must track
+    # prompt.PROMPT_VERSION — the module constant alone never busts the cache.
+    # Keep the two (plus settings.yaml) in lockstep
     # (test_prompt_version_config_tracks_module guards the invariant).
-    prompt_version: str = "v3"
+    prompt_version: str = "v4"
     enabled_sessions: list[str] = Field(
         default_factory=lambda: ["afternoon", "close"]
     )

@@ -167,11 +167,20 @@ llm:
 llm_thesis:
   enabled: true
   model: "claude-sonnet-4-6"
-  max_usd_per_scan: 1.0
-  # v2: D7a calibration block. v3: R-A last-K reflections block. This runtime
-  # value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION) —
-  # keep it == the module constant.
-  prompt_version: "v3"
+  # xhigh extended thinking: thinking tokens bill as OUTPUT ($15/M), so a
+  # 5-ticker scan runs ~$1.0-1.9. Cap raised 1.0 -> 2.5 so the per-scan kill
+  # switch doesn't trip mid-scan and drop tickers.
+  max_usd_per_scan: 2.5
+  # "xhigh" extended-thinking budget (tokens) for the thesis LLM call. Passed
+  # explicitly as thinking={"type": "enabled", "budget_tokens": ...}. Must be a
+  # positive int; service._call_llm sets max_tokens = budget + 2000 headroom and
+  # forces temperature=1.0 (anthropic rejects temperature!=1 with thinking on).
+  thinking_budget_tokens: 24000
+  # v2: D7a calibration block. v3: R-A last-K reflections block. v4: switch to
+  # xhigh extended thinking (behavioral change busts the Tier-1 cache). This
+  # runtime value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION)
+  # — keep it == the module constant.
+  prompt_version: "v4"
   enabled_sessions:
     - afternoon
     - close

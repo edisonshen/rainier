@@ -222,7 +222,8 @@ class _StubLLM:
         self.fail = fail
         self.calls: list[dict] = []
 
-    def __call__(self, *, model, system_prompt, user_prompt, image_bytes):
+    def __call__(self, *, model, system_prompt, user_prompt, image_bytes,
+                 **_kwargs):
         self.calls.append(
             {
                 "model": model,
@@ -685,7 +686,8 @@ async def _run_thesis_capture(monkeypatch) -> tuple:
 
     captured: dict = {}
 
-    def fake_call_llm(*, model, system_prompt, user_prompt, image_bytes):
+    def fake_call_llm(*, model, system_prompt, user_prompt, image_bytes,
+                      **_kwargs):
         captured["user_prompt"] = user_prompt
         return valid, 10, 20
 
@@ -821,10 +823,11 @@ def test_input_hash_unaffected_by_reflections_text():
         signals={},
     )
     # Structural guarantee: the Tier-2 hash is computed from the EvidencePack +
-    # image bytes ONLY — prompt text (calibration/reflections blocks) cannot
-    # enter it because the function takes no prompt-text parameter and the pack
-    # carries no reflection field. (PROMPT_VERSION busts Tier-1 instead.)
+    # image bytes (+ the numeric thinking budget) ONLY — prompt text
+    # (calibration/reflections blocks) cannot enter it because the function takes
+    # no prompt-text parameter and the pack carries no reflection field.
+    # (PROMPT_VERSION busts Tier-1 instead.)
     params = list(inspect.signature(compute_input_hash).parameters)
-    assert params == ["pack", "image_bytes"]
+    assert params == ["pack", "image_bytes", "thinking_budget_tokens"]
     assert "reflection" not in pack.model_dump()
     assert compute_input_hash(pack, b"img") == compute_input_hash(pack, b"img")

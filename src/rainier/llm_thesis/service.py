@@ -46,6 +46,11 @@ log = logging.getLogger(__name__)
 _DEFAULT_INPUT_RATE = 3.0   # USD per 1M tokens (Sonnet 4.6 input)
 _DEFAULT_OUTPUT_RATE = 15.0  # USD per 1M tokens (Sonnet 4.6 output)
 
+# Anthropic requires max_tokens > thinking.budget_tokens. We reserve this many
+# tokens ABOVE the thinking budget for the final JSON answer. The thesis JSON is
+# ~650 output tokens in practice; 2000 is comfortable headroom.
+_FINAL_ANSWER_HEADROOM_TOKENS = 2000
+
 
 # ---------------------------------------------------------------------------
 # Evidence assembly
@@ -143,6 +148,7 @@ def _tier1_lookup(
     session_name: str,
     llm_model: str,
     enabled_signals: list[str] | None = None,
+    thinking_budget_tokens: int | None = None,
 ) -> tuple[int, dict[str, Any]] | None:
     """Cheap cache lookup — match (date, symbol, prompt, session, model).
 
@@ -215,6 +221,18 @@ def _tier1_lookup(
                 if isinstance(cached_signals, list):
                     if frozenset(cached_signals) != enabled_set:
                         continue
+            # Thinking-budget drift check: a row stamped with a different
+            # _thinking_budget_tokens was generated with a different amount of
+            # reasoning, so retuning the budget mid-day must regenerate rather
+            # than serve the stale thesis. Rows written before the budget was
+            # stamped carry no key and are left reusable (PROMPT_VERSION already
+            # gates out all pre-thinking rows).
+            if thinking_budget_tokens is not None and isinstance(output, dict):
+                cached_budget = output.get("_thinking_budget_tokens")
+                if cached_budget is not None and int(cached_budget) != int(
+                    thinking_budget_tokens
+                ):
+                    continue
             return int(rec_id), dict(output)
         return None
 
@@ -242,10 +260,39 @@ def _call_llm(
     system_prompt: str,
     user_prompt: str,
     image_bytes: bytes | None,
+    thinking_budget_tokens: int,
 ) -> tuple[str, int, int]:
     """Single LiteLLM completion. Returns (content, prompt_tokens, completion_tokens).
 
     Image bytes are passed as base64 data URL when present.
+
+    Extended thinking ("xhigh") is enabled via the deterministic explicit form
+    ``thinking={"type": "enabled", "budget_tokens": N}`` — LiteLLM's
+    ``reasoning_effort`` (low/medium/high) maps to much smaller anthropic budgets,
+    so we pass the budget directly. When thinking is on, anthropic enforces two
+    request invariants, both handled here:
+      * ``temperature`` MUST be 1.0 (anthropic 400s on any other value), and
+      * ``max_tokens`` MUST be strictly greater than ``budget_tokens``.
+
+    The response carries reasoning under a separate ``reasoning_content`` /
+    ``thinking_blocks`` field; ``message["content"]`` is still the final answer
+    text (the JSON thesis _parse_thesis expects), so we keep reading ``content``
+    and thinking text never leaks into the parsed thesis.
+
+    Model gate: the ``thinking={"type": "enabled", "budget_tokens": N}`` payload
+    is ANTHROPIC-specific (OpenAI reasoning models use ``reasoning_effort``), so
+    we attach it (and the temperature==1.0 / max_tokens invariants it requires)
+    only when the resolved provider is anthropic AND the model supports
+    reasoning. If the configured thesis model can't enable thinking, we RAISE
+    (the thesis pipeline requires thinking) rather than silently produce a
+    no-thinking thesis that would be persisted + cached as a valid xhigh result.
+
+    Cost note: anthropic bills thinking tokens as OUTPUT tokens and folds them
+    into ``usage.output_tokens``, which LiteLLM surfaces as ``completion_tokens``.
+    So ``completion_tokens`` already includes the thinking spend — any
+    ``reasoning_tokens`` LiteLLM reports in ``completion_tokens_details`` is a
+    SUBSET of it (adding it would double-count). The per-scan kill switch bills
+    ``completion_tokens`` at $15/M and therefore reflects true thinking spend.
     """
     import base64
 
@@ -261,17 +308,51 @@ def _call_llm(
             }
         )
 
-    resp = litellm.completion(
-        model=model,
-        messages=[
+    completion_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content_parts},
         ],
-        temperature=0.2,
+    }
+    try:
+        _provider = litellm.get_llm_provider(model)[1]
+    except Exception:
+        _provider = ""
+    anthropic_thinking = _provider == "anthropic" and litellm.supports_reasoning(
+        model=model
     )
+    if anthropic_thinking:
+        # Extended thinking: temperature MUST be 1.0 and max_tokens MUST exceed
+        # the thinking budget (final-answer headroom on top).
+        completion_kwargs["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": thinking_budget_tokens,
+        }
+        completion_kwargs["temperature"] = 1.0
+        completion_kwargs["max_tokens"] = (
+            thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
+        )
+    else:
+        # The thesis pipeline REQUIRES extended thinking. If the configured model
+        # can't enable it (non-anthropic provider, or dropped from litellm's
+        # reasoning registry), REFUSE loudly rather than fall back to a cheap
+        # no-thinking call: that plain thesis would still be persisted and
+        # stamped v4 + budget=24000, and Tier-1 would then serve the degraded
+        # row as a valid xhigh result for the rest of the day (cache poisoning —
+        # flagged by both codex and /review). Raising instead means the caller's
+        # retry loop drops the ticker and nothing degraded is ever cached.
+        raise RuntimeError(
+            f"extended thinking unavailable for thesis model {model!r} "
+            f"(provider={_provider or 'unknown'}); refusing to generate a "
+            "degraded no-thinking thesis"
+        )
+
+    resp = litellm.completion(**completion_kwargs)
     text = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage") or {}
     prompt_tokens = int(usage.get("prompt_tokens", 0))
+    # completion_tokens already includes thinking tokens (billed as output).
     completion_tokens = int(usage.get("completion_tokens", 0))
     return text, prompt_tokens, completion_tokens
 
@@ -324,6 +405,7 @@ async def generate_thesis(
         session_name=session_name,
         llm_model=thesis_cfg.model,
         enabled_signals=enabled_signal_names,
+        thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
     )
     if cached is not None:
         record_id, raw_output = cached
@@ -349,7 +431,12 @@ async def generate_thesis(
         return None, 0.0, None
 
     pack, renders, image_bytes = await asyncio.to_thread(evidence_provider)
-    input_hash = compute_input_hash(pack, image_bytes)
+    # Fold the thinking budget into the Tier-2 idempotency key so a retuned
+    # budget persists as its own row instead of colliding with the old-budget
+    # row on the unique index (which would re-read the stale id).
+    input_hash = compute_input_hash(
+        pack, image_bytes, thinking_budget_tokens=thesis_cfg.thinking_budget_tokens
+    )
 
     candidate_summary = json.dumps(pack.candidate, sort_keys=True, default=str)
     # D7a: inject the calibration section (how prior theses graded out). Loaded
@@ -379,7 +466,7 @@ async def generate_thesis(
     # on day D is written end-of-day D — a day-D scan must not see it) and the
     # same best-effort isolation: a load failure costs the block, not the
     # thesis. Like the calibration text this is invisible to compute_input_hash,
-    # so PROMPT_VERSION ("v3") busts the Tier-1 cache instead.
+    # so PROMPT_VERSION busts the Tier-1 cache instead.
     try:
         from rainier.paper.reflection import reflection_prompt_section
 
@@ -420,6 +507,7 @@ async def generate_thesis(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=attempt_user_prompt,
                 image_bytes=image_bytes,
+                thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
             )
         except Exception as exc:
             last_error = f"llm_call_failed: {exc}"
@@ -496,6 +584,9 @@ def _persist_thesis(
     # Stash the originating session inside structured_output so Tier-1
     # can refuse cross-session reuse on later same-day scans.
     payload["_session_name"] = session_name
+    # Stamp the thinking budget so Tier-1 can refuse to reuse a thesis that was
+    # generated with a different amount of reasoning after the budget is retuned.
+    payload["_thinking_budget_tokens"] = int(settings.llm_thesis.thinking_budget_tokens)
     with get_session() as session:
         rec = LLMAnalysisRecord(
             llm_provider="anthropic",
