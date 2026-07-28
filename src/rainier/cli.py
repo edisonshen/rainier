@@ -3257,7 +3257,13 @@ def thesis():
 @click.option("--top-n", default=5, type=int, help="How many top candidates to LLM-thesis.")
 @click.option("--discord/--no-discord", default=False, help="Post results to Discord.")
 @click.option("--dry-run", is_flag=True, help="Skip Discord, print theses to stdout.")
-@click.option("--max-usd", default=1.0, type=float, help="Hard kill switch on cumulative spend.")
+@click.option(
+    "--max-usd",
+    default=None,
+    type=float,
+    help="Hard kill switch on cumulative spend. Defaults to config "
+    "(llm_thesis.max_usd_per_scan) when omitted.",
+)
 @click.pass_context
 def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     """Manual scheduler-hook trigger — runs the same pipeline as `rainier run`."""
@@ -3270,8 +3276,11 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     from rainier.llm_thesis.service import compute_theses_and_persist
 
     settings = load_settings_fresh(_settings_path(ctx))
-    # Override the kill switch via CLI.
-    settings.llm_thesis.max_usd_per_scan = float(max_usd)
+    # Override the kill switch only when explicitly passed; otherwise inherit the
+    # config value (raised to 2.5 for xhigh thinking) instead of a stale default.
+    if max_usd is not None:
+        settings.llm_thesis.max_usd_per_scan = float(max_usd)
+    effective_max_usd = settings.llm_thesis.max_usd_per_scan
 
     click.echo(f"Running screener for session={session_name}...")
     all_candidates, ohlcv_by_symbol = screen_stocks(settings)
@@ -3288,7 +3297,7 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
         scan_candidates, scan_date=scan_date, session_name=session_name
     )
 
-    click.echo(f"Running LLM thesis on top {top_n} (max_usd={max_usd:.2f})...")
+    click.echo(f"Running LLM thesis on top {top_n} (max_usd={effective_max_usd:.2f})...")
     theses = compute_theses_and_persist(
         candidates[:top_n],
         ohlcv_by_symbol,
@@ -3324,7 +3333,13 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     "--session", "session_name", default="afternoon",
     type=click.Choice(["morning", "midday", "afternoon", "close"]),
 )
-@click.option("--max-usd", default=1.0, type=float)
+@click.option(
+    "--max-usd",
+    default=None,
+    type=float,
+    help="Hard kill switch on cumulative spend. Defaults to config "
+    "(llm_thesis.max_usd_per_scan) when omitted.",
+)
 @click.pass_context
 def thesis_ticker(ctx, symbol, session_name, max_usd):
     """Single-ticker debug pipeline against the latest QU100 snapshot."""
@@ -3335,7 +3350,9 @@ def thesis_ticker(ctx, symbol, session_name, max_usd):
     from rainier.llm_thesis.service import compute_theses_and_persist
 
     settings = load_settings_fresh(_settings_path(ctx))
-    settings.llm_thesis.max_usd_per_scan = float(max_usd)
+    # Inherit the config cap unless the operator explicitly overrides it.
+    if max_usd is not None:
+        settings.llm_thesis.max_usd_per_scan = float(max_usd)
 
     click.echo(f"Running screener (will filter to {symbol})...")
     candidates, ohlcv = screen_stocks(settings)
