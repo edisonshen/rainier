@@ -46,6 +46,11 @@ log = logging.getLogger(__name__)
 _DEFAULT_INPUT_RATE = 3.0   # USD per 1M tokens (Sonnet 4.6 input)
 _DEFAULT_OUTPUT_RATE = 15.0  # USD per 1M tokens (Sonnet 4.6 output)
 
+# Anthropic requires max_tokens > thinking.budget_tokens. We reserve this many
+# tokens ABOVE the thinking budget for the final JSON answer. The thesis JSON is
+# ~650 output tokens in practice; 2000 is comfortable headroom.
+_FINAL_ANSWER_HEADROOM_TOKENS = 2000
+
 
 # ---------------------------------------------------------------------------
 # Evidence assembly
@@ -242,10 +247,31 @@ def _call_llm(
     system_prompt: str,
     user_prompt: str,
     image_bytes: bytes | None,
+    thinking_budget_tokens: int,
 ) -> tuple[str, int, int]:
     """Single LiteLLM completion. Returns (content, prompt_tokens, completion_tokens).
 
     Image bytes are passed as base64 data URL when present.
+
+    Extended thinking ("xhigh") is enabled via the deterministic explicit form
+    ``thinking={"type": "enabled", "budget_tokens": N}`` — LiteLLM's
+    ``reasoning_effort`` (low/medium/high) maps to much smaller anthropic budgets,
+    so we pass the budget directly. When thinking is on, anthropic enforces two
+    request invariants, both handled here:
+      * ``temperature`` MUST be 1.0 (anthropic 400s on any other value), and
+      * ``max_tokens`` MUST be strictly greater than ``budget_tokens``.
+
+    The response carries reasoning under a separate ``reasoning_content`` /
+    ``thinking_blocks`` field; ``message["content"]`` is still the final answer
+    text (the JSON thesis _parse_thesis expects), so we keep reading ``content``
+    and thinking text never leaks into the parsed thesis.
+
+    Cost note: anthropic bills thinking tokens as OUTPUT tokens and folds them
+    into ``usage.output_tokens``, which LiteLLM surfaces as ``completion_tokens``.
+    So ``completion_tokens`` already includes the thinking spend — any
+    ``reasoning_tokens`` LiteLLM reports in ``completion_tokens_details`` is a
+    SUBSET of it (adding it would double-count). The per-scan kill switch bills
+    ``completion_tokens`` at $15/M and therefore reflects true thinking spend.
     """
     import base64
 
@@ -261,17 +287,22 @@ def _call_llm(
             }
         )
 
+    # max_tokens must exceed the thinking budget (final-answer headroom on top).
+    max_tokens = thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
     resp = litellm.completion(
         model=model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content_parts},
         ],
-        temperature=0.2,
+        thinking={"type": "enabled", "budget_tokens": thinking_budget_tokens},
+        temperature=1.0,  # anthropic rejects temperature != 1 with thinking enabled
+        max_tokens=max_tokens,
     )
     text = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage") or {}
     prompt_tokens = int(usage.get("prompt_tokens", 0))
+    # completion_tokens already includes thinking tokens (billed as output).
     completion_tokens = int(usage.get("completion_tokens", 0))
     return text, prompt_tokens, completion_tokens
 
@@ -420,6 +451,7 @@ async def generate_thesis(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=attempt_user_prompt,
                 image_bytes=image_bytes,
+                thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
             )
         except Exception as exc:
             last_error = f"llm_call_failed: {exc}"

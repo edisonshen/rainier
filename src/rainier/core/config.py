@@ -302,7 +302,19 @@ class LLMThesisConfig(BaseModel):
 
     enabled: bool = True
     model: str = "claude-sonnet-4-6"
-    max_usd_per_scan: float = 1.0
+    # Raised 1.0 -> 2.5 when the thesis call switched to xhigh extended thinking
+    # (thinking_budget_tokens below). At the xhigh budget a 5-ticker scan bills
+    # ~$1.0-1.9 (thinking tokens are billed as OUTPUT at $15/M); the old $1.00
+    # cap would trip the per-scan kill switch mid-scan and silently drop tickers.
+    max_usd_per_scan: float = 2.5
+    # Extended-thinking budget for the daily thesis call ("xhigh" tier = 24000).
+    # Passed to litellm.completion as thinking={"type": "enabled",
+    # "budget_tokens": <this>} (deterministic form — litellm's reasoning_effort
+    # low/medium/high map to much smaller anthropic budgets, not xhigh). When
+    # thinking is enabled the anthropic API requires temperature==1.0 and
+    # max_tokens > budget_tokens; both are handled in service._call_llm. Positive
+    # int; 0 or negative would violate the max_tokens > budget invariant.
+    thinking_budget_tokens: int = Field(24000, gt=0)
     # Bumped v1->v2 with the D7a calibration block, v2->v3 with the R-A
     # reflections block. The Tier-1 cache key is built from THIS runtime value
     # (service.generate_thesis reads settings.llm_thesis.prompt_version), so it
