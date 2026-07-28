@@ -52,7 +52,8 @@ def _mock_resp(content: str, *, completion_tokens: int = 12000, reasoning: str =
 
 def test_call_llm_enables_thinking_with_budget_and_temp_one():
     budget = 24000
-    with patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
+    with patch("litellm.supports_reasoning", return_value=True), \
+            patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
         _call_llm(
             model="claude-sonnet-4-6",
             system_prompt="sys",
@@ -73,7 +74,8 @@ def test_call_llm_enables_thinking_with_budget_and_temp_one():
 
 
 def test_call_llm_budget_scales_max_tokens():
-    with patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
+    with patch("litellm.supports_reasoning", return_value=True), \
+            patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
         _call_llm(
             model="claude-sonnet-4-6",
             system_prompt="sys",
@@ -88,7 +90,8 @@ def test_call_llm_budget_scales_max_tokens():
 
 def test_call_llm_returns_content_and_token_counts():
     resp = _mock_resp(_valid_thesis_json(), completion_tokens=13500)
-    with patch("litellm.completion", return_value=resp):
+    with patch("litellm.supports_reasoning", return_value=True), \
+            patch("litellm.completion", return_value=resp):
         text, p_tok, c_tok = _call_llm(
             model="claude-sonnet-4-6",
             system_prompt="sys",
@@ -107,7 +110,8 @@ def test_thinking_text_does_not_leak_into_parsed_thesis():
     thesis must come only from content, with no thinking text bleeding in."""
     reasoning = "SECRET CHAIN OF THOUGHT — must not appear in the thesis."
     resp = _mock_resp(_valid_thesis_json(), reasoning=reasoning)
-    with patch("litellm.completion", return_value=resp):
+    with patch("litellm.supports_reasoning", return_value=True), \
+            patch("litellm.completion", return_value=resp):
         text, _, _ = _call_llm(
             model="claude-sonnet-4-6",
             system_prompt="sys",
@@ -120,6 +124,24 @@ def test_thinking_text_does_not_leak_into_parsed_thesis():
     assert isinstance(thesis, TradeThesis)
     assert thesis.verdict == "setup_long"
     assert "SECRET" not in thesis.paragraph_evidence
+
+
+def test_call_llm_falls_back_for_non_reasoning_model():
+    """A non-reasoning provider must NOT receive thinking/max_tokens (LiteLLM
+    would raise UnsupportedParamsError); fall back to the legacy temp=0.2 call."""
+    with patch("litellm.supports_reasoning", return_value=False), \
+            patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
+        _call_llm(
+            model="gpt-some-non-reasoning",
+            system_prompt="sys",
+            user_prompt="user",
+            image_bytes=None,
+            thinking_budget_tokens=24000,
+        )
+    kwargs = mock_comp.call_args.kwargs
+    assert "thinking" not in kwargs
+    assert "max_tokens" not in kwargs
+    assert kwargs["temperature"] == 0.2
 
 
 def test_cost_estimate_bills_thinking_tokens_as_output():

@@ -15,7 +15,12 @@ from __future__ import annotations
 # the calibration section — same Tier-1-bust rationale. Bump IN LOCKSTEP with
 # core/config.py LLMThesisConfig.prompt_version and settings.yaml
 # llm_thesis.prompt_version (the runtime cache key uses the config value).
-PROMPT_VERSION = "v3"
+# v4: the thesis call switched to Sonnet 4.6 xhigh extended thinking — a
+# BEHAVIORAL change to the LLM output that compute_input_hash can't see (it
+# hashes only the EvidencePack + image). Bumping busts Tier-1 so same-day
+# reruns after the switch regenerate with thinking instead of serving a stale
+# no-thinking thesis; likewise when thinking_budget_tokens is retuned.
+PROMPT_VERSION = "v4"
 
 OUTPUT_SCHEMA = """{
   "verdict": "setup_long" | "watch" | "no_setup",

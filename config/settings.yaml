@@ -176,10 +176,11 @@ llm_thesis:
   # positive int; service._call_llm sets max_tokens = budget + 2000 headroom and
   # forces temperature=1.0 (anthropic rejects temperature!=1 with thinking on).
   thinking_budget_tokens: 24000
-  # v2: D7a calibration block. v3: R-A last-K reflections block. This runtime
-  # value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION) —
-  # keep it == the module constant.
-  prompt_version: "v3"
+  # v2: D7a calibration block. v3: R-A last-K reflections block. v4: switch to
+  # xhigh extended thinking (behavioral change busts the Tier-1 cache). This
+  # runtime value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION)
+  # — keep it == the module constant.
+  prompt_version: "v4"
   enabled_sessions:
     - afternoon
     - close

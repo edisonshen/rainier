@@ -318,12 +318,13 @@ class LLMThesisConfig(BaseModel):
     # fast at config load instead.
     thinking_budget_tokens: int = Field(24000, ge=1024)
     # Bumped v1->v2 with the D7a calibration block, v2->v3 with the R-A
-    # reflections block. The Tier-1 cache key is built from THIS runtime value
-    # (service.generate_thesis reads settings.llm_thesis.prompt_version), so it
-    # must track prompt.PROMPT_VERSION — the module constant alone never busts
-    # the cache. Keep the two (plus settings.yaml) in lockstep
+    # reflections block, v3->v4 with the switch to xhigh extended thinking. The
+    # Tier-1 cache key is built from THIS runtime value (service.generate_thesis
+    # reads settings.llm_thesis.prompt_version), so it must track
+    # prompt.PROMPT_VERSION — the module constant alone never busts the cache.
+    # Keep the two (plus settings.yaml) in lockstep
     # (test_prompt_version_config_tracks_module guards the invariant).
-    prompt_version: str = "v3"
+    prompt_version: str = "v4"
     enabled_sessions: list[str] = Field(
         default_factory=lambda: ["afternoon", "close"]
     )

@@ -266,6 +266,13 @@ def _call_llm(
     text (the JSON thesis _parse_thesis expects), so we keep reading ``content``
     and thinking text never leaks into the parsed thesis.
 
+    Model gate: the ``thinking`` param is anthropic/reasoning-model-specific.
+    We only attach it (and the temperature==1.0 / max_tokens invariants it
+    requires) when ``litellm.supports_reasoning(model)`` is True. If the thesis
+    model is ever reconfigured to a non-reasoning provider, we fall back to the
+    legacy plain call (temperature=0.2, no thinking) instead of letting LiteLLM
+    raise ``UnsupportedParamsError``.
+
     Cost note: anthropic bills thinking tokens as OUTPUT tokens and folds them
     into ``usage.output_tokens``, which LiteLLM surfaces as ``completion_tokens``.
     So ``completion_tokens`` already includes the thinking spend — any
@@ -287,18 +294,29 @@ def _call_llm(
             }
         )
 
-    # max_tokens must exceed the thinking budget (final-answer headroom on top).
-    max_tokens = thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
-    resp = litellm.completion(
-        model=model,
-        messages=[
+    completion_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content_parts},
         ],
-        thinking={"type": "enabled", "budget_tokens": thinking_budget_tokens},
-        temperature=1.0,  # anthropic rejects temperature != 1 with thinking enabled
-        max_tokens=max_tokens,
-    )
+    }
+    if litellm.supports_reasoning(model=model):
+        # Extended thinking: temperature MUST be 1.0 and max_tokens MUST exceed
+        # the thinking budget (final-answer headroom on top).
+        completion_kwargs["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": thinking_budget_tokens,
+        }
+        completion_kwargs["temperature"] = 1.0
+        completion_kwargs["max_tokens"] = (
+            thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
+        )
+    else:
+        # Non-reasoning provider: keep the original deterministic-ish call.
+        completion_kwargs["temperature"] = 0.2
+
+    resp = litellm.completion(**completion_kwargs)
     text = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage") or {}
     prompt_tokens = int(usage.get("prompt_tokens", 0))
@@ -410,7 +428,7 @@ async def generate_thesis(
     # on day D is written end-of-day D — a day-D scan must not see it) and the
     # same best-effort isolation: a load failure costs the block, not the
     # thesis. Like the calibration text this is invisible to compute_input_hash,
-    # so PROMPT_VERSION ("v3") busts the Tier-1 cache instead.
+    # so PROMPT_VERSION busts the Tier-1 cache instead.
     try:
         from rainier.paper.reflection import reflection_prompt_section
 
