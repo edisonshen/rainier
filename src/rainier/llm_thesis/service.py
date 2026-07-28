@@ -334,7 +334,18 @@ def _call_llm(
             thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
         )
     else:
-        # Non-reasoning provider: keep the original deterministic-ish call.
+        # Non-anthropic / non-reasoning model: no thinking payload (it would
+        # 400). For the pinned Sonnet 4.6 config this branch is a DEGRADATION —
+        # e.g. a litellm registry drop would silently turn every thesis into a
+        # cheap no-thinking call while the persisted row still stamps v4 +
+        # budget. Fail loud so the drop shows up as a WARNING, not just a
+        # suspiciously low bill.
+        log.warning(
+            "thesis_thinking_disabled model=%s provider=%s — thinking payload "
+            "skipped, using plain temperature=0.2 call",
+            model,
+            _provider,
+        )
         completion_kwargs["temperature"] = 0.2
 
     resp = litellm.completion(**completion_kwargs)

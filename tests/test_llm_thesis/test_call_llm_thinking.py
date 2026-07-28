@@ -50,6 +50,22 @@ def _mock_resp(content: str, *, completion_tokens: int = 12000, reasoning: str =
     }
 
 
+def test_committed_model_actually_engages_thinking_path():
+    """Un-mocked guard against a silent no-op: the model in the committed config
+    must resolve to the anthropic provider AND support reasoning in litellm's
+    registry, or _call_llm falls through to the plain temp=0.2 call and every
+    thesis silently degrades to non-thinking. Reads the model from config so a
+    rename can't disable the whole feature undetected. No network — litellm's
+    provider/registry lookups are local."""
+    import litellm
+
+    from rainier.core.config import LLMThesisConfig
+
+    model = LLMThesisConfig().model
+    assert litellm.get_llm_provider(model)[1] == "anthropic"
+    assert litellm.supports_reasoning(model=model) is True
+
+
 def test_call_llm_enables_thinking_with_budget_and_temp_one():
     budget = 24000
     with patch("litellm.supports_reasoning", return_value=True), \
