@@ -283,9 +283,9 @@ def _call_llm(
     is ANTHROPIC-specific (OpenAI reasoning models use ``reasoning_effort``), so
     we attach it (and the temperature==1.0 / max_tokens invariants it requires)
     only when the resolved provider is anthropic AND the model supports
-    reasoning. If the thesis model is ever reconfigured to another provider, we
-    fall back to the legacy plain call (temperature=0.2, no thinking) instead of
-    letting LiteLLM raise ``UnsupportedParamsError``.
+    reasoning. If the configured thesis model can't enable thinking, we RAISE
+    (the thesis pipeline requires thinking) rather than silently produce a
+    no-thinking thesis that would be persisted + cached as a valid xhigh result.
 
     Cost note: anthropic bills thinking tokens as OUTPUT tokens and folds them
     into ``usage.output_tokens``, which LiteLLM surfaces as ``completion_tokens``.
@@ -334,19 +334,19 @@ def _call_llm(
             thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
         )
     else:
-        # Non-anthropic / non-reasoning model: no thinking payload (it would
-        # 400). For the pinned Sonnet 4.6 config this branch is a DEGRADATION —
-        # e.g. a litellm registry drop would silently turn every thesis into a
-        # cheap no-thinking call while the persisted row still stamps v4 +
-        # budget. Fail loud so the drop shows up as a WARNING, not just a
-        # suspiciously low bill.
-        log.warning(
-            "thesis_thinking_disabled model=%s provider=%s — thinking payload "
-            "skipped, using plain temperature=0.2 call",
-            model,
-            _provider,
+        # The thesis pipeline REQUIRES extended thinking. If the configured model
+        # can't enable it (non-anthropic provider, or dropped from litellm's
+        # reasoning registry), REFUSE loudly rather than fall back to a cheap
+        # no-thinking call: that plain thesis would still be persisted and
+        # stamped v4 + budget=24000, and Tier-1 would then serve the degraded
+        # row as a valid xhigh result for the rest of the day (cache poisoning —
+        # flagged by both codex and /review). Raising instead means the caller's
+        # retry loop drops the ticker and nothing degraded is ever cached.
+        raise RuntimeError(
+            f"extended thinking unavailable for thesis model {model!r} "
+            f"(provider={_provider or 'unknown'}); refusing to generate a "
+            "degraded no-thinking thesis"
         )
-        completion_kwargs["temperature"] = 0.2
 
     resp = litellm.completion(**completion_kwargs)
     text = resp["choices"][0]["message"]["content"]

@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+import pytest
+
 from rainier.llm_thesis.schemas import TradeThesis
 from rainier.llm_thesis.service import (
     _FINAL_ANSWER_HEADROOM_TOKENS,
@@ -142,41 +144,39 @@ def test_thinking_text_does_not_leak_into_parsed_thesis():
     assert "SECRET" not in thesis.paragraph_evidence
 
 
-def test_call_llm_falls_back_for_non_reasoning_model():
-    """A non-reasoning provider must NOT receive thinking/max_tokens (LiteLLM
-    would raise UnsupportedParamsError); fall back to the legacy temp=0.2 call."""
+def test_call_llm_raises_for_non_reasoning_model():
+    """A non-reasoning model can't enable thinking; the thesis pipeline requires
+    it, so _call_llm must RAISE (never make a degraded no-thinking call that
+    could be persisted + cached as a valid xhigh result)."""
     with patch("litellm.supports_reasoning", return_value=False), \
             patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
-        _call_llm(
-            model="gpt-some-non-reasoning",
-            system_prompt="sys",
-            user_prompt="user",
-            image_bytes=None,
-            thinking_budget_tokens=24000,
-        )
-    kwargs = mock_comp.call_args.kwargs
-    assert "thinking" not in kwargs
-    assert "max_tokens" not in kwargs
-    assert kwargs["temperature"] == 0.2
+        with pytest.raises(RuntimeError, match="extended thinking unavailable"):
+            _call_llm(
+                model="gpt-some-non-reasoning",
+                system_prompt="sys",
+                user_prompt="user",
+                image_bytes=None,
+                thinking_budget_tokens=24000,
+            )
+    mock_comp.assert_not_called()  # no degraded thesis produced
 
 
-def test_call_llm_does_not_send_thinking_to_non_anthropic_reasoning_model():
+def test_call_llm_raises_for_non_anthropic_reasoning_model():
     """The anthropic thinking payload is provider-specific: an OpenAI reasoning
-    model (supports_reasoning True, provider != anthropic) must fall back rather
-    than receive thinking={...}."""
+    model (supports_reasoning True, provider != anthropic) must RAISE rather than
+    silently produce a no-thinking thesis."""
     with patch("litellm.supports_reasoning", return_value=True), \
             patch("litellm.get_llm_provider", return_value=("o3", "openai", None, None)), \
             patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
-        _call_llm(
-            model="o3",
-            system_prompt="sys",
-            user_prompt="user",
-            image_bytes=None,
-            thinking_budget_tokens=24000,
-        )
-    kwargs = mock_comp.call_args.kwargs
-    assert "thinking" not in kwargs
-    assert kwargs["temperature"] == 0.2
+        with pytest.raises(RuntimeError, match="extended thinking unavailable"):
+            _call_llm(
+                model="o3",
+                system_prompt="sys",
+                user_prompt="user",
+                image_bytes=None,
+                thinking_budget_tokens=24000,
+            )
+    mock_comp.assert_not_called()
 
 
 def test_cost_estimate_bills_thinking_tokens_as_output():
