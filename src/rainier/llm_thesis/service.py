@@ -266,12 +266,13 @@ def _call_llm(
     text (the JSON thesis _parse_thesis expects), so we keep reading ``content``
     and thinking text never leaks into the parsed thesis.
 
-    Model gate: the ``thinking`` param is anthropic/reasoning-model-specific.
-    We only attach it (and the temperature==1.0 / max_tokens invariants it
-    requires) when ``litellm.supports_reasoning(model)`` is True. If the thesis
-    model is ever reconfigured to a non-reasoning provider, we fall back to the
-    legacy plain call (temperature=0.2, no thinking) instead of letting LiteLLM
-    raise ``UnsupportedParamsError``.
+    Model gate: the ``thinking={"type": "enabled", "budget_tokens": N}`` payload
+    is ANTHROPIC-specific (OpenAI reasoning models use ``reasoning_effort``), so
+    we attach it (and the temperature==1.0 / max_tokens invariants it requires)
+    only when the resolved provider is anthropic AND the model supports
+    reasoning. If the thesis model is ever reconfigured to another provider, we
+    fall back to the legacy plain call (temperature=0.2, no thinking) instead of
+    letting LiteLLM raise ``UnsupportedParamsError``.
 
     Cost note: anthropic bills thinking tokens as OUTPUT tokens and folds them
     into ``usage.output_tokens``, which LiteLLM surfaces as ``completion_tokens``.
@@ -301,7 +302,14 @@ def _call_llm(
             {"role": "user", "content": content_parts},
         ],
     }
-    if litellm.supports_reasoning(model=model):
+    try:
+        _provider = litellm.get_llm_provider(model)[1]
+    except Exception:
+        _provider = ""
+    anthropic_thinking = _provider == "anthropic" and litellm.supports_reasoning(
+        model=model
+    )
+    if anthropic_thinking:
         # Extended thinking: temperature MUST be 1.0 and max_tokens MUST exceed
         # the thinking budget (final-answer headroom on top).
         completion_kwargs["thinking"] = {

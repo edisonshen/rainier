@@ -144,6 +144,25 @@ def test_call_llm_falls_back_for_non_reasoning_model():
     assert kwargs["temperature"] == 0.2
 
 
+def test_call_llm_does_not_send_thinking_to_non_anthropic_reasoning_model():
+    """The anthropic thinking payload is provider-specific: an OpenAI reasoning
+    model (supports_reasoning True, provider != anthropic) must fall back rather
+    than receive thinking={...}."""
+    with patch("litellm.supports_reasoning", return_value=True), \
+            patch("litellm.get_llm_provider", return_value=("o3", "openai", None, None)), \
+            patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
+        _call_llm(
+            model="o3",
+            system_prompt="sys",
+            user_prompt="user",
+            image_bytes=None,
+            thinking_budget_tokens=24000,
+        )
+    kwargs = mock_comp.call_args.kwargs
+    assert "thinking" not in kwargs
+    assert kwargs["temperature"] == 0.2
+
+
 def test_cost_estimate_bills_thinking_tokens_as_output():
     """A large completion-token count (thinking folded into output) must be
     billed at the $15/M output rate."""
