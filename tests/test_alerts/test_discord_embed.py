@@ -8,13 +8,16 @@ HTTP, no DB. Multipart attachment + DB chart-load happens in
 from __future__ import annotations
 
 from rainier.alerts.discord import (
+    _EMBED_FIELD_VALUE_MAX,
     _VERDICT_COLORS,
+    _WHY_BULLET_MAX,
     _build_chip_line,
     _levels_block,
     _llm_noticed,
     _risks_lines,
     _truncate_at_word,
     _watch_line,
+    _why_bullets,
     format_thesis_embed,
 )
 from rainier.core.types import StockCandidate
@@ -421,7 +424,6 @@ class TestLLMTextScrubbing:
         assert "`" not in out
 
     def test_why_bullets_scrub_paragraph_radar(self):
-        from rainier.alerts.discord import _why_bullets
         bullets = _why_bullets(
             _thesis(
                 paragraph_radar="@everyone strong setup. Volume confirms."
@@ -429,6 +431,69 @@ class TestLLMTextScrubbing:
         )
         for b in bullets:
             assert "@everyone" not in b
+
+    def test_why_bullet_full_sentence_survives_whole(self):
+        # Regression: the operator saw real ~150-char thesis sentences chopped
+        # mid-word by the old 60-char cap ("...pattern_type is…"). A full
+        # sentence shorter than _WHY_BULLET_MAX must render intact — no ellipsis.
+        sentence = (
+            "Entry 670.60 sits 1.07 percent below the current price 677.79 "
+            "and the stop rests just under the prior swing low which leaves "
+            "a clean measured move higher"
+        )
+        assert len(sentence) < _WHY_BULLET_MAX  # guards the fixture premise
+        bullets = _why_bullets(_thesis(paragraph_radar=sentence + "."))
+        assert bullets[0] == sentence
+        assert not bullets[0].endswith("…")
+
+    def test_why_bullet_over_cap_truncated_at_word_boundary(self):
+        # Boundary: a sentence longer than _WHY_BULLET_MAX is still truncated,
+        # now at the higher cap, and lands on a word break with the ellipsis.
+        words = ["measured"] * 60  # 60 * 9 - 1 = 539 chars, well over the cap
+        sentence = " ".join(words)
+        assert len(sentence) > _WHY_BULLET_MAX  # guards the fixture premise
+        bullets = _why_bullets(_thesis(paragraph_radar=sentence + "."))
+        assert bullets[0].endswith("…")
+        assert len(bullets[0]) <= _WHY_BULLET_MAX
+        # Word-boundary safe: dropping the ellipsis leaves whole words only.
+        assert bullets[0][:-1].strip() == bullets[0][:-1]
+        for token in bullets[0][:-1].split():
+            assert token == "measured"
+
+    def test_why_bullet_exact_boundary_transition(self):
+        # Off-by-one: a bullet of exactly _WHY_BULLET_MAX chars survives whole;
+        # one char over gains the ellipsis. Guards the constant's transition.
+        # "aa " repeats with period 3; slicing to these lengths never lands on
+        # a trailing space (which _why_bullets would strip), so the fixture
+        # lengths are exact.
+        filler = ("aa " * 100).strip()
+        at_cap = filler[:_WHY_BULLET_MAX]
+        over_cap = filler[: _WHY_BULLET_MAX + 1]
+        assert len(at_cap) == _WHY_BULLET_MAX
+        assert not at_cap.endswith(" ") and not over_cap.endswith(" ")
+
+        at = _why_bullets(_thesis(paragraph_radar=at_cap, paragraph_evidence=""))
+        assert at[0] == at_cap
+        assert not at[0].endswith("…")
+
+        over = _why_bullets(_thesis(paragraph_radar=over_cap, paragraph_evidence=""))
+        assert over[0].endswith("…")
+        assert len(over[0]) <= _WHY_BULLET_MAX
+
+    def test_why_field_value_within_discord_field_cap(self):
+        # Field-cap safety: four long bullets (2 sentences each in radar +
+        # evidence) still fit Discord's 1024-char field-value limit because the
+        # call site backstops the joined WHY value at _EMBED_FIELD_VALUE_MAX.
+        long_sentence = " ".join(["breakout"] * 40)  # ~319 chars, over the cap
+        embed = format_thesis_embed(
+            _thesis(
+                paragraph_radar=f"{long_sentence}. {long_sentence}.",
+                paragraph_evidence=f"{long_sentence}. {long_sentence}.",
+            ),
+            _candidate(),
+        )
+        why = next(f for f in embed["fields"] if f["name"] == "WHY")
+        assert len(why["value"]) <= _EMBED_FIELD_VALUE_MAX
 
 
 class TestFooterAndImage:
