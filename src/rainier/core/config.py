@@ -312,9 +312,11 @@ class LLMThesisConfig(BaseModel):
     # "budget_tokens": <this>} (deterministic form — litellm's reasoning_effort
     # low/medium/high map to much smaller anthropic budgets, not xhigh). When
     # thinking is enabled the anthropic API requires temperature==1.0 and
-    # max_tokens > budget_tokens; both are handled in service._call_llm. Positive
-    # int; 0 or negative would violate the max_tokens > budget invariant.
-    thinking_budget_tokens: int = Field(24000, gt=0)
+    # max_tokens > budget_tokens; both are handled in service._call_llm.
+    # Floor is Anthropic's documented minimum thinking budget (1024) — a smaller
+    # value loads fine but the provider rejects every thesis call, so we fail
+    # fast at config load instead.
+    thinking_budget_tokens: int = Field(24000, ge=1024)
     # Bumped v1->v2 with the D7a calibration block, v2->v3 with the R-A
     # reflections block. The Tier-1 cache key is built from THIS runtime value
     # (service.generate_thesis reads settings.llm_thesis.prompt_version), so it

@@ -23,15 +23,18 @@ def test_thinking_budget_and_cap_defaults():
     assert cfg.max_usd_per_scan == 2.5
 
 
-@pytest.mark.parametrize("bad", [0, -1, -24000])
-def test_thinking_budget_rejects_non_positive(bad: int):
+# 0/-1 are non-positive; 500/1023 are positive but below Anthropic's 1024
+# minimum thinking budget — both must fail fast at config load rather than
+# reach the provider and 400 every thesis call.
+@pytest.mark.parametrize("bad", [0, -1, -24000, 500, 1023])
+def test_thinking_budget_rejects_below_minimum(bad: int):
     with pytest.raises(ValidationError):
         LLMThesisConfig(thinking_budget_tokens=bad)
 
 
-def test_thinking_budget_accepts_positive_override():
-    cfg = LLMThesisConfig(thinking_budget_tokens=8000)
-    assert cfg.thinking_budget_tokens == 8000
+def test_thinking_budget_accepts_at_and_above_minimum():
+    assert LLMThesisConfig(thinking_budget_tokens=1024).thinking_budget_tokens == 1024
+    assert LLMThesisConfig(thinking_budget_tokens=8000).thinking_budget_tokens == 8000
 
 
 def test_yaml_block_reaches_thesis_config(monkeypatch, tmp_path):
