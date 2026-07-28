@@ -222,7 +222,8 @@ class _StubLLM:
         self.fail = fail
         self.calls: list[dict] = []
 
-    def __call__(self, *, model, system_prompt, user_prompt, image_bytes):
+    def __call__(self, *, model, system_prompt, user_prompt, image_bytes,
+                 **_kwargs):
         self.calls.append(
             {
                 "model": model,
@@ -685,7 +686,8 @@ async def _run_thesis_capture(monkeypatch) -> tuple:
 
     captured: dict = {}
 
-    def fake_call_llm(*, model, system_prompt, user_prompt, image_bytes):
+    def fake_call_llm(*, model, system_prompt, user_prompt, image_bytes,
+                      **_kwargs):
         captured["user_prompt"] = user_prompt
         return valid, 10, 20
 
