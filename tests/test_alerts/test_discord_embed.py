@@ -460,6 +460,26 @@ class TestLLMTextScrubbing:
         for token in bullets[0][:-1].split():
             assert token == "measured"
 
+    def test_why_bullet_exact_boundary_transition(self):
+        # Off-by-one: a bullet of exactly _WHY_BULLET_MAX chars survives whole;
+        # one char over gains the ellipsis. Guards the constant's transition.
+        # "aa " repeats with period 3; slicing to these lengths never lands on
+        # a trailing space (which _why_bullets would strip), so the fixture
+        # lengths are exact.
+        filler = ("aa " * 100).strip()
+        at_cap = filler[:_WHY_BULLET_MAX]
+        over_cap = filler[: _WHY_BULLET_MAX + 1]
+        assert len(at_cap) == _WHY_BULLET_MAX
+        assert not at_cap.endswith(" ") and not over_cap.endswith(" ")
+
+        at = _why_bullets(_thesis(paragraph_radar=at_cap, paragraph_evidence=""))
+        assert at[0] == at_cap
+        assert not at[0].endswith("…")
+
+        over = _why_bullets(_thesis(paragraph_radar=over_cap, paragraph_evidence=""))
+        assert over[0].endswith("…")
+        assert len(over[0]) <= _WHY_BULLET_MAX
+
     def test_why_field_value_within_discord_field_cap(self):
         # Field-cap safety: four long bullets (2 sentences each in radar +
         # evidence) still fit Discord's 1024-char field-value limit because the
