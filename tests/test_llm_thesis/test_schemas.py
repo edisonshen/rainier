@@ -122,3 +122,25 @@ def test_compute_input_hash_handles_no_image():
     )
     h = compute_input_hash(pack, None)
     assert len(h) == 64
+
+
+def test_compute_input_hash_changes_with_thinking_budget():
+    """A retuned thinking budget must change the Tier-2 idempotency key so the
+    regenerated thesis persists as its own row (no unique-index collision)."""
+    pack = EvidencePack(
+        symbol="NVDA", scan_date="2026-05-07", session_name="afternoon",
+        candidate={"rank": 5},
+    )
+    assert compute_input_hash(pack, b"img", thinking_budget_tokens=24000) != \
+        compute_input_hash(pack, b"img", thinking_budget_tokens=8000)
+
+
+def test_compute_input_hash_none_budget_matches_legacy_two_arg():
+    """Omitting the budget (default None) must keep the legacy 2-arg hash
+    byte-identical so other callers' idempotency keys are unaffected."""
+    pack = EvidencePack(
+        symbol="NVDA", scan_date="2026-05-07", session_name="afternoon",
+        candidate={"rank": 5},
+    )
+    assert compute_input_hash(pack, b"img") == \
+        compute_input_hash(pack, b"img", thinking_budget_tokens=None)

@@ -420,7 +420,12 @@ async def generate_thesis(
         return None, 0.0, None
 
     pack, renders, image_bytes = await asyncio.to_thread(evidence_provider)
-    input_hash = compute_input_hash(pack, image_bytes)
+    # Fold the thinking budget into the Tier-2 idempotency key so a retuned
+    # budget persists as its own row instead of colliding with the old-budget
+    # row on the unique index (which would re-read the stale id).
+    input_hash = compute_input_hash(
+        pack, image_bytes, thinking_budget_tokens=thesis_cfg.thinking_budget_tokens
+    )
 
     candidate_summary = json.dumps(pack.candidate, sort_keys=True, default=str)
     # D7a: inject the calibration section (how prior theses graded out). Loaded

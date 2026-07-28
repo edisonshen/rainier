@@ -68,13 +68,24 @@ class EvidencePack(BaseModel):
     image_sha256: str | None = None
 
 
-def compute_input_hash(pack: EvidencePack, image_bytes: bytes | None) -> str:
-    """Deterministic sha256 of the evidence pack + image bytes.
+def compute_input_hash(
+    pack: EvidencePack,
+    image_bytes: bytes | None,
+    thinking_budget_tokens: int | None = None,
+) -> str:
+    """Deterministic sha256 of the evidence pack + image bytes (+ thinking budget).
 
     Used as the idempotency key on `analysis_results.input_hash`. Two re-runs
-    of the same scan with the same (symbol, signals, image) compute to the
-    same value, so `INSERT ... ON CONFLICT DO NOTHING` guarantees zero
-    duplicate LLM calls.
+    of the same scan with the same (symbol, signals, image, thinking budget)
+    compute to the same value, so `INSERT ... ON CONFLICT DO NOTHING` guarantees
+    zero duplicate LLM calls.
+
+    ``thinking_budget_tokens`` is folded in because it changes the amount of
+    reasoning the LLM does — a retuned budget must yield a DIFFERENT idempotency
+    key so the regenerated thesis persists as its own row instead of colliding
+    with the old-budget row on the (day, symbols, model, prompt, input_hash)
+    unique index. It is NOT prompt text; the pack/image are still the only
+    content inputs. ``None`` (the default) keeps legacy callers byte-identical.
     """
     pack_json = pack.model_dump(exclude={"image_sha256"})
     serialized = json.dumps(pack_json, sort_keys=True, default=str).encode("utf-8")
@@ -83,4 +94,9 @@ def compute_input_hash(pack: EvidencePack, image_bytes: bytes | None) -> str:
         if image_bytes is not None
         else "no-image"
     )
-    return hashlib.sha256(serialized + image_hash.encode("ascii")).hexdigest()
+    digest = serialized + image_hash.encode("ascii")
+    if thinking_budget_tokens is not None:
+        # Append only when provided so the legacy 2-arg form stays byte-identical
+        # (other callers' idempotency keys are unaffected by this addition).
+        digest += f"|budget:{int(thinking_budget_tokens)}".encode("ascii")
+    return hashlib.sha256(digest).hexdigest()
