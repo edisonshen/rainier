@@ -84,6 +84,25 @@ def test_parse_dedups_duplicate_current_day_keeping_latest(payload_dup_current_d
     assert current.rating == "greed"
 
 
+def test_parse_dedup_keeps_max_epoch_regardless_of_array_order(payload):
+    """The kept current-day reading is the MAX-epoch point, not merely the last
+    array element. CNN's intraday duplicate carries a LATER epoch `x`; even if it
+    is listed BEFORE the midnight point, parse must keep it (score 88.0)."""
+    hist = payload["fear_and_greed_historical"]["data"]
+    last = hist[-1]  # 2020-09-23
+    later = dict(last)
+    later["x"] = last["x"] + 3_600_000  # +1h, same calendar date, later reading
+    later["y"] = 88.0
+    later["rating"] = "extreme greed"
+    # Insert the later point BEFORE the original (out-of-array-order).
+    hist.insert(len(hist) - 1, later)
+    obs = parse_observations(payload)
+    dates = [o.date for o in obs]
+    assert dates == [date(2020, 9, 21), date(2020, 9, 22), date(2020, 9, 23)]
+    current = next(o for o in obs if o.date == date(2020, 9, 23))
+    assert current.score == 88.0  # max-epoch point wins despite earlier position
+
+
 def test_persist_duplicate_current_day_inserts_one_row(session_factory, payload_dup_current_day):
     """A single persist of a payload with a duplicated current day inserts
     exactly ONE row for that date (the latest reading), not one per duplicate."""

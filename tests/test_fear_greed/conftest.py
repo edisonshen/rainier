@@ -38,8 +38,13 @@ def payload_dup_current_day() -> dict:
     component series carries the same intra-day duplicate.
     """
     data = copy.deepcopy(json.loads(FIXTURE.read_text()))
+    # The intraday duplicate carries a LATER epoch `x` (same calendar date) — the
+    # live shape (2026-07-29 served as x=…3200000 midnight AND x=…2837000
+    # intraday). +1h stays inside the same UTC day for the fixture's dates.
+    hour_ms = 3_600_000
     hist = data["fear_and_greed_historical"]["data"]
     dup = copy.deepcopy(hist[-1])
+    dup["x"] = dup["x"] + hour_ms
     dup["y"] = 63.0  # CNN's latest reading for the current, unsettled day
     dup["rating"] = "greed"
     hist.append(dup)
@@ -56,6 +61,7 @@ def payload_dup_current_day() -> dict:
     ):
         series = data[key]["data"]
         cdup = copy.deepcopy(series[-1])
+        cdup["x"] = cdup["x"] + hour_ms
         cdup["y"] = (cdup.get("y") or 0.0) + 1.0
         series.append(cdup)
     return data

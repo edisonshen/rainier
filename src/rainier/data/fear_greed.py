@@ -146,26 +146,32 @@ def parse_observations(payload: dict) -> list[FearGreedObservation]:
     if not historical:
         raise FearGreedError("payload has no fear_and_greed_historical data")
 
-    # date → raw point, per component series. The dict comprehension collapses
-    # any same-date duplicates to the LAST point (last-write-wins), matching the
-    # composite collapse below.
+    # date → raw point, per component series. Sort by epoch `x` ascending so the
+    # dict comprehension's last-write-wins keeps the MAX-epoch (most-recent)
+    # point per date, matching the composite collapse below — independent of the
+    # order CNN happens to list the points in.
     comp_by_date: dict[str, dict[date, dict]] = {}
     for key in COMPONENT_KEYS:
         series = payload.get(key, {}).get("data", []) or []
-        comp_by_date[key] = {_epoch_ms_to_date(pt["x"]): pt for pt in series}
+        comp_by_date[key] = {
+            _epoch_ms_to_date(pt["x"]): pt for pt in sorted(series, key=lambda p: p["x"])
+        }
 
     # Collapse the composite series to one point per date. CNN emits MULTIPLE
-    # points for the current (unsettled) trading day with different scores
-    # (verified live 2026-07-29: today present as both 33.4531 and 33.4694).
-    # Keep the LAST/most-recent point per date — CNN's latest reading for that
-    # day, which matches the `fear_and_greed.score` current composite. Without
-    # this collapse, parse emits a row per duplicate, persist stamps them with a
-    # single batch observed_at, and the ambiguous "latest by observed_at" read
-    # makes every later fetch append again (current day grows unbounded).
-    # Dict insertion order preserves chronological date order (a repeated date
-    # keeps its first-seen position but takes the last value).
+    # points for the current (unsettled) trading day with different scores AND
+    # different epoch `x` (verified live 2026-07-29: date 2026-07-29 present as
+    # both x=1785283200000 y=34.23 (midnight) and x=1785342837000 y=33.36
+    # (intraday) — the latter is the latest reading). Keep the MAX-epoch point
+    # per date — CNN's most-recent reading for that day, which matches the
+    # `fear_and_greed.score` current composite. Sorting by `x` makes "most
+    # recent" mean max timestamp, NOT merely the last array element, so a
+    # re-ordered payload can't flip the kept value and resume unbounded appends.
+    # Without this collapse, parse emits a row per duplicate, persist stamps them
+    # with a single batch observed_at, and the ambiguous "latest by observed_at"
+    # read makes every later fetch append again (current day grows unbounded).
+    # Dict insertion order (over the sorted points) yields chronological output.
     composite_by_date: dict[date, dict] = {}
-    for pt in historical:
+    for pt in sorted(historical, key=lambda p: p["x"]):
         composite_by_date[_epoch_ms_to_date(pt["x"])] = pt
 
     observations: list[FearGreedObservation] = []
