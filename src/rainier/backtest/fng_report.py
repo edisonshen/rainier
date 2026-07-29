@@ -82,19 +82,25 @@ def _verdict_block(result: BacktestResult) -> str:
             f"<td>{calmar_ratio}&times;</td>"
             f"<td>{_fmt(c.sharpe)} / {_fmt(b.sharpe) if b else '&mdash;'}</td>"
             f"<td>{_fmt(c.max_dd, pct=True)} / {_fmt(b.max_dd, pct=True) if b else '&mdash;'}</td>"
+            f"<td>{_fmt(c.exposure, pct=True, nd=1)}</td>"
             f"<td class='{'ok' if ok else 'no'}'>{'PASS' if ok else 'fail'}</td></tr>"
         )
     table = (
         "<table><thead><tr><th>Logic</th><th>Train-selected combo</th>"
         "<th>OOS Calmar</th><th>MA-only Calmar</th><th>ratio (bar &ge;1.15&times;)</th>"
-        "<th>Sharpe (logic/MA)</th><th>MaxDD (logic/MA)</th><th>Verdict</th></tr></thead>"
+        "<th>Sharpe (logic/MA)</th><th>MaxDD (logic/MA)</th>"
+        "<th>OOS Expo</th><th>Verdict</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
     return (
         f"<div class='verdict {cls}'><div class='v-head'>{headline}</div>"
         f"<div class='v-sub'>{sub}</div></div>"
         "<p>Bar (all three, OOS, vs the MA-only arm sharing the selected MA): "
-        "Calmar &ge; 1.15&times;, Sharpe &ge;, MaxDD &le; (annualized 252, rf=0).</p>"
+        "Calmar &ge; 1.15&times;, Sharpe &ge;, MaxDD &le; (annualized 252, rf=0). "
+        "<b>Read Calmar with the exposure column:</b> a very-low-exposure combo "
+        "sits in cash most of the OOS window, so its tiny drawdown can inflate "
+        "Calmar off a near-zero denominator &mdash; a PASS at &lt;~15% exposure is "
+        "fragile, not a robust edge (the design's Calmar-instability caveat).</p>"
         f"{table}"
     )
 
