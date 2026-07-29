@@ -9,6 +9,7 @@ a new immutable observation.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 from datetime import date, datetime, timezone
 
@@ -66,6 +67,77 @@ def test_parse_yields_one_observation_per_date(payload):
         date(2020, 9, 22),
         date(2020, 9, 23),
     ]
+
+
+def test_parse_dedups_duplicate_current_day_keeping_latest(payload_dup_current_day):
+    """CNN serves the current (unsettled) day as MULTIPLE points with different
+    scores. Parse must collapse them to ONE observation per date, keeping the
+    LAST/most-recent point (CNN's latest reading)."""
+    obs = parse_observations(payload_dup_current_day)
+    # Exactly one observation per calendar date, no duplicate dates.
+    dates = [o.date for o in obs]
+    assert dates == [date(2020, 9, 21), date(2020, 9, 22), date(2020, 9, 23)]
+    assert len(dates) == len(set(dates))
+    # The current day keeps the LAST point's score (63.0), not the earlier 61.0.
+    current = next(o for o in obs if o.date == date(2020, 9, 23))
+    assert current.score == 63.0
+    assert current.rating == "greed"
+
+
+def test_persist_duplicate_current_day_inserts_one_row(session_factory, payload_dup_current_day):
+    """A single persist of a payload with a duplicated current day inserts
+    exactly ONE row for that date (the latest reading), not one per duplicate."""
+    obs = parse_observations(payload_dup_current_day)
+    with session_factory() as s:
+        n = persist_observations(s, obs, source_version="daily", observed_at=T1)
+    assert n == 3
+    with session_factory() as s:
+        rows = (
+            s.execute(
+                select(FearGreedIndex).where(FearGreedIndex.date == date(2020, 9, 23))
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0].score == 63.0
+
+
+def test_current_day_does_not_accumulate_across_unchanged_fetches(
+    session_factory, payload_dup_current_day
+):
+    """Two fetch/persist runs on an UNCHANGED source (duplicated current day
+    each time) must NOT accumulate extra rows — the current day stays at one
+    row. Then a genuinely changed current-day value appends exactly one."""
+    client = _FakeClient(status_code=200, body=payload_dup_current_day)
+    # Two identical daily fetches on the buggy-shaped payload.
+    assert fetch(session_factory=session_factory, client=client, lookback_days=1) == 3
+    assert fetch(session_factory=session_factory, client=client, lookback_days=1) == 0
+    d_current = date(2020, 9, 23)
+    with session_factory() as s:
+        count = s.execute(
+            select(func.count())
+            .select_from(FearGreedIndex)
+            .where(FearGreedIndex.date == d_current)
+        ).scalar_one()
+    assert count == 1  # current day did NOT accumulate
+
+    # A genuine source revision of the current day appends exactly one new row.
+    changed = copy.deepcopy(payload_dup_current_day)
+    changed["fear_and_greed_historical"]["data"][-1]["y"] = 70.0
+    changed_client = _FakeClient(status_code=200, body=changed)
+    assert fetch(session_factory=session_factory, client=changed_client, lookback_days=1) == 1
+    with session_factory() as s:
+        rows = (
+            s.execute(
+                select(FearGreedIndex)
+                .where(FearGreedIndex.date == d_current)
+                .order_by(FearGreedIndex.observed_at, FearGreedIndex.id)
+            )
+            .scalars()
+            .all()
+        )
+    assert [r.score for r in rows] == [63.0, 70.0]
 
 
 def test_parse_composite_and_all_nine_components(payload):

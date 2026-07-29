@@ -146,15 +146,30 @@ def parse_observations(payload: dict) -> list[FearGreedObservation]:
     if not historical:
         raise FearGreedError("payload has no fear_and_greed_historical data")
 
-    # date → raw point, per component series.
+    # date → raw point, per component series. The dict comprehension collapses
+    # any same-date duplicates to the LAST point (last-write-wins), matching the
+    # composite collapse below.
     comp_by_date: dict[str, dict[date, dict]] = {}
     for key in COMPONENT_KEYS:
         series = payload.get(key, {}).get("data", []) or []
         comp_by_date[key] = {_epoch_ms_to_date(pt["x"]): pt for pt in series}
 
-    observations: list[FearGreedObservation] = []
+    # Collapse the composite series to one point per date. CNN emits MULTIPLE
+    # points for the current (unsettled) trading day with different scores
+    # (verified live 2026-07-29: today present as both 33.4531 and 33.4694).
+    # Keep the LAST/most-recent point per date — CNN's latest reading for that
+    # day, which matches the `fear_and_greed.score` current composite. Without
+    # this collapse, parse emits a row per duplicate, persist stamps them with a
+    # single batch observed_at, and the ambiguous "latest by observed_at" read
+    # makes every later fetch append again (current day grows unbounded).
+    # Dict insertion order preserves chronological date order (a repeated date
+    # keeps its first-seen position but takes the last value).
+    composite_by_date: dict[date, dict] = {}
     for pt in historical:
-        d = _epoch_ms_to_date(pt["x"])
+        composite_by_date[_epoch_ms_to_date(pt["x"])] = pt
+
+    observations: list[FearGreedObservation] = []
+    for d, pt in composite_by_date.items():
         components: dict[str, float | None] = {}
         raw_components: dict[str, dict | None] = {}
         for key, column in COMPONENT_KEYS.items():
@@ -200,9 +215,10 @@ def persist_observations(
 ) -> int:
     """Append changed observations; return the number of rows inserted.
 
-    For each date, the latest stored observation (by ``observed_at`` DESC) is
-    compared against the pulled value: identical → no-op; changed or absent →
-    a new immutable ``(date, observed_at)`` row. Never mutates a prior row.
+    For each date, the latest stored observation (by ``observed_at`` DESC, then
+    ``id`` DESC to break same-``observed_at`` ties deterministically) is compared
+    against the pulled value: identical → no-op; changed or absent → a new
+    immutable ``(date, observed_at)`` row. Never mutates a prior row.
     """
     observed_at = observed_at or datetime.now(tz=timezone.utc)
     inserted = 0
@@ -210,7 +226,7 @@ def persist_observations(
         latest = session.execute(
             select(FearGreedIndex)
             .where(FearGreedIndex.date == obs.date)
-            .order_by(FearGreedIndex.observed_at.desc())
+            .order_by(FearGreedIndex.observed_at.desc(), FearGreedIndex.id.desc())
             .limit(1)
         ).scalar_one_or_none()
         if latest is not None and not _differs(latest, obs):
