@@ -252,3 +252,25 @@ jobs:
     log: "data/money-flow-backup.log"
     discord_on_failure: true
     enabled: true
+
+  # CNN Fear & Greed Index — daily point-in-time capture (append-on-change).
+  # DESIGN-fear-greed-signal.md Phase 1 / TASK-PLAN-fng-data-ingest-efb8.md.
+  #
+  # DEFINED BUT NOT ARMED: `enabled: false` is DELIBERATE and MUST stay
+  # present-and-false. A missing `enabled` key defaults to True in
+  # scheduler/jobs.py, so dropping the flag would auto-install this into the
+  # live crontab on the next `rainier jobs sync`. The operator arms it
+  # explicitly once the change is pulled onto the prod checkout (Phase 1
+  # collects nothing until then — project_prod_checkout_staleness).
+  #
+  # 15:10 PT runs after the US cash close so the day's composite is settled.
+  # `fetch` appends today's observation only if the value changed since the
+  # last stored one (idempotent; a re-run is a safe no-op). Fails loud on a
+  # non-200/empty CNN response so cron-wrapper.sh fires the Discord alert.
+  - name: fear-greed-daily
+    description: "Append today's CNN Fear & Greed observation (point-in-time, append-on-change)"
+    schedule: "10 15 * * 1-5"   # 15:10 PST Mon-Fri (after cash close)
+    command: "uv run rainier fear-greed fetch"
+    log: "data/fear-greed.log"
+    discord_on_failure: true
+    enabled: false

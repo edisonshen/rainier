@@ -70,7 +70,7 @@ def test_parse_yields_one_observation_per_date(payload):
 def test_parse_composite_and_all_nine_components(payload):
     first = parse_observations(payload)[0]
     assert first.score == 45.0
-    assert first.rating == "fear"
+    assert first.rating == "neutral"  # CNN band: 45 ≤ score < 55
     # All 9 component columns present and non-null.
     assert set(first.components) == set(COMPONENT_KEYS.values())
     assert all(v is not None for v in first.components.values())
@@ -82,7 +82,7 @@ def test_parse_composite_and_all_nine_components(payload):
 def test_parse_keeps_rating_labels_in_raw(payload):
     first = parse_observations(payload)[0]
     # 9 component rating labels recoverable from raw, plus the composite rating.
-    assert first.raw["composite"]["rating"] == "fear"
+    assert first.raw["composite"]["rating"] == "neutral"
     assert set(first.raw["components"]) == set(COMPONENT_KEYS)
     for key in COMPONENT_KEYS:
         assert "rating" in first.raw["components"][key]
@@ -107,7 +107,7 @@ def test_all_nine_score_columns_persisted(session_factory, payload):
             select(FearGreedIndex).where(FearGreedIndex.date == date(2020, 9, 21))
         ).scalar_one()
     assert row.score == 45.0
-    assert row.rating == "fear"
+    assert row.rating == "neutral"
     assert row.momentum_sp125_score is not None
     assert row.volatility_vix_50_score is not None
     for col in COMPONENT_KEYS.values():

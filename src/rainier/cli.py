@@ -1464,6 +1464,43 @@ def qu_money_flow_coverage(
 
 
 # ---------------------------------------------------------------------------
+# Fear & Greed ingest
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="fear-greed")
+def fear_greed_group() -> None:
+    """CNN Fear & Greed Index ingest (point-in-time, append-on-change)."""
+
+
+@fear_greed_group.command(name="backfill")
+@click.option(
+    "--start",
+    "start_str",
+    default="2020-09-21",
+    show_default=True,
+    help="Backfill start date (YYYY-MM-DD); earliest CNN serves is 2020-09-21.",
+)
+def fear_greed_backfill(start_str: str) -> None:
+    """Backfill the F&G index from --start to today (source_version=backfill)."""
+    from datetime import date as _date
+
+    from rainier.data.fear_greed import backfill
+
+    inserted = backfill(start=_date.fromisoformat(start_str))
+    click.echo(f"fear-greed backfill: {inserted} observation(s) inserted")
+
+
+@fear_greed_group.command(name="fetch")
+def fear_greed_fetch() -> None:
+    """Append today's F&G observation (source_version=daily, append-on-change)."""
+    from rainier.data.fear_greed import fetch
+
+    inserted = fetch()
+    click.echo(f"fear-greed fetch: {inserted} observation(s) inserted")
+
+
+# ---------------------------------------------------------------------------
 # Scheduler service command
 # ---------------------------------------------------------------------------
 
