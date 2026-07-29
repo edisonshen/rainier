@@ -10,17 +10,22 @@ Acceptance (task plan):
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
+import pytest
 
 from rainier.core.config import StockScreenerConfig
 from rainier.paper.pattern_audit import (
     HORIZONS,
     aggregate,
     aggregate_to_frame,
+    as_of_index,
     build_corpus,
     corpus_path,
     directional_correct,
     forward_return,
+    forward_returns_by_symbol,
     render_report_markdown,
     write_corpus,
 )
@@ -531,3 +536,77 @@ def test_render_report_empty_corpus():
     agg = aggregate_to_frame(empty)
     md = render_report_markdown(empty, agg, window_label="n/a")
     assert "no emissions" in md.lower()
+
+
+# ---------------------------------------------------------------------------
+# as_of_index + forward_returns_by_symbol — the screened-pool fan-out the
+# replay evaluator drives (per-symbol + money-flow-only coverage).
+# ---------------------------------------------------------------------------
+
+
+def test_as_of_index_resolves_last_bar_on_or_before():
+    df = _make_ohlcv([100.0, 101.0, 102.0])  # 2025-01-01..03, tz-aware UTC index
+    assert as_of_index(df, date(2025, 1, 1)) == 0
+    assert as_of_index(df, date(2025, 1, 3)) == 2
+    # an as_of that IS a trading day resolves to that day's own bar
+    assert as_of_index(df, date(2025, 1, 2)) == 1
+    # before the first bar → None (symbol not yet trading as-of that date)
+    assert as_of_index(df, date(2024, 12, 31)) is None
+    # after the last bar → last bar (as-of clamps to newest available)
+    assert as_of_index(df, date(2025, 6, 1)) == 2
+
+
+def test_as_of_index_guard_branches():
+    # non-DatetimeIndex frame → None (no calendar axis to align a bar to)
+    plain = pd.DataFrame({"close": [1.0, 2.0]})  # RangeIndex
+    assert as_of_index(plain, date(2025, 1, 1)) is None
+    # empty (0-row) frame → None even with a DatetimeIndex
+    empty = pd.DataFrame({"close": []}, index=pd.DatetimeIndex([], tz="UTC"))
+    assert as_of_index(empty, date(2025, 1, 1)) is None
+    # tz-NAIVE index resolves against a calendar date (heterogeneous-tz path)
+    naive = pd.DataFrame(
+        {"close": [1.0, 2.0, 3.0]},
+        index=pd.date_range("2025-01-01", periods=3, freq="D"),  # tz-naive
+    )
+    assert as_of_index(naive, date(2025, 1, 2)) == 1
+    assert as_of_index(naive, date(2024, 12, 31)) is None
+
+
+def test_forward_returns_by_symbol_covers_every_requested_symbol():
+    """Every requested symbol is a key at every horizon — the evaluator must
+    never omit a selected key (basket rewards raise on a missing key). A
+    money-flow-only symbol with no price frame → None, present, never omitted."""
+    up = _make_ohlcv([100.0, 101.0, 102.0, 103.0, 110.0, 120.0])
+    out = forward_returns_by_symbol(
+        {"UP": up}, date(2025, 1, 1), ["UP", "MFONLY"], horizons=(5,)
+    )
+    # UP as-of t=0: close[5]/close[0]-1 = 120/100 - 1 = 0.20
+    assert abs(out[5]["UP"] - 0.20) < 1e-12
+    # money-flow-only symbol (absent from prices) → key present, value None
+    assert "MFONLY" in out[5]
+    assert out[5]["MFONLY"] is None
+
+
+def test_forward_returns_by_symbol_null_near_window_end_not_zero():
+    flat = _make_ohlcv([100.0] * 10)
+    out = forward_returns_by_symbol({"X": flat}, date(2025, 1, 9), ["X"], horizons=(5,))
+    # as-of t=8 → t+5=13 >= len(10) → None (never 0.0 near the window end)
+    assert out[5]["X"] is None
+
+
+def test_forward_returns_by_symbol_all_horizons_present():
+    up = _make_ohlcv([100.0 + i for i in range(30)])
+    out = forward_returns_by_symbol({"X": up}, date(2025, 1, 1), ["X"])
+    # default HORIZONS (5,10,20) all present, all non-null with 30 bars ahead
+    assert set(out.keys()) == set(HORIZONS)
+    for h in HORIZONS:
+        assert out[h]["X"] is not None
+
+
+def test_forward_returns_by_symbol_rejects_nonpositive_horizon():
+    """horizon <= 0 would read close[t_idx] (bogus 0) or wrap iloc to a FUTURE
+    bar (look-ahead) — reject it loudly rather than emit a leaked scorecard."""
+    up = _make_ohlcv([100.0 + i for i in range(10)])
+    for bad in ((0,), (-5,), (5, 0)):
+        with pytest.raises(ValueError, match="positive"):
+            forward_returns_by_symbol({"X": up}, date(2025, 1, 1), ["X"], horizons=bad)
