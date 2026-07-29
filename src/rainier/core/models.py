@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -927,6 +928,58 @@ class PaperReclaimQueue(Base):
             "status IN ('queued', 'reenqueued', 'done', 'expired')",
             name="ck_paper_reclaim_status",
         ),
+    )
+
+
+class FearGreedIndex(Base):
+    """CNN Fear & Greed Index — point-in-time, append-only-on-change.
+
+    A PLAIN Postgres table (NOT a hypertable — tiny row count, ~1.5k rows;
+    hypertable is absent from HYPERTABLES below). Each fetch appends a new
+    ``(date, observed_at)`` observation ONLY when the pulled value differs from
+    the latest stored one for that date, so a cron double-fire is a no-op while
+    a genuine source revision appends a new immutable row.
+
+    The 9 CNN component *scores* are columns; the composite rating plus each
+    component's rating label live in ``raw`` (display-oriented, recoverable).
+    ``raw`` is JSONB on Postgres and a JSON variant on SQLite so the ORM can
+    ``create_all`` in tests without Postgres.
+    """
+
+    __tablename__ = "fear_greed_index"
+
+    # BigInteger→BIGINT on Postgres; INTEGER on SQLite so its rowid
+    # autoincrement fires (SQLite only auto-generates for INTEGER PRIMARY KEY),
+    # letting the ORM create + drive this table in tests without Postgres.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)  # composite 0-100
+    rating: Mapped[str | None] = mapped_column(Text)
+
+    momentum_sp500_score: Mapped[float | None] = mapped_column(Float)
+    momentum_sp125_score: Mapped[float | None] = mapped_column(Float)
+    price_strength_score: Mapped[float | None] = mapped_column(Float)
+    price_breadth_score: Mapped[float | None] = mapped_column(Float)
+    put_call_score: Mapped[float | None] = mapped_column(Float)
+    volatility_vix_score: Mapped[float | None] = mapped_column(Float)
+    volatility_vix_50_score: Mapped[float | None] = mapped_column(Float)
+    junk_bond_demand_score: Mapped[float | None] = mapped_column(Float)
+    safe_haven_demand_score: Mapped[float | None] = mapped_column(Float)
+
+    raw: Mapped[dict] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=False)
+    source_version: Mapped[str] = mapped_column(Text, nullable=False)  # 'daily' | 'backfill'
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_fng_date", "date"),
+        Index("ix_fng_date_obs", "date", observed_at.desc()),
     )
 
 

@@ -24,7 +24,10 @@ venv/
 .env
 
 # Runtime data (logs, cache, scraped, user CSVs, auth tokens)
-data/
+# Anchored to repo root so it ignores ONLY the top-level runtime dir, NOT
+# source packages like src/rainier/data/ (an unanchored `data/` silently
+# excluded src/rainier/data/fear_greed.py from its commit).
+/data/
 
 # Trained ML model artifacts
 models/

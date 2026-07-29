@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
@@ -37,6 +38,45 @@ def _settings_path(ctx) -> str:
     """
     obj = getattr(ctx, "obj", None) or {}
     return obj.get("settings_path") or "config/settings.yaml"
+
+
+@contextmanager
+def _legacy_db_for_config(ctx):
+    """Point the legacy ``get_session()``/``get_engine()`` at the DB named by the
+    root ``--config`` for the duration of the block.
+
+    Commands that write via the legacy ``core.database`` global session factory
+    otherwise ignore ``--config`` and hit whatever ``config/settings.yaml``
+    resolves to (codex P1 — same failure the backfill-screened-levels command
+    fixes). Seed the process settings singleton from the operator-selected YAML
+    and reset the cached engine/session factory so they rebind, then RESTORE all
+    three process globals on exit so an in-process caller (CliRunner /
+    programmatic reuse) does not silently inherit this command's DB.
+    """
+    from rainier.core import config as _config_mod
+    from rainier.core import database as _database_mod
+    from rainier.core.config import load_settings_fresh
+
+    _prev_settings = _config_mod._settings
+    _prev_engine = _database_mod._engine
+    _prev_factory = _database_mod._session_factory
+
+    _config_mod._settings = load_settings_fresh(_settings_path(ctx))
+    _database_mod._engine = None
+    _database_mod._session_factory = None
+    try:
+        yield
+    finally:
+        # Dispose the engine created INSIDE the block (if any) before restoring
+        # the prior one — otherwise its pooled connections leak on every
+        # invocation in the in-process/CliRunner reuse path this helper exists
+        # to protect. `_engine` is still None here if no session was opened.
+        _new_engine = _database_mod._engine
+        _config_mod._settings = _prev_settings
+        _database_mod._engine = _prev_engine
+        _database_mod._session_factory = _prev_factory
+        if _new_engine is not None and _new_engine is not _prev_engine:
+            _new_engine.dispose()
 
 
 @cli.command()
@@ -1461,6 +1501,47 @@ def qu_money_flow_coverage(
         click.echo(coverage.render_text_report(report), nl=False)
 
     sys.exit(report.exit_code())
+
+
+# ---------------------------------------------------------------------------
+# Fear & Greed ingest
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="fear-greed")
+def fear_greed_group() -> None:
+    """CNN Fear & Greed Index ingest (point-in-time, append-on-change)."""
+
+
+@fear_greed_group.command(name="backfill")
+@click.option(
+    "--start",
+    "start_str",
+    default="2020-09-21",
+    show_default=True,
+    help="Backfill start date (YYYY-MM-DD); earliest CNN serves is 2020-09-21.",
+)
+@click.pass_context
+def fear_greed_backfill(ctx, start_str: str) -> None:
+    """Backfill the F&G index from --start to today (source_version=backfill)."""
+    from datetime import date as _date
+
+    from rainier.data.fear_greed import backfill
+
+    with _legacy_db_for_config(ctx):
+        inserted = backfill(start=_date.fromisoformat(start_str))
+    click.echo(f"fear-greed backfill: {inserted} observation(s) inserted")
+
+
+@fear_greed_group.command(name="fetch")
+@click.pass_context
+def fear_greed_fetch(ctx) -> None:
+    """Append today's F&G observation (source_version=daily, append-on-change)."""
+    from rainier.data.fear_greed import fetch
+
+    with _legacy_db_for_config(ctx):
+        inserted = fetch()
+    click.echo(f"fear-greed fetch: {inserted} observation(s) inserted")
 
 
 # ---------------------------------------------------------------------------

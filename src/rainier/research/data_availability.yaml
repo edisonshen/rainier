@@ -5951,3 +5951,28 @@ entries:
   revision_immutability: true
   source: computed_locally
   sector: thematic
+- dataset: fear_greed_index
+  fields:
+  - score
+  - momentum_sp500_score
+  - momentum_sp125_score
+  - price_strength_score
+  - price_breadth_score
+  - put_call_score
+  - volatility_vix_score
+  - volatility_vix_50_score
+  - junk_bond_demand_score
+  - safe_haven_demand_score
+  observability_timestamp_rule: end_of_trading_day
+  revision_immutability: false
+  source: cnn_fear_greed
+  notes: 'CNN Fear & Greed composite (0-100) + 9 component scores, captured
+    point-in-time (append-on-change) into the legacy public.fear_greed_index
+    table. The CNN endpoint restates the series intraday and revises history, so
+    revision_immutability is FALSE: backfilled rows (source_version=backfill)
+    carry revised values, NOT true point-in-time. The first-live-capture
+    boundary is DERIVED from the table, never stored as a field:
+    MIN(observed_at) WHERE source_version=''daily''. Rows on/after that boundary
+    are true point-in-time; earlier rows are research-grade revised values.
+
+    '
