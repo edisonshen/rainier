@@ -134,17 +134,36 @@ def _case_changed(payload, dup):
     return dict(first=obs, second=revised, n1=3, n2=1, target=D_FIRST, scores=[45.0, 99.0])
 
 
+def _case_component_changed(payload, dup):
+    # Composite score identical but a component moved → still a real revision.
+    # Guards the `_differs` component/rating branch (score compare alone would
+    # miss it and stop appending on component-only revisions).
+    obs = parse_observations(payload)
+    revised = list(obs)
+    comps = dict(revised[0].components)
+    comps["put_call_score"] = comps["put_call_score"] + 1.0
+    revised[0] = dataclasses.replace(revised[0], components=comps)
+    return dict(first=obs, second=revised, n1=3, n2=1, target=D_FIRST, scores=[45.0, 45.0])
+
+
 def _case_dup_current_day(payload, dup):
     # CNN serves the current (unsettled) day twice with different scores; parse
-    # collapses to the latest reading (63.0) → a single persist writes one row.
+    # collapses to the latest reading (63.0) → one row. A second identical pull
+    # must NOT accumulate — this is the live "current day grows unbounded across
+    # fetches" bug (n2==0, still one row).
     obs = parse_observations(dup)
-    return dict(first=obs, second=None, n1=3, n2=0, target=D_LAST, scores=[63.0])
+    return dict(first=obs, second=obs, n1=3, n2=0, target=D_LAST, scores=[63.0])
 
 
 @pytest.mark.parametrize(
     "build",
-    [_case_unchanged, _case_changed, _case_dup_current_day],
-    ids=["unchanged->0-new", "changed->1-new-immutable", "dup-current-day->collapse-1"],
+    [_case_unchanged, _case_changed, _case_component_changed, _case_dup_current_day],
+    ids=[
+        "unchanged->0-new",
+        "changed->1-new-immutable",
+        "component-changed->1-new",
+        "dup-current-day->collapse-1-no-accumulate",
+    ],
 )
 def test_append_on_change(session_factory, payload, payload_dup_current_day, build):
     """CONTRACT (append-only-on-change; the load-bearing correctness property and
