@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 from datetime import date, datetime, timezone
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -269,6 +270,24 @@ def test_fetch_failure_persists_nothing(session_factory):
     assert _row_count(session_factory) == 0
 
 
+def test_owns_client_closed_even_when_get_raises(monkeypatch):
+    """When fetch_graphdata constructs its own client, it must close it on the
+    error path (owns_client=True branch — every other test injects a client)."""
+    closed = {"v": False}
+
+    class _OwnedClient:
+        def get(self, url, headers=None, **kwargs):
+            raise RuntimeError("boom")
+
+        def close(self):
+            closed["v"] = True
+
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _OwnedClient())
+    with pytest.raises(RuntimeError):
+        fetch_graphdata(EARLIEST_DATE)
+    assert closed["v"] is True
+
+
 # --------------------------------------------------------------------------
 # Orchestrators
 # --------------------------------------------------------------------------
@@ -300,3 +319,12 @@ def test_fetch_tags_rows_daily(session_factory, payload):
             s.execute(select(FearGreedIndex.source_version)).scalars().all()
         )
     assert versions == {"daily"}
+
+
+def test_fetch_clamps_lookback_to_earliest_date(session_factory, payload):
+    """A lookback window reaching before EARLIEST_DATE clamps the request start —
+    earlier dates make CNN return HTTP 500 (see EARLIEST_DATE)."""
+    client = _FakeClient(status_code=200, body=payload)
+    # ~10 years back overshoots EARLIEST_DATE (2020-09-21) → clamped.
+    fetch(session_factory=session_factory, client=client, lookback_days=3650)
+    assert client.calls[0][0].endswith(f"/{EARLIEST_DATE.isoformat()}")
