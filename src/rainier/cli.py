@@ -4296,6 +4296,105 @@ def sma_sweep(
 
 
 # ---------------------------------------------------------------------------
+# fng-backtest — Fear & Greed + QQQ-MA market-entry signal (offline analysis)
+# ---------------------------------------------------------------------------
+
+
+@cli.command("fng-backtest")
+@click.option("--symbol", type=click.Choice(["QQQ", "TQQQ"]), default="QQQ",
+              show_default=True, help="Traded instrument. Trend + F&G are always QQQ-level.")
+@click.option("--slippage-bp", type=float, default=5.0, show_default=True,
+              help="Round-trip slippage per state transition, basis points.")
+@click.option("--oos-months", type=int, default=18, show_default=True,
+              help="Length of the untouched OOS holdout at the end of the span (months).")
+@click.option("--split-date", type=str, default=None,
+              help="Explicit train/OOS split date (YYYY-MM-DD). Overrides --oos-months.")
+@click.option("--report-path", type=click.Path(), default=None,
+              help="HTML report output path. Default: docs/fng-<symbol>-backtest-report.html")
+@click.option("--refresh-data", is_flag=True, default=False,
+              help="Force a fresh yfinance price download even if the cache is valid.")
+def fng_backtest(
+    symbol: str,
+    slippage_bp: float,
+    oos_months: int,
+    split_date: str | None,
+    report_path: str | None,
+    refresh_data: bool,
+) -> None:
+    """Backtest the F&G + QQQ-MA entry signal vs buy-and-hold AND an MA-only arm.
+
+    Selects the best (logic, MA, threshold) on the TRAIN window only and gates
+    on a single untouched OOS holdout; the auto-verdict answers "does F&G beat
+    the MA-only baseline out-of-sample?". Offline — no live surface.
+    """
+    from rainier.backtest.fear_greed_signal import (
+        align_prices_and_fng,
+        load_fng_series,
+        run_backtest,
+    )
+    from rainier.backtest.fng_report import render_report
+    from rainier.backtest.tqqq_sma_sweep import fetch_prices
+
+    if report_path is None:
+        report_path = f"docs/fng-{symbol.lower()}-backtest-report.html"
+
+    click.echo("Loading F&G series (legacy fear_greed_index)…")
+    fng, boundary = load_fng_series()
+    if fng.empty:
+        raise click.ClickException(
+            "fear_greed_index is empty — run `rainier fear-greed backfill` first."
+        )
+    research_grade = boundary is None
+    click.echo(f"  F&G rows: {len(fng)}  {fng.index[0].date()} → {fng.index[-1].date()}  "
+               f"({'research-grade (all backfill)' if research_grade else f'live boundary {boundary}'})")
+
+    click.echo("Fetching prices (QQQ/TQQQ)…")
+    prices = fetch_prices(refresh=refresh_data)
+
+    signal_close, trade_close, fng_vals, dates = align_prices_and_fng(prices, fng, symbol)
+    click.echo(f"  aligned bars: {len(dates)}  {dates[0].date()} → {dates[-1].date()}")
+
+    if split_date is not None:
+        split_ts = pd.Timestamp(split_date)
+    else:
+        split_ts = pd.Timestamp(dates[-1]) - pd.DateOffset(months=oos_months)
+    click.echo(f"Train/OOS split: {split_ts.date()} (OOS = final ~{oos_months} months)")
+
+    result = run_backtest(
+        signal_close=signal_close,
+        trade_close=trade_close,
+        fng=fng_vals,
+        dates=dates,
+        split_date=split_ts,
+        slippage_bp=slippage_bp,
+        symbol=symbol,
+        research_grade=research_grade,
+        daily_boundary=boundary,
+    )
+
+    click.echo("")
+    click.echo("Per-logic OOS verdict (vs paired MA-only arm):")
+    for logic, sel in result.selections.items():
+        ok = result.verdicts.get(logic, False)
+        paired = result.ma_only.get(sel.combo.ma)
+        mac = paired.oos.calmar if paired else float("nan")
+        click.echo(
+            f"  {logic.value:<12} combo(MA={sel.combo.ma}, thr={sel.combo.threshold:g})  "
+            f"OOS Calmar {sel.oos.calmar:.2f} vs MA-only {mac:.2f}  "
+            f"Sharpe {sel.oos.sharpe:.2f}  MaxDD {sel.oos.max_dd*100:.1f}%  "
+            f"→ {'ELIGIBLE' if ok else 'fail'}"
+        )
+    if result.eligible_logics:
+        names = ", ".join(l.value for l in result.eligible_logics)
+        click.echo(f"\nVERDICT: ELIGIBLE for Phase-3 gate (shadow first) — {names}")
+    else:
+        click.echo("\nVERDICT: F&G stays context-only (dashboard 4c) — no OOS edge.")
+
+    out = render_report(result, Path(report_path))
+    click.echo(f"\nReport → {out}")
+
+
+# ---------------------------------------------------------------------------
 # cache — manage regenerable on-disk caches
 # ---------------------------------------------------------------------------
 
