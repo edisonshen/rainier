@@ -67,9 +67,16 @@ def _legacy_db_for_config(ctx):
     try:
         yield
     finally:
+        # Dispose the engine created INSIDE the block (if any) before restoring
+        # the prior one — otherwise its pooled connections leak on every
+        # invocation in the in-process/CliRunner reuse path this helper exists
+        # to protect. `_engine` is still None here if no session was opened.
+        _new_engine = _database_mod._engine
         _config_mod._settings = _prev_settings
         _database_mod._engine = _prev_engine
         _database_mod._session_factory = _prev_factory
+        if _new_engine is not None and _new_engine is not _prev_engine:
+            _new_engine.dispose()
 
 
 @cli.command()

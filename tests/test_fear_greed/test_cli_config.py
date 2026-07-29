@@ -47,6 +47,37 @@ def test_legacy_db_for_config_rebinds_then_restores(monkeypatch):
         config_mod._settings, database_mod._engine, database_mod._session_factory = saved
 
 
+def test_legacy_db_for_config_disposes_engine_created_in_block(monkeypatch):
+    """An engine created inside the block (via get_session) must be disposed on
+    exit, not silently orphaned — its pooled connections would leak on every
+    in-process/CliRunner reuse."""
+    monkeypatch.setattr(config_mod, "load_settings_fresh", lambda _p: object())
+
+    disposed = {"v": False}
+
+    class _FakeEngine:
+        def dispose(self):
+            disposed["v"] = True
+
+    prev_engine = object()
+    saved = (config_mod._settings, database_mod._engine, database_mod._session_factory)
+    config_mod._settings = object()
+    database_mod._engine = prev_engine
+    database_mod._session_factory = object()
+
+    class _Ctx:
+        obj = {"settings_path": "config/staging.yaml"}
+
+    try:
+        with cli_mod._legacy_db_for_config(_Ctx()):
+            # Simulate get_session() lazily creating a fresh engine in the block.
+            database_mod._engine = _FakeEngine()
+        assert disposed["v"] is True, "block-created engine not disposed on exit"
+        assert database_mod._engine is prev_engine  # prior engine restored
+    finally:
+        config_mod._settings, database_mod._engine, database_mod._session_factory = saved
+
+
 def test_legacy_db_for_config_restores_on_exception(monkeypatch):
     """Restore must run on the failure path too (finally, not happy-path only)."""
     monkeypatch.setattr(config_mod, "load_settings_fresh", lambda _p: object())
