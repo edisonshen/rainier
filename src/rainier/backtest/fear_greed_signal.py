@@ -447,6 +447,17 @@ def run_backtest(
     ma_windows = list(ma_windows) if ma_windows is not None else list(MA_WINDOWS)
     split = _split_index(dates, split_date)
 
+    # A degenerate split (0 or n) leaves one window empty, which would crash
+    # compute_metrics on a size-0 slice. Fail loudly with an actionable message.
+    n = int(trade_close.shape[0])
+    if not 0 < split < n:
+        raise ValueError(
+            f"split_date {pd.Timestamp(split_date).date()} yields a degenerate "
+            f"train/OOS split (index {split} of {n}); it must fall strictly "
+            f"inside the aligned span {dates[0].date()}..{dates[-1].date()} "
+            "(check --split-date / --oos-months vs the data range)."
+        )
+
     combo_results: list[ComboResult] = []
     for combo in combos:
         mask = logic_mask(signal_close, fng, combo.logic, combo.threshold, combo.ma)

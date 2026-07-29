@@ -211,6 +211,23 @@ def test_run_backtest_slices_train_and_oos_without_leakage() -> None:
     assert result.buy_and_hold.full.final_value > 0
 
 
+@pytest.mark.parametrize("bad_split", ["2000-01-01", "2099-01-01"])
+def test_run_backtest_rejects_degenerate_split(bad_split: str) -> None:
+    """A split outside the aligned span (empty train or OOS window) raises a
+    clear ValueError, not a bare IndexError from a size-0 metric slice."""
+    n = 40
+    dates = pd.bdate_range("2021-01-01", periods=n)
+    qqq = 100.0 * np.cumprod(1 + np.full(n, 0.001))
+    fng = np.full(n, 50.0)
+
+    with pytest.raises(ValueError, match="degenerate"):
+        run_backtest(
+            signal_close=qqq, trade_close=qqq, fng=fng, dates=dates,
+            split_date=pd.Timestamp(bad_split), combos=[Combo(Logic.CONTRARIAN, 5, 30.0)],
+            ma_windows=[5],
+        )
+
+
 # --------------------------------------------------------------------------
 # 5. Auto-verdict — 3-inequality rule
 # --------------------------------------------------------------------------
