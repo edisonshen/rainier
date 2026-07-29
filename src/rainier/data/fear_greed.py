@@ -214,7 +214,20 @@ def persist_observations(
             .limit(1)
         ).scalar_one_or_none()
         if latest is not None and not _differs(latest, obs):
-            continue
+            # Value unchanged. Normally a no-op — EXCEPT the first live `daily`
+            # fetch that confirms a date previously seen only via `backfill`
+            # (revised, research-grade). Record that transition so the derived
+            # PIT boundary `MIN(observed_at) WHERE source_version='daily'` is
+            # populated when live capture starts, even if CNN hasn't revised the
+            # value since the backfill. Without this, an operator who backfills
+            # then arms the daily cron never establishes a true point-in-time
+            # boundary until CNN happens to change a number. A subsequent
+            # daily→daily identical re-pull still no-ops (idempotent).
+            provenance_upgrade = (
+                source_version == "daily" and latest.source_version != "daily"
+            )
+            if not provenance_upgrade:
+                continue
         session.add(
             FearGreedIndex(
                 date=obs.date,

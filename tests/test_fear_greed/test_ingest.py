@@ -169,6 +169,50 @@ def test_revision_on_component_score_appends(session_factory, payload):
     assert n == 1
 
 
+T3 = datetime(2026, 7, 31, 22, 10, tzinfo=timezone.utc)
+
+
+def test_first_daily_after_backfill_records_pit_boundary(session_factory, payload):
+    """Backfill then the first live daily fetch with IDENTICAL values must still
+    append a `daily` row, establishing the derived PIT boundary
+    (MIN(observed_at) WHERE source_version='daily'). A second identical daily
+    re-pull then no-ops (idempotency preserved)."""
+    obs = parse_observations(payload)
+    # 1) Backfill everything (revised, research-grade).
+    with session_factory() as s:
+        assert persist_observations(s, obs, source_version="backfill", observed_at=T1) == 3
+    # 2) First live daily fetch, values unchanged from backfill → provenance
+    #    upgrade: appends a daily observation per date so live capture starts.
+    with session_factory() as s:
+        assert persist_observations(s, obs, source_version="daily", observed_at=T2) == 3
+    # 3) Double-fire of the daily cron, still identical → no-op.
+    with session_factory() as s:
+        assert persist_observations(s, obs, source_version="daily", observed_at=T3) == 0
+
+    with session_factory() as s:
+        d0 = date(2020, 9, 21)
+        rows = (
+            s.execute(
+                select(FearGreedIndex)
+                .where(FearGreedIndex.date == d0)
+                .order_by(FearGreedIndex.observed_at)
+            )
+            .scalars()
+            .all()
+        )
+        assert [r.source_version for r in rows] == ["backfill", "daily"]
+        # SQLite drops tzinfo on round-trip; compare naive-to-naive.
+        assert rows[0].observed_at.replace(tzinfo=None) == T1.replace(tzinfo=None)
+        # The derived PIT boundary is populated at the first live capture (T2).
+        boundary = s.execute(
+            select(func.min(FearGreedIndex.observed_at)).where(
+                FearGreedIndex.source_version == "daily"
+            )
+        ).scalar_one()
+        assert boundary.replace(tzinfo=None) == T2.replace(tzinfo=None)
+    assert _row_count(session_factory) == 6  # 3 backfill + 3 daily
+
+
 # --------------------------------------------------------------------------
 # Fail-loud
 # --------------------------------------------------------------------------
