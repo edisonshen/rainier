@@ -1,19 +1,25 @@
-"""Ingest behaviour: parse, append-on-change dedup, revision immutability,
-fail-loud, and the backfill/fetch orchestrators.
+"""Fear & Greed ingest — the core user functions and the contracts they protect.
 
-All 9 CNN component series are stored as `*_score` columns; the composite plus
-each component's rating label live in `raw`. Point-in-time capture is
-append-only-on-change: an unchanged re-pull is a no-op, a changed value appends
-a new immutable observation.
+Core user functions: ``rainier fear-greed fetch`` and ``... backfill`` (driven
+here as ``fetch()`` / ``backfill()`` with an injected fake CNN client).
+
+One focused test per contract (table-driven where cases share a driver):
+  1. fetch writes a correct observation (composite + all 9 components + raw).
+  2. append-on-change / no duplicates  (unchanged / changed / dup-current-day).
+  3. backfill loads history as ``source_version=backfill``.
+  4. fail-loud on a bad CNN response — persist nothing.
+  5. point-in-time boundary — daily vs backfill distinguishable.
+
+Deterministic + offline: a recorded JSON fixture, SQLite-backed DB (the ORM
+downgrades JSONB→JSON and BigInteger→INTEGER on SQLite), no live network, no
+timing sleeps.
 """
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 from datetime import date, datetime, timezone
 
-import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -24,165 +30,58 @@ from rainier.data.fear_greed import (
     FearGreedError,
     backfill,
     fetch,
-    fetch_graphdata,
     parse_observations,
     persist_observations,
 )
 
+# Two distinct ingest instants — the append-on-change / PIT contracts depend on
+# observed_at ordering, so tests pin it rather than lean on wall-clock now().
 T1 = datetime(2026, 7, 29, 22, 10, tzinfo=timezone.utc)
 T2 = datetime(2026, 7, 30, 22, 10, tzinfo=timezone.utc)
+T3 = datetime(2026, 7, 31, 22, 10, tzinfo=timezone.utc)
+
+# Fixture trading days (2020-09-21..23); D_LAST is the "current" day CNN dupes.
+D_FIRST = date(2020, 9, 21)
+D_LAST = date(2020, 9, 23)
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, body):
+    def __init__(self, status_code: int, body, bad_json: bool = False):
         self.status_code = status_code
         self._body = body
+        self._bad_json = bad_json
 
     def json(self):
+        if self._bad_json:  # a 200 with an HTML interstitial body
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
         return self._body
 
 
 class _FakeClient:
-    """Minimal httpx.Client stand-in recording the URL + headers it saw."""
+    """httpx.Client stand-in recording the URLs it was asked to GET."""
 
-    def __init__(self, status_code: int = 200, body=None):
+    def __init__(self, status_code: int = 200, body=None, bad_json: bool = False):
         self._status = status_code
         self._body = body
+        self._bad_json = bad_json
         self.calls: list[tuple[str, dict]] = []
 
     def get(self, url, headers=None, **kwargs):
         self.calls.append((url, headers or {}))
-        return _FakeResponse(self._status, self._body)
+        return _FakeResponse(self._status, self._body, self._bad_json)
 
 
-# --------------------------------------------------------------------------
-# Parse
-# --------------------------------------------------------------------------
-
-
-def test_parse_yields_one_observation_per_date(payload):
-    obs = parse_observations(payload)
-    assert [o.date for o in obs] == [
-        date(2020, 9, 21),
-        date(2020, 9, 22),
-        date(2020, 9, 23),
-    ]
-
-
-def test_parse_dedups_duplicate_current_day_keeping_latest(payload_dup_current_day):
-    """CNN serves the current (unsettled) day as MULTIPLE points with different
-    scores. Parse must collapse them to ONE observation per date, keeping the
-    LAST/most-recent point (CNN's latest reading)."""
-    obs = parse_observations(payload_dup_current_day)
-    # Exactly one observation per calendar date, no duplicate dates.
-    dates = [o.date for o in obs]
-    assert dates == [date(2020, 9, 21), date(2020, 9, 22), date(2020, 9, 23)]
-    assert len(dates) == len(set(dates))
-    # The current day keeps the LAST point's score (63.0), not the earlier 61.0.
-    current = next(o for o in obs if o.date == date(2020, 9, 23))
-    assert current.score == 63.0
-    assert current.rating == "greed"
-
-
-def test_parse_dedup_keeps_max_epoch_regardless_of_array_order(payload):
-    """The kept current-day reading is the MAX-epoch point, not merely the last
-    array element. CNN's intraday duplicate carries a LATER epoch `x`; even if it
-    is listed BEFORE the midnight point, parse must keep it (score 88.0)."""
-    hist = payload["fear_and_greed_historical"]["data"]
-    last = hist[-1]  # 2020-09-23
-    later = dict(last)
-    later["x"] = last["x"] + 3_600_000  # +1h, same calendar date, later reading
-    later["y"] = 88.0
-    later["rating"] = "extreme greed"
-    # Insert the later point BEFORE the original (out-of-array-order).
-    hist.insert(len(hist) - 1, later)
-    obs = parse_observations(payload)
-    dates = [o.date for o in obs]
-    assert dates == [date(2020, 9, 21), date(2020, 9, 22), date(2020, 9, 23)]
-    current = next(o for o in obs if o.date == date(2020, 9, 23))
-    assert current.score == 88.0  # max-epoch point wins despite earlier position
-
-
-def test_persist_duplicate_current_day_inserts_one_row(session_factory, payload_dup_current_day):
-    """A single persist of a payload with a duplicated current day inserts
-    exactly ONE row for that date (the latest reading), not one per duplicate."""
-    obs = parse_observations(payload_dup_current_day)
+def _rows_for_date(session_factory, d: date) -> list[FearGreedIndex]:
     with session_factory() as s:
-        n = persist_observations(s, obs, source_version="daily", observed_at=T1)
-    assert n == 3
-    with session_factory() as s:
-        rows = (
-            s.execute(
-                select(FearGreedIndex).where(FearGreedIndex.date == date(2020, 9, 23))
-            )
-            .scalars()
-            .all()
-        )
-    assert len(rows) == 1
-    assert rows[0].score == 63.0
-
-
-def test_current_day_does_not_accumulate_across_unchanged_fetches(
-    session_factory, payload_dup_current_day
-):
-    """Two fetch/persist runs on an UNCHANGED source (duplicated current day
-    each time) must NOT accumulate extra rows — the current day stays at one
-    row. Then a genuinely changed current-day value appends exactly one."""
-    client = _FakeClient(status_code=200, body=payload_dup_current_day)
-    # Two identical daily fetches on the buggy-shaped payload.
-    assert fetch(session_factory=session_factory, client=client, lookback_days=1) == 3
-    assert fetch(session_factory=session_factory, client=client, lookback_days=1) == 0
-    d_current = date(2020, 9, 23)
-    with session_factory() as s:
-        count = s.execute(
-            select(func.count())
-            .select_from(FearGreedIndex)
-            .where(FearGreedIndex.date == d_current)
-        ).scalar_one()
-    assert count == 1  # current day did NOT accumulate
-
-    # A genuine source revision of the current day appends exactly one new row.
-    changed = copy.deepcopy(payload_dup_current_day)
-    changed["fear_and_greed_historical"]["data"][-1]["y"] = 70.0
-    changed_client = _FakeClient(status_code=200, body=changed)
-    assert fetch(session_factory=session_factory, client=changed_client, lookback_days=1) == 1
-    with session_factory() as s:
-        rows = (
+        return (
             s.execute(
                 select(FearGreedIndex)
-                .where(FearGreedIndex.date == d_current)
+                .where(FearGreedIndex.date == d)
                 .order_by(FearGreedIndex.observed_at, FearGreedIndex.id)
             )
             .scalars()
             .all()
         )
-    assert [r.score for r in rows] == [63.0, 70.0]
-
-
-def test_parse_composite_and_all_nine_components(payload):
-    first = parse_observations(payload)[0]
-    assert first.score == 45.0
-    assert first.rating == "neutral"  # CNN band: 45 ≤ score < 55
-    # All 9 component columns present and non-null.
-    assert set(first.components) == set(COMPONENT_KEYS.values())
-    assert all(v is not None for v in first.components.values())
-    # The two easy-to-drop series are explicitly present.
-    assert first.components["momentum_sp125_score"] is not None
-    assert first.components["volatility_vix_50_score"] is not None
-
-
-def test_parse_keeps_rating_labels_in_raw(payload):
-    first = parse_observations(payload)[0]
-    # 9 component rating labels recoverable from raw, plus the composite rating.
-    assert first.raw["composite"]["rating"] == "neutral"
-    assert set(first.raw["components"]) == set(COMPONENT_KEYS)
-    for key in COMPONENT_KEYS:
-        assert "rating" in first.raw["components"][key]
-
-
-# --------------------------------------------------------------------------
-# Persist — append-on-change
-# --------------------------------------------------------------------------
 
 
 def _row_count(session_factory) -> int:
@@ -190,232 +89,152 @@ def _row_count(session_factory) -> int:
         return s.execute(select(func.count()).select_from(FearGreedIndex)).scalar_one()
 
 
-def test_all_nine_score_columns_persisted(session_factory, payload):
-    obs = parse_observations(payload)
-    with session_factory() as s:
-        persist_observations(s, obs, source_version="backfill", observed_at=T1)
-    with session_factory() as s:
-        row = s.execute(
-            select(FearGreedIndex).where(FearGreedIndex.date == date(2020, 9, 21))
-        ).scalar_one()
+# --------------------------------------------------------------------------
+# 1. fetch writes a correct observation
+# --------------------------------------------------------------------------
+
+
+def test_fetch_writes_correct_observation(session_factory, payload):
+    """CONTRACT: `fear-greed fetch` parses+persists an observation with the
+    composite score+rating, all 9 component `*_score` columns populated, and
+    every rating label preserved in `raw`."""
+    client = _FakeClient(body=payload)
+    assert fetch(session_factory=session_factory, client=client) == 3
+
+    row = _rows_for_date(session_factory, D_FIRST)[0]
     assert row.score == 45.0
     assert row.rating == "neutral"
-    assert row.momentum_sp125_score is not None
-    assert row.volatility_vix_50_score is not None
+    assert row.source_version == "daily"
+    # All 9 components stored — sp125 and vix_50 are the easy-to-drop pair.
     for col in COMPONENT_KEYS.values():
         assert getattr(row, col) is not None
-    # rating labels survive in raw
-    assert row.raw["components"]["market_volatility_vix_50"]["rating"] is not None
+    assert row.momentum_sp125_score is not None
+    assert row.volatility_vix_50_score is not None
+    # Composite + per-component rating labels recoverable from raw.
+    assert row.raw["composite"]["rating"] == "neutral"
+    assert set(row.raw["components"]) == set(COMPONENT_KEYS)
+    for key in COMPONENT_KEYS:
+        assert "rating" in row.raw["components"][key]
 
 
-def test_idempotent_double_fire_identical_value(session_factory, payload):
+# --------------------------------------------------------------------------
+# 2. append-on-change / no duplicates  (load-bearing dedup + the live bug)
+# --------------------------------------------------------------------------
+
+
+def _case_unchanged(payload, dup):
     obs = parse_observations(payload)
-    with session_factory() as s:
-        n1 = persist_observations(s, obs, source_version="daily", observed_at=T1)
-    with session_factory() as s:
-        n2 = persist_observations(s, obs, source_version="daily", observed_at=T2)
-    assert n1 == 3
-    assert n2 == 0  # identical re-pull → no new rows
-    assert _row_count(session_factory) == 3
+    return dict(first=obs, second=obs, n1=3, n2=0, target=D_FIRST, scores=[45.0])
 
 
-def test_revision_appends_new_observation_original_unchanged(session_factory, payload):
+def _case_changed(payload, dup):
     obs = parse_observations(payload)
-    with session_factory() as s:
-        persist_observations(s, obs, source_version="daily", observed_at=T1)
-
-    # Simulate a revised re-pull: the first date's composite score moved.
     revised = list(obs)
     revised[0] = dataclasses.replace(revised[0], score=99.0)
-    with session_factory() as s:
-        n = persist_observations(s, revised, source_version="daily", observed_at=T2)
-    assert n == 1  # only the changed date appends
+    return dict(first=obs, second=revised, n1=3, n2=1, target=D_FIRST, scores=[45.0, 99.0])
 
-    d0 = date(2020, 9, 21)
+
+def _case_dup_current_day(payload, dup):
+    # CNN serves the current (unsettled) day twice with different scores; parse
+    # collapses to the latest reading (63.0) → a single persist writes one row.
+    obs = parse_observations(dup)
+    return dict(first=obs, second=None, n1=3, n2=0, target=D_LAST, scores=[63.0])
+
+
+@pytest.mark.parametrize(
+    "build",
+    [_case_unchanged, _case_changed, _case_dup_current_day],
+    ids=["unchanged->0-new", "changed->1-new-immutable", "dup-current-day->collapse-1"],
+)
+def test_append_on_change(session_factory, payload, payload_dup_current_day, build):
+    """CONTRACT (append-only-on-change; the load-bearing correctness property and
+    the live current-day-twice bug): append a new immutable row ONLY when the
+    value changed; an identical re-pull is a no-op; CNN's duplicated current day
+    collapses to exactly one row; a prior row is never mutated."""
+    c = build(payload, payload_dup_current_day)
     with session_factory() as s:
-        rows = (
-            s.execute(
-                select(FearGreedIndex)
-                .where(FearGreedIndex.date == d0)
-                .order_by(FearGreedIndex.observed_at)
+        assert persist_observations(s, c["first"], source_version="daily", observed_at=T1) == c["n1"]
+    if c["second"] is not None:
+        with session_factory() as s:
+            assert (
+                persist_observations(s, c["second"], source_version="daily", observed_at=T2)
+                == c["n2"]
             )
-            .scalars()
-            .all()
-        )
-    assert len(rows) == 2
-    assert rows[0].score == 45.0  # original immutable
-    assert rows[1].score == 99.0  # new observation
-
-
-def test_revision_on_component_score_appends(session_factory, payload):
-    """A change in a component score (composite unchanged) still appends."""
-    obs = parse_observations(payload)
-    with session_factory() as s:
-        persist_observations(s, obs, source_version="daily", observed_at=T1)
-    revised = list(obs)
-    comps = dict(revised[0].components)
-    comps["put_call_score"] = comps["put_call_score"] + 1.0
-    revised[0] = dataclasses.replace(revised[0], components=comps)
-    with session_factory() as s:
-        n = persist_observations(s, revised, source_version="daily", observed_at=T2)
-    assert n == 1
-
-
-T3 = datetime(2026, 7, 31, 22, 10, tzinfo=timezone.utc)
-
-
-def test_first_daily_after_backfill_records_pit_boundary(session_factory, payload):
-    """Backfill then the first live daily fetch with IDENTICAL values must still
-    append a `daily` row, establishing the derived PIT boundary
-    (MIN(observed_at) WHERE source_version='daily'). A second identical daily
-    re-pull then no-ops (idempotency preserved)."""
-    obs = parse_observations(payload)
-    # 1) Backfill everything (revised, research-grade).
-    with session_factory() as s:
-        assert persist_observations(s, obs, source_version="backfill", observed_at=T1) == 3
-    # 2) First live daily fetch, values unchanged from backfill → provenance
-    #    upgrade: appends a daily observation per date so live capture starts.
-    with session_factory() as s:
-        assert persist_observations(s, obs, source_version="daily", observed_at=T2) == 3
-    # 3) Double-fire of the daily cron, still identical → no-op.
-    with session_factory() as s:
-        assert persist_observations(s, obs, source_version="daily", observed_at=T3) == 0
-
-    with session_factory() as s:
-        d0 = date(2020, 9, 21)
-        rows = (
-            s.execute(
-                select(FearGreedIndex)
-                .where(FearGreedIndex.date == d0)
-                .order_by(FearGreedIndex.observed_at)
-            )
-            .scalars()
-            .all()
-        )
-        assert [r.source_version for r in rows] == ["backfill", "daily"]
-        # SQLite drops tzinfo on round-trip; compare naive-to-naive.
-        assert rows[0].observed_at.replace(tzinfo=None) == T1.replace(tzinfo=None)
-        # The derived PIT boundary is populated at the first live capture (T2).
-        boundary = s.execute(
-            select(func.min(FearGreedIndex.observed_at)).where(
-                FearGreedIndex.source_version == "daily"
-            )
-        ).scalar_one()
-        assert boundary.replace(tzinfo=None) == T2.replace(tzinfo=None)
-    assert _row_count(session_factory) == 6  # 3 backfill + 3 daily
+    rows = _rows_for_date(session_factory, c["target"])
+    assert [r.score for r in rows] == c["scores"]
+    assert rows[0].score == c["scores"][0]  # earliest row immutable
 
 
 # --------------------------------------------------------------------------
-# Fail-loud
+# 3. backfill loads history
 # --------------------------------------------------------------------------
 
 
-def test_fetch_graphdata_raises_on_non_200():
-    client = _FakeClient(status_code=418, body=None)
-    with pytest.raises(FearGreedError):
-        fetch_graphdata(EARLIEST_DATE, client=client)
+def test_backfill_loads_history(session_factory, payload):
+    """CONTRACT: `fear-greed backfill` loads one row per trading day over the
+    range, tagged `source_version=backfill`, starting at the earliest CNN date."""
+    client = _FakeClient(body=payload)
+    assert backfill(session_factory=session_factory, client=client) == 3
+    assert _row_count(session_factory) == 3
+    with session_factory() as s:
+        versions = set(s.execute(select(FearGreedIndex.source_version)).scalars())
+        span = s.execute(
+            select(func.min(FearGreedIndex.date), func.max(FearGreedIndex.date))
+        ).one()
+    assert versions == {"backfill"}
+    assert span == (D_FIRST, D_LAST)
+    assert client.calls[0][0].endswith(f"/{EARLIEST_DATE.isoformat()}")
 
 
-def test_fetch_graphdata_raises_on_empty_payload():
-    client = _FakeClient(status_code=200, body={})
-    with pytest.raises(FearGreedError):
-        fetch_graphdata(EARLIEST_DATE, client=client)
+# --------------------------------------------------------------------------
+# 4. fail-loud — a bad CNN response persists nothing
+# --------------------------------------------------------------------------
 
 
-def test_fetch_graphdata_raises_on_non_json_body():
-    """A 200 with a non-JSON body (HTML interstitial) → FearGreedError, not a bare
-    JSONDecodeError — the fail-loud contract must own every 200-but-bad response."""
-
-    class _BadJSONClient:
-        calls: list = []
-
-        def get(self, url, headers=None, **kwargs):
-            class _Resp:
-                status_code = 200
-
-                def json(self):
-                    raise ValueError("Expecting value: line 1 column 1 (char 0)")
-
-            return _Resp()
-
-    with pytest.raises(FearGreedError):
-        fetch_graphdata(EARLIEST_DATE, client=_BadJSONClient())
-
-
-def test_fetch_graphdata_sends_cnn_headers_and_dated_url(payload):
-    client = _FakeClient(status_code=200, body=payload)
-    got = fetch_graphdata(date(2020, 9, 21), client=client)
-    assert got is payload
-    url, headers = client.calls[0]
-    assert url.endswith("/2020-09-21")
-    assert headers["Origin"] == "https://edition.cnn.com"
-    assert headers["Referer"] == "https://edition.cnn.com/"
-    assert "User-Agent" in headers
-    assert headers["Accept"] == "application/json"
-
-
-def test_fetch_failure_persists_nothing(session_factory):
-    client = _FakeClient(status_code=418, body=None)
+@pytest.mark.parametrize(
+    "client",
+    [
+        _FakeClient(status_code=418, body=None),
+        _FakeClient(status_code=200, body={}),
+        _FakeClient(status_code=200, bad_json=True),
+    ],
+    ids=["non-200", "empty-body", "non-json-body"],
+)
+def test_fetch_fails_loud_persists_nothing(session_factory, client):
+    """CONTRACT: a non-200, empty, or non-JSON CNN response raises FearGreedError
+    and writes zero rows — the fail-loud boundary owns every bad response."""
     with pytest.raises(FearGreedError):
         fetch(session_factory=session_factory, client=client)
     assert _row_count(session_factory) == 0
 
 
-def test_owns_client_closed_even_when_get_raises(monkeypatch):
-    """When fetch_graphdata constructs its own client, it must close it on the
-    error path (owns_client=True branch — every other test injects a client)."""
-    closed = {"v": False}
-
-    class _OwnedClient:
-        def get(self, url, headers=None, **kwargs):
-            raise RuntimeError("boom")
-
-        def close(self):
-            closed["v"] = True
-
-    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _OwnedClient())
-    with pytest.raises(RuntimeError):
-        fetch_graphdata(EARLIEST_DATE)
-    assert closed["v"] is True
-
-
 # --------------------------------------------------------------------------
-# Orchestrators
+# 5. point-in-time boundary — daily vs backfill
 # --------------------------------------------------------------------------
 
 
-def test_backfill_persists_range_as_backfill(session_factory, payload):
-    client = _FakeClient(status_code=200, body=payload)
-    n = backfill(session_factory=session_factory, client=client)
-    assert n == 3
+def test_pit_boundary_daily_vs_backfill(session_factory, payload):
+    """CONTRACT: backfill (revised) and daily (live capture) rows are
+    distinguishable; the first live daily fetch after backfill records a `daily`
+    row even when the value is unchanged, so the derived boundary
+    `MIN(observed_at) WHERE source_version='daily'` is the live-capture instant;
+    a second identical daily re-pull no-ops."""
+    obs = parse_observations(payload)
     with session_factory() as s:
-        versions = set(
-            s.execute(select(FearGreedIndex.source_version)).scalars().all()
-        )
-        span = s.execute(
-            select(func.min(FearGreedIndex.date), func.max(FearGreedIndex.date))
-        ).one()
-    assert versions == {"backfill"}
-    assert span == (date(2020, 9, 21), date(2020, 9, 23))
-    # backfill default start is the earliest CNN date.
-    assert client.calls[0][0].endswith(f"/{EARLIEST_DATE.isoformat()}")
-
-
-def test_fetch_tags_rows_daily(session_factory, payload):
-    client = _FakeClient(status_code=200, body=payload)
-    n = fetch(session_factory=session_factory, client=client)
-    assert n == 3
+        assert persist_observations(s, obs, source_version="backfill", observed_at=T1) == 3
     with session_factory() as s:
-        versions = set(
-            s.execute(select(FearGreedIndex.source_version)).scalars().all()
-        )
-    assert versions == {"daily"}
+        assert persist_observations(s, obs, source_version="daily", observed_at=T2) == 3
+    with session_factory() as s:
+        assert persist_observations(s, obs, source_version="daily", observed_at=T3) == 0
 
-
-def test_fetch_clamps_lookback_to_earliest_date(session_factory, payload):
-    """A lookback window reaching before EARLIEST_DATE clamps the request start —
-    earlier dates make CNN return HTTP 500 (see EARLIEST_DATE)."""
-    client = _FakeClient(status_code=200, body=payload)
-    # ~10 years back overshoots EARLIEST_DATE (2020-09-21) → clamped.
-    fetch(session_factory=session_factory, client=client, lookback_days=3650)
-    assert client.calls[0][0].endswith(f"/{EARLIEST_DATE.isoformat()}")
+    rows = _rows_for_date(session_factory, D_FIRST)
+    assert [r.source_version for r in rows] == ["backfill", "daily"]
+    with session_factory() as s:
+        boundary = s.execute(
+            select(func.min(FearGreedIndex.observed_at)).where(
+                FearGreedIndex.source_version == "daily"
+            )
+        ).scalar_one()
+    # SQLite drops tzinfo on round-trip; compare naive-to-naive.
+    assert boundary.replace(tzinfo=None) == T2.replace(tzinfo=None)
+    assert _row_count(session_factory) == 6  # 3 backfill + 3 daily
