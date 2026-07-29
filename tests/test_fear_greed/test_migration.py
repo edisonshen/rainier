@@ -62,7 +62,7 @@ def test_has_raw_jsonb_and_provenance(forward_sql):
 
 def test_indexes_present(forward_sql):
     lowered = forward_sql.lower()
-    assert "(date)" in lowered.replace(" ", " ")  # ix_fng_date
+    assert "(date)" in lowered  # ix_fng_date
     assert "observed_at desc" in lowered  # ix_fng_date_obs (latest/earliest scan)
 
 
