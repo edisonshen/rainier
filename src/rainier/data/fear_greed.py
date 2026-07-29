@@ -124,7 +124,12 @@ def fetch_graphdata(start: date, *, client: httpx.Client | None = None) -> dict:
         raise FearGreedError(
             f"CNN Fear & Greed fetch failed: HTTP {resp.status_code} for {url}"
         )
-    payload = resp.json()
+    try:
+        payload = resp.json()
+    except ValueError as exc:  # 200 with a non-JSON body (e.g. an HTML interstitial)
+        raise FearGreedError(
+            f"CNN Fear & Greed returned a non-JSON body for {url}"
+        ) from exc
     if not payload or not payload.get(_HISTORICAL_KEY, {}).get("data"):
         raise FearGreedError(f"CNN Fear & Greed returned an empty payload for {url}")
     return payload

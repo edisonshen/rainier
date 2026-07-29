@@ -186,6 +186,26 @@ def test_fetch_graphdata_raises_on_empty_payload():
         fetch_graphdata(EARLIEST_DATE, client=client)
 
 
+def test_fetch_graphdata_raises_on_non_json_body():
+    """A 200 with a non-JSON body (HTML interstitial) → FearGreedError, not a bare
+    JSONDecodeError — the fail-loud contract must own every 200-but-bad response."""
+
+    class _BadJSONClient:
+        calls: list = []
+
+        def get(self, url, headers=None, **kwargs):
+            class _Resp:
+                status_code = 200
+
+                def json(self):
+                    raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+            return _Resp()
+
+    with pytest.raises(FearGreedError):
+        fetch_graphdata(EARLIEST_DATE, client=_BadJSONClient())
+
+
 def test_fetch_graphdata_sends_cnn_headers_and_dated_url(payload):
     client = _FakeClient(status_code=200, body=payload)
     got = fetch_graphdata(date(2020, 9, 21), client=client)
