@@ -448,7 +448,10 @@ def test_dashboard_deeplink(base_url, thesis_id, expected):
     embed = format_thesis_embed(
         _thesis(), _candidate(), dashboard_base_url=base_url, thesis_id=thesis_id
     )
-    assert embed.get("url") == expected
+    if expected is None:
+        assert "url" not in embed   # key omitted entirely, not set to None
+    else:
+        assert embed["url"] == expected
 
 
 # ---------------------------------------------------------------------------
