@@ -2,16 +2,17 @@
 
 Lean suite (operator standard: test the contracts users depend on, not a
 matrix). The core user function is ``rainier fng-backtest``; the load-bearing
-contracts are:
+contracts are one test each:
 
 1. No lookahead — a signal from ``F&G[D]`` + ``close[D]`` earns ``return[D+1]``
    and ZERO on day D (carry-then-apply, one-day lag).
 2. Each combine logic's in/out mask matches its rule.
-3. Benchmarks (buy-and-hold + MA-only) present + correct — primitives asserted
-   directly against the named toy series; annualized metrics against an inline
-   numpy reference snippet.
-4. Train-only selection / OOS gate — selection reads the train window only; the
-   gate metric is read from the untouched OOS slice.
+3. Metrics are correct — buy-and-hold primitives + annualized CAGR/Calmar/Sharpe
+   against an inline numpy reference, plus exposure / switch count / per-transition
+   slippage on a hand-specified switching mask.
+4. Train/OOS split integrity — selection reads the train window only, per-combo
+   OOS/train metrics equal ``compute_metrics`` on the raw slices (no leakage), and
+   a degenerate split raises a clear ``ValueError``.
 5. Auto-verdict — the 3-inequality rule returns eligible / context-only
    deterministically.
 """
@@ -36,6 +37,15 @@ from rainier.backtest.fear_greed_signal import (
     run_backtest,
     select_best_on_train,
 )
+
+
+def _arm(calmar: float, sharpe: float = 0.0, max_dd: float = 0.1) -> ArmMetrics:
+    return ArmMetrics(
+        final_value=1.0, total_return=0.0, cagr=0.0, max_dd=max_dd,
+        calmar=calmar, sharpe=sharpe, exposure=1.0, switches=0,
+        hit_rate=0.0, n_days=10,
+    )
+
 
 # --------------------------------------------------------------------------
 # 1. No lookahead — the load-bearing correctness property
@@ -92,16 +102,20 @@ def test_logic_mask_matches_rule(
 
 
 # --------------------------------------------------------------------------
-# 3. Benchmarks present + correct — toy-series primitives + annualized ref
+# 3. Metrics are correct — primitives + annualized ref + slippage/switches
 # --------------------------------------------------------------------------
 
 # Named toy series (task-plan oracle): buy-and-hold, always in.
 _BH_CLOSE = np.array([100.0, 101.0, 100.0, 103.0, 102.0, 105.0])
 
 
-def test_buy_and_hold_primitives_match_toy_oracle() -> None:
+def test_metrics_match_toy_oracle_and_reference() -> None:
+    """Every metric on the named toy series: buy-and-hold primitives, the equity
+    curve, the annualized CAGR/Calmar/Sharpe pinned to an inline numpy reference,
+    and — on a second hand-specified switching mask — exposure, switch count, and
+    that slippage is charged once per transition."""
+    # --- buy-and-hold primitives on the named oracle (slippage charged 0 here) ---
     m = compute_metrics(_BH_CLOSE, buy_and_hold_mask(len(_BH_CLOSE)), slippage_bp=5.0)
-
     assert m.total_return == pytest.approx(0.05)          # 105/100 - 1
     assert m.final_value == pytest.approx(1.05)
     assert m.max_dd == pytest.approx(1.0 / 101.0)         # peak 1.01 -> 1.00
@@ -112,31 +126,23 @@ def test_buy_and_hold_primitives_match_toy_oracle() -> None:
     equity, _ = equity_curve(_BH_CLOSE, buy_and_hold_mask(len(_BH_CLOSE)), 5.0)
     np.testing.assert_allclose(equity, [1.0, 1.01, 1.0, 1.03, 1.02, 1.05])
 
-
-def test_annualized_metrics_match_reference_snippet() -> None:
-    """CAGR/Calmar/Sharpe pinned to an inline numpy reference (252, rf=0)."""
-    m = compute_metrics(_BH_CLOSE, buy_and_hold_mask(len(_BH_CLOSE)), slippage_bp=0.0)
-
-    # --- reference computation (the formula the implementation must match) ---
-    equity = np.array([1.0, 1.01, 1.0, 1.03, 1.02, 1.05])
-    n = len(equity)
-    strat_ret = np.zeros(n)
-    strat_ret[1:] = equity[1:] / equity[:-1] - 1.0
+    # --- annualized metrics vs the reference formula (252, rf=0), no slippage ---
+    m_ann = compute_metrics(_BH_CLOSE, buy_and_hold_mask(len(_BH_CLOSE)), slippage_bp=0.0)
+    ref_equity = np.array([1.0, 1.01, 1.0, 1.03, 1.02, 1.05])
+    n = len(ref_equity)
+    ref_strat_ret = np.zeros(n)
+    ref_strat_ret[1:] = ref_equity[1:] / ref_equity[:-1] - 1.0
     years = n / 252.0
-    ref_cagr = equity[-1] ** (1.0 / years) - 1.0
-    peak = np.maximum.accumulate(equity)
-    ref_max_dd = float((1.0 - equity / peak).max())
+    ref_cagr = ref_equity[-1] ** (1.0 / years) - 1.0
+    peak = np.maximum.accumulate(ref_equity)
+    ref_max_dd = float((1.0 - ref_equity / peak).max())
     ref_calmar = ref_cagr / ref_max_dd
-    ref_sharpe = strat_ret.mean() / strat_ret.std(ddof=1) * np.sqrt(252.0)
+    ref_sharpe = ref_strat_ret.mean() / ref_strat_ret.std(ddof=1) * np.sqrt(252.0)
+    assert m_ann.cagr == pytest.approx(ref_cagr)
+    assert m_ann.calmar == pytest.approx(ref_calmar)
+    assert m_ann.sharpe == pytest.approx(ref_sharpe)
 
-    assert m.cagr == pytest.approx(ref_cagr)
-    assert m.calmar == pytest.approx(ref_calmar)
-    assert m.sharpe == pytest.approx(ref_sharpe)
-
-
-def test_exposure_switches_and_slippage_per_transition() -> None:
-    """Second toy: hand-specified mask pins exposure, switch count, and that
-    slippage is charged once per transition."""
+    # --- exposure / switch count / per-transition slippage (switching mask) ---
     close = np.array([100.0, 101.0, 102.0, 101.0, 102.0, 103.0])
     mask = np.array([True, True, False, False, True, True])
 
@@ -157,21 +163,17 @@ def test_exposure_switches_and_slippage_per_transition() -> None:
 
 
 # --------------------------------------------------------------------------
-# 4. Train-only selection / OOS gate — assert the split
+# 4. Train/OOS split integrity — train-only selection, no leakage, fail-loud
 # --------------------------------------------------------------------------
 
 
-def _arm(calmar: float, sharpe: float = 0.0, max_dd: float = 0.1) -> ArmMetrics:
-    return ArmMetrics(
-        final_value=1.0, total_return=0.0, cagr=0.0, max_dd=max_dd,
-        calmar=calmar, sharpe=sharpe, exposure=1.0, switches=0,
-        hit_rate=0.0, n_days=10,
-    )
-
-
-def test_selection_reads_train_only() -> None:
-    """The train-selected combo maximizes TRAIN Calmar; its gate metric is OOS."""
+def test_train_oos_split_integrity() -> None:
+    """Selection reads the TRAIN window only; per-combo OOS/train metrics equal
+    ``compute_metrics`` on the raw slices (masks from full history, no seam warmup
+    loss, no leakage); a degenerate split (empty train or OOS) fails loudly."""
     logic = Logic.CONTRARIAN
+
+    # --- selection maximizes TRAIN Calmar, ignoring OOS; gate metric reads OOS ---
     # row_a is best on TRAIN but worst on OOS; row_b is the reverse.
     row_a = ComboResult(
         combo=Combo(logic, 20, 20.0), train=_arm(2.0), oos=_arm(0.1), full=_arm(1.0)
@@ -179,15 +181,11 @@ def test_selection_reads_train_only() -> None:
     row_b = ComboResult(
         combo=Combo(logic, 20, 30.0), train=_arm(1.0), oos=_arm(5.0), full=_arm(1.0)
     )
-
     picked = select_best_on_train([row_a, row_b], logic)
-    assert picked is row_a                      # selection ignored OOS
+    assert picked is row_a                          # selection ignored OOS
     assert picked.oos.calmar == pytest.approx(0.1)  # gate reads OOS, not train
 
-
-def test_run_backtest_slices_train_and_oos_without_leakage() -> None:
-    """Per-combo OOS/train metrics equal ``compute_metrics`` on the raw slices,
-    with masks derived from full history (no seam warmup loss, no leakage)."""
+    # --- run_backtest slices train/OOS off full-history masks without leakage ---
     rng = np.random.default_rng(0)
     n = 80
     dates = pd.bdate_range("2021-01-01", periods=n)
@@ -210,22 +208,18 @@ def test_run_backtest_slices_train_and_oos_without_leakage() -> None:
     assert 5 in result.ma_only
     assert result.buy_and_hold.full.final_value > 0
 
-
-@pytest.mark.parametrize("bad_split", ["2000-01-01", "2099-01-01"])
-def test_run_backtest_rejects_degenerate_split(bad_split: str) -> None:
-    """A split outside the aligned span (empty train or OOS window) raises a
-    clear ValueError, not a bare IndexError from a size-0 metric slice."""
-    n = 40
-    dates = pd.bdate_range("2021-01-01", periods=n)
-    qqq = 100.0 * np.cumprod(1 + np.full(n, 0.001))
-    fng = np.full(n, 50.0)
-
-    with pytest.raises(ValueError, match="degenerate"):
-        run_backtest(
-            signal_close=qqq, trade_close=qqq, fng=fng, dates=dates,
-            split_date=pd.Timestamp(bad_split), combos=[Combo(Logic.CONTRARIAN, 5, 30.0)],
-            ma_windows=[5],
-        )
+    # --- degenerate split (outside the aligned span) raises a clear ValueError ---
+    bad_n = 40
+    bad_dates = pd.bdate_range("2021-01-01", periods=bad_n)
+    bad_qqq = 100.0 * np.cumprod(1 + np.full(bad_n, 0.001))
+    bad_fng = np.full(bad_n, 50.0)
+    for bad_split in ("2000-01-01", "2099-01-01"):  # empty train, then empty OOS
+        with pytest.raises(ValueError, match="degenerate"):
+            run_backtest(
+                signal_close=bad_qqq, trade_close=bad_qqq, fng=bad_fng, dates=bad_dates,
+                split_date=pd.Timestamp(bad_split),
+                combos=[Combo(Logic.CONTRARIAN, 5, 30.0)], ma_windows=[5],
+            )
 
 
 # --------------------------------------------------------------------------
