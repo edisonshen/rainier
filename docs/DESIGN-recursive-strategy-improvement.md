@@ -417,3 +417,18 @@ and should be read as *architecture* references, not as evidence of edge.
 | 9 | *EvoQuant* (arXiv 2607.12455) | https://arxiv.org/abs/2607.12455 | Verifier-guided improvement of an *already-deployed* strategy plus experience distillation — the closest framing to Rainier's actual situation (a live champion, not a blank sheet). |
 | 10 | *AlgoEvolve* (arXiv 2606.26173) | https://arxiv.org/abs/2606.26173 | Meta-evolution of the proposer prompt; the P5 reference. |
 | 11 | *QuantaAlpha* (arXiv 2602.07085) | https://arxiv.org/abs/2602.07085 | Trajectory-level evolution with lineage/auditability and anti-crowding — informs the archive's lineage and diversity requirements. |
+
+### Open-endedness / quality-diversity — the source of the P3 archive
+
+None of these are finance papers. They are the upstream lineage that the
+evolutionary trading work above borrows from, and they are where the "keep an
+archive of interestingly different solutions rather than one champion" decision
+in P3 actually comes from. Read 12 if you want to understand *why* P3 is an
+archive and not a leaderboard.
+
+| # | Work | Link | Why it matters here |
+|---|---|---|---|
+| 12 | Mouret & Clune (2015) — *Illuminating Search Spaces by Mapping Elites* | https://arxiv.org/abs/1504.04909 | The original MAP-Elites paper. The behavior-descriptor grid in P3 is this algorithm; §"illumination" is the argument for preferring a map over a maximum. |
+| 13 | Zhang, Hu, Lu, Lange & Clune (2025) — *Darwin Gödel Machine* | https://arxiv.org/abs/2505.22954 | Self-modifying agent that keeps an archive and **empirically validates every self-modification against a benchmark**, with an explicit objective-hacking analysis. The closest existing precedent for the P1-gate-plus-P3-archive shape. |
+| 14 | Clune (2019) — *AI-GAs: AI-Generating Algorithms* | https://arxiv.org/abs/1905.10985 | The position paper behind the whole "learn the improvement process, don't hand-design it" framing that P5 gestures at. |
+| 15 | Recursive — *First Steps Toward Automated AI Research* (2026-06-11) | https://www.recursive.com/articles/first-steps-toward-automated-ai-research · https://github.com/recursive-org/first-steps-toward-automated-ai-research | Industrial automated research loop built on these principles. Notable for this plan: it validates results "for reward hacks and variance before treating improved performance as real progress", and it picked benchmarks with **tight feedback loops, clear metrics, low variance, and hardenable evaluators** — the precise properties financial backtests lack, which is the argument for P0/P1 in one sentence. |
