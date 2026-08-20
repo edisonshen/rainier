@@ -393,13 +393,27 @@ Only after P4 has produced a real track record:
 
 ## 8. References
 
-- Bailey & López de Prado — *The Deflated Sharpe Ratio* (selection bias + non-normality)
-- Bailey, Borwein, López de Prado & Zhu (2014) — *The Probability of Backtest Overfitting* (CSCV)
-- López de Prado — purged K-fold + embargo for overlapping labels
-- *MadEvolve* (arXiv 2605.23007) — AlphaEvolve-style evolution of trading systems; explicit p-hacking evaluation
-- *QuantEvolve* — MAP-Elites + island models + hypothesis-driven LLM mutation for full strategies
-- *AlgoEvolve* (arXiv 2606.26173) — meta-evolution of the proposer prompt
-- *EvoQuant* (arXiv 2607.12455) — verifier-guided optimization of *existing deployed* strategies + experience distillation
-- *QuantaAlpha* (arXiv 2602.07085) — trajectory-level evolution, lineage/auditability, anti-crowding
-- *AEL* (arXiv 2604.21725) — Thompson bandit (fast) + LLM reflection (slow); "less is more" ablation
-- LATSS (`vincent212/trading_strategy_evolution_agent`) — LLM mutates structure only; optimizer fits params; CV + null test judges
+Ordered by the phase they inform. The anti-overfitting group is load-bearing and
+peer-reviewed; the evolutionary group is recent, mostly self-reported in-sample,
+and should be read as *architecture* references, not as evidence of edge.
+
+### Anti-overfitting — read before P1 (the gate)
+
+| # | Work | Link | Why it matters here |
+|---|---|---|---|
+| 1 | Bailey, Borwein, López de Prado & Zhu — *The Probability of Backtest Overfitting* (J. Computational Finance, 2016) | https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253 | CSCV = the PBO estimator in the P1 gate. Shows plain hold-out is unreliable for backtests, which is why P1 needs more than a sealed window. |
+| 2 | Bailey & López de Prado — *The Deflated Sharpe Ratio* (JPM 40(5), 2014) | https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551 | Deflates Sharpe by trial count + non-normality. Directly motivates the `research_trial` ledger: DSR is uncomputable without an honest trial count. |
+| 3 | Bailey, Borwein, López de Prado & Zhu — *Pseudo-Mathematics and Financial Charlatanism* (Notices of the AMS 61(5), 2014) | https://www.ams.org/notices/201405/rnoti-p458.pdf | Minimum backtest length vs. number of trials. Short; the fastest way to see why `--sweep`/`--variations` with an unrecorded trial count is unsound. |
+| 4 | López de Prado — *Advances in Financial Machine Learning*, ch. 7 | (book) | Purged K-fold + embargo. Applies directly to the 5/10/20d overlapping forward-return labels in the audit corpus. |
+
+### Evolutionary / LLM search — read before P3–P5
+
+| # | Work | Link | Why it matters here |
+|---|---|---|---|
+| 5 | LATSS — `vincent212/llm-assisted-trading-strategy-search` | https://github.com/vincent212/trading_strategy_evolution_agent | Closest running system to the P3 design: LLM mutates *structure only* and never picks a number; SciPy fits params; fitness is active return vs buy-and-hold with a shift-the-signal null test and sealed holdout years. Read the code, not just the README. |
+| 6 | *QuantEvolve* (arXiv 2510.18569) | https://arxiv.org/abs/2510.18569 | Quality-diversity feature map over strategy type / risk / turnover — the source of the P3 MAP-Elites behavior descriptors. |
+| 7 | *MadEvolve* (arXiv 2605.23007) | https://arxiv.org/abs/2605.23007 | AlphaEvolve-style evolution of a full trading system; §7 explicitly estimates p-hacking probability and compares against plain Claude Code as a search baseline. |
+| 8 | *AEL* (arXiv 2604.21725) | https://arxiv.org/abs/2604.21725 | Thompson bandit (fast loop) + LLM reflection (slow loop) — the two-clock split behind P4/P5. Includes a "less is more" ablation. |
+| 9 | *EvoQuant* (arXiv 2607.12455) | https://arxiv.org/abs/2607.12455 | Verifier-guided improvement of an *already-deployed* strategy plus experience distillation — the closest framing to Rainier's actual situation (a live champion, not a blank sheet). |
+| 10 | *AlgoEvolve* (arXiv 2606.26173) | https://arxiv.org/abs/2606.26173 | Meta-evolution of the proposer prompt; the P5 reference. |
+| 11 | *QuantaAlpha* (arXiv 2602.07085) | https://arxiv.org/abs/2602.07085 | Trajectory-level evolution with lineage/auditability and anti-crowding — informs the archive's lineage and diversity requirements. |
