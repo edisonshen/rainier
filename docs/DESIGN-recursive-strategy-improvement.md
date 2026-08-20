@@ -25,6 +25,8 @@ So the plan is ordered: **fix the ruler → build the promotion gate → then, a
 
 Total ≈ **13–18 sessions**, phase-gated — each phase is independently useful and P0/P1 are worth doing even if you stop there.
 
+The one public account of an industrial version of this loop running (§3, ref 15) reinforces the ordering: it succeeded on tasks chosen for *tight feedback, clear metrics, low variance, and hardenable evaluators* — the four properties a QU100 backtest lacks and that P0/P1 exist to manufacture.
+
 ---
 
 ## 1. What already exists (audit)
@@ -217,6 +219,56 @@ proposes *structure* and never picks numeric values or sees raw market data; the
 numeric optimizer fits parameters; the harness judges. This keeps LLM
 hallucination out of the number line and makes each proposal cheap to validate.
 
+### Calibration against a working automated-research loop
+
+Recursive's *First Steps Toward Automated AI Research* (ref 15) is the closest
+public account of an industrial version of this loop actually running, so it is
+worth checking the plan against it. Their loop is the same shape as §3's —
+propose → implement → run → **validate** → let the result choose the next
+experiment, many threads, retained context, merged branches. Four of their
+operational choices change decisions in §4, and one disanalogy dominates
+everything.
+
+**They re-ran the incumbent before comparing to it.** Their headline number for
+the prior state of the art was not the number the prior holder published — they
+stripped its reward hacks, re-evaluated it on 10 random seeds, and quoted *that*.
+Rainier's incumbent gets no more trust: the current champion's numbers were
+produced by the pre-P0 harness on the raw-return corpus D-1 shows is scoring
+beta. → P1.6, P2 acceptance.
+
+**The incumbent was partly cheating.** That prior best came from a public
+collaborative effort — dozens of humans and hundreds of agents — and still
+contained reward hacks that survived until someone specifically looked. A
+baseline is not clean because many eyes produced it. → §5.
+
+**Two runs from different seeds converged on different, equally competitive
+solutions.** They read this as evidence of real search rather than memorized
+recall, which it is. It is *also* evidence that the top of the ranking is
+noise-limited: when several structurally different candidates tie, picking the
+argmax is picking noise. That is the case for the archive (§3a) rather than a
+leaderboard, and financial data is far noisier than fixed-seed LM training. → P3.
+
+**The weak starting point beat the community's best.** Starting from a vanilla
+Transformer + AdamW, their system still passed the collaboratively-optimized
+solution. Anchoring search on the incumbent is not obviously optimal; seeding
+some archive cells from a deliberately naive baseline costs little and guards
+against inheriting the champion's mistakes. → P3.
+
+**The disanalogy that matters more than any of the above.** They chose their
+benchmarks for *tight feedback loops, clear metrics, relatively low variance,
+and evaluators that can be hardened against reward hacks* — and even with all
+four they still ran 10 seeds and screened outputs by hand. A QU100 backtest has
+none of the four: feedback takes weeks, the metric is contested (D-1), variance
+swamps the effect size, and the evaluator leaks (D-3). Pointed at Rainier today,
+the same system would mostly discover flaws in the evaluator. This is not an
+argument against the approach — it is the argument for P0/P1, which exist
+precisely to manufacture those four properties before any search runs.
+
+One closing note in their own words: they flag that they may have missed reward
+hacks in the kernel results "where we are not specialists." Nobody will reliably
+eyeball a subtle look-ahead leak in an LLM-written strategy either, which is why
+the P3 proposal surface starts at typed config mutations and not free Python.
+
 ---
 
 ## 4. Phased plan
@@ -266,10 +318,20 @@ The single most important phase. New module `research/gate.py`.
    - Cost stress: re-score at 2× assumed slippage/commission; edge must survive.
 5. **Wire the existing loops through it.** `apply_action` and any
    `champion.yaml` promotion call `gate.check()` and record the verdict.
+6. **Re-baseline the incumbent.** The champion's recorded numbers are not a
+   valid comparison point — they predate P0's ruler. Before the gate can reject
+   anything, re-score the current champion *through the gate itself* (same
+   corpus, same purge/embargo, same cost stress) and write that as ledger entry
+   zero. Audit it for the failure modes the gate is built to catch — reliance on
+   `unknown`-regime rows, on the missed-winner sweep, on the un-embargoed folds —
+   and record what it depends on. Ref 15 did exactly this before quoting a prior
+   state of the art, and found reward hacks in a baseline that hundreds of
+   agents had already picked over.
 
 *Acceptance:* `champion.yaml` v1 → v2 cannot be written without a ledger entry
 and a passing gate verdict; a deliberately overfit toy strategy is rejected by
-the gate in a test.
+the gate in a test; ledger entry zero is the re-scored champion, not its
+historical self-report.
 
 ### P2 — Reward registry + L3 evaluator (Slice 1) (2–3 sessions)
 
@@ -288,6 +350,14 @@ Fills the stubs the repo already declares.
 - **`research/evaluator/builder.py`** — replace the dry-run stub with the real
   EvidencePack (OHLCV + signals + chart), sharing `paper/pattern_replay.py`'s
   parity-tested replay so a research score and a live emission mean the same thing.
+
+- **Variance budget.** A single backtest path is one sample, and the evaluator
+  must report dispersion, not just a point score: score every candidate over
+  resampled paths (CSCV folds, bootstrapped entry-date jitter) and carry
+  `(score, spread, n_paths)` through to the gate. Ref 15 used 10 seeds on a
+  benchmark they describe as *low* variance; Rainier's is not low variance, so a
+  point estimate is not a score. Candidates whose spread swamps their edge are
+  rejected at the gate as unresolved, distinct from rejected as unprofitable.
 
 *Acceptance:* re-scoring today's live champion through the L3 evaluator
 reproduces the paper book's realized stats within tolerance (a parity test). If
@@ -311,12 +381,24 @@ Now recursion is safe to switch on.
   scored against outcome. Mutations without a mechanism are the ones that
   overfit; making the hypothesis a required, judged field is the cheapest
   available regularizer.
+- **Seed from two starting points, not one.** Initialize part of the archive
+  from the champion and part from a deliberately naive baseline (flat pattern
+  weights, no regime filter). Ref 15's weak start beat a heavily
+  community-optimized incumbent; more importantly here, a run seeded only from
+  the champion inherits whatever D-1 baked into it, and running both gives a
+  free check on whether the champion's structure is actually load-bearing.
+- **Ties are not rankings.** When several elites fall inside each other's score
+  spread (P2), do not collapse to an argmax — keep them all and let P4's bandit
+  resolve the ordering with out-of-sample capital, which is the only
+  discriminator that isn't already exhausted. Ref 15 saw two independent runs
+  land on different, equally competitive solutions on a *low*-variance task.
 - **Cost governance.** Reuse `research/cost_pilot.py`. Hard per-run $ cap, same
   pattern as `llm_thesis.max_usd_per_scan: 2.5`.
 
 *Acceptance:* an end-to-end run produces ≥20 archive cells filled; ≥1 elite
 clears the P1 gate on sealed holdout; the run's total $ and trial count are
-recorded in the ledger.
+recorded in the ledger; the naive-seeded and champion-seeded lineages are both
+represented, and the report states whether they converged.
 
 ### P4 — Bandit allocation over live paper (2 sessions)
 
@@ -358,6 +440,9 @@ Only after P4 has produced a real track record:
 | Silent capital damage | Paper-only through P4; per-arm drawdown auto-retire; weekly Discord digest of every auto-applied change. |
 | Unauditable drift | Every promotion writes `champion.yaml` version + parent + gate verdict into `history/`; one-line revert. |
 | Reward hacking | Rewards pre-registered before search; changing the reward set is an L3 (human-gated) event, logged. |
+| **Incumbent assumed clean** | The champion is re-scored through the gate as ledger entry zero (P1.6) and audited for the same hacks candidates are screened for. A baseline is not trustworthy because it is incumbent. |
+| **Point scores mistaken for edge** | Evaluator returns `(score, spread, n_paths)`; candidates whose spread swamps their edge are rejected as *unresolved*, and ties are kept rather than ranked (P2, P3). |
+| **Hand-screening doesn't scale** | Ref 15 admits missing hacks in results outside their expertise. Rainier's answer is a narrow typed proposal surface (P3 stage 1) plus automated leak checks, not reviewer diligence. |
 
 ---
 
@@ -372,6 +457,9 @@ Only after P4 has produced a real track record:
 - **Don't evolve free-form strategy code first.** Stage the proposal surface.
 - **Don't re-tune the 12 pattern weights on the current corpus.** Per D-1 that
   corpus scores beta. Re-tuning on it now bakes the artifact in.
+- **Don't benchmark candidates against the champion's published numbers.**
+  Re-score it first (P1.6). Comparing a gate-scored candidate to a
+  pre-gate baseline measures the harness change, not the candidate.
 
 ---
 
