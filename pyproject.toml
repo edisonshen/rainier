@@ -129,4 +129,35 @@ dev = [
     # dev-only.
     "pytest-postgresql>=6.0",
     "ruff>=0.3",
+    # Mutation testing for the core price-action pipeline (see [tool.mutmut]).
+    "mutmut>=3.7",
+]
+
+[tool.mutmut]
+source_paths = ["src/"]
+do_not_mutate = [
+    "src/rainier/alerts/*", "src/rainier/apis/*", "src/rainier/breadth/*",
+    "src/rainier/core/*", "src/rainier/dashboard/*", "src/rainier/data/*",
+    "src/rainier/db/*", "src/rainier/llm_thesis/*", "src/rainier/market_breadth/*",
+    "src/rainier/ml/*", "src/rainier/monitors/*", "src/rainier/notifications/*",
+    "src/rainier/paper/*", "src/rainier/pipeline/*", "src/rainier/reports/*",
+    "src/rainier/research/*", "src/rainier/scheduler/*", "src/rainier/scrapers/*",
+    "src/rainier/trader/*", "src/rainier/viz/*", "src/rainier/cli.py",
+    "src/rainier/analysis/stock_patterns.py", "src/rainier/analysis/stock_screener.py",
+    "src/rainier/analysis/sector_analyzer.py", "src/rainier/analysis/regime.py",
+    "src/rainier/analysis/pattern_primitives.py", "src/rainier/analysis/target_calculator.py",
+    "src/rainier/backtest/qu100_backtest.py", "src/rainier/backtest/qu100_portfolio.py",
+    "src/rainier/backtest/tqqq_sma_report.py", "src/rainier/backtest/tqqq_sma_sweep.py",
+    "src/rainier/backtest/portfolio.py", "src/rainier/backtest/walk_forward.py",
+    "src/rainier/backtest/sweep.py", "src/rainier/backtest/export.py", "src/rainier/backtest/report.py",
+    "src/rainier/signals/journal.py", "src/rainier/signals/ml_emitter.py",
+    "src/rainier/signals/pattern_emitter.py", "src/rainier/signals/regime_filter.py",
+]
+also_copy = ["scripts/", "config/", "db/", "migrations/", "docs/"]
+pytest_add_cli_args = ["-m", "not slow", "--deselect", "tests/research/test_research_cli.py::test_resolve_ledger_sha_works_from_subdirectory"]
+pytest_add_cli_args_test_selection = [
+    "tests/test_pivots.py","tests/test_pinbar.py","tests/test_sr_horizontal.py",
+    "tests/test_sr_diagonal.py","tests/test_inside_bar.py","tests/test_backtest.py",
+    "tests/test_generator.py","tests/test_scorer.py","tests/test_extractor.py",
+    "tests/test_labels.py",
 ]
