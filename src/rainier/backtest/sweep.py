@@ -7,13 +7,14 @@ is injected so sweep doesn't know which signal strategy is being tested.
 from __future__ import annotations
 
 import itertools
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
 import pandas as pd
 
 from rainier.core.config import BacktestConfig
-from rainier.core.protocols import SignalEmitter
+from rainier.core.protocols import BacktestMetrics, SignalEmitter
 from rainier.core.types import Timeframe
 
 from .engine import run_backtest
@@ -43,6 +44,22 @@ class SweepResult:
 # Type alias: factory that creates a SignalEmitter given confidence + rr params
 EmitterFactory = Callable[[float, float], SignalEmitter]
 
+# One process-pool task: (df, symbol, timeframe, emitter_factory, config, conf, rr)
+_ComboArgs = tuple[
+    pd.DataFrame, str, Timeframe, EmitterFactory, BacktestConfig, float, float
+]
+
+
+def _run_combo(args: _ComboArgs) -> BacktestMetrics:
+    """Process-pool worker: one backtest for one (confidence, rr) combo.
+
+    Module-level so it pickles; the emitter factory must itself be picklable
+    (a module-level function or frozen dataclass, not a closure).
+    """
+    df, symbol, timeframe, emitter_factory, config, conf, rr = args
+    emitter = emitter_factory(conf, rr)
+    return run_backtest(df, symbol, timeframe, emitter, config)
+
 
 def run_sweep(
     df: pd.DataFrame,
@@ -52,6 +69,7 @@ def run_sweep(
     config: BacktestConfig | None = None,
     confidence_values: list[float] | None = None,
     rr_values: list[float] | None = None,
+    n_workers: int | None = 1,
 ) -> SweepResult:
     """Run backtest across all combinations of confidence × rr_ratio.
 
@@ -61,9 +79,13 @@ def run_sweep(
         timeframe: Bar timeframe
         emitter_factory: Creates a SignalEmitter for given (min_confidence, min_rr_ratio).
                         This keeps sweep decoupled from any specific signal strategy.
+                        Must be picklable when n_workers != 1.
         config: Base backtest config (sweep overrides confidence/rr)
         confidence_values: Confidence thresholds to test
         rr_values: Min R:R ratios to test
+        n_workers: Process-pool size; 1 (default) runs in-process with no
+                   pool, None = os.cpu_count(). Result ordering is
+                   deterministic either way.
 
     Returns:
         SweepResult with comparison table and best params
@@ -81,11 +103,18 @@ def run_sweep(
     best_pf = float("-inf")
 
     combos = list(itertools.product(confidence_values, rr_values))
+    combo_args = [
+        (df, symbol, timeframe, emitter_factory, config, conf, rr)
+        for conf, rr in combos
+    ]
 
-    for idx, (conf, rr) in enumerate(combos, 1):
-        emitter = emitter_factory(conf, rr)
-        metrics = run_backtest(df, symbol, timeframe, emitter, config)
+    if n_workers == 1:
+        all_metrics = [_run_combo(args) for args in combo_args]
+    else:
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            all_metrics = list(pool.map(_run_combo, combo_args))
 
+    for (conf, rr), metrics in zip(combos, all_metrics):
         # Tag metrics with the params used
         metrics.min_confidence = conf
         metrics.min_rr_ratio = rr

@@ -39,6 +39,12 @@ def _make_zigzag_dataset(n_bars: int = 200) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _picklable_factory(conf: float, rr: float):
+    """Module-level EmitterFactory — picklable, so it can cross the
+    run_sweep process-pool boundary."""
+    return FakeSignalEmitter()
+
+
 class FakeSignalEmitter:
     """A test emitter that produces a known signal at a specific bar."""
 
@@ -277,6 +283,30 @@ class TestSweep:
         )
         # 2 x 2 = 4 combinations
         assert len(result.rows) == 4
+
+    def test_sweep_parallel_matches_sequential(self):
+        """n_workers=2 runs combos on a process pool; rows and best params
+        must be identical to the sequential run (deterministic ordering)."""
+        from rainier.backtest.sweep import run_sweep
+
+        df = _make_zigzag_dataset()
+        config = BacktestConfig()
+
+        sequential = run_sweep(
+            df, "NQ", Timeframe.H1, _picklable_factory, config,
+            confidence_values=[0.5, 0.6],
+            rr_values=[1.0, 2.0],
+        )
+        parallel = run_sweep(
+            df, "NQ", Timeframe.H1, _picklable_factory, config,
+            confidence_values=[0.5, 0.6],
+            rr_values=[1.0, 2.0],
+            n_workers=2,
+        )
+        assert parallel.rows == sequential.rows
+        assert parallel.best_by_pnl == sequential.best_by_pnl
+        assert parallel.best_by_sharpe == sequential.best_by_sharpe
+        assert parallel.best_by_profit_factor == sequential.best_by_profit_factor
 
     def test_sweep_table_format(self):
         from rainier.backtest.sweep import SweepResult, format_sweep_table

@@ -25,7 +25,7 @@ Disk note: everything under ``data/cache/tqqq_sma/`` (``prices.parquet``,
 ``results.parquet`` and companion ``.sha256`` / ``.fingerprint.txt`` files) is
 **regenerable** — it is the cached output of this sweep, not a source of truth.
 A full Phase-2 ``results.parquet`` is ~570 MB. It is safe to delete at any time;
-the next ``rainier sma-sweep`` re-derives it from yfinance prices. Clear it with
+the next ``rainier backtest sma-sweep`` re-derives it from yfinance prices. Clear it with
 ``rainier cache clean`` (or pass ``--no-results-cache`` to ``sma-sweep`` to drop
 ``results.parquet`` automatically once the report has been rendered from it).
 
@@ -435,7 +435,7 @@ def clean_cache(cache_dir: Path = CACHE_DIR) -> list[Path]:
 
     Removes ``cache_dir`` and everything under it (prices/results parquets and
     their companion hash/fingerprint files). The cache is pure sweep output —
-    the next ``rainier sma-sweep`` re-derives it — so this is always safe.
+    the next ``rainier backtest sma-sweep`` re-derives it — so this is always safe.
 
     Returns the list of removed top-level paths (empty if the dir was absent).
     Idempotent: a no-op when ``cache_dir`` does not exist.
@@ -852,7 +852,7 @@ def dedup_by_strategy_id(df: pd.DataFrame) -> pd.DataFrame:
     """
     if "strategy_id" not in df.columns:
         raise KeyError(
-            "strategy_id column missing — re-run `rainier sma-sweep` after "
+            "strategy_id column missing — re-run `rainier backtest sma-sweep` after "
             "deleting the existing results.parquet to produce v2 schema rows."
         )
     counts = df.groupby("strategy_id", sort=False).size().rename("n_equivalent")
@@ -885,7 +885,7 @@ def walk_forward_top_n(
     the parquet to the trend-following subset BEFORE dedup/top-N selection.
     This is the cache-contamination guard's walk-forward analog — if a
     Phase-2 sweep has populated the parquet on disk and the user then runs
-    ``rainier sma-sweep --phase 1``, the walk-forward parquet must contain
+    ``rainier backtest sma-sweep --phase 1``, the walk-forward parquet must contain
     only Phase-1 (trend-following) winners, not anti-trend rows masquerading
     as Phase 1 validation. ``phase=2`` reads the full grid as before.
     """

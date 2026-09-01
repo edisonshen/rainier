@@ -1,7 +1,8 @@
-"""Futures price-action commands: fetch/scan/daytrade/chart/backtest/report, SMA sweep."""
+"""Futures price-action commands: fetch/daytrade/chart, backtest group, SMA sweep."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -9,9 +10,40 @@ import click
 import pandas as pd
 
 from rainier.cli import (
+    backtest_group,
     cli,
 )
-from rainier.core.types import Timeframe
+from rainier.core.config import AnalysisConfig
+from rainier.core.types import MarketRegime, Timeframe
+
+
+@dataclass(frozen=True)
+class _PinBarEmitterFactory:
+    """Picklable SignalEmitter factory for sweep/walk-forward workers.
+
+    ``run_sweep`` fans combos out to a process pool, so the factory must be
+    a module-level picklable object — a closure over CLI locals cannot cross
+    the process boundary.
+    """
+
+    analysis_config: AnalysisConfig
+    regimes: frozenset[MarketRegime] | None = None
+
+    def __call__(self, min_conf: float, min_rr: float):
+        from rainier.core.config import ScorerConfig, SignalConfig
+        from rainier.signals.emitter import PinBarSignalEmitter
+
+        sig_config = SignalConfig(
+            scorer=ScorerConfig(min_confidence=min_conf),
+            min_rr_ratio=min_rr,
+        )
+        emitter = PinBarSignalEmitter(self.analysis_config, sig_config)
+        if self.regimes is None:
+            return emitter
+        from rainier.analysis.regime import RegimeDetector
+        from rainier.signals.regime_filter import RegimeFilter
+
+        return RegimeFilter(emitter, RegimeDetector(), set(self.regimes))
 
 
 @cli.command()
@@ -50,49 +82,6 @@ def fetch(ctx, symbol, data_dir, provider_type, plot):
     if plot:
         click.echo()
         ctx.invoke(daytrade, symbol=symbol, data_dir=data_dir, output_path=None)
-
-
-@cli.command()
-@click.option("--symbol", required=True, help="Instrument symbol (MES, NQ, GC)")
-@click.option("--timeframe", "tf", required=True, help="Timeframe (1D, 4H, 1H, 15m, 5m)")
-@click.option("--csv", "csv_path", required=True, type=click.Path(exists=True), help="CSV file")
-@click.option("--start", default=None, help="Start date (YYYY-MM-DD)")
-@click.option("--end", default=None, help="End date (YYYY-MM-DD)")
-@click.pass_context
-def scan(ctx, symbol, tf, csv_path, start, end):
-    """Scan a single CSV file for pin bar setups."""
-    from rainier.analysis.analyzer import analyze
-    from rainier.signals.generator import generate_signals
-
-    settings = ctx.obj["settings"]
-    timeframe = Timeframe(tf)
-    start_dt = datetime.strptime(start, "%Y-%m-%d") if start else None
-    end_dt = datetime.strptime(end, "%Y-%m-%d") if end else None
-
-    from rainier.data.csv_provider import CSVProvider
-
-    provider = CSVProvider(Path(csv_path).parent)
-    df = provider._read_csv(Path(csv_path), start_dt, end_dt)
-
-    click.echo(f"Loaded {len(df)} candles for {symbol} {tf}")
-
-    result = analyze(df, symbol, timeframe, settings.analysis)
-    click.echo(f"Found {len(result.pivots)} pivots, {len(result.sr_levels)} S/R levels, "
-               f"{len(result.pin_bars)} pin bars, {len(result.inside_bars)} inside bars")
-
-    if result.bias:
-        click.echo(f"Bias: {result.bias.value}")
-
-    signals = generate_signals(result, df, settings.signal)
-    click.echo(f"\nSignals: {len(signals)}")
-
-    for sig in signals:
-        side = "BUY" if sig.direction.value == "LONG" else "SELL"
-        click.echo(
-            f"  {side} @ {sig.entry_price:.2f} | "
-            f"SL {sig.stop_loss:.2f} | TP {sig.take_profit:.2f} | "
-            f"R:R {sig.rr_ratio:.1f} | Conf {sig.confidence:.0%}"
-        )
 
 
 @cli.command()
@@ -210,7 +199,7 @@ def chart(ctx, symbol, tf, csv_path, start, end, output_path):
     click.echo(f"Chart saved to {out}")
 
 
-@cli.command()
+@backtest_group.command(name="futures")
 @click.option("--symbol", required=True)
 @click.option("--timeframe", "tf", required=True)
 @click.option("--csv", "csv_path", required=True, type=click.Path(exists=True))
@@ -234,11 +223,13 @@ def chart(ctx, symbol, tf, csv_path, start, end, output_path):
 @click.option("--symbols", default=None, help="Comma-separated symbols for portfolio backtest")
 @click.option("--data-dir", "data_dir", default=None, type=click.Path(exists=True),
               help="Directory with CSV files for portfolio mode")
+@click.option("--sweep-workers", "sweep_workers", default=None, type=int,
+              help="Process-pool size for --sweep (default: os.cpu_count())")
 @click.pass_context
 def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
              slippage, commission, show_trades, walk_forward, wf_train_bars, wf_test_bars,
-             wf_step_bars, wf_mode, regime_filter, symbols, data_dir):
-    """Run a backtest on historical data."""
+             wf_step_bars, wf_mode, regime_filter, symbols, data_dir, sweep_workers):
+    """Run a futures backtest on historical CSV data."""
     from rainier.backtest.engine import run_backtest
     from rainier.backtest.report import format_report, format_trade_log, plot_equity_curve
     from rainier.signals.emitter import PinBarSignalEmitter
@@ -263,10 +254,9 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
         bt_config.commission_per_trade = commission
 
     # Parse regime filter
-    regime_set = None
+    regime_set: frozenset[MarketRegime] | None = None
     if regime_filter:
-        from rainier.core.types import MarketRegime
-        regime_set = {MarketRegime(r.strip()) for r in regime_filter.split(",")}
+        regime_set = frozenset(MarketRegime(r.strip()) for r in regime_filter.split(","))
         click.echo(f"Regime filter: {[r.value for r in regime_set]}")
 
     def _wrap_with_regime(emitter):
@@ -274,17 +264,9 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
             return emitter
         from rainier.analysis.regime import RegimeDetector
         from rainier.signals.regime_filter import RegimeFilter
-        return RegimeFilter(emitter, RegimeDetector(), regime_set)
+        return RegimeFilter(emitter, RegimeDetector(), set(regime_set))
 
-    def emitter_factory(min_conf: float, min_rr: float):
-        from rainier.core.config import ScorerConfig, SignalConfig
-        sig_config = SignalConfig(
-            scorer=ScorerConfig(min_confidence=min_conf),
-            min_rr_ratio=min_rr,
-        )
-        return _wrap_with_regime(
-            PinBarSignalEmitter(settings.analysis, sig_config)
-        )
+    emitter_factory = _PinBarEmitterFactory(settings.analysis, regime_set)
 
     if symbols:
         # Portfolio backtest mode
@@ -356,6 +338,7 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
 
         sweep_result = run_sweep(
             df, symbol, timeframe, emitter_factory, bt_config,
+            n_workers=sweep_workers,
         )
         click.echo(format_sweep_table(sweep_result))
 
@@ -391,7 +374,7 @@ def backtest(ctx, symbol, tf, csv_path, start, end, capital, export_path, sweep,
             click.echo(f"Trades exported to {out}")
 
 
-@cli.command(name="backtest-pattern")
+@backtest_group.command(name="pattern")
 @click.option("--symbol", required=True, help="Stock ticker (AAPL, NVDA, etc.)")
 @click.option("--csv", "csv_path", default=None, type=click.Path(exists=True),
               help="CSV file with daily OHLCV (fetches via yfinance if omitted)")
@@ -469,38 +452,10 @@ def backtest_pattern(ctx, symbol, csv_path, start, end, capital,
         click.echo(f"Trades exported to {out}")
 
 
-@cli.command()
-@click.option("--csv", "csv_path", required=True, type=click.Path(exists=True))
-@click.option("--symbol", required=True)
-@click.option("--timeframe", "tf", required=True)
-@click.pass_context
-def report(ctx, csv_path, symbol, tf):
-    """Generate a daily report for a symbol."""
-    from rainier.analysis.analyzer import analyze
-    from rainier.reports.daily import generate_daily_report
-    from rainier.signals.generator import generate_signals
-
-    settings = ctx.obj["settings"]
-    timeframe = Timeframe(tf)
-
-    from rainier.data.csv_provider import CSVProvider
-
-    provider = CSVProvider(Path(csv_path).parent)
-    df = provider._read_csv(Path(csv_path), None, None)
-
-    result = analyze(df, symbol, timeframe, settings.analysis)
-    signals = generate_signals(result, df, settings.signal)
-
-    report_text = generate_daily_report({symbol: result}, {symbol: signals})
-    click.echo(report_text)
-
-
-
-
 # ---------------------------------------------------------------------------
 
 
-@cli.command("sma-sweep")
+@backtest_group.command("sma-sweep")
 @click.option("--phase", type=click.IntRange(1, 2), default=1, show_default=True,
               help="1 = trend-following (sell >= buy). 2 = full grid (adds anti-trend).")
 @click.option("--max-window", type=int, default=60, show_default=True,
@@ -662,7 +617,7 @@ def cache_clean(yes: bool) -> None:
     """Delete the TQQQ/SQQQ SMA sweep cache (data/cache/tqqq_sma/).
 
     The cache (prices + results parquets, ~570 MB at Phase 2) is pure sweep
-    output and is fully regenerated by the next `rainier sma-sweep` run.
+    output and is fully regenerated by the next `rainier backtest sma-sweep` run.
     """
     from rainier.backtest.tqqq_sma_sweep import CACHE_DIR, clean_cache
 

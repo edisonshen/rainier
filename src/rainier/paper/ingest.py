@@ -36,6 +36,10 @@ from .calendar import DEFAULT_CALENDAR, TradingCalendar
 
 log = logging.getLogger(__name__)
 
+# Bounded fan-out for the yfinance batch fetches — network-bound work; DB
+# persistence stays serialized in the caller.
+FETCH_MAX_WORKERS = 4
+
 # A single daily bar, normalized: trading-date + OHLCV (any of o/h/l/c/v may be
 # None for a NULL/no-data day). `date` is a plain calendar `date` here; the
 # upsert canonicalizes it to 00:00 UTC.
@@ -493,15 +497,17 @@ def get_qu100_appearances(
 
 def _yfinance_fetch_fn(symbols: list[str], start: date, end: date) -> dict[str, list[Bar]]:
     """Production fetch: yfinance → per-symbol long-form bars (NaN → None)."""
+    from concurrent.futures import ThreadPoolExecutor
+
     import pandas as pd
     import yfinance as yf
 
-    out: dict[str, list[Bar]] = {}
     batch_size = 20
     total = math.ceil(len(symbols) / batch_size)
     end_buffered = end + timedelta(days=1)
-    for bi in range(0, len(symbols), batch_size):
-        batch = symbols[bi : bi + batch_size]
+
+    def _fetch_batch(batch: list[str]) -> dict[str, list[Bar]]:
+        out: dict[str, list[Bar]] = {}
         df = yf.download(
             " ".join(batch),
             start=start.isoformat(),
@@ -511,7 +517,7 @@ def _yfinance_fetch_fn(symbols: list[str], start: date, end: date) -> dict[str, 
             threads=True,
         )
         if df is None or df.empty:
-            continue
+            return out
         if not isinstance(df.columns, pd.MultiIndex) and len(batch) == 1:
             df.columns = pd.MultiIndex.from_product([df.columns, batch])
         for sym in batch:
@@ -540,5 +546,13 @@ def _yfinance_fetch_fn(symbols: list[str], start: date, end: date) -> dict[str, 
                     }
                 )
             out[sym] = bars
-        log.info("yf_batch_done batch=%d total=%d", bi // batch_size + 1, total)
-    return out
+        return out
+
+    batches = [symbols[bi : bi + batch_size] for bi in range(0, len(symbols), batch_size)]
+    merged: dict[str, list[Bar]] = {}
+    if batches:
+        with ThreadPoolExecutor(max_workers=min(FETCH_MAX_WORKERS, len(batches))) as pool:
+            for i, batch_out in enumerate(pool.map(_fetch_batch, batches)):
+                merged.update(batch_out)
+                log.info("yf_batch_done batch=%d total=%d", i + 1, total)
+    return merged

@@ -8,7 +8,6 @@ from pathlib import Path
 import click
 
 from rainier.cli import (
-    _settings_path,
     cli,
 )
 
@@ -66,11 +65,12 @@ def db_init(ctx):
         click.echo("")
         click.echo(
             "Recovery: if this DB is already versioned (schema_migrations "
-            "exists), run 'rainier db migrate-legacy' to apply the pending "
-            "files. If it is UNVERSIONED, hand-apply the missing "
-            "migrations/*.sql to the legacy engine first, then adopt with "
-            "'rainier db migrate-legacy --baseline' (a plain run refuses "
-            "unversioned schemas, and baseline refuses while drift remains)."
+            "exists), apply the pending files via "
+            "rainier.core.legacy_migrate.run_migrations. If it is "
+            "UNVERSIONED, hand-apply the missing migrations/*.sql to the "
+            "legacy engine first, then adopt with baseline_migrations "
+            "(run_migrations refuses unversioned schemas, and baseline "
+            "refuses while drift remains)."
         )
         raise click.ClickException(f"{len(real)} schema-drift finding(s); see above.")
     # Honest scope: the drift check verifies ORM-DECLARED objects (tables,
@@ -89,16 +89,16 @@ def db_init(ctx):
     if pending:
         if applied_versions(engine):
             # Versioned DB: the pending files are new migrations — apply them.
-            hint = "Run 'rainier db migrate-legacy' to apply them."
+            hint = (
+                "Apply them via rainier.core.legacy_migrate.run_migrations."
+            )
         else:
-            # Unversioned (incl. the fresh db-init bootstrap): a plain run
-            # refuses unversioned schemas, so lead with --baseline
-            # (codex 43f3 [P2]: the old wording pointed fresh installs at a
-            # command guaranteed to fail).
+            # Unversioned (incl. the fresh db-init bootstrap): run_migrations
+            # refuses unversioned schemas, so lead with baseline_migrations.
             hint = (
                 "This DB is unversioned; adopt the file history with "
-                "'rainier db migrate-legacy --baseline' (a plain run refuses "
-                "unversioned schemas)."
+                "rainier.core.legacy_migrate.baseline_migrations "
+                "(run_migrations refuses unversioned schemas)."
             )
         click.echo(
             f"NOTE: {len(pending)} legacy migration file(s) not recorded as applied "
@@ -106,168 +106,6 @@ def db_init(ctx):
             f"migration-only DDL such as indexes/constraints. {hint}"
         )
     click.echo("Database initialized successfully.")
-
-
-@db.command(name="migrate-legacy")
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help="List pending migrations/*.sql without applying anything.",
-)
-@click.option(
-    "--baseline",
-    is_flag=True,
-    help=(
-        "Adopt an existing pre-versioned DB: RECORD all pending migrations as "
-        "applied WITHOUT running their SQL (alembic 'stamp'). Use once on a DB "
-        "that already has the schema but no schema_migrations table, then run "
-        "without this flag for genuinely new files. Refuses (stamping nothing) "
-        "if ORM-declared objects (tables/columns/named indexes+constraints) "
-        "are missing, or if the DB is already versioned; DDL that exists only "
-        "in migrations/*.sql without an ORM mirror is not verified."
-    ),
-)
-def db_migrate_legacy(dry_run: bool, baseline: bool) -> None:
-    """Apply the numbered ``migrations/*.sql`` to the LEGACY ``core.database``.
-
-    This is the runner for the legacy local-TimescaleDB track (public.* tables),
-    NOT Alembic — ``rainier db migrate`` is Alembic against the separate Neon
-    canonical DB. Applies each forward (non-``_downgrade``) file in filename
-    order, recording it in ``schema_migrations``. Idempotent: already-recorded
-    files are skipped, so a second run is a no-op. ``--dry-run`` lists pending
-    files without touching the DB; ``--baseline`` stamps pending files as applied
-    without running them (to adopt an already-migrated DB) after validating that
-    no ORM-declared object is missing.
-
-    BOOTSTRAP (fresh legacy DB): ``rainier db init`` then ``rainier db
-    migrate-legacy --baseline``. The historical files assume an existing schema
-    (0001 ALTERs tables only ``db init`` creates) and 0001's idempotency-index
-    expression is not runnable on modern Postgres at all (the live legacy DB
-    lacks it too), so a from-0001 replay is not a supported path. ``db init``
-    materializes every ORM-declared table/column/index/constraint; baseline
-    then adopts the file history after verifying those ORM-declared objects
-    exist (by name). Migration-only DDL the ORM does not mirror is NOT
-    verifiable and is excluded — a documented limitation.
-    """
-    from rainier.core.database import get_engine
-    from rainier.core.legacy_migrate import (
-        AlreadyVersionedError,
-        EmptyDatabaseError,
-        UnversionedSchemaError,
-        baseline_migrations,
-        run_migrations,
-    )
-
-    if dry_run and baseline:
-        raise click.ClickException("--dry-run and --baseline are mutually exclusive.")
-
-    engine = get_engine()
-    if dry_run:
-        # The same guards as a real run apply, so the preview is truthful.
-        try:
-            pending = run_migrations(engine, dry_run=True)
-        except (UnversionedSchemaError, EmptyDatabaseError) as exc:
-            raise click.ClickException(str(exc)) from exc
-        except Exception as exc:  # unhealthy DB during the probe, etc.
-            raise click.ClickException(
-                f"legacy migration dry-run failed: {exc.__class__.__name__}: {exc}"
-            ) from exc
-        if not pending:
-            click.echo("No pending legacy migrations.")
-            return
-        click.echo(f"{len(pending)} pending legacy migration(s):")
-        for name in pending:
-            click.echo(f"  - {name}")
-        return
-
-    if baseline:
-        from rainier.core.legacy_migrate import applied_versions, pending_migrations
-        from rainier.core.schema_check import KNOWN_BENIGN_DRIFT, check_schema_drift
-
-        pending = pending_migrations(engine)
-
-        # Already-versioned takes precedence over the drift refusal
-        # (codex 43f3 [P2]): on an adopted DB with a new ORM-backed migration
-        # pending, the right guidance is a plain run — NOT the drift
-        # refusal's "hand-apply then re-run --baseline". Mirrors the guard
-        # inside baseline_migrations (kept there for non-CLI callers).
-        if pending and applied_versions(engine):
-            raise click.ClickException(
-                "schema_migrations already has recorded versions; the "
-                f"{len(pending)} pending file(s) are new migrations that must "
-                "be APPLIED, not stamped. Run 'rainier db migrate-legacy' "
-                "(without --baseline)."
-            )
-
-        # Validate BEFORE stamping (codex 43f3 [P1]): baseline records files
-        # as applied WITHOUT running them, so adopting a schema that is still
-        # missing ORM-declared objects (the 0012/0013 incident state) would
-        # permanently mask those migrations from the runner. Refuse with the
-        # DB untouched — a stamp-then-fail would mutate bookkeeping into a
-        # harder-to-recover state. Skipped when nothing is pending (a no-op
-        # baseline stamps nothing, so there is nothing to mask).
-        missing = (
-            [f for f in check_schema_drift(engine) if f not in KNOWN_BENIGN_DRIFT]
-            if pending
-            else []
-        )
-        if missing:
-            click.echo(
-                "Refusing to baseline — the live schema is missing "
-                "ORM-declared objects:"
-            )
-            for finding in missing:
-                click.echo(f"  - {finding}")
-            click.echo(
-                "Stamping now would record their migrations as applied and "
-                "permanently skip them. Create missing tables with 'rainier "
-                "db init', hand-apply the migrations for missing columns to "
-                "the legacy engine, then re-run --baseline."
-            )
-            raise click.ClickException(
-                f"{len(missing)} missing ORM object(s); nothing was stamped."
-            )
-
-        try:
-            stamped = baseline_migrations(engine)
-        except AlreadyVersionedError as exc:
-            raise click.ClickException(str(exc)) from exc
-        except Exception as exc:  # mirror db_migrate's wrapping idiom
-            raise click.ClickException(
-                f"legacy baseline failed: {exc.__class__.__name__}: {exc}"
-            ) from exc
-        if not stamped:
-            click.echo("Nothing to baseline (all migrations already recorded).")
-            return
-        click.echo(f"Baselined {len(stamped)} migration(s) (recorded, NOT run):")
-        for name in stamped:
-            click.echo(f"  - {name}")
-        click.echo(
-            "Note: this validation covers ORM-declared objects (tables, "
-            "columns, named indexes/constraints) — DDL that exists solely in "
-            "migrations/*.sql without an ORM mirror, and same-name definition "
-            "drift, are not verified."
-        )
-        return
-
-    try:
-        applied = run_migrations(engine)
-    except (UnversionedSchemaError, EmptyDatabaseError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    except Exception as exc:
-        # A real apply failure (bad future migration, permissions, dropped
-        # connection) surfaces as a clean `Error:` line, not a raw traceback —
-        # mirrors db_migrate's wrapping idiom. The failed file's transaction
-        # rolled back whole, so a re-run resumes at the same file.
-        raise click.ClickException(
-            f"legacy migration failed: {exc.__class__.__name__}: {exc}"
-        ) from exc
-    if not applied:
-        click.echo("Legacy migrations already up to date (no-op).")
-        return
-    click.echo(f"Applied {len(applied)} legacy migration(s):")
-    for name in applied:
-        click.echo(f"  - {name}")
 
 
 @db.command(name="gc-test-schemas")
@@ -600,47 +438,6 @@ def _asof_window(asof_start: str | None, asof_end: str | None) -> tuple[date | N
     return start, end
 
 
-@db.command("backfill-from-parquet")
-@click.option(
-    "--cache-dir",
-    "cache_dir",
-    type=click.Path(file_okay=False),
-    default="data/cache",
-    show_default=True,
-    help="Directory holding the parquet caches to backfill from.",
-)
-@click.option("--asof-start", default=None, help="Inclusive start date (YYYY-MM-DD).")
-@click.option("--asof-end", default=None, help="Inclusive end date (YYYY-MM-DD).")
-@click.option(
-    "--dry-run", is_flag=True, help="Report per-table row counts without writing."
-)
-def db_backfill_from_parquet(
-    cache_dir: str, asof_start: str | None, asof_end: str | None, dry_run: bool
-) -> None:
-    """Backfill the full parquet history into ``market.*`` (registries first).
-
-    Idempotent (UPSERT). ``--asof-start/--asof-end`` window the date-keyed
-    tables; the ticker/sector registries always load fully (FK parents).
-    """
-    from rainier.db.backfill import backfill_from_parquet
-
-    start, end = _asof_window(asof_start, asof_end)
-    engine = _require_db_engine("db backfill-from-parquet")
-    try:
-        counts = backfill_from_parquet(
-            engine, cache_dir, asof_start=start, asof_end=end, dry_run=dry_run
-        )
-    finally:
-        engine.dispose()
-
-    label = "would write" if dry_run else "wrote"
-    for table, n in counts.items():
-        click.echo(f"  {table}: {label} {n} rows")
-    total = sum(counts.values())
-    suffix = " (dry-run, no mutation)" if dry_run else ""
-    click.echo(f"backfill-from-parquet — {label} {total} rows total{suffix}")
-
-
 @db.command("verify-coverage")
 @click.option(
     "--cache-dir",
@@ -695,143 +492,6 @@ def db_verify_coverage(
         f"{len(report.drift)} (asof_date, table) group(s) drifted — "
         f"parquet and Postgres disagree."
     )
-
-
-@db.command("backfill-screened-levels")
-@click.option("--from", "from_date", required=True, help="Inclusive start scan_date (YYYY-MM-DD).")
-@click.option("--to", "to_date", required=True, help="Inclusive end scan_date (YYYY-MM-DD).")
-@click.option(
-    "--apply",
-    is_flag=True,
-    help="Write the recovered levels. Omit for a dry-run (report only).",
-)
-@click.pass_context
-def db_backfill_screened_levels(ctx, from_date: str, to_date: str, apply: bool) -> None:
-    """One-time backfill of NULL screened_stocks trade levels (historical repair).
-
-    Replays the pattern detector as-of each historical scan_date over a fresh
-    yfinance 6-month window (the source the live screener used — the stored
-    `stock_prices` corpus is too short to form a pattern), matches the actionable
-    pattern whose `pattern_type` equals the row's stored type, and coalesce-upserts
-    entry/stop/target/rr (fills NULL only, never clobbers a set value). Dry-run by
-    default; pass `--apply` to write.
-
-    Honors the root `--config` for BOTH the target database AND the detector knobs
-    used in the replay. Because this reconstructs HISTORICAL screen output, point
-    `--config` at the settings YAML whose `stock_screener` section matches what the
-    live screen ran on those dates (e.g. `rainier --config config/settings.yaml db
-    backfill-screened-levels ...`). If detector thresholds (swing_lookback,
-    neckline_tolerance_pct, min_daily_bars, ...) were tuned after the scan window,
-    a default config would replay with TODAY's knobs and write levels the live
-    screen never produced — so pin the historical config.
-
-    Only `close`-session rows are repaired: the replay uses the completed daily
-    bar, which matches what the live screen saw only at close (earlier sessions
-    that day lacked the final high/low/close). Non-close patterned-NULL rows, and
-    rows whose stored pattern does not re-detect as-of, are LEFT NULL and reported
-    in `still-NULL` — never given look-ahead or wrong-pattern levels.
-    """
-    from datetime import date as _date
-
-    from rainier.core import config as _config_mod
-    from rainier.core import database as _database_mod
-    from rainier.core.config import load_settings_fresh
-    from rainier.paper.backfill_screened_levels import backfill_screened_levels
-
-    # Honor the root `--config` (codex P1). load_settings_fresh reads the YAML the
-    # operator selected; we (a) seed the process settings singleton so the legacy
-    # DB session + persist_screened_stocks target THAT database (not the default
-    # config/settings.yaml), and (b) pass its stock_screener as the replay config
-    # so the reconstruction uses the operator-pinned (historical) detector knobs.
-    #
-    # These are PROCESS globals. Snapshot them and RESTORE in finally (codex P2):
-    # an in-process caller (CliRunner / programmatic reuse) must not have its later
-    # commands silently inherit this backfill's --config DB. Without restore, the
-    # next get_settings()/get_session() in the same interpreter would read/write
-    # the wrong database.
-    _prev_settings = _config_mod._settings
-    _prev_engine = _database_mod._engine
-    _prev_factory = _database_mod._session_factory
-
-    settings = load_settings_fresh(_settings_path(ctx))
-    _config_mod._settings = settings  # seed singleton before any get_session()
-    # Reset the cached legacy engine/session factory so they REBIND against the
-    # just-seeded settings. Seeding _settings alone is insufficient if a session
-    # was already opened earlier in the same process — get_session() would keep the
-    # stale module-level _engine pointed at the old DB.
-    _database_mod._engine = None
-    _database_mod._session_factory = None
-
-    try:
-        # Operator-facing validation failures (a bad date string, from>to, or
-        # --apply on a pre-0012 DB) must surface as a clean Click error, not a raw
-        # traceback that looks like the command crashed.
-        try:
-            start = _date.fromisoformat(from_date)
-            end = _date.fromisoformat(to_date)
-        except ValueError as exc:
-            raise click.BadParameter(f"dates must be YYYY-MM-DD: {exc}") from exc
-
-        try:
-            result = backfill_screened_levels(
-                from_date=start,
-                to_date=end,
-                apply=apply,
-                config=settings.stock_screener,
-            )
-        except (ValueError, RuntimeError) as exc:
-            # ValueError: from_date > to_date. RuntimeError: --apply preflight on a
-            # pre-0012 DB (the message already names migration 0012).
-            raise click.ClickException(str(exc)) from exc
-
-        mode = "APPLY" if apply else "DRY-RUN"
-        click.echo(
-            f"backfill-screened-levels [{mode}] {start}..{end}: "
-            f"scanned={result.scanned} recovered={result.recovered} "
-            f"still_null={result.still_null} "
-            f"no_price_data={result.no_price_data} "
-            f"detector_errors={result.detector_errors} "
-            f"skipped_non_close={result.skipped_non_close}"
-        )
-        if result.still_null_keys:
-            click.echo(
-                f"  still-NULL ({result.still_null} rows, had prices but no as-of "
-                "pattern matched the stored type — permanent, re-run won't help):"
-            )
-            for symbol, scan_date in result.still_null_keys:
-                click.echo(f"    {symbol} {scan_date}")
-        if result.no_price_data_keys:
-            click.echo(
-                f"  no-price-data ({result.no_price_data} rows, yfinance returned "
-                "no bars even after solo retry — TRANSIENT, re-run may recover):"
-            )
-            for symbol, scan_date in result.no_price_data_keys:
-                click.echo(f"    {symbol} {scan_date}")
-        if result.detector_error_keys:
-            click.echo(
-                f"  detector-errors ({result.detector_errors} rows, the detector "
-                "raised — NOT a permanent no-match; a data re-pull or code fix may "
-                "recover these; see logs for tracebacks):"
-            )
-            for symbol, scan_date in result.detector_error_keys:
-                click.echo(f"    {symbol} {scan_date}")
-        if result.skipped_non_close:
-            click.echo(
-                f"  skipped-non-close ({result.skipped_non_close} rows): non-close "
-                "patterned-NULL rows are NOT repairable (look-ahead) and remain NULL."
-            )
-        if not apply and result.recovered:
-            click.echo(
-                "  (dry-run — re-run with --apply to write the recovered levels)"
-            )
-    finally:
-        # Restore the process globals so a later in-process command uses its own
-        # root --config, not this backfill's. Dispose the engine we (re)built.
-        if _database_mod._engine is not None:
-            _database_mod._engine.dispose()
-        _config_mod._settings = _prev_settings
-        _database_mod._engine = _prev_engine
-        _database_mod._session_factory = _prev_factory
 
 
 # ---------------------------------------------------------------------------

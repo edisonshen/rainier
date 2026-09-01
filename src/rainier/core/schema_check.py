@@ -27,7 +27,7 @@ from rainier.core.models import Base
 # QU100 pipeline never reads the table, and the operator's runbook (memory
 # ``project_prod_checkout_staleness``) says to block only on findings BEYOND
 # it. Without this allowlist ``rainier db init`` would exit non-zero on the
-# live DB forever, with ``db migrate-legacy`` unable to clear it.
+# live DB forever, with the legacy migration runner unable to clear it.
 KNOWN_BENIGN_DRIFT: frozenset[str] = frozenset(
     {
         "missing column: capital_flow_bars.symbol",

@@ -50,8 +50,8 @@ How many stocks to trade per day? Ranked by pattern confidence, pick top N.
 ### Command
 
 ```bash
-uv run rainier backtest-qu100 --patterns --pattern-top-n 3 --hold 5
-uv run rainier backtest-qu100 --patterns --pattern-top-n 2 --hold 5
+uv run rainier backtest qu100 --patterns --pattern-top-n 3 --hold 5
+uv run rainier backtest qu100 --patterns --pattern-top-n 2 --hold 5
 ```
 
 ---
@@ -62,8 +62,8 @@ _Baseline strategy: buy top-ranked QU100 "Long in" stocks by money flow, no patt
 
 Results from parameter sweep and signal tuning variations are available via:
 ```bash
-uv run rainier backtest-qu100 --sweep
-uv run rainier backtest-qu100 --variations
+uv run rainier backtest qu100 --sweep
+uv run rainier backtest qu100 --variations
 ```
 
 ---

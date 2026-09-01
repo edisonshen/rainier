@@ -502,7 +502,7 @@ def test_backfill_spy_incremental_cli_idempotent(migrated_engine, tmp_path, data
 
 @pytest.mark.requires_postgres
 def test_backfill_from_parquet_seeds_both_tables(migrated_engine, tmp_path, database_url):
-    """db backfill-from-parquet seeds breadth_indicator_daily + benchmark_ohlcv
+    """backfill_from_parquet seeds breadth_indicator_daily + benchmark_ohlcv
     from their parquet caches, and verify-coverage reports parity for both."""
     from rainier.db.backfill import backfill_from_parquet
     from rainier.db.verify import verify_coverage
