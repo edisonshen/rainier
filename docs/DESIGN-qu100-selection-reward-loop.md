@@ -134,11 +134,43 @@ uv run rainier selection-champion {show,history,rollback}
 uv run rainier challenger {list,status,promote,reject}
 ```
 
+### 3.6 Generalized loop engine (operator 2026-08-31: "hook this into different decision systems, then auto-research many times")
+
+The decision → reward → modify cycle above is not qu100-specific. Extract it as a small **loop engine** in `research/loop/`, defined by three protocols (in `core/protocols.py`, per repo convention), so any decision system in rainier can plug in and be auto-researched repeatedly:
+
+```
+class DecisionSource(Protocol):        # what was decided, with lever_context
+    def decisions(self, window) -> list[Decision]          # Decision = (id, symbol, date, action, plan_levels, lever_context)
+
+class RewardScorer(Protocol):          # how a decision graded out
+    def score(self, decision, as_of) -> list[RewardRow]    # writes selection_reward rows (system_name column added)
+
+class LeverSpace(Protocol):            # what may be modified, and how
+    def champion(self) -> dict                              # current config
+    def propose(self, scorecard) -> list[Challenger]        # single-lever deltas
+    def apply(self, challenger) -> None                     # gated promotion writes the new champion version
+```
+
+Engine cycle (one "auto-research iteration", runnable on demand `rainier loop run --system X` or on the weekly cron):
+
+```
+decisions ─► score rewards ─► scorecard ─► propose challengers ─► shadow/replay test ─► gate ─► promote (operator-approved) ─► repeat
+```
+
+Adapters, in adoption order:
+1. **`qu100_llm`** (this design, §3.1–3.4) — first and reference adapter; the engine is *extracted from* R1–R3 code, not built speculatively.
+2. **`stock_screener`** — LeverSpace = existing `champion.yaml` (`core/champion.py`); RewardScorer = `pattern_replay.py` composite replay. Mostly wiring, both halves exist.
+3. **`reclaim_gate`** (`paper/reclaim.py` thresholds), **`futures_pinbar`** (scorer via the existing backtest engine's `TradeRecord`s) — later, each is just three protocol implementations.
+
+Engine-level rules (inherited from §3.4 guardrails, enforced once): as-of discipline, matured-rewards-only gates, one champion change per system per cycle, operator approval, full lineage (every promotion records `parent`, scorecard evidence, and the loop iteration id). "Auto research many times" = the engine can run its propose→test→gate cycle every week per system, safely, because the gates + approval make each iteration cheap to reject.
+
 ## 4. Phasing (each phase = its own PR)
 
 - **R1 — reward ledger + registry.** `selection_reward` migration; reward bodies in `research/rewards` (registry stub → real); daily step (vi); counterfactual scoring for declined decisions (reusing `evaluate_exit`); `rainier reward compute`; tests (R math incl. invalid levels / basis mismatch, idempotent upsert, provisional→realized transition, counterfactual as-of discipline).
 - **R2 — scorecard + selection champion.** Weekly `compute_lever_scorecard` + snapshot/Discord; `selection_champion.yaml` + loader (generalizing `core/champion.py`); wire `signal_weights` into prompt rendering (D7b prerequisite); `challenger_promotion` insight kind + gated executor; CLI; tests.
 - **R3 — challenger automation + bandit.** Challenger generator; shadow-book-per-challenger (`challenger_id`), replay warm-start; promotion gate evaluation; Thompson allocation in `research/bandit`; tests.
+- **R4 — loop-engine extraction (§3.6).** Factor the R1–R3 qu100 code into `research/loop/` behind the `DecisionSource` / `RewardScorer` / `LeverSpace` protocols; add `system_name` to `selection_reward`; `rainier loop run --system qu100_llm` = existing weekly behavior (parity test); tests.
+- **R5 — second adapter: `stock_screener`.** Wire existing `champion.yaml` + `pattern_replay.py` into the engine; screener lever scorecard + gated promotion; proves the engine generalizes; tests.
 
 R1 is independently valuable (the ledger + scorecard answer "is the selection working, and which knob is the problem" even with zero automation).
 
