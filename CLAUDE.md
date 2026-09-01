@@ -21,8 +21,13 @@ src/rainier/
 ├── notifications/  notifier.py (Apprise multi-channel)
 ├── alerts/         discord.py (webhook notifications)
 ├── reports/        daily.py (daily review + next-day outlook)
-├── scheduler/      jobs.py (cron.yaml → system crontab), service.py (APScheduler for scraping)
+├── scheduler/      jobs.py (cron.yaml → system crontab), service.py (APScheduler for scraping),
+│                   recovery.py (post-restart service checks + missed-scrape re-runs)
 ├── pipeline/       post_scrape.py (shared screen→persist→LLM thesis→Discord, used by cron CLI + scheduler)
+├── db/             canonical Postgres store: schema.py, engine.py, upsert.py, backfill.py,
+│                   backfill_prices.py (yfinance OHLCV backfill), dualwrite.py, verify.py
+├── cli/            composition root: __init__.py (root group + shared helpers), futures.py, qu100.py,
+│                   jobs.py, db.py, paper.py, ml.py, thesis.py, thematic.py, dashboard.py
 ├── trader/         (Phase 3 placeholder — IB TWS execution)
 └── dashboard/      app.py, render_etf.py, render_combined.py, data.py, actions.py (ETF + combined dashboards)
 ```
@@ -97,7 +102,7 @@ All boundary contracts live in `core/protocols.py`. Modules depend on protocols,
 - `signals/` imports from `core/` and `analysis/` — never from `backtest/` or `trader/`
 - `features/` imports ONLY from `core/` — never from `backtest/` directly
 - `trader/` (future) imports ONLY from `core/` — receives signals via protocol
-- `cli.py` is the **composition root** — the only place that wires modules together
+- `cli/` is the **composition root** — the only place that wires modules together
 
 ### Protocol Contracts (in `core/protocols.py`)
 
@@ -132,7 +137,7 @@ LIVE TRADING (future, Phase 3):
 ### Adding a New Signal Strategy
 
 1. Create a new class implementing the `SignalEmitter` protocol (just needs `emit()` method)
-2. Wire it in `cli.py` or wherever the composition happens
+2. Wire it in `cli/` or wherever the composition happens
 3. The backtest engine, sweep runner, and export all work automatically — zero changes needed
 
 ## Key Conventions
