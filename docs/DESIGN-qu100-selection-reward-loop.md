@@ -51,12 +51,27 @@ R              = (X - E) / risk_per_share
   - `no_setup` on a symbol with **no valid long-shape levels** gets **no R** — there is no plan to score. It is scored only in the coverage diagnostic (unchanged).
 - **Why R and not return%:** R normalizes by the risk the plan took, so a 2% gain on a tight-stop setup and a 10% gain on a wide-stop setup compare honestly; expectancy in R (`mean(R)`) is the standard objective for per-decision quality, which is what this book measures (independent $10k sleeves, no portfolio cap — D2).
 
-**Aggregate objectives** (computed over cohorts, all with `n` attached):
-- `expectancy_R = mean(R)` — headline.
-- `t_stat_R = mean(R) / (std(R)/√n)` — the promotion gate uses this, not raw mean (small-sample discipline, same spirit as D6).
-- `hit_rate`, `avg_win_R`, `avg_loss_R`, `max_drawdown_R` (path-level, from the by-holding-day curves already built for `discover_time_stop`).
+**Aggregate objectives — the operator's three axes (2026-08-31: total return, minimize risk, high win rate — "that is it"):**
 
-All reward bodies are registered in `research/rewards.REGISTRY` (the Slice-0 stub becomes real): `r_multiple_realized`, `r_multiple_mtm`, `r_multiple_counterfactual`, `expectancy_R`, `t_stat_R`, plus the fixed-horizon `h5_return` / `h10_return` (thin wrappers over `thesis_evaluations`) for cross-checking. **`reward_version: 1`** is pinned; any formula change bumps it (same convention as `feature_version` in `paper/features.py`).
+| Axis | Metric | Definition |
+|---|---|---|
+| **Total return** | `total_R = sum(R)` and `total_pnl_$` | how much the cohort made in total (sum of independent $10k sleeves, per D2/D11 framing) |
+| **Risk** | `max_drawdown_R` (path-level, from the by-holding-day curves already built for `discover_time_stop`) + `std(R)` | worst peak-to-trough of the cohort's cumulative-R curve; dispersion |
+| **Win rate** | `win_rate = wins / matured decisions` (win = `R > 0`) | over the honest denominator incl. counterfactually-scored declines |
+
+Cohort comparisons (scorecard + promotion) use one composite that encodes all three, with the axes also reported separately so trade-offs stay visible:
+
+```
+score = total_R − λ · max_drawdown_R          (λ = 1.0 default ★)
+subject to: win_rate ≥ champion's win_rate − 5pp   (win-rate floor — a challenger may not
+                                                    buy total return with materially more losers)
+```
+
+Supporting stats always attached: `n`, `expectancy_R = mean(R)`, `t_stat_R = mean(R)/(std(R)/√n)` — the promotion gate keeps the t-stat requirement (small-sample discipline, same spirit as D6), applied to the composite's return leg.
+
+**Known tension (stated, not hidden):** win rate and total return fight each other — tight targets raise win rate but cap total return; letting winners run does the opposite. The composite + floor resolves it in favor of *total return at no-worse risk and no-materially-worse win rate*; the scorecard reports all three axes per lever bucket so the operator sees which axis a change trades away.
+
+All reward bodies are registered in `research/rewards.REGISTRY` (the Slice-0 stub becomes real): `r_multiple_realized`, `r_multiple_mtm`, `r_multiple_counterfactual`, `total_R`, `win_rate`, `max_drawdown_R`, `composite_score`, `expectancy_R`, `t_stat_R`, plus the fixed-horizon `h5_return` / `h10_return` (thin wrappers over `thesis_evaluations`) for cross-checking. **`reward_version: 1`** is pinned; any formula change bumps it (same convention as `feature_version` in `paper/features.py`).
 
 ### 3.2 Reward ledger (data model)
 
@@ -82,7 +97,7 @@ as_of_date    DATE, created_at
 
 ### 3.3 Lever scorecard (weekly)
 
-Extend the Friday research job with `compute_lever_scorecard()`: for each lever in `lever_context`, group matured, **non-provisional** rewards by lever value and emit `expectancy_R / t_stat / n` per bucket, plus the same split for counterfactual cohorts (e.g. "watch conf≥7 counterfactual expectancy vs live setup_long expectancy" — exactly the WATCH-flip question WS A measures, now standing infrastructure). Output: a `lever_scorecard` section in the weekly `paper_report_snapshot` payload + Discord table. This is the human-readable "back-tracking" view the operator asked for.
+Extend the Friday research job with `compute_lever_scorecard()`: for each lever in `lever_context`, group matured, **non-provisional** rewards by lever value and emit the three operator axes per bucket — `total_R / max_drawdown_R / win_rate` — plus `composite_score`, `expectancy_R`, `t_stat`, `n`, plus the same split for counterfactual cohorts (e.g. "watch conf≥7 counterfactual expectancy vs live setup_long expectancy" — exactly the WATCH-flip question WS A measures, now standing infrastructure). Output: a `lever_scorecard` section in the weekly `paper_report_snapshot` payload + Discord table. This is the human-readable "back-tracking" view the operator asked for.
 
 ### 3.4 Evolution loop (champion / challenger, gated)
 
@@ -101,8 +116,8 @@ config/model/selection_champion.yaml
 **Loop cadence (weekly, Fri, after the scorecard):**
 1. **Propose.** Challenger generator produces ≤2 candidate configs per week, each a *single-lever* delta from champion, sourced from: (a) scorecard buckets with `t_stat` beyond threshold (e.g. "conf gate 7 beats 6"), (b) existing research insights (`discover_time_stop`, `check_signal_underperform` → weight/disable deltas — this finally makes D7b real, and wiring `signal_weights` into prompt rendering is a prerequisite subtask, per D7b), (c) operator-suggested. Single-lever deltas keep attribution clean.
 2. **Shadow-test.** Each challenger runs as a **shadow book** through the real engine — reuse the `paper_trade.shadow` mechanism (migration 0013) with a new `challenger_id` tag, and `paper/replay.py` for historical warm-start where the lever permits it (confidence gate and act-on-watch replay cleanly from stored theses; a `prompt_version` change **cannot** be replayed and must accrue live shadow decisions only — the ledger's `counterfactual` flag already distinguishes these).
-3. **Promote/reject (gated).** Promotion requires ALL of: `n ≥ 30` matured shadow decisions; challenger `expectancy_R` beats champion with `t_stat ≥ 1.5` on the same window; direction stable across **≥2 consecutive weekly runs** (D6 discipline); and **operator approval** via the existing `ResearchInsight` action gate (new kind `challenger_promotion`, executor writes the new `selection_champion.yaml` version++, parent=old, score=expectancy_R, history retained). No auto-apply in v1.
-4. **Bandit allocation (Phase R3, `research/bandit/`).** When >1 challenger competes for live shadow slots, allocate symbols/sessions via Thompson sampling over `expectancy_R` posteriors instead of running all challengers on everything (LLM cost control). This fills the empty L5 bandit package; it allocates *measurement budget*, never live capital.
+3. **Promote/reject (gated).** Promotion requires ALL of: `n ≥ 30` matured shadow decisions; challenger `composite_score` (total_R − λ·drawdown) beats champion's on the same window with `t_stat ≥ 1.5` on the return leg; challenger passes the **win-rate floor** (≥ champion − 5pp); direction stable across **≥2 consecutive weekly runs** (D6 discipline); and **operator approval** via the existing `ResearchInsight` action gate (new kind `challenger_promotion`, executor writes the new `selection_champion.yaml` version++, parent=old, score=composite_score, history retained). No auto-apply in v1.
+4. **Bandit allocation (Phase R3, `research/bandit/`).** When >1 challenger competes for live shadow slots, allocate symbols/sessions via Thompson sampling over `composite_score` posteriors instead of running all challengers on everything (LLM cost control). This fills the empty L5 bandit package; it allocates *measurement budget*, never live capital.
 
 **Guardrails (hard rules):**
 - Coverage diagnostics (missed-winner sweep) never feed rewards or promotion (D8 stands).
