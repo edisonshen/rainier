@@ -29,6 +29,57 @@ class TestDetectInsideBars:
         inside_bars = detect_inside_bars(df)
         assert inside_bars == []
 
+    def test_exact_equality_with_mother_counts_as_inside(self, base_timestamp):
+        """Boundary: high == mother high AND low == mother low is still inside."""
+        from datetime import timedelta
+
+        df = pd.DataFrame([
+            {"timestamp": base_timestamp, "open": 100, "high": 110,
+             "low": 90, "close": 105, "volume": 100},
+            {"timestamp": base_timestamp + timedelta(hours=1), "open": 105, "high": 110,
+             "low": 90, "close": 100, "volume": 100},
+        ])
+        inside_bars = detect_inside_bars(df)
+        assert len(inside_bars) == 1
+        assert inside_bars[0].index == 1
+        assert inside_bars[0].mother_index == 0
+        assert inside_bars[0].compression_ratio == 1.0
+
+    def test_high_above_mother_not_inside(self, base_timestamp):
+        from datetime import timedelta
+
+        df = pd.DataFrame([
+            {"timestamp": base_timestamp, "open": 100, "high": 110,
+             "low": 90, "close": 105, "volume": 100},
+            {"timestamp": base_timestamp + timedelta(hours=1), "open": 105, "high": 110.1,
+             "low": 90, "close": 100, "volume": 100},
+        ])
+        assert detect_inside_bars(df) == []
+
+    def test_low_below_mother_not_inside(self, base_timestamp):
+        from datetime import timedelta
+
+        df = pd.DataFrame([
+            {"timestamp": base_timestamp, "open": 100, "high": 110,
+             "low": 90, "close": 105, "volume": 100},
+            {"timestamp": base_timestamp + timedelta(hours=1), "open": 105, "high": 110,
+             "low": 89.9, "close": 100, "volume": 100},
+        ])
+        assert detect_inside_bars(df) == []
+
+    def test_compression_ratio_hand_computed(self, base_timestamp):
+        from datetime import timedelta
+
+        df = pd.DataFrame([
+            {"timestamp": base_timestamp, "open": 100, "high": 110,
+             "low": 90, "close": 105, "volume": 100},
+            {"timestamp": base_timestamp + timedelta(hours=1), "open": 100, "high": 104,
+             "low": 96, "close": 102, "volume": 100},
+        ])
+        inside_bars = detect_inside_bars(df)
+        assert len(inside_bars) == 1
+        assert inside_bars[0].compression_ratio == (104 - 96) / (110 - 90)
+
     def test_equal_high_low_skipped(self, base_timestamp):
         """Mother bar with zero range should be skipped."""
         from datetime import timedelta
