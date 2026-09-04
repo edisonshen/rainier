@@ -475,7 +475,7 @@ class TestDeliveryContract:
     delivered ONLY when Discord accepts the POST, and the candidate table the
     operator reads is what actually goes to the channel. Deterministic — safe
     for CI. For a true end-to-end channel check, see the env-gated live test
-    below (and the ``rainier debug post-fake-thesis`` CLI probe)."""
+    below (the ``rainier debug post-fake-thesis`` probe was removed)."""
 
     def test_summary_message_is_posted_to_channel_on_success(self):
         config = DiscordConfig(enabled=True, stock_webhook_url="https://chan/hook")

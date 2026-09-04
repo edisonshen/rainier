@@ -1,4 +1,4 @@
-"""`rainier pattern-audit` CLI — wiring smoke test.
+"""`rainier backtest audit` CLI — wiring smoke test.
 
 The audit logic (corpus build / aggregation / forward returns) is covered in
 tests/test_paper/test_pattern_audit.py. Here we only assert the CLI wires
@@ -49,7 +49,7 @@ def test_pattern_audit_writes_report(tmp_path):
     ) as mock_run:
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["pattern-audit", "--report", str(report), "--symbols", "AAA,BBB"]
+            cli, ["backtest", "audit", "--report", str(report), "--symbols", "AAA,BBB"]
         )
 
     assert result.exit_code == 0, result.output

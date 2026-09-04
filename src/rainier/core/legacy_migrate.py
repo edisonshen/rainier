@@ -311,7 +311,7 @@ def baseline_migrations(
         raise AlreadyVersionedError(
             "schema_migrations already has recorded versions; the "
             f"{len(pending)} pending file(s) are new migrations that must be "
-            "APPLIED, not stamped. Run 'rainier db migrate-legacy' (without "
+            "APPLIED, not stamped. Run run_migrations (without "
             "--baseline). Baseline only adopts an unversioned existing schema."
         )
     stamped: list[str] = []
@@ -357,7 +357,7 @@ def run_migrations(
       an empty pre-created table must not disarm the guard). Refuses to
       blindly replay ``0001..N`` (historical files don't re-run cleanly on an
       already-migrated schema). Adopt with ``baseline_migrations`` /
-      ``db migrate-legacy --baseline``, then run for the new tail only.
+      ``baseline_migrations``, then run for the new tail only.
     * ``EmptyDatabaseError`` — the DB is truly EMPTY and the DEFAULT (shipped)
       migration set is in use. The shipped files assume an existing schema
       (0001 ALTERs tables only ``db init`` creates), so a from-scratch replay
@@ -376,7 +376,7 @@ def run_migrations(
                 "Legacy schema already has tables but no recorded versions in "
                 "schema_migrations. Refusing to replay 0001..N (some "
                 "historical files don't re-run cleanly on an existing "
-                "schema). Run 'rainier db migrate-legacy --baseline' once to "
+                "schema). Run baseline_migrations once to "
                 "adopt the current schema, then re-run to apply any new "
                 "migrations."
             )
@@ -385,7 +385,7 @@ def run_migrations(
                 "Empty legacy database: the shipped migrations/*.sql assume an "
                 "existing schema (0001 ALTERs tables only 'rainier db init' "
                 "creates) and cannot bootstrap from scratch. Run 'rainier db "
-                "init' first, then 'rainier db migrate-legacy --baseline' to "
+                "init' first, then baseline_migrations to "
                 "adopt the file history."
             )
 

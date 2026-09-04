@@ -27,6 +27,11 @@ def cli(ctx, config_path):
     ctx.obj["settings_path"] = str(path)
 
 
+@cli.group(name="backtest")
+def backtest_group():
+    """Backtesting commands (futures, patterns, portfolio, QU100, sweeps)."""
+
+
 def _settings_path(ctx) -> str:
     """Return the YAML path the user selected at the CLI root.
 
@@ -285,7 +290,6 @@ from rainier.cli.thematic import (  # noqa: E402, F401
     _dual_write_labels_pg,
     _frame_to_pg_rows,
 )
-from rainier.cli.thesis import _FAKE_THESIS_VERDICTS, _mask_webhook_url  # noqa: E402, F401
 from rainier.scheduler.recovery import (  # noqa: E402, F401
     _is_qu100_fresh,
     _latest_due_session,

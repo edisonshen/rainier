@@ -43,23 +43,27 @@ uv run ruff check src/ tests/
 
 # Futures data + analysis
 uv run rainier fetch --symbol MES --plot
-uv run rainier scan --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
 uv run rainier daytrade --symbol MES --data-dir data/csv
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --trades
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --export trades.csv
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --export trades.parquet
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --sweep
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --slippage 0.001 --commission 5.0
 uv run rainier chart --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
-uv run rainier report --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
+
+# Backtesting (all under the `backtest` group)
+uv run rainier backtest futures --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
+uv run rainier backtest futures --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --trades
+uv run rainier backtest futures --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --export trades.csv
+uv run rainier backtest futures --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --sweep
+uv run rainier backtest futures --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --sweep --sweep-workers 4
+uv run rainier backtest futures --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --slippage 0.001 --commission 5.0
+uv run rainier backtest pattern --symbols TSLA,NVDA
+uv run rainier backtest portfolio
+uv run rainier backtest audit                              # pattern forward-return audit
+uv run rainier backtest sma-sweep                          # TQQQ/SQQQ SMA rotation sweep
 
 # QU100 backtesting
-uv run rainier backtest-qu100                              # default: rank 1-50, 5d hold
-uv run rainier backtest-qu100 --sweep                      # parameter sweep (rank x hold)
-uv run rainier backtest-qu100 --variations                 # all signal tuning variants
-uv run rainier backtest-qu100 --patterns                   # pattern-filtered (best 3 patterns, top 5)
-uv run rainier backtest-qu100 --patterns --pattern-top-n 10  # pattern-filtered, top 10
+uv run rainier backtest qu100                              # default: rank 1-50, 5d hold
+uv run rainier backtest qu100 --sweep                      # parameter sweep (rank x hold)
+uv run rainier backtest qu100 --variations                 # all signal tuning variants
+uv run rainier backtest qu100 --patterns                   # pattern-filtered (best 3 patterns, top 5)
+uv run rainier backtest qu100 --patterns --pattern-top-n 10  # pattern-filtered, top 10
 
 # QuantUnicorn scraping
 uv run rainier scrape qu --session morning --headed
@@ -154,8 +158,8 @@ LIVE TRADING (future, Phase 3):
 
 ### Regenerable caches & log size (disk hygiene)
 
-- `data/cache/tqqq_sma/` — TQQQ/SQQQ SMA sweep cache (prices + `results.parquet`, ~570 MB at Phase 2). **Regenerable**, not source-of-truth: the next `rainier sma-sweep` re-derives it from yfinance. Clear it with `rainier cache clean`, or pass `--no-results-cache` to `sma-sweep` to drop `results.parquet` automatically once the report is rendered from it.
-- `data/cache/qu100_pattern_audit/corpus.parquet` — the pattern forward-return audit corpus (one row per actionable emission with 5/10/20d forward returns + regime tag). **Regenerable**, not source-of-truth: the next `rainier pattern-audit` re-derives it from Postgres `stock_prices`. Safe to delete; gitignored. The committed artifact is `docs/REPORT-qu100-pattern-hit-rate.md` (the rendered table), not the corpus.
+- `data/cache/tqqq_sma/` — TQQQ/SQQQ SMA sweep cache (prices + `results.parquet`, ~570 MB at Phase 2). **Regenerable**, not source-of-truth: the next `rainier backtest sma-sweep` re-derives it from yfinance. Clear it with `rainier cache clean`, or pass `--no-results-cache` to `sma-sweep` to drop `results.parquet` automatically once the report is rendered from it.
+- `data/cache/qu100_pattern_audit/corpus.parquet` — the pattern forward-return audit corpus (one row per actionable emission with 5/10/20d forward returns + regime tag). **Regenerable**, not source-of-truth: the next `rainier backtest audit` re-derives it from Postgres `stock_prices`. Safe to delete; gitignored. The committed artifact is `docs/REPORT-qu100-pattern-hit-rate.md` (the rendered table), not the corpus.
 - `config/model/registry.parquet` — champion/challenger results registry `(version, window, metrics)`, written by `core.champion.append_registry_entry`. **Regenerable** research dataset, gitignored; `config/model/champion.yaml` + `config/model/history/` are the committed source-of-truth.
 - Cron job logs (`data/fetch.log`, `data/qu-scrape.log`) are size-capped by `scripts/cron-wrapper.sh` to the trailing 10 MiB (override with `CRON_LOG_MAX_BYTES`). Content is unchanged; only the oldest bytes past the cap are dropped.
 

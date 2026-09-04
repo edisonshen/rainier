@@ -4,20 +4,26 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 import pandas as pd
+
+if TYPE_CHECKING:
+    from rainier.backtest.qu100_backtest import PatternMatch
+    from rainier.core.config import StockScreenerConfig
 
 from rainier.cli import (
     _get_discord_backtest_webhook,
     _legacy_db_for_config,
     _run_qu_scrape,
     _send_discord_embeds,
+    backtest_group,
     cli,
 )
 
 
-@cli.command(name="backtest-portfolio")
+@backtest_group.command(name="portfolio")
 @click.option("--capital", default=100.0, type=float, help="Starting capital in USD")
 @click.option("--max-positions", default=5, type=int, help="Max concurrent positions")
 @click.option("--top-n", default=2, type=int, help="Top N pattern matches to buy per day")
@@ -111,7 +117,7 @@ def backtest_portfolio(ctx, capital, max_positions, top_n, max_hold,
             click.echo("Sent to Discord.")
 
 
-@cli.command(name="backtest-qu100")
+@backtest_group.command(name="qu100")
 @click.option("--top-n", default=20, type=int, help="Top N stocks per day")
 @click.option("--hold", default=5, type=int, help="Holding period in days")
 @click.option("--min-rank", default=1, type=int, help="Min rank to include")
@@ -184,7 +190,7 @@ def backtest_qu100(ctx, top_n, hold, min_rank, max_rank, entry_delay,
         click.echo("Report sent to Discord")
 
 
-@cli.command(name="pattern-audit")
+@backtest_group.command(name="audit")
 @click.option(
     "--symbols", default=None,
     help="Comma-separated symbols (default: all in money_flow_snapshots)",
@@ -202,8 +208,12 @@ def backtest_qu100(ctx, top_n, hold, min_rank, max_rank, entry_delay,
     "--window-label", default=None,
     help="Override the report window label (default: derived from corpus dates)",
 )
+@click.option(
+    "--workers", "n_workers", default=None, type=int,
+    help="Process-pool size for the per-symbol replay (default: os.cpu_count())",
+)
 @click.pass_context
-def pattern_audit(ctx, symbols, report_path, window_days, window_label):
+def pattern_audit(ctx, symbols, report_path, window_days, window_label, n_workers):
     """Pattern forward-return audit over `stock_prices` (WS B).
 
     Faithfully replays the LIVE pattern layer as-of each trading day, attaches
@@ -236,7 +246,7 @@ def pattern_audit(ctx, symbols, report_path, window_days, window_label):
     click.echo("Running QU100 pattern forward-return audit over stock_prices...")
     corpus, agg, corpus_file, derived_label = run_pattern_audit(
         config=settings.stock_screener, symbols=sym_list, window_days=win_days,
-        corpus_filename=corpus_filename,
+        corpus_filename=corpus_filename, n_workers=n_workers,
     )
     click.echo(f"Corpus: {len(corpus)} emissions → {corpus_file}")
 
@@ -416,16 +426,65 @@ def _run_qu100_momentum(
         click.echo("Momentum report sent to Discord")
 
 
+def _extract_symbol_frame(price_data: pd.DataFrame, sym: str) -> pd.DataFrame:
+    """Extract one symbol's OHLCV frame from a (possibly MultiIndex) yf download."""
+    if isinstance(price_data.columns, pd.MultiIndex):
+        return pd.DataFrame({
+            "open": price_data["Open"][sym],
+            "high": price_data["High"][sym],
+            "low": price_data["Low"][sym],
+            "close": price_data["Close"][sym],
+            "volume": price_data["Volume"][sym],
+        }).dropna()
+    return pd.DataFrame({
+        "open": price_data["Open"],
+        "high": price_data["High"],
+        "low": price_data["Low"],
+        "close": price_data["Close"],
+        "volume": price_data["Volume"],
+    }).dropna()
+
+
+def _detect_symbol_patterns(
+    args: tuple[str, pd.DataFrame, StockScreenerConfig],
+) -> tuple[str, list[PatternMatch], str | None]:
+    """Process-pool worker: detect BEST_PATTERNS matches for one symbol.
+
+    Returns ``(symbol, matches, error)`` — exceptions are captured per symbol
+    so one bad ticker never aborts the pool, matching the sequential behavior.
+    """
+    sym, sym_df, config = args
+    from rainier.analysis.stock_patterns import detect_patterns
+    from rainier.backtest.qu100_backtest import BEST_PATTERNS, PatternMatch
+
+    matches: list[PatternMatch] = []
+    try:
+        for p in detect_patterns(sym, sym_df, config):
+            if p.pattern_type not in BEST_PATTERNS:
+                continue
+            end_idx = p.pattern_end_idx or p.pattern_start_idx
+            if end_idx is not None and end_idx < len(sym_df):
+                matches.append(PatternMatch(
+                    symbol=sym,
+                    pattern_type=p.pattern_type,
+                    confidence=p.confidence,
+                    signal_date=sym_df.index[end_idx].date(),
+                ))
+    except Exception as exc:
+        return sym, [], str(exc)
+    return sym, matches, None
+
+
 def _run_qu100_pattern_backtest(
     top_n: int, hold: int, webhook: str | None,
 ) -> None:
     """Run pattern-filtered QU100 backtest (composition root wiring)."""
+    from concurrent.futures import ProcessPoolExecutor
+
     import yfinance as yf
 
-    from rainier.analysis.stock_patterns import detect_patterns
     from rainier.backtest.qu100_backtest import (
         BEST_PATTERNS,
-        PatternMatch,
         format_discord_report,
         format_pattern_report,
         load_rankings_from_db,
@@ -461,54 +520,25 @@ def _run_qu100_pattern_backtest(
         progress=False,
     )
 
-    # Step 3: Run pattern detection on each symbol
+    # Step 3: Run pattern detection per symbol on a process pool. Detection is
+    # pure CPU work over an already-downloaded frame, so symbols fan out safely;
+    # results are collected in submission (sorted-symbol) order, keeping the
+    # match list — and thus the backtest — deterministic.
     config = StockScreenerConfig()
     pattern_matches: list[PatternMatch] = []
 
-    click.echo(f"  Detecting patterns on {len(all_symbols)} symbols...")
+    tasks = []
     for sym in all_symbols:
-        try:
-            # Extract single-symbol OHLCV
-            if isinstance(price_data.columns, pd.MultiIndex):
-                sym_df = pd.DataFrame({
-                    "open": price_data["Open"][sym],
-                    "high": price_data["High"][sym],
-                    "low": price_data["Low"][sym],
-                    "close": price_data["Close"][sym],
-                    "volume": price_data["Volume"][sym],
-                }).dropna()
-            else:
-                # Single symbol
-                sym_df = pd.DataFrame({
-                    "open": price_data["Open"],
-                    "high": price_data["High"],
-                    "low": price_data["Low"],
-                    "close": price_data["Close"],
-                    "volume": price_data["Volume"],
-                }).dropna()
+        sym_df = _extract_symbol_frame(price_data, sym)
+        if len(sym_df) >= config.min_pattern_bars:
+            tasks.append((sym, sym_df, config))
 
-            if len(sym_df) < config.min_pattern_bars:
-                continue
-
-            detected = detect_patterns(sym, sym_df, config)
-
-            # Convert to PatternMatch with dates
-            for p in detected:
-                if p.pattern_type not in BEST_PATTERNS:
-                    continue
-
-                # Use the pattern end bar's date as signal date
-                end_idx = p.pattern_end_idx or p.pattern_start_idx
-                if end_idx is not None and end_idx < len(sym_df):
-                    signal_date = sym_df.index[end_idx].date()
-                    pattern_matches.append(PatternMatch(
-                        symbol=sym,
-                        pattern_type=p.pattern_type,
-                        confidence=p.confidence,
-                        signal_date=signal_date,
-                    ))
-        except Exception as exc:
-            click.echo(f"  Warning: {sym} pattern detection failed: {exc}")
+    click.echo(f"  Detecting patterns on {len(tasks)} symbols...")
+    with ProcessPoolExecutor() as pool:
+        for sym, matches, error in pool.map(_detect_symbol_patterns, tasks):
+            if error is not None:
+                click.echo(f"  Warning: {sym} pattern detection failed: {error}")
+            pattern_matches.extend(matches)
 
     click.echo(f"  Found {len(pattern_matches)} pattern matches across {BEST_PATTERNS}")
 

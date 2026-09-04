@@ -62,6 +62,7 @@ import pyarrow.parquet as pq
 DEFAULT_OUT = Path("data/cache/sp500_universe.parquet")
 DEFAULT_CHUNK_SIZE = 25
 DEFAULT_RETRIES = 1
+FETCH_MAX_WORKERS = 4
 INCREMENTAL_WINDOW_DAYS = 5
 
 # Fail-loud threshold for the cron path: if fewer than this fraction of
@@ -448,12 +449,17 @@ def backfill(
     except Exception:  # noqa: BLE001 — best-effort version capture
         yfinance_version = "stub"
 
-    # Fetch in chunks. We collect the entire batch before touching the
-    # destination parquet — a mid-fetch crash leaves the prior parquet
-    # bytes intact (test_partial_failure_does_not_corrupt_parquet).
-    all_fetched: dict[str, pd.DataFrame] = {}
-    for chunk in _chunked(symbols, chunk_size):
-        batch = _fetch_with_retry(
+    # Fetch chunks on a bounded thread pool (network-bound). We collect the
+    # entire batch before touching the destination parquet — a mid-fetch
+    # crash leaves the prior parquet bytes intact
+    # (test_partial_failure_does_not_corrupt_parquet). Results merge into a
+    # symbol-keyed dict, so chunk completion order never affects the output;
+    # a chunk's RateLimitError (after its own retries) propagates out of
+    # ``executor.map`` exactly as it did from the sequential loop.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _fetch_chunk(chunk: list[str]) -> dict[str, pd.DataFrame]:
+        return _fetch_with_retry(
             fetch_fn=fetch_fn,
             chunk=chunk,
             start=start_iso,
@@ -461,7 +467,12 @@ def backfill(
             retries=retries,
             retry_sleep=retry_sleep,
         )
-        all_fetched.update(batch)
+
+    chunks = list(_chunked(symbols, chunk_size))
+    all_fetched: dict[str, pd.DataFrame] = {}
+    with ThreadPoolExecutor(max_workers=min(FETCH_MAX_WORKERS, len(chunks))) as executor:
+        for batch in executor.map(_fetch_chunk, chunks):
+            all_fetched.update(batch)
 
     new_df = _to_long_frame(all_fetched, yfinance_version, fetched_at)
 

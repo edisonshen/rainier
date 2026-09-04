@@ -1058,7 +1058,7 @@ def render_report(
     wf_hash = _file_sha256(walkforward_path) if walkforward_path.exists() else "missing"
     # Dataset hash derived from the qqq column to stay independent of pyarrow buffer layout
     ds_hash = hashlib.sha256(prices.to_csv().encode()).hexdigest()
-    repro_cmd = f"uv run rainier sma-sweep --phase {phase}"
+    repro_cmd = f"uv run rainier backtest sma-sweep --phase {phase}"
     repro_body = (
         '<table class="kv"><tbody>'
         f'<tr><th>git SHA</th><td><code>{git_sha}</code></td></tr>'

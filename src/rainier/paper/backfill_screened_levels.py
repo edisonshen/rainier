@@ -76,8 +76,8 @@ Non-``close`` patterned-NULL rows are deliberately left NULL — see
 Levels come from the actionable pattern matching the stored type, so they are
 faithful by construction (the replay is parity-tested against ``screen_stocks``).
 
-This is a maintenance command (``rainier db backfill-screened-levels``), NOT a
-scheduled job — a historical repair.
+This is a maintenance service (invoked programmatically; its one-off CLI
+wrapper was removed), NOT a scheduled job — a historical repair.
 """
 
 from __future__ import annotations

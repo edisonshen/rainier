@@ -45,7 +45,7 @@ from rainier.paper.pattern_replay import (
 log = logging.getLogger(__name__)
 
 # Regenerable Parquet cache (feature-store convention; off Neon). Added to the
-# CLAUDE.md disk-hygiene list. `rainier pattern-audit` re-derives it from
+# CLAUDE.md disk-hygiene list. `rainier backtest audit` re-derives it from
 # stock_prices each run.
 DEFAULT_CORPUS_DIR = Path("data/cache/qu100_pattern_audit")
 CORPUS_FILENAME = "corpus.parquet"
@@ -149,6 +149,74 @@ def _default_regime_fn(as_of: date) -> str:
     return compute_market_regime(as_of=as_of)
 
 
+# One process-pool task:
+# (symbol, frame, config, min_history_bars, lookback_bars, window_start)
+_ReplayArgs = tuple[str, pd.DataFrame, StockScreenerConfig, int, int, date | None]
+
+
+def _replay_symbol(args: _ReplayArgs) -> list[dict]:
+    """Replay the pattern layer over one symbol's frame → corpus rows sans regime.
+
+    Pure CPU work over an in-memory frame, so it can run on a process pool;
+    the regime tag (a DB lookup via an injectable, possibly unpicklable
+    ``regime_fn``) is attached by ``build_corpus`` in the parent process.
+    """
+    symbol, df, config, min_history_bars, lookback_bars, window_start = args
+    rows: list[dict] = []
+    n = len(df)
+    if n < min_history_bars:
+        return rows
+    # As-of every bar from the min-history floor to the last bar. The window
+    # trims to the live lookback; forward returns look INTO future bars of
+    # the full frame, so the loop runs to the end (late rows get NULL fwd).
+    for t_idx in range(min_history_bars - 1, n):
+        as_of_ts = df.index[t_idx]
+        as_of_date = (
+            as_of_ts.date() if hasattr(as_of_ts, "date") else as_of_ts
+        )
+        # Trailing-window bound on the AS-OF date (earlier bars still loaded
+        # for lookback / forward-return edges, just no emission). Bars are
+        # date-ascending, so once we cross the cutoff every later t is in.
+        if window_start is not None and as_of_date < window_start:
+            continue
+        # CALENDAR 6-month window ending at t (byte-faithful to the live
+        # yfinance period="6mo"); falls back to bar-count for index-less
+        # frames. `lookback_bars` only governs the fallback path.
+        window = window_as_of(df, t_idx, lookback_bars=lookback_bars)
+        # Gate on the AS-OF WINDOW length, mirroring live `_fetch_stock_data`
+        # which rejects a 6-month frame shorter than min_bars. So a config
+        # with min_daily_bars > lookback emits nothing, same as live.
+        if len(window) < min_history_bars:
+            continue
+        # The live screener wraps detect_patterns in try/except and skips
+        # bad symbols; mirror that so one malformed window over a 1-year
+        # replay drops that window, not the whole audit.
+        try:
+            emission = emission_at(symbol, window, config)
+        except Exception:
+            log.exception(
+                "pattern replay failed for %s @ t_idx=%d, skipping window",
+                symbol, t_idx,
+            )
+            continue
+        if emission is None:
+            continue
+        row = {
+            "symbol": symbol,
+            "as_of": as_of_date,
+            "pattern_type": emission.pattern_type,
+            "direction": emission.direction,
+            "status": emission.status,
+            "confidence": emission.confidence,
+            "pattern_contribution": emission.pattern_contribution,
+            "close_at_t": emission.close_at_t,
+        }
+        for h in HORIZONS:
+            row[f"fwd_return_{h}d"] = forward_return(df, t_idx, h)
+        rows.append(row)
+    return rows
+
+
 def build_corpus(
     prices_by_symbol: dict[str, pd.DataFrame],
     *,
@@ -157,6 +225,7 @@ def build_corpus(
     min_history_bars: int = MIN_HISTORY_BARS,
     lookback_bars: int = LIVE_LOOKBACK_BARS,
     window_start: date | None = None,
+    n_workers: int | None = 1,
 ) -> pd.DataFrame:
     """Replay the pattern layer over every (symbol, trading day) and attach
     forward returns + a regime tag.
@@ -179,6 +248,12 @@ def build_corpus(
     frame shorter than ``min_bars``, so a config whose ``min_daily_bars``
     exceeds ``lookback_bars`` (~126) emits nothing here exactly as live skips
     every symbol — no silent divergence.
+
+    ``n_workers`` fans the per-symbol replay (pure CPU pattern detection) out
+    to a process pool; 1 (default) stays in-process, ``None`` uses
+    ``os.cpu_count()``. Symbols are processed in sorted order and results
+    reassembled in that same order, so the corpus is byte-identical for any
+    worker count. Regime lookups (DB) always run in the parent process.
     """
     # The regime for a calendar date is invariant across symbols, but the
     # default `compute_market_regime` opens a fresh DB session + SPY query per
@@ -194,60 +269,24 @@ def build_corpus(
             regime_cache[as_of_date] = cached
         return cached
 
+    tasks = [
+        (symbol, prices_by_symbol[symbol], config, min_history_bars,
+         lookback_bars, window_start)
+        for symbol in sorted(prices_by_symbol)
+    ]
+
+    if n_workers == 1:
+        per_symbol_rows = [_replay_symbol(task) for task in tasks]
+    else:
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            per_symbol_rows = list(pool.map(_replay_symbol, tasks))
+
     rows: list[dict] = []
-    for symbol in sorted(prices_by_symbol):
-        df = prices_by_symbol[symbol]
-        n = len(df)
-        if n < min_history_bars:
-            continue
-        # As-of every bar from the min-history floor to the last bar. The window
-        # trims to the live lookback; forward returns look INTO future bars of
-        # the full frame, so the loop runs to the end (late rows get NULL fwd).
-        for t_idx in range(min_history_bars - 1, n):
-            as_of_ts = df.index[t_idx]
-            as_of_date = (
-                as_of_ts.date() if hasattr(as_of_ts, "date") else as_of_ts
-            )
-            # Trailing-window bound on the AS-OF date (earlier bars still loaded
-            # for lookback / forward-return edges, just no emission). Bars are
-            # date-ascending, so once we cross the cutoff every later t is in.
-            if window_start is not None and as_of_date < window_start:
-                continue
-            # CALENDAR 6-month window ending at t (byte-faithful to the live
-            # yfinance period="6mo"); falls back to bar-count for index-less
-            # frames. `lookback_bars` only governs the fallback path.
-            window = window_as_of(df, t_idx, lookback_bars=lookback_bars)
-            # Gate on the AS-OF WINDOW length, mirroring live `_fetch_stock_data`
-            # which rejects a 6-month frame shorter than min_bars. So a config
-            # with min_daily_bars > lookback emits nothing, same as live.
-            if len(window) < min_history_bars:
-                continue
-            # The live screener wraps detect_patterns in try/except and skips
-            # bad symbols; mirror that so one malformed window over a 1-year
-            # replay drops that window, not the whole audit.
-            try:
-                emission = emission_at(symbol, window, config)
-            except Exception:
-                log.exception(
-                    "pattern replay failed for %s @ t_idx=%d, skipping window",
-                    symbol, t_idx,
-                )
-                continue
-            if emission is None:
-                continue
-            row = {
-                "symbol": symbol,
-                "as_of": as_of_date,
-                "pattern_type": emission.pattern_type,
-                "direction": emission.direction,
-                "status": emission.status,
-                "confidence": emission.confidence,
-                "pattern_contribution": emission.pattern_contribution,
-                "regime": _regime(as_of_date),
-                "close_at_t": emission.close_at_t,
-            }
-            for h in HORIZONS:
-                row[f"fwd_return_{h}d"] = forward_return(df, t_idx, h)
+    for symbol_rows in per_symbol_rows:
+        for row in symbol_rows:
+            row["regime"] = _regime(row["as_of"])
             rows.append(row)
 
     if not rows:
@@ -409,6 +448,7 @@ def run_pattern_audit(
     min_history_bars: int | None = None,
     window_days: int | None = DEFAULT_WINDOW_DAYS,
     corpus_filename: str | None = None,
+    n_workers: int | None = 1,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Path, str]:
     """Build the corpus from `stock_prices`, write Parquet, aggregate.
 
@@ -503,6 +543,7 @@ def run_pattern_audit(
         config=config,
         min_history_bars=min_history_bars,
         window_start=window_start,
+        n_workers=n_workers,
     )
     agg = aggregate_to_frame(corpus)
     path = write_corpus(corpus, corpus_dir, filename=corpus_filename)
@@ -540,7 +581,7 @@ def render_report_markdown(
         "# QU100 pattern forward-return audit",
         "",
         "*WS1 deliverable of the QU100-LLM pattern-tuning design. Auto-generated "
-        "by `rainier pattern-audit`.*",
+        "by `rainier backtest audit`.*",
         "",
         "## The problem this answers",
         "",
@@ -587,7 +628,7 @@ def render_report_markdown(
         "`unknown` = fewer than 200 SPY bars at/before the as-of day; reported, "
         "never dropped.",
         "- `thin` = n < 30 at that horizon — reported, never over-tuned.",
-        "- Reproduce: `rainier pattern-audit` (re-derives corpus + this report "
+        "- Reproduce: `rainier backtest audit` (re-derives corpus + this report "
         "from Postgres `stock_prices`; deterministic for a fixed DB snapshot). "
         "Parity-tested vs live `screen_stocks` "
         "(`tests/test_paper/test_pattern_replay.py`).",

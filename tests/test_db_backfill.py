@@ -1,4 +1,4 @@
-"""Integration tests for Phase 3 ``rainier db backfill-from-parquet`` (task plan §5).
+"""Integration tests for the Phase 3 parquet backfill service (task plan §5).
 
 The backfill reads the five parquet caches and UPSERTs their full history into
 the matching ``market.*`` tables (registries first for FK order). We assert:
@@ -269,69 +269,13 @@ def test_backfill_asof_window(migrated_engine, tmp_path, database_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.requires_postgres
-def test_cli_backfill_from_parquet(migrated_engine, tmp_path, database_url):
-    from rainier.cli import cli
-
-    cache = tmp_path / "cache"
-    frames = _write_cache(cache, ["AAA", "BBB"], n_days=8)
-
-    res = CliRunner().invoke(
-        cli, ["db", "backfill-from-parquet", "--cache-dir", str(cache)]
-    )
-    assert res.exit_code == 0, res.output
-    for table, frame in frames.items():
-        assert _count(migrated_engine, table) == len(frame)
-
-
-def test_cli_backfill_requires_database_url(tmp_path, monkeypatch):
-    """DATABASE_URL unset -> a clean ClickException, not a raw traceback."""
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    from rainier.cli import cli
-
-    cache = tmp_path / "cache"
-    _write_cache(cache, ["AAA"], n_days=3)
-
-    res = CliRunner().invoke(
-        cli, ["db", "backfill-from-parquet", "--cache-dir", str(cache)]
-    )
-    assert res.exit_code != 0
-    assert res.exception is None or isinstance(res.exception, SystemExit), (
-        f"expected a clean ClickException, got {res.exception!r}"
-    )
-    assert "DATABASE_URL" in res.output
-
-
-def test_cli_backfill_rejects_reversed_window(tmp_path, monkeypatch):
-    """--asof-start > --asof-end -> clean ClickException, never a silent
-    registries-only run. A reversed window filters every date-keyed row out, so
-    without this guard backfill would 'succeed' having written nothing but the
-    FK parents. Validation runs before the DB engine is required, so no
-    DATABASE_URL is needed."""
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    from rainier.cli import cli
-
-    res = CliRunner().invoke(
-        cli,
-        [
-            "db", "backfill-from-parquet", "--cache-dir", str(tmp_path / "cache"),
-            "--asof-start", "2026-05-10", "--asof-end", "2026-05-01",
-        ],
-    )
-    assert res.exit_code != 0
-    assert res.exception is None or isinstance(res.exception, SystemExit), (
-        f"expected a clean ClickException, got {res.exception!r}"
-    )
-    assert "asof-start" in res.output and "asof-end" in res.output
-
-
 def test_cli_backfill_registered():
-    """`rainier db --help` lists backfill-from-parquet alongside the legacy cmds."""
+    """`rainier db --help`: the parquet backfill CLI wrapper was removed; the
+    legacy + Phase 1 commands must still be present."""
     from rainier.cli import cli
 
     res = CliRunner().invoke(cli, ["db", "--help"])
     assert res.exit_code == 0, res.output
-    assert "backfill-from-parquet" in res.output
-    # Regression guard: the legacy + Phase 1 commands must still be present.
+    assert "backfill-from-parquet" not in res.output
     for sub in ("init", "ping", "migrate"):
         assert sub in res.output

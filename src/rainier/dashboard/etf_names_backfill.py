@@ -69,6 +69,7 @@ __all__ = [
 
 DEFAULT_OUT = Path("data/cache/etf_names.parquet")
 DEFAULT_RETRIES = 1
+FETCH_MAX_WORKERS = 8
 STALE_THRESHOLD_DAYS = 30
 
 _COLUMN_ORDER: tuple[str, ...] = ("symbol", "long_name", "short_name", "fetched_at")
@@ -103,13 +104,12 @@ FetchFn = Callable[[list[str]], dict[str, dict[str, str | None]]]
 # ---------------------------------------------------------------------------
 
 
-def _yfinance_fetch(symbols: list[str]) -> dict[str, dict[str, str | None]]:
-    """Fetch yfinance ``info`` for each symbol; return {sym: {long, short}}.
+def _yfinance_fetch_one(sym: str) -> dict[str, str | None]:
+    """Fetch yfinance ``info`` for one symbol → {long_name, short_name}.
 
-    yfinance's per-ticker ``info`` is sequential by design; for the ~100
-    ETFs in the thematic universe this is fast enough and simpler than
-    bulk pulling. Each Ticker construction is cheap; the network call
-    happens lazily on the first ``.info`` access.
+    Rate-limit-looking failures surface as ``RateLimitError`` (retryable);
+    other failures (network reset, JSON decode, etc.) are treated as
+    missing — the name falls back to the symbol in the renderer.
 
     Symbol translation (``BRK.B`` → ``BRK-B``) mirrors the OHLCV
     backfill: yfinance wants the dash form, our YAML + parquet keep the
@@ -117,23 +117,38 @@ def _yfinance_fetch(symbols: list[str]) -> dict[str, dict[str, str | None]]:
     """
     import yfinance as yf  # local import → tests stay offline
 
-    out: dict[str, dict[str, str | None]] = {}
-    for sym in symbols:
-        yf_sym = sym.replace(".", "-")
-        try:
-            info = yf.Ticker(yf_sym).info or {}
-        except Exception as exc:  # noqa: BLE001 — surface as RateLimitError
-            msg = str(exc).lower()
-            if "rate" in msg or "limit" in msg or "429" in msg or "throttle" in msg:
-                raise RateLimitError(str(exc)) from exc
-            # Other failures (network reset, JSON decode, etc.) treat as
-            # missing — name falls back to symbol in the renderer.
-            info = {}
-        out[sym] = {
-            "long_name": _coerce_str(info.get("longName")),
-            "short_name": _coerce_str(info.get("shortName")),
-        }
-    return out
+    yf_sym = sym.replace(".", "-")
+    try:
+        info = yf.Ticker(yf_sym).info or {}
+    except Exception as exc:  # noqa: BLE001 — surface as RateLimitError
+        msg = str(exc).lower()
+        if "rate" in msg or "limit" in msg or "429" in msg or "throttle" in msg:
+            raise RateLimitError(str(exc)) from exc
+        info = {}
+    return {
+        "long_name": _coerce_str(info.get("longName")),
+        "short_name": _coerce_str(info.get("shortName")),
+    }
+
+
+def _yfinance_fetch(symbols: list[str]) -> dict[str, dict[str, str | None]]:
+    """Fetch yfinance ``info`` per symbol on a bounded thread pool.
+
+    The per-ticker ``.info`` call is network-bound, so up to
+    ``FETCH_MAX_WORKERS`` symbols fetch concurrently. Results are keyed by
+    symbol (dict), so completion order never affects the output; the merge
+    and atomic parquet write stay in the caller's single thread. A
+    ``RateLimitError`` from any worker propagates out of ``executor.map``
+    so the retry wrapper sees the same signal as the old sequential loop.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not symbols:
+        return {}
+    workers = min(FETCH_MAX_WORKERS, len(symbols))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(_yfinance_fetch_one, symbols))
+    return dict(zip(symbols, results))
 
 
 def _coerce_str(value) -> str | None:

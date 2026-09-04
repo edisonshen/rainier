@@ -152,6 +152,27 @@ def test_build_corpus_attaches_regime_and_fwd_returns():
     pd.testing.assert_frame_equal(corpus, corpus2)
 
 
+def test_build_corpus_parallel_matches_sequential():
+    """n_workers=2 fans the per-symbol replay to a process pool; the corpus
+    must be byte-identical to the sequential (n_workers=1) build."""
+    prices = [100.0] * 60
+    prices += _false_breakdown_block()
+    prices += [92.5, 93.0] * 11
+    df = _make_ohlcv(prices)
+    prices_by_symbol = {"AAA": df, "BBB": df.copy()}
+
+    sequential = build_corpus(
+        prices_by_symbol, config=_CONFIG,
+        regime_fn=lambda as_of: "bull", min_history_bars=60,
+    )
+    parallel = build_corpus(
+        prices_by_symbol, config=_CONFIG,
+        regime_fn=lambda as_of: "bull", min_history_bars=60, n_workers=2,
+    )
+    assert not sequential.empty
+    pd.testing.assert_frame_equal(sequential, parallel)
+
+
 def test_build_corpus_memoizes_regime_per_date():
     """regime_fn is invoked at most once per distinct as_of date — a 1-year ×
     N-symbol audit must not re-query SPY per emission (the default regime_fn
