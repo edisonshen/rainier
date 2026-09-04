@@ -9,82 +9,21 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # pytest-xdist runs one worker per core; cap the BLAS / numba thread pools
+  # so the workers don't oversubscribe the runner (4 workers x N threads
+  # each is dramatically slower than the serial run).
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  NUMBA_NUM_THREADS: "1"
+
 jobs:
-  lint:
-    name: Lint (ruff)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+  # The three jobs below are independent and run in parallel. Each one does a
+  # single `uv sync` from the shared uv cache; nothing is repeated across them.
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --extra dev
-
-      - name: ruff check
-        run: uv run ruff check src/ tests/
-
-  test:
-    name: Test (pytest)
-    runs-on: ubuntu-latest
-
-    services:
-      # TimescaleDB matches the local dev image. Even tests that don't touch
-      # the DB run cleanly; tests that need it pick up DATABASE_URL below.
-      postgres:
-        image: timescale/timescaledb:latest-pg16
-        env:
-          POSTGRES_USER: rainier
-          POSTGRES_PASSWORD: rainier_dev
-          POSTGRES_DB: rainier
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U rainier"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-
-    env:
-      DATABASE_URL: postgresql://rainier:rainier_dev@localhost:5432/rainier
-      # Don't run the gated end-to-end LLM tests in CI (no Anthropic key).
-      # They self-skip via pytest.mark.skipif when this env var is absent.
-      RAINIER_LLM_INTEGRATION_TEST: ""
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --extra dev
-
-      - name: Initialize DB (create_all from current ORM)
-        run: uv run rainier db init
-
-      - name: Apply SQL migrations (idempotent ALTERs on top of db init)
-        run: |
-          shopt -s nullglob
-          for f in migrations/*.sql; do
-            echo "Applying $f"
-            PGPASSWORD=rainier_dev psql \
-              -h localhost -p 5432 -U rainier -d rainier \
-              -f "$f"
-          done
-
-      - name: pytest
-        run: uv run pytest tests/ -v --tb=short
-
-  build:
-    name: Build (import smoke + wheel)
+  lint-build:
+    name: Lint (ruff) + Build (import smoke + wheel)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +36,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --extra dev --extra dashboard
+
+      - name: ruff check
+        run: uv run ruff check src/ tests/
 
       - name: Import smoke (CLI loads, all modules import)
         run: |
@@ -113,3 +55,78 @@ jobs:
           # pointing at the new venv's python.
           uv pip install --python /tmp/wheel-test/bin/python dist/*.whl
           /tmp/wheel-test/bin/rainier --help
+
+  test:
+    name: Test (pytest)
+    runs-on: ubuntu-latest
+    env:
+      # Don't run the gated end-to-end LLM tests in CI (no Anthropic key).
+      # They self-skip via pytest.mark.skipif when this env var is absent.
+      RAINIER_LLM_INTEGRATION_TEST: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # No Postgres service here: the `requires_postgres` tests resolve their
+      # DB via RAINIER_TEST_DATABASE_URL -> pytest-postgresql (initdb on PATH)
+      # -> skip, and never read the ambient DATABASE_URL. The ORM / SQL
+      # migration smoke against TimescaleDB lives in the `db-migrations` job.
+      - name: pytest
+        run: uv run pytest tests/ -n auto --dist loadfile -v --tb=short
+
+  db-migrations:
+    name: DB (ORM create_all + SQL migrations on TimescaleDB)
+    runs-on: ubuntu-latest
+
+    services:
+      # TimescaleDB matches the local dev image.
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: rainier
+          POSTGRES_PASSWORD: rainier_dev
+          POSTGRES_DB: rainier
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rainier"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://rainier:rainier_dev@localhost:5432/rainier
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Initialize DB (create_all from current ORM)
+        run: uv run rainier db init
+
+      - name: Apply SQL migrations (idempotent ALTERs on top of db init)
+        run: |
+          shopt -s nullglob
+          for f in migrations/*.sql; do
+            echo "Applying $f"
+            PGPASSWORD=rainier_dev psql \
+              -h localhost -p 5432 -U rainier -d rainier \
+              -f "$f"
+          done
