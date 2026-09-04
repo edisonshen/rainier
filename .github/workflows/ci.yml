@@ -29,10 +29,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.12"
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: uv sync --extra dev --extra dashboard
@@ -68,10 +69,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.12"
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: uv sync --extra dev
@@ -110,10 +112,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.12"
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: uv sync
