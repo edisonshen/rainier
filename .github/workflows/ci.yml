@@ -19,11 +19,33 @@ env:
   NUMBA_NUM_THREADS: "1"
 
 jobs:
-  # The three jobs below are independent and run in parallel. Each one does a
-  # single `uv sync` from the shared uv cache; nothing is repeated across them.
+  # The jobs below are independent and run in parallel. Each one does a single
+  # `uv sync` from the shared uv cache (keyed on uv.lock); nothing is repeated
+  # across them. Job `name`s are referenced by branch protection's required
+  # status checks — renaming one leaves the PR stuck on "Expected — Waiting for
+  # status to be reported".
 
-  lint-build:
-    name: Lint (ruff) + Build (import smoke + wheel)
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: ruff check
+        run: uv run ruff check src/ tests/
+
+  build:
+    name: Build (import smoke + wheel)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +59,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --extra dev --extra dashboard
-
-      - name: ruff check
-        run: uv run ruff check src/ tests/
 
       - name: Import smoke (CLI loads, all modules import)
         run: |
