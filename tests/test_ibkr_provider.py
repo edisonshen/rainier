@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -10,6 +11,19 @@ import pytest
 from rainier.core.config import IBKRConfig, InstrumentConfig
 from rainier.core.types import Timeframe
 from rainier.data.ibkr_provider import TF_TO_IB_BAR_SIZE, IBKRProvider
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _ib_insync_event_loop():
+    """ib_insync (via eventkit) calls ``asyncio.get_event_loop()`` at import
+    time, which raises on 3.12 once an earlier ``asyncio.run()`` in the same
+    process has cleared the current loop. Provide one so test order (and
+    xdist worker assignment) doesn't matter."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield
+    asyncio.set_event_loop(None)
+    loop.close()
 
 
 @pytest.fixture

@@ -128,5 +128,6 @@ dev = [
     # tagged `requires_postgres` skip when this isn't available, so it's
     # dev-only.
     "pytest-postgresql>=6.0",
+    "pytest-xdist>=3.6",
     "ruff>=0.3",
 ]
