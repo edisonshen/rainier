@@ -211,6 +211,13 @@ llm_thesis:
       enabled: true
       params: {}
       weight: 1.0
+    # Quote / news / social-sentiment from a self-hosted OpenStock export.
+    # Source comes from OPENSTOCK_FEED_URL or OPENSTOCK_FEED_PATH in .env
+    # (or params.url / params.path here). Enable once the feed is live.
+    openstock_feed:
+      enabled: false
+      params: {}
+      weight: 1.0
 
 # --- Notifications ---
 

@@ -221,11 +221,25 @@ def _extract_fundamentals(value: dict[str, Any]) -> float | None:
     return float(pe)
 
 
+def _extract_openstock_feed(value: dict[str, Any]) -> float | None:
+    # Mean bullish % across whichever social/news sources reported one.
+    sentiment = value.get("sentiment")
+    if not isinstance(sentiment, dict):
+        return None
+    pcts = [
+        float(s["bullish_pct"])
+        for s in sentiment.values()
+        if isinstance(s, dict) and isinstance(s.get("bullish_pct"), (int, float))
+    ]
+    return sum(pcts) / len(pcts) if pcts else None
+
+
 SIGNAL_VALUE_EXTRACTORS: dict[str, Any] = {
     "rank_trajectory": _extract_rank_trajectory,
     "capital_flow_streak": _extract_capital_flow_streak,
     "sector_momentum": _extract_sector_momentum,
     "fundamentals": _extract_fundamentals,
+    "openstock_feed": _extract_openstock_feed,
 }
 
 
