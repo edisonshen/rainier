@@ -213,10 +213,12 @@ llm_thesis:
       weight: 1.0
     # Quote / news / social-sentiment from a self-hosted OpenStock export.
     # Source comes from OPENSTOCK_FEED_URL or OPENSTOCK_FEED_PATH in .env
-    # (or params.url / params.path here). Enable once the feed is live.
+    # (env only). Documents with as_of older than max_age_days are ignored.
+    # Enable once the feed is live.
     openstock_feed:
       enabled: false
-      params: {}
+      params:
+        max_age_days: 3
       weight: 1.0
 
 # --- Notifications ---

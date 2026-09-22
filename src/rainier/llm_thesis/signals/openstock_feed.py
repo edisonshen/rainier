@@ -4,9 +4,10 @@ self-hosted OpenStock export.
 OpenStock (https://github.com/Open-Dev-Society/OpenStock) is hosted outside
 rainier; it aggregates Finnhub (quote, profile, company news) and Adanos
 (Reddit / X / news / Polymarket buzz + bullish %). Rainier only reads a daily
-JSON feed, either from ``OPENSTOCK_FEED_URL`` (``GET <url>?tickers=A,B``,
+JSON feed, either from ``OPENSTOCK_FEED_URL`` (``GET <url>?tickers=<symbol>``,
 optional ``Authorization: Bearer $OPENSTOCK_FEED_TOKEN``) or from a local file
-``OPENSTOCK_FEED_PATH``.
+``OPENSTOCK_FEED_PATH``. Both come from the environment only (never from
+settings.yaml params) so the feed target cannot be redirected by config edits.
 
 Feed schema (one document, keyed by upper-case ticker)::
 
@@ -26,9 +27,11 @@ Feed schema (one document, keyed by upper-case ticker)::
       }
     }
 
-The feed is fetched once per (source, scan_date) and cached; a ticker missing
-from the feed, or an unconfigured / unreachable feed, yields ``None`` so the
-thesis pipeline simply omits this signal.
+A local file is loaded once per scan_date; a URL is fetched once per
+(symbol, scan_date). Documents whose ``as_of`` is older than
+``params.max_age_days`` (default 3) before scan_date are rejected. A ticker
+missing from the feed, a stale document, or an unconfigured / unreachable
+feed yields ``None`` so the thesis pipeline simply omits this signal.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -50,6 +53,7 @@ log = logging.getLogger(__name__)
 SENTIMENT_SOURCES = ("reddit", "x", "news", "polymarket")
 _MAX_HEADLINES = 5
 _FETCH_TIMEOUT_S = 10.0
+_DEFAULT_MAX_AGE_DAYS = 3
 
 
 def _coerce_float(val: Any) -> float | None:
@@ -69,6 +73,15 @@ def _coerce_int(val: Any) -> int | None:
         return None
 
 
+def _parse_as_of(raw: Any) -> date | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
 def _stocks_from_doc(doc: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(doc, dict):
         return {}
@@ -84,38 +97,45 @@ def _stocks_from_doc(doc: Any) -> dict[str, dict[str, Any]]:
     return {str(k).upper(): v for k, v in stocks.items() if isinstance(v, dict)}
 
 
-@lru_cache(maxsize=32)
-def _load_feed_cached(source: str, scan_date_iso: str) -> dict[str, dict[str, Any]]:
-    """Load the whole feed once per (source, scan_date). Empty dict on failure."""
+def _is_url(source: str) -> bool:
+    return source.startswith(("http://", "https://"))
+
+
+@lru_cache(maxsize=512)
+def _load_feed_cached(
+    source: str, scan_date_iso: str, tickers: str,
+) -> tuple[date | None, dict[str, dict[str, Any]]]:
+    """Load the feed once per cache key. Returns (as_of, stocks); empty on failure.
+
+    ``tickers`` is the ``?tickers=`` query for URL sources and "" for files
+    (a local file is one document for every symbol).
+    """
     try:
-        if source.startswith(("http://", "https://")):
+        if _is_url(source):
             headers: dict[str, str] = {}
             token = os.environ.get("OPENSTOCK_FEED_TOKEN")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
-            resp = httpx.get(source, headers=headers, timeout=_FETCH_TIMEOUT_S)
+            resp = httpx.get(
+                source, params={"tickers": tickers}, headers=headers, timeout=_FETCH_TIMEOUT_S,
+            )
             resp.raise_for_status()
             doc = resp.json()
         else:
             doc = json.loads(Path(source).read_text())
     except Exception:
         log.warning("openstock_feed_load_error source=%s", source, exc_info=True)
-        return {}
-    return _stocks_from_doc(doc)
+        return (None, {})
+    as_of = _parse_as_of(doc.get("as_of")) if isinstance(doc, dict) else None
+    return (as_of, _stocks_from_doc(doc))
 
 
 def _clear_cache_for_tests() -> None:
     _load_feed_cached.cache_clear()
 
 
-def _feed_source(params: dict[str, Any]) -> str | None:
-    return (
-        params.get("url")
-        or params.get("path")
-        or os.environ.get("OPENSTOCK_FEED_URL")
-        or os.environ.get("OPENSTOCK_FEED_PATH")
-        or None
-    )
+def _feed_source() -> str | None:
+    return os.environ.get("OPENSTOCK_FEED_URL") or os.environ.get("OPENSTOCK_FEED_PATH") or None
 
 
 class OpenStockFeedSignal:
@@ -124,13 +144,24 @@ class OpenStockFeedSignal:
     cost_estimate_ms = 500
 
     def compute(self, ctx: SignalContext) -> SignalValue | None:
-        source = _feed_source(ctx.params)
+        source = _feed_source()
         if not source:
             return None
-        scan_iso = (
-            ctx.scan_date.isoformat() if isinstance(ctx.scan_date, date) else str(ctx.scan_date)
+        scan_date = (
+            ctx.scan_date if isinstance(ctx.scan_date, date) else date.fromisoformat(str(ctx.scan_date))
         )
-        row = _load_feed_cached(source, scan_iso).get(ctx.symbol.upper())
+        symbol = ctx.symbol.upper()
+        as_of, stocks = _load_feed_cached(
+            source, scan_date.isoformat(), symbol if _is_url(source) else "",
+        )
+        max_age = int(ctx.params.get("max_age_days", _DEFAULT_MAX_AGE_DAYS))
+        if as_of is not None and as_of < scan_date - timedelta(days=max_age):
+            log.warning(
+                "openstock_feed_stale as_of=%s scan_date=%s max_age_days=%d",
+                as_of, scan_date, max_age,
+            )
+            return None
+        row = stocks.get(symbol)
         if row is None:
             return None
 

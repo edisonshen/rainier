@@ -49,10 +49,16 @@ def test_unconfigured_returns_none(monkeypatch):
     assert OpenStockFeedSignal().compute(_ctx()) is None
 
 
-def test_file_source_extracts_fields(tmp_path):
+def _write_feed(tmp_path, monkeypatch, doc=FEED):
     p = tmp_path / "feed.json"
-    p.write_text(json.dumps(FEED))
-    v = OpenStockFeedSignal().compute(_ctx(params={"path": str(p)}))
+    p.write_text(json.dumps(doc))
+    monkeypatch.delenv("OPENSTOCK_FEED_URL", raising=False)
+    monkeypatch.setenv("OPENSTOCK_FEED_PATH", str(p))
+
+
+def test_file_source_extracts_fields(tmp_path, monkeypatch):
+    _write_feed(tmp_path, monkeypatch)
+    v = OpenStockFeedSignal().compute(_ctx())
     assert v["price"] == 182.1
     assert v["change_pct"] == 1.8
     assert v["industry"] == "Semiconductors"
@@ -64,13 +70,22 @@ def test_file_source_extracts_fields(tmp_path):
     assert "bogus" not in v["sentiment"]
 
 
-def test_missing_ticker_returns_none(tmp_path):
+def test_missing_ticker_returns_none(tmp_path, monkeypatch):
+    _write_feed(tmp_path, monkeypatch)
+    assert OpenStockFeedSignal().compute(_ctx("ZZZZ")) is None
+
+
+def test_params_cannot_override_source(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENSTOCK_FEED_URL", raising=False)
+    monkeypatch.delenv("OPENSTOCK_FEED_PATH", raising=False)
     p = tmp_path / "feed.json"
     p.write_text(json.dumps(FEED))
-    assert OpenStockFeedSignal().compute(_ctx("ZZZZ", params={"path": str(p)})) is None
+    sig = OpenStockFeedSignal()
+    assert sig.compute(_ctx(params={"path": str(p)})) is None
+    assert sig.compute(_ctx(params={"url": "http://169.254.169.254/"})) is None
 
 
-def test_url_source_uses_bearer_token_and_caches(monkeypatch):
+def test_url_source_sends_tickers_and_bearer_and_caches_per_symbol(monkeypatch):
     monkeypatch.setenv("OPENSTOCK_FEED_URL", "https://os.example/api/export")
     monkeypatch.setenv("OPENSTOCK_FEED_TOKEN", "sekret")
     resp = MagicMock()
@@ -79,9 +94,26 @@ def test_url_source_uses_bearer_token_and_caches(monkeypatch):
         sig = OpenStockFeedSignal()
         v1 = sig.compute(_ctx())
         v2 = sig.compute(_ctx())
+        sig.compute(_ctx("AMD"))
     assert v1 == v2 and v1["price"] == 182.1
-    assert get.call_count == 1
-    assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer sekret"}
+    assert get.call_count == 2
+    first = get.call_args_list[0].kwargs
+    assert first["params"] == {"tickers": "NVDA"}
+    assert first["headers"] == {"Authorization": "Bearer sekret"}
+    assert get.call_args_list[1].kwargs["params"] == {"tickers": "AMD"}
+
+
+def test_stale_as_of_returns_none(tmp_path, monkeypatch):
+    stale = dict(FEED, as_of="2026-09-12T20:00:00Z")  # 6 days before scan_date
+    _write_feed(tmp_path, monkeypatch, stale)
+    assert OpenStockFeedSignal().compute(_ctx()) is None
+    assert OpenStockFeedSignal().compute(_ctx(params={"max_age_days": 10})) is not None
+
+
+def test_missing_as_of_is_accepted(tmp_path, monkeypatch):
+    doc = {k: v for k, v in FEED.items() if k != "as_of"}
+    _write_feed(tmp_path, monkeypatch, doc)
+    assert OpenStockFeedSignal().compute(_ctx())["price"] == 182.1
 
 
 def test_fetch_error_returns_none(monkeypatch):
@@ -90,10 +122,9 @@ def test_fetch_error_returns_none(monkeypatch):
         assert OpenStockFeedSignal().compute(_ctx()) is None
 
 
-def test_list_shaped_feed_is_accepted(tmp_path):
-    p = tmp_path / "feed.json"
-    p.write_text(json.dumps({"stocks": [{"symbol": "nvda", "quote": {"price": 5}}]}))
-    v = OpenStockFeedSignal().compute(_ctx(params={"path": str(p)}))
+def test_list_shaped_feed_is_accepted(tmp_path, monkeypatch):
+    _write_feed(tmp_path, monkeypatch, {"stocks": [{"symbol": "nvda", "quote": {"price": 5}}]})
+    v = OpenStockFeedSignal().compute(_ctx())
     assert v["price"] == 5.0
 
 
