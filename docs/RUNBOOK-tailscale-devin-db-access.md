@@ -37,7 +37,9 @@ Cost: $0 (Tailscale Personal plan). Data stays on the Mac mini; the nightly
    Devin nodes can reach nothing on the tailnet except Postgres on the DB host.
 
 2. **OAuth client** — Settings → Trust credentials → Generate credential → OAuth.
-   Scope: `Auth Keys` (write). Tag: `tag:devin`. Copy the client secret
+   Scope: `Auth Keys` (write). Tag: `tag:devin` **only** — a node must
+   advertise every tag on the client, so a client that also carries
+   `tag:rainier-db` cannot register a `tag:devin`-only node. Copy the client secret
    (`tskey-client-…`). It is used directly as an auth key
    (`tailscale up --auth-key=$SECRET --advertise-tags=tag:devin`) and, unlike a
    plain auth key, does not expire after 90 days. Nodes it registers are
@@ -93,6 +95,7 @@ It starts `tailscaled` if needed, joins the tailnet as an ephemeral
 | Symptom | Check |
 |---|---|
 | `tailscale up` hangs / "key not authorized" | OAuth client lacks the `auth_keys` scope or `tag:devin`; `tag:devin` missing from `tagOwners` |
+| `requested tags [tag:devin] are invalid or not permitted` | The OAuth client has extra tags (e.g. `tag:rainier-db`); `--advertise-tags` must list *all* of them. Fix: new client with only `tag:devin`, or `TAILSCALE_TAG=tag:devin,tag:rainier-db scripts/devin-db-connect.sh` |
 | tailnet up, `psql` times out | ACL missing `tag:devin → tag:rainier-db:5432`; Mac mini not tagged `tag:rainier-db`; Mac mini asleep (System Settings → Energy → prevent sleep) |
 | `psql` → "no pg_hba.conf entry" | Docker image default is `host all all all scram-sha-256`; only fires if you customised `pg_hba.conf` |
 | Password auth failed | Password rotated in compose but not applied to the existing volume — `ALTER USER` (§2) |
