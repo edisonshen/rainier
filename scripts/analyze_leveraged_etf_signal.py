@@ -114,7 +114,46 @@ def benchmark_features(close: pd.Series) -> pd.DataFrame:
     rng_hi = close.rolling(60).max()
     f["pct_of_60d_range"] = (close - rng_lo) / (rng_hi - rng_lo)
     f["ret_20d_back"] = close / close.shift(20) - 1
+    f["dd_from_60d_high"] = close / rng_hi - 1
+    f["min_fwd_10d"] = close.rolling(10).min().shift(-10) / close - 1
     return f
+
+
+def episodes(mask: pd.Series, cooldown: int) -> pd.DatetimeIndex:
+    """First day of each signal cluster; a new episode needs `cooldown` sessions of gap."""
+    out: list[int] = []
+    last = -10**9
+    for i, v in enumerate(mask.to_numpy()):
+        if v and i - last > cooldown:
+            out.append(i)
+            last = i
+    return mask.index[out]
+
+
+def bootstrap_p(feat: pd.DataFrame, ev: pd.DatetimeIndex, col: str, n_boot: int = 5000) -> float:
+    """P(random same-size day sample has mean >= observed)."""
+    if len(ev) == 0:
+        return np.nan
+    rng = np.random.default_rng(0)
+    pool = feat[col].dropna().to_numpy()
+    obs = feat.loc[ev, col].mean()
+    sims = rng.choice(pool, size=(n_boot, len(ev))).mean(axis=1)
+    return float((sims >= obs).mean())
+
+
+def episode_block(feat: pd.DataFrame, mask: pd.Series, label: str, cooldown: int) -> dict:
+    ev = episodes(mask, cooldown)
+    sub = feat.loc[ev]
+    row = {"signal": label, "signal_days": int(mask.sum()), "episodes": len(ev)}
+    for h in HORIZONS:
+        row[f"mean_{h}d"] = sub[f"fwd_{h}d"].mean()
+        row[f"win_{h}d"] = (sub[f"fwd_{h}d"] > 0).mean() if len(sub) else np.nan
+    row["p_20d"] = bootstrap_p(feat, ev, "fwd_20d")
+    row["dd_from_60d_high"] = sub["dd_from_60d_high"].mean() if len(sub) else np.nan
+    row["min_fwd_10d"] = sub["min_fwd_10d"].mean() if len(sub) else np.nan
+    row["near_swing_low"] = sub["near_swing_low"].mean() if len(sub) else np.nan
+    row["near_swing_high"] = sub["near_swing_high"].mean() if len(sub) else np.nan
+    return row
 
 
 def stats_block(feat: pd.DataFrame, mask: pd.Series, label: str) -> dict:
@@ -142,8 +181,10 @@ def md_table(df: pd.DataFrame) -> str:
 def fmt(df: pd.DataFrame) -> str:
     out = df.copy()
     for c in out.columns:
-        if c.startswith(("mean_", "median_", "win_", "near_", "pct_", "ret_")):
+        if c.startswith(("mean_", "median_", "win_", "near_", "pct_", "ret_", "dd_", "min_")):
             out[c] = (out[c] * 100).round(1).astype(str) + "%"
+        elif c.startswith("p_"):
+            out[c] = out[c].round(3)
     return md_table(out)
 
 
@@ -154,6 +195,8 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=Path("reports/etf_signal"))
     ap.add_argument("--burst-n", type=int, default=3)
     ap.add_argument("--burst-window", type=int, default=5)
+    ap.add_argument("--cooldown", type=int, default=20,
+                    help="sessions of gap before a signal day starts a new episode")
     args = ap.parse_args()
 
     app = load_appearances_csv(args.csv) if args.csv else load_appearances_db(args.dsn)
@@ -191,17 +234,35 @@ def main() -> None:
             days = feat.index.isin(g["data_date"])
             rows.append(stats_block(feat, pd.Series(days, index=feat.index), f"{sym} in {rt}"))
 
-        # burst: >= N appearances in trailing window, first day of burst only
-        for sym, g in sub_app.groupby("symbol"):
+        # appearance count in trailing window, bucketed (0 .. window)
+        ep_rows = []
+        for (sym, rt), g in sub_app.groupby(["symbol", "ranking_type"]):
             present = pd.Series(feat.index.isin(g["data_date"]), index=feat.index).astype(int)
             cnt = present.rolling(args.burst_window).sum()
-            burst = (cnt >= args.burst_n) & (cnt.shift(1).fillna(0) < args.burst_n)
-            rows.append(
-                stats_block(
-                    feat, burst,
-                    f"{sym} burst (>= {args.burst_n} in {args.burst_window}d, first day)",
-                )
-            )
+            for k in range(args.burst_window + 1):
+                rows.append(stats_block(feat, cnt == k,
+                                        f"{sym} {rt}: {k} of last {args.burst_window} sessions"))
+            burst = cnt >= args.burst_n
+            ep_rows.append(episode_block(
+                feat, burst,
+                f"{sym} {rt} >= {args.burst_n} of {args.burst_window}", args.cooldown))
+            ep_rows.append(episode_block(
+                feat, cnt == args.burst_window,
+                f"{sym} {rt} all {args.burst_window}", args.cooldown))
+        # bear-ETF inflow while bull ETF has dropped out of top100
+        bear_top = sub_app[(sub_app["direction"] == -1) & (sub_app["ranking_type"] == "top100")]
+        bull_top = sub_app[(sub_app["direction"] == 1) & (sub_app["ranking_type"] == "top100")]
+        bt = pd.Series(feat.index.isin(bear_top["data_date"]), index=feat.index)
+        lt = pd.Series(feat.index.isin(bull_top["data_date"]), index=feat.index)
+        bt_cnt = bt.astype(int).rolling(args.burst_window).sum()
+        ep_rows.append(episode_block(
+            feat, (bt_cnt >= args.burst_n) & ~lt,
+            f"bear ETF top100 >= {args.burst_n} of {args.burst_window} & bull ETF not in top100",
+            args.cooldown))
+        ep_rows.append(episode_block(
+            feat, (bt_cnt == 0) & lt,
+            f"no bear ETF in top100 for {args.burst_window} sessions & bull ETF in top100",
+            args.cooldown))
         # combined bull-vs-bear presence on same day
         for direction, lab in ((1, "bull ETF"), (-1, "bear ETF")):
             d = sub_app[sub_app["direction"] == direction]["data_date"]
@@ -210,7 +271,11 @@ def main() -> None:
 
         table = pd.DataFrame(rows)
         table.to_csv(args.out / f"stats_{bm}.csv", index=False)
-        lines += [f"## {bm}", "", fmt(table), ""]
+        ep_table = pd.DataFrame(ep_rows)
+        ep_table.to_csv(args.out / f"episodes_{bm}.csv", index=False)
+        lines += [f"## {bm}", "", "### Daily conditional stats", "", fmt(table), "",
+                  f"### Episode-level (first day of each cluster, {args.cooldown}-session cooldown)",
+                  "", fmt(ep_table), ""]
 
         # event timeline
         feat_rows = feat.reset_index()
@@ -229,9 +294,13 @@ def main() -> None:
         "",
         "- `win_Nd` above baseline for a *bear* ETF appearance (SQQQ/SPXS...) => capitulation / "
         "bottom signal. Below baseline for a *bull* ETF => euphoria / top signal.",
-        "- `near_swing_low` = share of signal days within +/-3 sessions of a 20-day swing low.",
+        "- `near_swing_low` = share of signal days within +/-3 sessions of a 20-day swing low; "
+        "compare against the baseline row, not against 0.",
         "- `pct_of_60d_range` near 0% = index at bottom of its 60-day range on signal day.",
-        "- With n < ~15 treat any edge as anecdotal.",
+        "- Daily rows over-count because signal days cluster; the episode table de-clusters and "
+        "`p_20d` is a bootstrap P(random sample of the same size has mean fwd_20d >= observed).",
+        "- `min_fwd_10d` = worst close over the next 10 sessions (how much further it falls).",
+        "- With episodes < ~15 treat any edge as anecdotal.",
     ]
     (args.out / "REPORT.md").write_text("\n".join(lines))
     print("\n".join(lines))
