@@ -102,3 +102,49 @@ Practical use: treat "bear leveraged ETF in QU100 top100 on >= 3 of 5 sessions w
 ETF is absent" as a *pullback-in-progress / capitulation-building* context flag that tilts the
 20-day outlook positive, and expect further downside of a few percent before the actual low.
 Do not use it as a standalone entry trigger or as a top signal.
+
+## Follow-up: does SQQQ mark the *start* of a big downtrend instead?
+
+Reframed test: signal = SQQQ (or SPXS) *first* top100 appearance after 5/10/20 sessions absent,
+count rising from 0 to >= 2 in 5 sessions, rank <= 20, TQQQ dropping out, bear-ETF breadth, etc.
+Outcomes = P(index falls >= 5% within 20 sessions), P(falls >= 10% within 40), P(new 60-day low
+within 20), P(20-day return < 0), vs. unconditional base rates. Episode-level, 20-session cooldown.
+
+| signal | n | P(fall >= 5% / 20d) | P(new 60d low / 20d) | P(fwd20 < 0) |
+|---|---|---|---|---|
+| **QQQ baseline** | | 28% | 20% | 37% |
+| SQQQ first top100 after 5d absence | 43 | 21% | 12% | 42% |
+| SQQQ first top100 after 10d absence | 14 | 21% | 7% | 50% |
+| SQQQ count5 rises 0 -> >= 2 | 18 | 28% | 11% | 33% |
+| SQQQ rank <= 20 | 26 | 27% | 46% | 27% |
+| TQQQ first bottom100 (outflow) after 10d | 34 | 18% | 9% | 21% |
+| # bear/vol ETFs in top100 rises to >= 4 | 16 | 38% | 44% | 31% |
+| **SPY baseline** | | 16% | 17% | 32% |
+| SPXS first top100 after 5d absence | 29 | 31% (p=0.04) | 34% | 45% |
+| SPXS count5 rises 0 -> >= 2 | 12 | 17% | 42% | 67% (p=0.02) |
+| SPXS \| SPXU first top100 after 5d absence | 36 | 22% | 28% | 39% |
+
+Robustness check on the SPXS result (the only one that looked real): split 2020-22 vs 2023+:
+fall>=5% 44% vs 25% base in 2020-22, but 15% vs 11% in 2023+; adding SPXU to the definition
+removes the edge (21% vs 25% base in 2020-22). 16 of the 29 episodes are in 2021-22. It is
+mostly "2022 was a bear market", not a transferable signal.
+
+Recall check: of the 10 QQQ local peaks followed by a >= 10% drop, SQQQ was in the top100
+within +/-5 sessions of all 10 - but SQQQ is in the top100 in 94% of *all* 11-session windows,
+so that is no information. SPXS: 3 of 5 SPY peaks vs 35% base (n too small).
+
+Broader search for a "trending down" group signal:
+* `long_short == "Short in"` share of the top100: no edge at 80/90/95th percentile.
+* Every symbol with >= 15 first-appearance episodes (488 symbols): best z-score 2.3
+  (APPS, ALB, RIO ...), which is exactly what the maximum of 488 noise draws looks like.
+  No individual symbol is a usable downtrend predictor; random-pick groupings will overfit.
+* Sector share of top100 at >= 90th percentile: Energy-crowded days -> 42% fall>=5% (n=26,
+  concentrated in 2022); Tech-crowded (n=23) / Financials-crowded (n=32) days -> 4% / 9%,
+  i.e. when Tech or Financials dominate inflows the index rarely drops 5% in the next month.
+  Regime-dependent and small-n; worth watching, not proven.
+
+Conclusion: SQQQ appearing in QU100 does **not** mark the start of a big downtrend for QQQ. It
+is in the list roughly half of all days and its first appearance is followed by *fewer*
+5%+ drops than average. SQQQ with a strong rank (<= 20) or 4+ bear ETFs together means the
+market is already ~9% off its high and volatile (new 60-day lows 44-46% vs 20%), but 20-day
+returns are still above average - a late-decline / capitulation marker, not an early one.
