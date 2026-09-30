@@ -81,3 +81,6 @@ htmlcov/
 # ruff
 .ruff_cache/
 .gstack/
+
+# mutmut mutation testing artifacts
+mutants/
