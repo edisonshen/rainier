@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 
 import pandas as pd
+import pytest
 
 from rainier.backtest.engine import run_backtest
 from rainier.core.config import BacktestConfig
@@ -297,6 +298,183 @@ class TestSweep:
         }])
         text = format_sweep_table(result)
         assert "PARAMETER SWEEP" in text
+
+
+# ---------------------------------------------------------------------------
+# compute_metrics golden test — every field from a hand-computed trade list
+# ---------------------------------------------------------------------------
+
+
+def _trade(net, gross, comm, slip, hold, mae, mfe):
+    return TradeRecord(
+        net_pnl=net, gross_pnl=gross, commission=comm, slippage_cost=slip,
+        hold_bars=hold, mae=mae, mfe=mfe,
+    )
+
+
+class TestComputeMetricsGolden:
+    def test_every_field_hand_computed(self):
+        from pytest import approx
+
+        from rainier.backtest.engine import compute_metrics
+
+        trades = [
+            _trade(net=10.0, gross=11.0, comm=0.5, slip=0.5, hold=2, mae=1.0, mfe=12.0),
+            _trade(net=-4.0, gross=-3.0, comm=0.5, slip=0.5, hold=4, mae=5.0, mfe=1.0),
+            _trade(net=6.0, gross=7.0, comm=0.5, slip=0.5, hold=6, mae=2.0, mfe=8.0),
+        ]
+        equity_curve = [100.0, 110.0, 106.0, 112.0]
+        config = BacktestConfig(
+            initial_capital=100.0, slippage_pct=0.001, commission_per_trade=0.25,
+        )
+
+        m = compute_metrics(trades, equity_curve, config)
+
+        assert m.total_trades == 3
+        assert m.winners == 2
+        assert m.losers == 1
+        assert m.win_rate == approx(2 / 3)
+        assert m.profit_factor == approx(16.0 / 4.0)
+        assert m.total_gross_pnl == approx(15.0)
+        assert m.total_commission == approx(1.5)
+        assert m.total_slippage == approx(1.5)
+        assert m.total_net_pnl == approx(12.0)
+        assert m.max_drawdown == approx(4.0)  # peak 110 → trough 106
+        assert m.max_drawdown_pct == approx(4.0 / 110.0)
+        assert m.sharpe_ratio == approx(11.185232151607185)
+        assert m.avg_win == approx(8.0)
+        assert m.avg_loss == approx(-4.0)
+        assert m.avg_hold_bars == approx(4.0)
+        assert m.avg_mae == approx(8.0 / 3.0)
+        assert m.avg_mfe == approx(7.0)
+        assert m.largest_win == approx(10.0)
+        assert m.largest_loss == approx(-4.0)
+        assert m.initial_capital == 100.0
+        assert m.final_equity == 112.0
+        assert m.equity_curve == equity_curve
+        assert m.slippage_pct == 0.001
+        assert m.commission_per_trade == 0.25
+        assert m.min_confidence == 0.0
+        assert m.min_rr_ratio == 0.0
+        assert m.trades == trades
+
+    def test_no_losers_profit_factor_inf(self):
+        from rainier.backtest.engine import compute_metrics
+
+        trades = [_trade(net=5.0, gross=5.0, comm=0.0, slip=0.0, hold=1, mae=0.0, mfe=5.0)]
+        m = compute_metrics(trades, [100.0, 105.0], BacktestConfig())
+        assert m.profit_factor == float("inf")
+
+    def test_no_trades_all_zero(self):
+        from rainier.backtest.engine import compute_metrics
+
+        m = compute_metrics([], [100.0], BacktestConfig(initial_capital=100.0))
+        assert m.total_trades == 0
+        assert m.profit_factor == 0.0
+        assert m.win_rate == 0.0
+        assert m.largest_win == 0.0
+        assert m.largest_loss == 0.0
+        assert m.avg_win == 0.0
+        assert m.avg_loss == 0.0
+
+    def test_zero_net_pnl_trade_counts_as_loser(self):
+        from rainier.backtest.engine import compute_metrics
+
+        trades = [_trade(net=0.0, gross=0.0, comm=0.0, slip=0.0, hold=1, mae=0.0, mfe=0.0)]
+        m = compute_metrics(trades, [100.0, 100.0], BacktestConfig())
+        assert m.winners == 0
+        assert m.losers == 1
+
+
+# ---------------------------------------------------------------------------
+# _close_trade — hand-computed PnL for long + short with slippage/commission
+# ---------------------------------------------------------------------------
+
+
+def _make_open_trade(direction: Direction, entry_price: float, slippage_cost: float,
+                     notes: str = ""):
+    from rainier.backtest.engine import _OpenTrade
+
+    signal = Signal(
+        symbol="NQ", timeframe=Timeframe.H1, direction=direction,
+        entry_price=100.0, stop_loss=95.0 if direction == Direction.LONG else 105.0,
+        take_profit=110.0 if direction == Direction.LONG else 90.0,
+        confidence=0.75, timestamp=datetime(2025, 1, 1, 9), notes=notes,
+    )
+    return _OpenTrade(
+        signal=signal, trade_id=7, entry_bar=10,
+        entry_price=entry_price, slippage_cost=slippage_cost, mae=1.5, mfe=3.0,
+    )
+
+
+def _exit_bar_data():
+    return pd.Series({
+        "timestamp": datetime(2025, 1, 1, 15),
+        "open": 109.0, "high": 111.0, "low": 108.0, "close": 110.0, "volume": 1000.0,
+    })
+
+
+class TestCloseTrade:
+    def test_long_pnl_with_commission_and_slippage(self):
+        from rainier.backtest.engine import _close_trade
+
+        config = BacktestConfig(commission_per_trade=2.5)
+        ot = _make_open_trade(Direction.LONG, entry_price=100.1, slippage_cost=0.1)
+        record = _close_trade(ot, 110.0, "take_profit", 16, _exit_bar_data(), config)
+
+        assert record.trade_id == 7
+        assert record.symbol == "NQ"
+        assert record.timeframe == "1H"
+        assert record.direction == "LONG"
+        assert record.entry_price == 100.1
+        assert record.exit_price == 110.0
+        assert record.stop_loss == 95.0
+        assert record.take_profit == 110.0
+        assert record.entry_bar == 10
+        assert record.exit_bar == 16
+        assert record.hold_bars == 6
+        assert record.gross_pnl == pytest.approx(9.9)
+        assert record.commission == pytest.approx(5.0)  # 2.5 per side x 2
+        assert record.slippage_cost == pytest.approx(0.1)
+        assert record.net_pnl == pytest.approx(9.9 - 5.0 - 0.1)
+        assert record.confidence == 0.75
+        assert record.risk == pytest.approx(5.0)  # |signal entry 100 - SL 95|
+        assert record.mae == 1.5
+        assert record.mfe == 3.0
+        assert record.exit_reason == "take_profit"
+        assert record.entry_timestamp == str(datetime(2025, 1, 1, 9))
+        assert record.exit_timestamp == str(datetime(2025, 1, 1, 15))
+
+    def test_short_pnl_inverted(self):
+        from rainier.backtest.engine import _close_trade
+
+        config = BacktestConfig(commission_per_trade=0.0)
+        ot = _make_open_trade(Direction.SHORT, entry_price=99.9, slippage_cost=0.1)
+        record = _close_trade(ot, 90.0, "take_profit", 16, _exit_bar_data(), config)
+
+        assert record.direction == "SHORT"
+        assert record.gross_pnl == pytest.approx(9.9)  # entry 99.9 - exit 90.0
+        assert record.net_pnl == pytest.approx(9.9 - 0.1)
+
+    def test_losing_short(self):
+        from rainier.backtest.engine import _close_trade
+
+        config = BacktestConfig(commission_per_trade=1.0)
+        ot = _make_open_trade(Direction.SHORT, entry_price=100.0, slippage_cost=0.05)
+        record = _close_trade(ot, 105.0, "stop_loss", 12, _exit_bar_data(), config)
+
+        assert record.gross_pnl == pytest.approx(-5.0)
+        assert record.net_pnl == pytest.approx(-5.0 - 2.0 - 0.05)
+        assert record.exit_reason == "stop_loss"
+
+    def test_pattern_notes_parsed(self):
+        from rainier.backtest.engine import _close_trade
+
+        ot = _make_open_trade(Direction.LONG, entry_price=100.0, slippage_cost=0.0,
+                              notes="pattern:w_bottom")
+        record = _close_trade(ot, 110.0, "take_profit", 16, _exit_bar_data(), BacktestConfig())
+        assert record.pattern_type == "w_bottom"
+        assert record.entry_reason == "pattern_breakout_w_bottom"
 
 
 # ---------------------------------------------------------------------------
