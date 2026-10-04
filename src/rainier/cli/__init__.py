@@ -270,6 +270,7 @@ from rainier.cli import (  # noqa: E402, F401
     ml,
     paper,
     qu100,
+    reward,
     thematic,
     thesis,
 )

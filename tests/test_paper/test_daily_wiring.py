@@ -189,6 +189,13 @@ def _patch_pipeline(
         "rainier.paper.calibration.persist_calibration", lambda *a, **k: None
     )
 
+    # R1 selection rewards (step vii) — runs LAST, after calibration.
+    def fake_rewards(**kw):
+        calls.append("rewards")
+        return {}
+
+    monkeypatch.setattr("rainier.paper.rewards.compute_rewards", fake_rewards)
+
     # Avoid the yesterday-rows DB fetch.
     monkeypatch.setattr(service, "load_settings_fresh", lambda: _FakeSettings())
 
@@ -215,6 +222,7 @@ def test_g1_daily_eval_runs_steps_in_order(monkeypatch):
     assert calls.index("update") < calls.index("horizon")
     assert calls.index("horizon") < calls.index("report")
     assert calls.index("report") < calls.index("calibration")
+    assert calls.index("calibration") < calls.index("rewards")
     # WS B reclaim runs after the trading steps (post-ingest) — detect then
     # process — and never blocks the horizon/report/calibration tail.
     assert calls.index("update") < calls.index("reclaim_detect")
