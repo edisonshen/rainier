@@ -181,10 +181,20 @@ def test_call_llm_raises_for_non_anthropic_reasoning_model():
 
 def test_cost_estimate_bills_thinking_tokens_as_output():
     """A large completion-token count (thinking folded into output) must be
-    billed at the $15/M output rate."""
+    billed at the model's output rate (Opus 5.5: $20/M)."""
     # 2800 input, 13500 output (incl. ~11k thinking).
-    cost = _estimate_cost_usd(2800, 13500)
-    expected = 2800 / 1_000_000 * 3.0 + 13500 / 1_000_000 * 15.0
-    assert cost == expected
-    # Sanity: a single xhigh ticker lands in the measured ~$0.15-0.40 range.
-    assert 0.15 <= cost <= 0.40
+    cost = _estimate_cost_usd(2800, 13500, "claude-opus-5-5")
+    expected = 2800 / 1_000_000 * 4.0 + 13500 / 1_000_000 * 20.0
+    assert cost == pytest.approx(expected)
+    # Sanity: a single xhigh ticker lands in the ~$0.20-0.55 range.
+    assert 0.20 <= cost <= 0.55
+
+
+def test_cost_estimate_uses_catalog_rates_per_model():
+    sonnet = _estimate_cost_usd(1_000_000, 1_000_000, "claude-sonnet-4-6")
+    assert sonnet == pytest.approx(3.0 + 15.0)
+
+
+def test_cost_estimate_unknown_model_falls_back_to_default_rates():
+    cost = _estimate_cost_usd(1_000_000, 1_000_000, "not-a-real-model")
+    assert cost == pytest.approx(4.0 + 20.0)

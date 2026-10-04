@@ -166,11 +166,11 @@ llm:
 
 llm_thesis:
   enabled: true
-  model: "claude-sonnet-4-6"
-  # xhigh extended thinking: thinking tokens bill as OUTPUT ($15/M), so a
-  # 5-ticker scan runs ~$1.0-1.9. Cap raised 1.0 -> 2.5 so the per-scan kill
-  # switch doesn't trip mid-scan and drop tickers.
-  max_usd_per_scan: 2.5
+  model: "claude-opus-5-5"
+  # xhigh extended thinking: thinking tokens bill as OUTPUT ($20/M on Opus 5.5),
+  # so a 5-ticker scan runs ~$1.3-2.5. Cap raised 2.5 -> 3.5 for Opus 5.5 so the
+  # per-scan kill switch doesn't trip mid-scan and drop tickers.
+  max_usd_per_scan: 3.5
   # "xhigh" extended-thinking budget (tokens) for the thesis LLM call. Passed
   # explicitly as thinking={"type": "enabled", "budget_tokens": ...}. Must be a
   # positive int; service._call_llm sets max_tokens = budget + 2000 headroom and

@@ -19,8 +19,8 @@ def test_thinking_budget_and_cap_defaults():
     cfg = LLMThesisConfig()
     # "xhigh" tier.
     assert cfg.thinking_budget_tokens == 24000
-    # Cap raised 1.0 -> 2.5 so a 5-ticker xhigh scan doesn't trip the kill switch.
-    assert cfg.max_usd_per_scan == 2.5
+    # Cap raised 1.0 -> 2.5 (xhigh thinking) -> 3.5 (Opus 5.5 pricing).
+    assert cfg.max_usd_per_scan == 3.5
 
 
 # 0/-1 are non-positive; 500/1023 are positive but below Anthropic's 1024
@@ -58,4 +58,4 @@ def test_committed_settings_yaml_uses_xhigh_budget_and_raised_cap():
     repo_root = Path(__file__).resolve().parents[2]
     s = load_settings(config_path=repo_root / "config" / "settings.yaml")
     assert s.llm_thesis.thinking_budget_tokens == 24000
-    assert s.llm_thesis.max_usd_per_scan == 2.5
+    assert s.llm_thesis.max_usd_per_scan == 3.5

@@ -67,8 +67,8 @@ Each PR is self-contained, individually reviewable, and leaves the system in a w
 
    class LLMThesisConfig(BaseModel):
        enabled: bool = True
-       model: str = "claude-sonnet-4-6"
-       max_usd_per_scan: float = 1.0
+       model: str = "claude-opus-5-5"
+       max_usd_per_scan: float = 3.5  # Opus 5.5 + xhigh thinking
        prompt_version: str = "v1"
        enabled_sessions: list[str] = ["afternoon", "close"]
        fallback_to_anthropic_sdk: bool = False
@@ -368,7 +368,7 @@ Auto-research is the **automated half of "look at eval data → improve the syst
 
 ## Cost estimate
 
-Sonnet 4.6 multimodal at $3/$15 per MTok input/output, $0.30/MTok cached input. Per-ticker prompt: ~10K static prefix (cacheable), ~3.5K volatile evidence (was 3K in v1; +500 for trends + fundamentals), ~1.5K image, ~2K output. 5 tickers × 2 scans = 10 calls/day with prompt cache warm within each scan.
+Sonnet 4.6 multimodal at $3/$15 per MTok input/output (original estimate; the thesis model is now Opus 5.5 at $4/$20, cap $3.5/scan), $0.30/MTok cached input. Per-ticker prompt: ~10K static prefix (cacheable), ~3.5K volatile evidence (was 3K in v1; +500 for trends + fundamentals), ~1.5K image, ~2K output. 5 tickers × 2 scans = 10 calls/day with prompt cache warm within each scan.
 
 | Component | Per-scan tokens | Cost |
 |---|---|---|
