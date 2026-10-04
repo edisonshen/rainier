@@ -301,12 +301,12 @@ class LLMThesisConfig(BaseModel):
     """
 
     enabled: bool = True
-    model: str = "claude-sonnet-4-6"
-    # Raised 1.0 -> 2.5 when the thesis call switched to xhigh extended thinking
-    # (thinking_budget_tokens below). At the xhigh budget a 5-ticker scan bills
-    # ~$1.0-1.9 (thinking tokens are billed as OUTPUT at $15/M); the old $1.00
-    # cap would trip the per-scan kill switch mid-scan and silently drop tickers.
-    max_usd_per_scan: float = 2.5
+    model: str = "claude-opus-5-5"
+    # Raised 1.0 -> 2.5 for xhigh extended thinking, then 2.5 -> 3.5 for Opus 5.5
+    # ($4/$20 per M vs Sonnet 4.6's $3/$15). At the xhigh budget a 5-ticker scan
+    # bills ~$1.3-2.5 (thinking tokens are billed as OUTPUT); a tighter cap would
+    # trip the per-scan kill switch mid-scan and silently drop tickers.
+    max_usd_per_scan: float = 3.5
     # Extended-thinking budget for the daily thesis call ("xhigh" tier = 24000).
     # Passed to litellm.completion as thinking={"type": "enabled",
     # "budget_tokens": <this>} (deterministic form — litellm's reasoning_effort

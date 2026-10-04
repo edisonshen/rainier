@@ -42,9 +42,10 @@ from .signals.base import SignalContext
 
 log = logging.getLogger(__name__)
 
-# Static catalog of cost rates so callers can score-keep without LiteLLM telemetry.
-_DEFAULT_INPUT_RATE = 3.0   # USD per 1M tokens (Sonnet 4.6 input)
-_DEFAULT_OUTPUT_RATE = 15.0  # USD per 1M tokens (Sonnet 4.6 output)
+# Fallback cost rates (USD per 1M tokens, Opus 5.5) for models missing from
+# LiteLLM's price catalog; known models are billed at their catalog rates.
+_DEFAULT_INPUT_RATE = 4.0
+_DEFAULT_OUTPUT_RATE = 20.0
 
 # Anthropic requires max_tokens > thinking.budget_tokens. We reserve this many
 # tokens ABOVE the thinking budget for the final JSON answer. The thesis JSON is
@@ -242,10 +243,26 @@ def _tier1_lookup(
 # ---------------------------------------------------------------------------
 
 
-def _estimate_cost_usd(prompt_tokens: int, completion_tokens: int) -> float:
+def _model_rates_per_m(model: str | None) -> tuple[float, float]:
+    """(input, output) USD per 1M tokens for ``model`` from LiteLLM's catalog."""
+    if model:
+        import litellm
+
+        entry = litellm.model_cost.get(model) or {}
+        in_rate = entry.get("input_cost_per_token")
+        out_rate = entry.get("output_cost_per_token")
+        if in_rate and out_rate:
+            return float(in_rate) * 1_000_000, float(out_rate) * 1_000_000
+    return _DEFAULT_INPUT_RATE, _DEFAULT_OUTPUT_RATE
+
+
+def _estimate_cost_usd(
+    prompt_tokens: int, completion_tokens: int, model: str | None = None
+) -> float:
+    in_rate, out_rate = _model_rates_per_m(model)
     return (
-        prompt_tokens / 1_000_000 * _DEFAULT_INPUT_RATE
-        + completion_tokens / 1_000_000 * _DEFAULT_OUTPUT_RATE
+        prompt_tokens / 1_000_000 * in_rate
+        + completion_tokens / 1_000_000 * out_rate
     )
 
 
@@ -519,7 +536,7 @@ async def generate_thesis(
             )
             continue
 
-        attempt_cost = _estimate_cost_usd(p_tok, c_tok)
+        attempt_cost = _estimate_cost_usd(p_tok, c_tok, thesis_cfg.model)
         cost_charged += attempt_cost
         if cost_charged > max_usd_remaining:
             log.warning(
