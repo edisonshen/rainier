@@ -20,6 +20,8 @@ from __future__ import annotations
 # hashes only the EvidencePack + image). Bumping busts Tier-1 so same-day
 # reruns after the switch regenerate with thinking instead of serving a stale
 # no-thinking thesis; likewise when thinking_budget_tokens is retuned.
+# A model switch (e.g. Sonnet 4.6 -> Opus 5.5) needs no bump: the Tier-1 key
+# already includes llm_model.
 PROMPT_VERSION = "v4"
 
 OUTPUT_SCHEMA = """{
