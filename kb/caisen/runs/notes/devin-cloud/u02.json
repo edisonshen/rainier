@@ -1,0 +1,51 @@
+{
+  "unit_id": "u02",
+  "model": "devin-cloud",
+  "pages_read": [19, 20],
+  "summary": "Defines 破底翻 (break-bottom reversal): after a decline, price consolidates in a range, briefly breaks below the range's lower neckline (a shakeout, 甩轿), then reclaims the neckline — a rare, reliable bullish buy signal indicating a main player (主力) accumulating. Gives a staged entry: buy on the reclaim, add on the breakout above the upper neckline, with stops at the lower neckline/low and then the upper neckline.",
+  "patterns": [
+    {
+      "name_zh": "破底翻",
+      "name_en": "Break-bottom reversal (spring / failed breakdown)",
+      "direction": "long",
+      "structure": "After a decline, price builds a base (筑底) as a trading range 20-22. Price breaks below the range's lower neckline (20) to a low (18.5), then rallies back above the lower neckline (站回颈线之上). Later it breaks the upper edge (22).",
+      "entry": "Buy when price reclaims the lower neckline after breaking it (破底翻后随之买进); add (加码) on the breakout above the upper range edge 22.",
+      "stop": "Initial stop near the lower neckline 20; if the low is not far, the stop may instead be placed at a break of the low 18.5 to improve the success rate. After adding at 22: if price falls back below 22, stop the added position and take profit on the 破底翻 position.",
+      "target": {"formula": "not given in this unit (hold the swing while support holds)", "worked_example": "n.a.", "pages": [20]},
+      "confirmation": [
+        "The reclaim of the lower neckline is the signal; the breakout above the upper edge 22 means the main player is attacking (主力攻击发起) and is usually the fastest-moving phase.",
+        "After the 22 breakout, price must not fall back below 22."
+      ],
+      "invalidation": [
+        "Falling back below the lower neckline 20 (or below the low 18.5 if that stop is chosen) invalidates the initial entry.",
+        "After the upper-edge breakout, falling back below 22 ends the added position and the setup's long holdings."
+      ],
+      "timeframes": ["not specified in this unit (schematic)"],
+      "pages": [19, 20]
+    }
+  ],
+  "rules": [
+    {"id": "R1", "rule": "During a decline into a base, a break below the base's lower neckline followed by a rally back above it is a 破底翻 structure and usually a rare, reliable bullish buy signal.", "kind": "entry", "quote_zh": "技术面出现破底翻时，大多是相当难得的多头企稳买进信号。", "pages": [19]},
+    {"id": "R2", "rule": "Interpretation: the breakdown is usually the main player deliberately (or using bad news) shaking out weak holders while accumulating; since chips are cleared, price can easily rally back above the neckline.", "kind": "psychology", "quote_zh": "出现这种情况大多是主力在低档筑底进货期，刻意或藉由基本面或消息面的利空随势破底……这就是市场所谓的“甩轿”清洗浮额动作的一种。", "pages": [19]},
+    {"id": "R3", "rule": "A 破底翻 with a shakeout usually indicates a main player is present, raising the odds of profiting alongside them.", "kind": "filter", "quote_zh": "有甩轿动作的破底翻，大多表示有主力在场，随主力进场获利的机率，自然大幅提高。", "pages": [20]},
+    {"id": "R4", "rule": "Buy right after the reversal; support remains the lower neckline (20), so the stop is near 20; if the low is not far it is acceptable to set the stop at a break of the low (18.5) to increase the success rate.", "kind": "stop", "quote_zh": "破底翻后随之买进，破底翻后的支撑仍是在整理区下缘颈线20，因此买进后的停损价设在20附近，如果低点不远，属可承受的风险范围，则可设在低点18.5跌破后停损，增加成功率", "pages": [20]},
+    {"id": "R5", "rule": "Add the final position on the breakout above the upper edge (22).", "kind": "entry", "quote_zh": "待突破整理区上缘颈线22做最后加码。", "pages": [20]},
+    {"id": "R6", "rule": "A breakout above the range's upper edge signals the main player's attack and is usually the fastest-moving phase; after it, price must not fall back below 22.", "kind": "filter", "quote_zh": "整理区上缘突破，表示主力攻击发起，通常都是价位波动最快的时候，因此整理区上缘22，突破后便不能再拉回跌破。", "pages": [20]},
+    {"id": "R7", "rule": "If 22 breaks back down, stop out the added long and take profit on the 破底翻 long; otherwise hold the swing while support holds — enter low, risk little, capture a large swing.", "kind": "risk", "quote_zh": "一旦跌破22，则加码多单停损及破底翻布局的多单停利，反之，多头看支撑，支撑不破续抱波段，如此便能低档布局，以有限的风险获取大波段利润。", "pages": [20]}
+  ],
+  "worked_examples": [
+    {"instrument": "schematic", "timeframe": "n.a.", "period": "n.a.", "pattern": "破底翻", "levels": {"range_low_neckline": 20, "range_high_neckline": 22, "break_low": 18.5}, "outcome": "n.a. (illustration)", "pages": [19, 20]}
+  ],
+  "quantifiable": [
+    "Range: after a downtrend, identify a horizontal consolidation with lower edge L (20) and upper edge H (22).",
+    "Signal: a close below L (破底) followed within a few bars by a close back above L (站回) → long entry.",
+    "Initial stop: below L, or below the breakdown low if (entry - low)/entry is within acceptable risk.",
+    "Add-on: close above H; stop for the add-on = close back below H; on that event also take profit on the initial position."
+  ],
+  "ambiguities": [
+    "How far below the neckline and for how long price may stay below before the reclaim is not specified.",
+    "No target formula is given for a plain 破底翻 in this unit (u03 combines it with a W bottom).",
+    "'如果低点不远' — what counts as 'not far' (acceptable risk) is not quantified."
+  ],
+  "illegible": []
+}

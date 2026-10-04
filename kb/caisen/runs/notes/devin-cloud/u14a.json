@@ -1,0 +1,541 @@
+{
+  "unit_id": "u14a",
+  "model": "devin-cloud",
+  "pages_read": [
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131
+  ],
+  "summary": "Opens the 大盘 (Taiwan weighted index) section: follow the index trend to raise the stock-picking success rate, and trade the index only in swings (only one or two big swings a year; never short-term trade). Five case studies of the TAIEX 1997-2000 (daily and weekly) apply the earlier pattern toolkit to the index: head breakdowns (破线头部确立) after a volume climax with price/volume divergence, equal-distance decline/advance targets (跌幅满足/涨幅满足, two-wave targets), a weak rebound ending in a 假突破, the 1999 破底翻 bottom, a neckline breakout with first- and second-wave targets, and a weekly triangle breakout. Each case gives entry level, neckline-reclaim stop with % risk (1%-3.3%) and realised % profit.",
+  "patterns": [
+    {
+      "name_zh": "破线头部确立（指数做空）",
+      "name_en": "Head confirmed by neckline breakdown (index short)",
+      "direction": "short",
+      "structure": "A top area (盘头) with a rising neckline/trendline under the highs; often preceded by a volume climax (爆量/天量) followed by 价涨量缩 divergence. A long black candle breaking the neckline (长黑摜破颈线) confirms the head.",
+      "entry": "Short on the day the neckline is broken by a long black candle (破线头部确立空单进场); e.g. 1997/9/2 short ~9340, 1998/4/14 short ~8735, 1998/7/30 short ~7780, 1998/12 short ~7750.",
+      "stop": "Stop when price reclaims the neckline (站回颈线 / 突破...也就是站回颈线时停损), which is also the 翻黑 high; risks quoted 3.3%, 2.8%, 2.1%, ~1%.",
+      "target": {
+        "formula": "After price breaks the prior low L of the decline: target = rebound_high H2 - (prior_high H1 - L)  (等幅跌幅满足). Multiple waves can be computed from successive high/low pairs.",
+        "worked_example": "1997-98: 10256 - 7040 = 3216; 9378 - 3216 = 6162 (actual low 6219). 1999 weekly: 9378 - 7073 = 2305; 8116 - 2305 = 5811 and 8116 - 6219 = 1897; 7488 - 1897 = 5591 (actual low 5422).",
+        "pages": [
+          124,
+          125,
+          126,
+          127
+        ]
+      },
+      "confirmation": [
+        "Long black candle through the neckline.",
+        "Prior volume climax then price up / volume down divergence (量价背离) warns of the top.",
+        "Decline target only computed once the prior low is broken (跌破前低后便可计算跌幅满足)."
+      ],
+      "invalidation": [
+        "Price reclaims the neckline (站回颈线) -> stop."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        123,
+        124,
+        127,
+        128
+      ]
+    },
+    {
+      "name_zh": "假突破（弱势反弹后）",
+      "name_en": "False breakout ending a weak rebound",
+      "direction": "short",
+      "structure": "After reaching a decline target, the index rebounds slowly (e.g. ~3 months, ~1200-1269 pts, structurally weak relative to the prior fall), briefly pushes above a prior high/upper line (7488 above 7218/7249) and falls back; then breaks the rising rebound trendline.",
+      "entry": "Short when the rebound trendline/neckline breaks after the false breakout (破线头部确立), ~7750 in Dec 1998.",
+      "stop": "Reclaim of the neckline / the 翻黑 high, ~7830 (risk ~1%).",
+      "target": {
+        "formula": "A confirmed false breakout usually breaks the prior low; once broken, target = false-breakout high - (prior high - prior low).",
+        "worked_example": "8116 - 6219 = 1897; 7488 - 1897 = 5591 (actual low 5422 on 1999/2/5); short profit ~30%.",
+        "pages": [
+          127,
+          128
+        ]
+      },
+      "confirmation": [
+        "Weak, slow rebound relative to the long-term decline.",
+        "Break of the rebound's rising trendline after the false breakout."
+      ],
+      "invalidation": [
+        "Reclaim of the neckline (~7830)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        124,
+        125,
+        126,
+        127,
+        128
+      ]
+    },
+    {
+      "name_zh": "破底翻（指数底部）",
+      "name_en": "Break-bottom reversal at an index bottom",
+      "direction": "long",
+      "structure": "At/near the decline target the index breaks below the neckline/prior low (5988) to a new low (5422), then within 1-2 weeks reclaims the neckline with consecutive gap-up long red candles (连续二个跳空长红); the second long red (1999/2/22) stands back above 5988 = 破底翻确立.",
+      "entry": "Buy when the 破底翻 is confirmed by reclaiming the neckline (5988); add on the later neckline breakout (1999/3/15 ~6580).",
+      "stop": "For the neckline-breakout entry: break of the breakout long red's low 6440 (跌落线下), risk ~2.2%.",
+      "target": {
+        "formula": "破底翻 typically goes on to break the prior high (7488). After the subsequent neckline breakout: target_1 = breakout + (neckline - low); target_2 = target_1 + same distance.",
+        "worked_example": "6550 - 5422 = 1128; 6533 + 1128 = 7661; 7661 + 1128 = 8789 (high 8710.71).",
+        "pages": [
+          127,
+          129,
+          130
+        ]
+      },
+      "confirmation": [
+        "Consecutive gap-up long red candles.",
+        "Occurs at/near a computed decline target.",
+        "Brief time below the neckline (1-2 weeks)."
+      ],
+      "invalidation": [
+        "Failure to hold back above the neckline (implied; not stated explicitly for this case)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        126,
+        127,
+        129
+      ]
+    },
+    {
+      "name_zh": "突破颈线底部确立与第二波涨幅满足",
+      "name_en": "Neckline breakout bottom with first- and second-wave targets",
+      "direction": "long",
+      "structure": "Base whose neckline ~6550 sits above the low 5422; long red candle breaks the neckline (1999/3/15). After reaching target 1 the index consolidates ~2 months (box 7209.51-7705.63) and a long red (6/7) breaks the box's upper neckline to new highs.",
+      "entry": "Buy on the long red neckline breakout (~6580); add/hold on the 6/7 consolidation breakout.",
+      "stop": "Break of the breakout long red candle's low 6440 (risk ~2.2%).",
+      "target": {
+        "formula": "target_1 = breakout + (neckline - low); target_2 = target_1 + (neckline - low). Cross-check: a short-wave target = consolidation low + (short-wave high - short-wave start).",
+        "worked_example": "6550 - 5422 = 1128; 6533 + 1128 = 7661; 7661 + 1128 = 8789. Short wave: 8058 - 7304 = 754; 7924 + 754 = 8678. Actual high 8710.",
+        "pages": [
+          129,
+          130
+        ]
+      },
+      "confirmation": [
+        "Long red breakout candle whose low holds (当日长红低点6440点不破).",
+        "Two independent target calculations land near the same level (都在大约的位置)."
+      ],
+      "invalidation": [
+        "Close below the breakout long red low 6440.",
+        "At target: 7/13 带量长黑 breaks a ~1-month top's neckline -> exit."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        129,
+        130
+      ]
+    },
+    {
+      "name_zh": "三角形整理突破（周线）",
+      "name_en": "Triangle consolidation breakout with measured move (weekly)",
+      "direction": "long",
+      "structure": "After the 8710 high, ~half a year of converging triangle consolidation (8710.71/8414.60 highs, 6771.75/7261.31 lows); the week of 1999/12/25 breaks the triangle's upper neckline, and 2 weeks later breaks the prior high 8710.",
+      "entry": "Buy on the triangle upper-neckline breakout (~8020); target calculation enabled once prior high 8710 is broken.",
+      "stop": "The broken neckline becomes support; buy-stop risk ~2.5% (颈线反压突破变支撑，不破看涨幅满足附近).",
+      "target": {
+        "formula": "Method 1 (large wave): low_start + (high - prior_low) i.e. 6771 + (8710 - 5422). Method 2 (triangle): breakout point + triangle side length (vertical height at the 8710 high).",
+        "worked_example": "8710 - 5422 = 3288; 6771 + 3288 = 10059. Side length ~2180; 8020 + 2180 = 10200. Actual high 10393 (Feb 2000); profit ~22%.",
+        "pages": [
+          131,
+          132
+        ]
+      },
+      "confirmation": [
+        "Breaking the prior high 8710 two weeks after the triangle breakout.",
+        "Two target methods agree roughly."
+      ],
+      "invalidation": [
+        "Falling back below the triangle neckline."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        131,
+        132
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Watch the index and trade stocks in the direction of the index trend for a higher success rate.",
+      "kind": "filter",
+      "quote_zh": "观察大盘，随大盘趋势，操作个股才会有更高的成功率。",
+      "pages": [
+        123
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Index (futures) trading must also be swing trading; only a few swings a year, the big ones maybe only one or two, but very profitable.",
+      "kind": "time",
+      "quote_zh": "指数的操作也是必须波段操作，一年可以做的波段没有几次，较大的波段甚至可能少至一两次",
+      "pages": [
+        123
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Never try short-term trading; it becomes a habit and fails.",
+      "kind": "psychology",
+      "quote_zh": "投资人千万不要尝试短线，那会成为习惯，必败无疑。",
+      "pages": [
+        123
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "At a rare turning point (bull or bear), enter aggressively with a strict stop: small losses, big gains; catching one or two big swing turns a year is success.",
+      "kind": "risk",
+      "quote_zh": "一旦出现难得的转折，无论是多头转折或空头转折，积极介入，严设停损，小赔大赚，一年只要抓到一两次的较大波段转折，便是成功的操作。",
+      "pages": [
+        123
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "After a heavy-volume day there is usually still a higher high; then price rises on shrinking volume (divergence) before the top.",
+      "kind": "volume",
+      "quote_zh": "技术面大量后通常都还会有高点，随后价涨量缩量价背离。",
+      "pages": [
+        124
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "A long black candle breaking the neckline confirms the head and is a long-term sell signal.",
+      "kind": "entry",
+      "quote_zh": "同年9月2日长黑摜破颈线头部，确立为长线卖出信号",
+      "pages": [
+        124
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "The decline target is computed only after price breaks the prior low.",
+      "kind": "target",
+      "quote_zh": "直到跌破前低7040点后，便可计算跌幅满足。",
+      "pages": [
+        124
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Short stop = price reclaiming the neckline (站回颈线).",
+      "kind": "stop",
+      "quote_zh": "约可空在9340点附近，突破9650点也就是站回颈线时停损，风险约3.3%",
+      "pages": [
+        124
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "A slow, small rebound after a big decline is structurally weak; it ended with a false breakout, then broke the neckline for another leg down.",
+      "kind": "filter",
+      "quote_zh": "在长线结构上属于相对弱势反弹，反弹波在假突破后结束，随后跌破颈线再跌一波才见底。",
+      "pages": [
+        124
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Cover shorts near the decline target.",
+      "kind": "target",
+      "quote_zh": "达跌幅满足附近，空单回补获利约20%~34%。",
+      "pages": [
+        124
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "A confirmed false breakout usually breaks the prior low; then compute the decline target.",
+      "kind": "target",
+      "quote_zh": "技术面假突破确立通常都会跌破前低（6219点），跌破前低后便能计算跌幅满足。",
+      "pages": [
+        127
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "A confirmed 破底翻 usually goes on to break the prior high.",
+      "kind": "target",
+      "quote_zh": "技术面破底翻确立后通常都会突破前高",
+      "pages": [
+        127
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Short stop at the neckline-reclaim level, which is also the 翻黑 high; risk can be as low as ~1%. If the reclaim fails, hold for the decline target.",
+      "kind": "stop",
+      "quote_zh": "停损设在7830点附近，也就是站回颈线反压，也是翻黑高点，风险仅约1%，反压站不回看跌幅满足附近",
+      "pages": [
+        128
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "As in many examples, after a false breakout turns bearish, the bear phase ends with a 破底翻 stabilisation buy signal.",
+      "kind": "entry",
+      "quote_zh": "如同许多例子一样，假突破翻空后，最终以破底翻企稳买进信号结束空头。",
+      "pages": [
+        128
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "Use the weekly chart as an auxiliary reference to the daily operation.",
+      "kind": "filter",
+      "quote_zh": "参考前一篇日线，周线做为辅助操作。",
+      "pages": [
+        126,
+        128
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "After a long-red neckline breakout, as long as that candle's low holds, look for the bottom's measured-move target; break of the long red low is the stop.",
+      "kind": "stop",
+      "quote_zh": "技术面当日长红低点6440点不破，看底部计算的涨幅满足附近。",
+      "pages": [
+        129,
+        130
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "A breakout to new highs from a consolidation after target 1 allows computing the second-wave target.",
+      "kind": "target",
+      "quote_zh": "同年6月7日突破整理区上缘颈线再创新高后，便可计算第二波涨幅满足。",
+      "pages": [
+        129
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "Scale out at target 1, exit fully at target 2, especially on a neckline-break 翻黑 head confirmation.",
+      "kind": "target",
+      "quote_zh": "达涨幅满足7661点附近多单减码，再达第二波涨幅满足附近，尤其是7月13日破线翻黑头部确立时，多单获利了结约16%~31%。",
+      "pages": [
+        130
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "Triangle measured move: rise after the breakout equals the triangle's side length.",
+      "kind": "target",
+      "quote_zh": "突破颈线后的涨幅=三角形边长的等幅。",
+      "pages": [
+        132
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "Broken resistance neckline becomes support; if it holds, look for the measured target.",
+      "kind": "stop",
+      "quote_zh": "颈线反压突破变支撑，不破看涨幅满足附近",
+      "pages": [
+        132
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "Diversification is ignorance-hedging (O'Neil quote); hedging a losing position by shorting other things is a big mistake (Gann quote); control losses and accept them (Schwartz quote).",
+      "kind": "psychology",
+      "quote_zh": "多样化只是一种避险的无知",
+      "pages": [
+        126,
+        128,
+        130
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "1997-07..1998-09",
+      "pattern": "爆量后量价背离 + 破线头部确立 + 跌幅满足",
+      "levels": {
+        "volume_climax_date": "1997/7/17 (2969亿元)",
+        "high": 10256.1,
+        "low1": 7040.54,
+        "rebound_high": 9378.52,
+        "second_high": 9337.61,
+        "target": 6162,
+        "actual_low": 6219.89,
+        "short1_entry": 9340,
+        "short1_stop": 9650,
+        "short2_entry": 8735,
+        "short2_stop": 8980,
+        "short3_entry": 7780,
+        "short3_stop": 7950
+      },
+      "outcome": "Three head breakdowns (1997/9/2, 1998/4/14, 1998/7/30); risks 3.3%/2.8%/2.1%; low 6219 near target 6162; shorts covered for ~20%-34%.",
+      "pages": [
+        123,
+        124
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "1997-08..1999-02",
+      "pattern": "跌幅满足 (two calculations)",
+      "levels": {
+        "high": 10256.1,
+        "low1": 7040.54,
+        "rebound_high": 9378.52,
+        "target1": 6162,
+        "low2": 6219.89,
+        "rebound2_high": 7488.43,
+        "alt_calc_a": "9378-7073=2305; 8116-2305=5811",
+        "alt_calc_b": "8116-6219=1897; 7488-1897=5591",
+        "actual_low": 5422.66
+      },
+      "outcome": "Feb 1999 low 5422 near targets; stayed only 1-2 weeks, then 破底翻 ended the long bear.",
+      "pages": [
+        125,
+        126
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "1998-07..1999-03",
+      "pattern": "假突破 -> 破线 -> 跌幅满足 -> 破底翻",
+      "levels": {
+        "prior_high": 8116.57,
+        "prior_low": 6219.89,
+        "false_breakout_high": 7488.43,
+        "upper_line_points": [
+          7218.39,
+          7249.29
+        ],
+        "target": 5591,
+        "actual_low": 5422.66,
+        "neckline": 5988.06,
+        "short_entry": 7750,
+        "short_stop": 7830
+      },
+      "outcome": "Short ~7750 with ~1% risk, ~30% profit; 破底翻 confirmed 1999/2/22 at 5988; later broke 7488.",
+      "pages": [
+        127,
+        128
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "1999-02..1999-07",
+      "pattern": "破底翻 + 突破颈线底部确立 + 第二波涨幅满足",
+      "levels": {
+        "low": 5422.66,
+        "neckline": 6550,
+        "breakout": 6533,
+        "target1": 7661,
+        "target2": 8789,
+        "short_wave": "7304->8058 (754); 7924+754=8678",
+        "actual_high": 8710.71,
+        "entry": 6580,
+        "stop": 6440
+      },
+      "outcome": "Bought 1999/3/15 ~6580, risk ~2.2%; scaled out at 7661, exited near 8789/7-13 head break; profit ~16%-31%.",
+      "pages": [
+        129,
+        130
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "1999-07..2000-02",
+      "pattern": "三角形整理突破 + 涨幅满足",
+      "levels": {
+        "start_low": 5422.66,
+        "high": 8710.71,
+        "triangle_low": 6771.75,
+        "triangle_other_points": [
+          8414.6,
+          7261.31
+        ],
+        "target_large_wave": 10059,
+        "side_length": 2180,
+        "breakout": 8020,
+        "target_triangle": 10200,
+        "actual_high": 10393.59
+      },
+      "outcome": "Breakout week 1999/12/25; risk ~2.5%, profit ~22% (stated on p132).",
+      "pages": [
+        131,
+        132
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Index regime filter: only take stock longs when the index is not in a confirmed head (破线头部确立) and its decline target is not yet reached; mirror for shorts.",
+    "Head confirmation: close below the top area's rising neckline with a long black candle (body > N x ATR) after a volume climax (volume = max of last 250 bars) followed by higher price highs on lower volume.",
+    "Decline target activation: only after close < prior swing low L; target = rebound_high - (prior_high - L). Treat 'near target' as within ~1-3% (book examples: 6219 vs 6162, 5422 vs 5591/5811).",
+    "Short stop = close back above the broken neckline (or the breakdown candle's high); risk% = (stop - entry)/entry, book cases 1%-3.3% on daily index.",
+    "Long-red breakout stop = close below that candle's low.",
+    "Second-wave target = target_1 + (neckline - low), activated by a breakout to new highs out of the post-target_1 consolidation.",
+    "Triangle target = breakout price + vertical height of the triangle at its widest (first) pivot.",
+    "False breakout after a weak rebound: price > prior range high then closes back below within a few bars, plus a break of the rebound's rising trendline -> short; expect break of prior low."
+  ],
+  "ambiguities": [
+    "'Weak rebound' is described qualitatively (3 months, ~1200-1269 points against a 4037-point fall); no threshold is given.",
+    "'附近' (near target) tolerance is unspecified; actual lows overshoot or undershoot targets by up to ~170 points (5422 vs 5591).",
+    "Neckline breakout level used in arithmetic (6533) differs from the neckline (6550) and the entry (6580); which reference to use is not formalised.",
+    "Triangle 'side length' (边长约2180) measurement point is loosely defined (vertical line at the 8710 high).",
+    "The weekly 1999 bottom was computed with two different high/low pairs (5811 vs 5591); no rule says which pair to prefer.",
+    "The book uses the weekly chart only as auxiliary; how to resolve daily/weekly conflicts is not stated.",
+    "Profit ranges (20%-34%, 16%-31%) aggregate several entries; per-entry profit is not given."
+  ],
+  "illegible": [
+    {
+      "page": 123,
+      "what": "Small dashed-line target label text next to 跌幅满足 (e.g. '1/BPL/...') on the chart"
+    },
+    {
+      "page": 125,
+      "what": "Small dashed-line target labels next to both 跌幅满足 markers; partly obscured low label read as 7830.75 (last digit uncertain)"
+    },
+    {
+      "page": 127,
+      "what": "Small dashed-line target label under the 7488.43 false breakout; right-edge price 7209.5x truncated"
+    },
+    {
+      "page": 129,
+      "what": "Small dashed-line labels at the 8789 and first target levels; right-edge last low truncated as 6771.7x"
+    },
+    {
+      "page": 131,
+      "what": "Small dashed-line labels next to 涨幅满足/跌幅满足 markers"
+    }
+  ]
+}

@@ -1,0 +1,663 @@
+{
+  "unit_id": "u15b",
+  "model": "devin-cloud",
+  "pages_read": [
+    182,
+    183,
+    184,
+    185,
+    186,
+    187,
+    188,
+    189,
+    190,
+    191
+  ],
+  "summary": "Weekly stock case studies combine bottom/reclaim and neckline-break signals with equal-distance price targets, then reverse to shorts when triangle or head-and-shoulders tops break their necklines (PDF pp182–191). The cases are the continuation of 茂矽, 台积电, 金宝, 友达, and the beginning of 光磊; stops generally use the reclaimed/broken neckline or the signal candle's extreme, while base duration distinguishes a short rebound from a substantial bull swing (pp182–191). Multiple measured-move targets are conditional on renewed breakouts after consolidation, not automatic promises, and the text stresses patience because clear weekly opportunities are infrequent (pp182–186, 188, 191).",
+  "patterns": [
+    {
+      "name_zh": "带量破底翻",
+      "name_en": "Volume-backed failed breakdown and reclaim",
+      "direction": "long",
+      "structure": "A base first undercuts its previous floor, then a large bullish weekly candle reclaims the base neckline. 台积电 breaks the floor in the week of 1998-08-29 and reclaims on 1998-11-21 (p183); 友达 reclaims its earlier range floor at 10.68 after a low at 9.88 (pp189–190).",
+      "entry": "Enter when the reclaim establishes the bottom; 台积电 around 13.3 on 1998-11-21 (p185). 友达's trading paragraph gives a daily reclaim on 2003-05-26 and a next-day entry around 11.6, with the weekly bullish reclaim dated May 31 (p190); p189 prints a conflicting year, retained in ambiguities.",
+      "stop": "台积电: below 12.5, the large bullish week's low, risk about 6% (p185). 友达: below the pre-breakdown floor 10.68, identified as the main player's cost-area floor, risk about 8% (p190).",
+      "target": {
+        "formula": "After a later break of the preceding swing high, project the first rise's distance upward from the correction low; this is not a target computed from the reclaim candle itself.",
+        "worked_example": "台积电: 30.5 - 10.5 = 20; 23.4 + 20 = 43.4 (p183). 友达: 30.88 - 9.88 = 21; 23.77 + 21 = 44.77 (p189).",
+        "pages": [
+          183,
+          189
+        ]
+      },
+      "confirmation": [
+        "台积电 uses a volume-backed long bullish weekly candle reclaiming the neckline (pp183, 185).",
+        "友达's weekly May 31 candle closes bullish above the neckline after the daily reclaim (p190).",
+        "The later prior-high breakout permits calculating the large-swing upside target (pp183, 189)."
+      ],
+      "invalidation": [
+        "Break the specified reclaimed support or signal-candle low and stop (pp185, 190).",
+        "金宝's early-2001 reclaim base lasts only a little over two months versus a top lasting over ten months, so it is treated as a rebound, not an established large bull swing (pp187–188)."
+      ],
+      "timeframes": [
+        "weekly",
+        "daily entry timing within a weekly case (友达, p190)"
+      ],
+      "pages": [
+        183,
+        185,
+        187,
+        188,
+        189,
+        190
+      ]
+    },
+    {
+      "name_zh": "收敛三角形底部与带量突破颈线",
+      "name_en": "Contracting-triangle bottom and volume-backed neckline breakout",
+      "direction": "long",
+      "structure": "A prolonged base or narrowing triangle has a descending upper neckline and rising lower boundary; the upward break confirms the bottom. 台积电's approximately eight-month 16.67–25.79 range resolves upward on 2003-05-31 (pp183, 185). 金宝 first clears the smaller base neckline on 2001-10-27, then the larger triangle neckline on December 8 (p188).",
+      "entry": "Enter the volume-backed small-base neckline break; 金宝 around 7.5 on October 27. Add around 9.7 when the larger neckline breaks on December 8 (p188). 台积电's 2003 breakout confirms a bull phase but no entry price is specified (p185). 茂矽's prior triangle-bottom breakout entry is approximately 295 on 1999-09-04 (p182, continuation).",
+      "stop": "A fall back below the broken neckline invalidates the long; 金宝 quotes approximately 7% risk for both initial and add-on positions without an exact numerical stop (p188). 茂矽 uses 267, the breakout week's long bullish candle low, risk about 9% (p182).",
+      "target": {
+        "formula": "Triangle upside target = breakout neckline + vertical distance from the low to the upper neckline at the measuring location.",
+        "worked_example": "金宝: 12.8 - 6.08 = 6.72; 9.8 + 6.72 = 16.52 (p188). 茂矽's continuation gives a first target of 545 and a second of 545 + 255 = 800 (p182); the initial height derivation is outside this unit.",
+        "pages": [
+          182,
+          188
+        ]
+      },
+      "confirmation": [
+        "Long bullish candles with volume confirm both 金宝 neckline breaks (p188).",
+        "金宝's later base is over ten months old, matching the earlier top's scale and making a large bull swing more likely (p188).",
+        "台积电's long bullish candle breaks the consolidation's upper neckline (p185)."
+      ],
+      "invalidation": [
+        "Return below the breakout neckline triggers the stated stop (pp182, 188)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        182,
+        183,
+        185,
+        188
+      ]
+    },
+    {
+      "name_zh": "收敛三角形头部",
+      "name_en": "Contracting-triangle top",
+      "direction": "short",
+      "structure": "台积电 consolidates at high levels around the first large-swing target for about half a year; a large bearish weekly candle breaks the triangle's lower neckline. The measuring height is from approximately 51 to the neckline at approximately 39.5, while the actual break is approximately 42.5 (pp183–184).",
+      "entry": "Short after the large bearish neckline break on 2000-07-21; the operation paragraph says around 42 but misprints the year as 2002 (pp183–185).",
+      "stop": "Approximately 44, above the neckline and at the bearish signal candle's high; approximately 5% risk. Cover if price regains this resistance (p185).",
+      "target": {
+        "formula": "Height H = triangle high - neckline at the measuring location; T1 = neckline at the breakdown - H; T2 = T1 - H after consolidation resolves downward.",
+        "worked_example": "51 - 39.5 = 11.5; 42.5 - 11.5 = 31; 31 - 11.5 = 19.5 (p184). The chart's exact peak label is 51.42, but the book's arithmetic intentionally uses approximately 51 (p183).",
+        "pages": [
+          183,
+          184
+        ]
+      },
+      "confirmation": [
+        "The large bearish candle breaking the neckline establishes the top (pp183–184).",
+        "Following the first target, the text describes roughly two months of consolidation before another decline, then a September 2001 breakdown and three more months to the second target (p184)."
+      ],
+      "invalidation": [
+        "Regain the neckline/44 stop and exit the short (p185).",
+        "After reaching the second target, 台积电 makes a direct V reversal and reclaims the neckline, ending that bearish sequence (p184)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        183,
+        184,
+        185
+      ]
+    },
+    {
+      "name_zh": "头肩顶、复合式头肩顶",
+      "name_en": "Head-and-shoulders and composite head-and-shoulders tops",
+      "direction": "short",
+      "structure": "A head above its shoulders becomes a confirmed top only after a neckline break. 茂矽 first forms an M top and then a composite head-and-shoulders top (p182). 台积电's head is approximately 42.1, neckline measuring value 34.9, and break value 36 (p185); 友达's head is 49.21, neckline measuring value 35.5, and break value 36 (pp189–190).",
+      "entry": "Short the confirming weekly neckline break: 茂矽 2000-09-09 around 530 (p182); 台积电 2002-06-08 around 34.5 (p186); 友达 2004-06-12 around 35 after the break of 36 (p190).",
+      "stop": "Exit if price regains neckline resistance: 茂矽 563, also the signal week's high, risk about 6% (p182); 台积电 approximately 36, risk about 4.3% (p186); 友达 above 36, described as approximately 5% risk (p190).",
+      "target": {
+        "formula": "H = head (or central mean of head highs) - neckline at the measuring location; T1 = actual neckline breakdown level - H; T2 = T1 - H where a second wave is explicitly supplied.",
+        "worked_example": "茂矽: 848 - 506 = 342; 535 - 342 = 193 (p182). 台积电: 42.1 - 34.9 = 7.2; 36 - 7.2 = 28.8; 28.8 - 7.2 = 21.6 (p185). 友达: 49.21 - 35.5 = 13.71; 36 - 13.71 = 22.29 (p190).",
+        "pages": [
+          182,
+          185,
+          190
+        ]
+      },
+      "confirmation": [
+        "A long bearish weekly candle confirms the neckline breakdown in 茂矽 and 台积电 (pp182, 185–186).",
+        "台积电 reaches 29.37, rebounds to 34.14 to complete an escape-line rally, then declines again (p185).",
+        "友达 reaches the calculated downside target region and stabilizes at 22.19 (p190)."
+      ],
+      "invalidation": [
+        "A return above the specified neckline stop ends the short (pp182, 186, 190).",
+        "茂矽's later volume-backed bullish reclaim confirms a bottom; 台积电's later triangle-bottom breakout begins a new bull phase (pp182, 185)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        182,
+        185,
+        186,
+        189,
+        190
+      ]
+    },
+    {
+      "name_zh": "高档假突破与头部、底部规模比较",
+      "name_en": "High-level false breakout followed by top confirmation and base-scale filtering",
+      "direction": "short",
+      "structure": "金宝 breaks the upper neckline in February 2000 but falls back below it, establishing a false breakout and long-term sell signal. A head-and-shoulders neckline break on July 29 confirms the larger top (p187). A subsequent reclaim with only a little-over-two-month base is much smaller than the over-ten-month top and is classified as a short rebound (pp187–188).",
+      "entry": "Short once the false breakout is established on 2000-02-21, around 22.9; add on the July 29 neckline break, around 16 (p188).",
+      "stop": "Initial short: regain the upper neckline at 24.4, risk approximately 6.5%. Add-on: regain 16.7, risk approximately 5%; the original high-entry short takes profit while the lower add-on stops out (p188).",
+      "target": {
+        "formula": "The subsequent confirmed head-and-shoulders top supplies the measured downside target: breakdown neckline - (head - measuring neckline).",
+        "worked_example": "26.73 - 15.7 = 11.03; 16.7 - 11.03 = 5.67 (p187).",
+        "pages": [
+          187
+        ]
+      },
+      "confirmation": [
+        "Failure back below the upper neckline confirms the false breakout (p187).",
+        "The July 29 lower-neckline break confirms the head-and-shoulders top (p187).",
+        "The early-2001 reclaim rallies sharply for three weeks but then resumes long bearish consolidation; a genuinely large bottom is described only in October 2001 (pp187–188)."
+      ],
+      "invalidation": [
+        "Regain the relevant short stop/neckline and exit (p188).",
+        "The later volume-backed October and December 2001 base-neckline breaks are long signals, not reasons to retain the original bearish thesis (p188)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        187,
+        188
+      ]
+    },
+    {
+      "name_zh": "长期底部突破与旗形整理再突破",
+      "name_en": "Long-base neckline breakout followed by a flag continuation",
+      "direction": "long",
+      "structure": "光磊's three-year-four-month base is confirmed by the volume-backed long bullish weekly candle on 2006-04-15. Its downward-sloping neckline is measured near 16.2 above the 5.08 low, but the actual breakout is near 15.5. A neckline retest lasts about half a year; after reaching the first target, a flag consolidates for over three months before its upper edge breaks on 2007-03-04 (p191).",
+      "entry": "The April 15 volume-backed neckline break establishes the bottom; the March 4 flag-upper-edge break authorizes the second-wave target. This unit's page does not give an entry price (p191).",
+      "stop": "No numerical trading stop is stated on p191; the operations paragraph continues in the next unit.",
+      "target": {
+        "formula": "H = base neckline at the measuring location - bottom; T1 = breakout neckline + H; a renewed flag breakout permits T2 = T1 + H.",
+        "worked_example": "16.2 - 5.08 = 11.12; 15.5 + 11.12 = 26.62. The chart labels the second target 37.74 (p191); its explicit second-wave arithmetic continues outside this unit.",
+        "pages": [
+          191
+        ]
+      },
+      "confirmation": [
+        "Volume-backed long bullish candle confirms the multi-year bottom (p191).",
+        "A flag-upper-edge break after more than three months of consolidation confirms continuation (p191)."
+      ],
+      "invalidation": [
+        "No explicit invalidation rule is provided on p191; the long neckline-retest duration is noted as unusual, not itself classified as failure."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        191
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Only calculate the next upside wave after consolidation is followed by a new breakout; 茂矽's second target repeats the same 255-point distance.",
+      "kind": "target",
+      "quote_zh": "整理后再度突破整理区高点，便能计算第二波涨幅满足。",
+      "pages": [
+        182
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "茂矽's first target 545 plus the original 255 distance yields the second target 800; do not replace this printed arithmetic with estimates.",
+      "kind": "target",
+      "quote_zh": "第一波涨幅满足545元＋255元＝等幅满足计算的第二波涨幅满足800元。",
+      "pages": [
+        182
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Use a broken neckline as short resistance; 茂矽's stop is also the breakdown week's high.",
+      "kind": "stop",
+      "quote_zh": "停损设在563元，也就是站回颈线反压，也是当周长黑高点，风险约6%",
+      "pages": [
+        182
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "For 台积电's upside swing target, add the first low-to-high rise to the correction low after the prior high is exceeded.",
+      "kind": "target",
+      "quote_zh": "自23.4元低点＋20元＝等幅计算的涨幅满足43.4元。",
+      "pages": [
+        183
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "A contracting triangle becomes a confirmed top only after the neckline breaks; its measuring height is the triangle edge length, projected below the actual breakdown.",
+      "kind": "target",
+      "quote_zh": "当收敛三角形颈线跌破头部确立后，便可计算跌幅满足。计算方式：三角形边长＝跌破颈线后的等长。",
+      "pages": [
+        184
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "The second triangle downside target repeats the same height below the first target.",
+      "kind": "target",
+      "quote_zh": "第一波跌幅满足点31元再减11.5元＝等幅计算的跌幅满足19.5元。",
+      "pages": [
+        184
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "台积电's reclaimed-bottom long uses the large bullish week's low as support and holds toward the target while that support remains intact.",
+      "kind": "stop",
+      "quote_zh": "停损设在12.5元，也就是当周大量长红低点支撑，风险约6%，支撑不破，看涨幅满足附近",
+      "pages": [
+        185
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "After a neckline breakdown, a rally that fails to regain it is an escape-line rally, not a reclaimed bull structure.",
+      "kind": "filter",
+      "quote_zh": "跌破颈线后反弹未站回颈线称之为逃命线（粉色箭头部分）",
+      "pages": [
+        186
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Weekly swing trading requires patience: in 台积电's roughly five-year example only a few clear buy and sell turning points occur.",
+      "kind": "psychology",
+      "quote_zh": "操作波段要有耐心，机会是等出来的。",
+      "pages": [
+        186
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Breaking an upper neckline then falling back below it confirms a false breakout and a long-term sell signal.",
+      "kind": "entry",
+      "quote_zh": "金宝2000年2月突破上缘颈线又跌回破线，假突破确立长线卖出信号",
+      "pages": [
+        187
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Compare base duration with preceding top duration: 金宝's little-over-two-month reclaim base versus an over-ten-month top is treated as a short rebound despite its large amplitude.",
+      "kind": "time",
+      "quote_zh": "远小于头肩顶十个多月的头部规模，通常短线反弹视之（但因跌深弹幅也达倍数）",
+      "pages": [
+        187,
+        188
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "A later base already over ten months old makes a substantial bull swing more likely; 金宝's subsequent larger-triangle break permits measuring the upside target.",
+      "kind": "time",
+      "quote_zh": "此时对应年初低点底部规模已达十个多月，较易有大波段多头走势",
+      "pages": [
+        188
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Manage initial shorts and breakdown add-ons separately when price regains the add-on neckline: the high-entry short takes profit and the lower add-on stops out.",
+      "kind": "risk",
+      "quote_zh": "站回颈线16.7元之上，停损利点风险约5%（假突破高档空单停利，破线加码空单停损）",
+      "pages": [
+        188
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "友达's reclaim stop uses the pre-breakdown range floor 10.68, identified as the main player's cost area, not the new low 9.88.",
+      "kind": "stop",
+      "quote_zh": "停损设破底前低点10.68元跌破后（破底前的区间才是主力成本区），风险约8%",
+      "pages": [
+        190
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "友达's broken 36 neckline changes from support into resistance: cover the short if price regains it, otherwise hold toward 22.29.",
+      "kind": "stop",
+      "quote_zh": "36元颈线跌破支撑变反压",
+      "pages": [
+        190
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "The duration of a post-breakout retest can be substantial: 光磊 retests its neckline for approximately half a year, described as unusually long.",
+      "kind": "time",
+      "quote_zh": "只是突破颈线后的回测颈线时间为少见的约半年之久。",
+      "pages": [
+        191
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "A renewed break of the flag's upper boundary permits calculation of 光磊's second upside wave.",
+      "kind": "target",
+      "quote_zh": "突破旗形整理上缘，便可计算第二波涨幅满足。",
+      "pages": [
+        191
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "茂矽 (continuation; ticker not stated on this unit's page)",
+      "timeframe": "weekly",
+      "period": "1999-09..2000 year-end",
+      "pattern": "Triangle-bottom breakout → second upside wave → M/composite head-and-shoulders top",
+      "levels": {
+        "long_entry": 295,
+        "long_stop": 267,
+        "long_risk_pct": 9,
+        "up_target_1": 545,
+        "repeated_height": 255,
+        "up_target_2": 800,
+        "head_high_central_mean": 848,
+        "head_measuring_neckline": 506,
+        "down_height": 342,
+        "down_breakout_neckline": 535,
+        "down_target": 193,
+        "short_entry": 530,
+        "short_stop": 563,
+        "short_risk_pct": 6
+      },
+      "outcome": "Long entered on 1999-09-04; first target region in February 2000 and second in early April, quoted gains approximately 84% and 170%. The large bearish neckline break on 2000-09-09 confirms the composite top; reaches the downside target region by year-end, then two weeks of consolidation and a volume-backed bullish reclaim confirm a bottom. Quoted short profit approximately 63%. The prior chart/initial target derivation is outside this unit.",
+      "pages": [
+        182
+      ]
+    },
+    {
+      "instrument": "台积电 (2330)",
+      "timeframe": "weekly",
+      "period": "1998-08..2000-07",
+      "pattern": "破底翻 → large-swing upside equal distance",
+      "levels": {
+        "low": 10.5,
+        "chart_low_label": 10.5,
+        "chart_prior_high": 18.11,
+        "reclaim_near_price_in_exposition": 12.8,
+        "entry_near_price_in_exposition": 13,
+        "operation_entry": 13.3,
+        "stop": 12.5,
+        "risk_pct": 6,
+        "first_swing_high": 30.5,
+        "correction_low": 23.4,
+        "swing_distance": 20,
+        "up_target": 43.4,
+        "high_rounded_in_prose": 51,
+        "high_chart_exact": 51.42
+      },
+      "outcome": "1998-08-29 breaks the floor, 1998-11-21 volume-backed bullish reclaim confirms the bottom. First swing high on 1999-06-26, then correction; 1999-09-04 exceeds 30.5 and authorizes the 43.4 target. Reaches target region in late January 2000 and overshoots to approximately 51. Exposition quotes approximately 220% profit; the operation paragraph quotes approximately 226% (not reconciled).",
+      "pages": [
+        183,
+        184,
+        185
+      ]
+    },
+    {
+      "instrument": "台积电 (2330)",
+      "timeframe": "weekly",
+      "period": "2000-07..2002",
+      "pattern": "Contracting-triangle top → two downside waves → V reversal",
+      "levels": {
+        "triangle_high_for_calculation": 51,
+        "measuring_neckline": 39.5,
+        "triangle_height": 11.5,
+        "breakdown_neckline": 42.5,
+        "target_1": 31,
+        "target_2": 19.5,
+        "post_target_range_low_prose": 24.56,
+        "post_target_range_high_prose": 36.91,
+        "chart_intermediate_low": 22.45,
+        "chart_intermediate_high": 30.67,
+        "second_target_low_prose": 18.8,
+        "second_target_low_chart": 18.83,
+        "subsequent_high": 42.11,
+        "entry": 42,
+        "stop": 44,
+        "risk_pct": 5
+      },
+      "outcome": "Chart and exposition date the confirming long bearish candle 2000-07-21; operation paragraph prints 2002-07-21. After first-target-centered consolidation, a September 2001 lower-boundary break reaches the second target about three months later. A direct V reversal reclaims the neckline and rises to 42.11. Quoted short gains near first/second targets approximately 26%/53%.",
+      "pages": [
+        183,
+        184,
+        185
+      ]
+    },
+    {
+      "instrument": "台积电 (2330)",
+      "timeframe": "weekly",
+      "period": "2002-06..2003-05",
+      "pattern": "Head-and-shoulders top → two downside waves → contracting-triangle bottom",
+      "levels": {
+        "head_for_calculation": 42.1,
+        "chart_head_exact": 42.11,
+        "measuring_neckline": 34.9,
+        "height": 7.2,
+        "breakdown_neckline": 36,
+        "target_1": 28.8,
+        "target_2": 21.6,
+        "initial_decline_low_prose": 29.37,
+        "escape_rally_high_prose": 34.14,
+        "base_low": 16.67,
+        "base_high": 25.79,
+        "chart_later_low": 19.15,
+        "short_entry": 34.5,
+        "short_stop": 36,
+        "risk_pct": 4.3
+      },
+      "outcome": "2002-06-08 long bearish neckline break confirms the top. First decline bottoms in the week of July 6 at 29.37, rallies to 34.14 without reclaiming the neckline, then falls again. After the second target region, approximately eight months of base building; 2003-05-31 long bullish candle breaks the upper boundary and confirms a triangle bottom. Quoted short gains approximately 15% and 36%.",
+      "pages": [
+        183,
+        185,
+        186
+      ]
+    },
+    {
+      "instrument": "金宝 (2312)",
+      "timeframe": "weekly",
+      "period": "2000-02..early 2001",
+      "pattern": "High-level false breakout → head-and-shoulders neckline breakdown",
+      "levels": {
+        "head": 26.73,
+        "measuring_neckline": 15.7,
+        "height": 11.03,
+        "breakdown_neckline": 16.7,
+        "down_target": 5.67,
+        "initial_entry": 22.9,
+        "initial_stop": 24.4,
+        "initial_risk_pct": 6.5,
+        "addon_entry": 16,
+        "addon_stop": 16.7,
+        "addon_risk_pct": 5,
+        "target_region_low": 6.08,
+        "other_chart_pivots": [
+          9.34,
+          19.0,
+          19.59,
+          14.97
+        ]
+      },
+      "outcome": "False-breakout short on 2000-02-21; add on the 2000-07-29 neckline break. Reaches downside target region near early-2001 low 6.08; quoted short profit at least 50%. A little-over-two-month reclaim base produces a three-week sharp rebound, then resumes prolonged bearish consolidation, rather than cancelling the larger top solely because the bounce is large.",
+      "pages": [
+        187,
+        188
+      ]
+    },
+    {
+      "instrument": "金宝 (2312)",
+      "timeframe": "weekly",
+      "period": "2001-10..2002-04",
+      "pattern": "Volume-backed small-neckline break → large contracting-triangle neckline break",
+      "levels": {
+        "base_reference_low": 6.08,
+        "upper_neckline_measurement": 12.8,
+        "upper_chart_pivot": 12.77,
+        "height": 6.72,
+        "large_neckline_break": 9.8,
+        "target": 16.52,
+        "first_entry": 7.5,
+        "first_risk_pct": 7,
+        "addon_entry": 9.7,
+        "addon_risk_pct": 7,
+        "actual_high": 16.96,
+        "other_chart_pivots": [
+          7.85,
+          5.87,
+          5.92,
+          10.36
+        ]
+      },
+      "outcome": "2001-10-27 volume-backed long bullish candle confirms the small base; over ten months of bottom formation supports a large bull-swing interpretation. Add on December 8 at the larger triangle neckline break. Reaches target region in April 2002, high 16.96, then tops and turns bearish. Quoted gains approximately 70%–120%; numerical stop prices are not supplied, only neckline failure and approximately 7% risk.",
+      "pages": [
+        187,
+        188
+      ]
+    },
+    {
+      "instrument": "友达 (2409)",
+      "timeframe": "weekly with daily entry refinement",
+      "period": "May reclaim (year conflicts in text)..2004-04",
+      "pattern": "破底翻 → prior-high breakout → large-swing upside target",
+      "levels": {
+        "new_low": 9.88,
+        "pre_breakdown_floor_and_stop": 10.68,
+        "entry": 11.6,
+        "risk_pct": 8,
+        "first_high": 30.88,
+        "correction_low": 23.77,
+        "swing_distance": 21,
+        "up_target": 44.77,
+        "actual_high": 49.21,
+        "daily_trend_break_exit": 26.5,
+        "other_chart_pivots": [
+          15.4,
+          14.71
+        ]
+      },
+      "outcome": "p189 prints a 2002-05-31 weekly reclaim; p190 gives a 2003-05-26 daily reclaim followed by May 31 weekly confirmation. Preserve the mismatch. The 2004-02-21 long bullish prior-high breakout permits 44.77; reaches target region by mid-April and reverses less than three weeks later. Target-region profit approximately 286%, stated profit/risk ratio 35; earlier 11/17 daily trendline break offers an exit around 26.5 with quoted approximately 128% profit.",
+      "pages": [
+        189,
+        190
+      ]
+    },
+    {
+      "instrument": "友达 (2409)",
+      "timeframe": "weekly",
+      "period": "2004-06..2004-11",
+      "pattern": "Head-and-shoulders neckline breakdown",
+      "levels": {
+        "head": 49.21,
+        "measuring_neckline": 35.5,
+        "height": 13.71,
+        "breakdown_neckline_and_stop_reference": 36,
+        "short_entry": 35,
+        "quoted_risk_pct": 5,
+        "down_target": 22.29,
+        "actual_low": 22.19,
+        "other_chart_pivots": [
+          24.74,
+          31.73,
+          27.3,
+          33.95
+        ]
+      },
+      "outcome": "2004-06-12 breaks the neckline; below-36 resistance supports the short. Reaches target region in the week of 2004-11-06 at 22.19, stabilizes and builds a bottom before rising again. Quoted short profit approximately 36%.",
+      "pages": [
+        189,
+        190
+      ]
+    },
+    {
+      "instrument": "光磊 (2340; example begins here and continues in u15c)",
+      "timeframe": "weekly",
+      "period": "2003..2008 chart; discussion through 2007-03-04",
+      "pattern": "Multi-year bottom neckline breakout → flag continuation",
+      "levels": {
+        "bottom": 5.08,
+        "measuring_neckline": 16.2,
+        "height": 11.12,
+        "breakout_neckline": 15.5,
+        "up_target_1": 26.62,
+        "up_target_2_chart": 37.74,
+        "top_high_chart": 43.42,
+        "later_top_measuring_neckline_chart": 29.1,
+        "later_top_breakdown_neckline_chart": 31,
+        "later_chart_low": 16.33,
+        "other_chart_pivots": [
+          18.21,
+          17.97,
+          17.13,
+          15.92,
+          10.49,
+          11.82,
+          10.98,
+          7.66,
+          9.65,
+          22.79,
+          15.14,
+          28.11
+        ]
+      },
+      "outcome": "2006-04-15 volume-backed long bullish neckline break confirms a three-year-four-month base. Retest lasts about half a year. First target region in early 2007, then more than three months of flag consolidation; 2007-03-04 upper-boundary break permits a second target. The chart shows later top/breakdown levels but this page's prose has not yet explained their arithmetic or trading stops.",
+      "pages": [
+        191
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Candidate reclaim detector: a weekly undercut of an established floor followed by a bullish reclaim of the floor/neckline; flag whether volume expands and record the signal-candle low as a possible stop. This is an operational interpretation, not a specified numerical volume threshold (pp183, 185, 189–190).",
+    "For a swing-continuation long, wait for price to exceed the prior swing high, then T = correction_low + (prior_high - originating_low); exact examples are 台积电 23.4 + (30.5 - 10.5) = 43.4 and 友达 23.77 + (30.88 - 9.88) = 44.77 (pp183, 189).",
+    "For sloping-neckline triangles, store two neckline coordinates: the value at the height measurement and the value at the breakout. 台积电 uses 39.5 for height but 42.5 for the downward projection; 金宝 uses 12.8 for height but 9.8 for the upward projection (pp184, 188).",
+    "For confirmed head-and-shoulders tops, T1 = breakdown_neckline - (head_reference - measuring_neckline); repeat the same height for T2 only when the example explicitly supplies a second wave (pp182, 185, 190).",
+    "Candidate escape-line classification: after breaking a neckline, a rally fails to regain that neckline and rolls over. The text defines the relation but not touch tolerance or required duration (pp185–186).",
+    "A conditional second-wave state can require consolidation near T1 followed by a break of the consolidation boundary in the original direction; 茂矽 upward continuation and 光磊's flag give examples (pp182, 191).",
+    "Compare elapsed base duration with preceding top duration; 金宝's about-two-month base versus over-ten-month top is rebound-only, while a later over-ten-month base supports a large bull swing. No universal ratio is specified (pp187–188).",
+    "Model original and add-on positions with different entry/stop levels: 金宝 initial short 22.9/24.4, add-on 16/16.7; reclaiming 16.7 realizes profit on one and loss on the other (p188).",
+    "Compute displayed price risk from entry and stop for audit, but retain the author's approximate figures separately; stops include bullish-candle lows, bearish-candle highs, prior range floors, and reclaimed necklines (pp182, 185–186, 188, 190)."
+  ],
+  "ambiguities": [
+    "p182 is a continuation of 茂矽: its chart and initial measured-height derivation are outside u15b. Only the printed 545, 255, 800 and later head/neckline calculation can be verified here (p182).",
+    "台积电's triangle-top chart and exposition say 2000-07-21 (pp183–184), but the operation paragraph says 2002-07-21 (p185). The notes preserve rather than repair the date conflict.",
+    "台积电 uses rounded 51 for its triangle calculation, while the chart labels 51.42; prose second-target low 18.8 versus chart 18.83 and head reference 42.1 versus chart 42.11 are separate printed values, not silently interchangeable (pp183–185).",
+    "台积电's post-first-target consolidation is described as low 24.56/high 36.91, while the displayed intermediate triangle labels are 22.45 and 30.67; the page does not explain the relationship of these distinct ranges (pp183–184).",
+    "台积电's exposition uses entry near 13, exit near 42 and approximately 220% profit, while the operation paragraph uses entry 13.3 and approximately 226% near the 43.4 target. These are separately rounded trade descriptions, not one uniform entry/exit pair (pp184–185).",
+    "友达's title says 2002–2004 and p189 dates the reclaim 2002-05-31, whereas p190 specifies 2003-05-26 daily reclaim followed by May 31 weekly confirmation; chart axis includes later data through 2005. No outside calendar lookup used to repair these dates (pp189–190).",
+    "友达's 11/17 daily trendline exit omits a year and uses a daily chart not reproduced here; record the quoted 26.5/128% only (p190).",
+    "友达's short entry 35 and neckline stop 36 imply roughly 2.9% price distance, while the text says approximately 5%; it may allow stop tolerance but no exact adjusted stop is specified (p190).",
+    "Terms such as volume-backed, long bullish/bearish candle, target vicinity, confirmed breakout and support not broken have no numerical thresholds, closing-versus-intrabar rule, or execution convention in these pages (pp182–191).",
+    "Bottom/top duration is used qualitatively to infer swing scale, not as a calibrated statistical guarantee; no general minimum duration or ratio is given (pp187–188). 金宝's upside-height calculation uses the earlier 6.08 low even though the later chart labels lows at 5.87/5.92; the book does not explain why it retains the earlier measurement anchor (pp187–188).",
+    "光磊's p191 begins a case that continues in u15c. Only the chart supplies 37.74 and later top levels here; no numeric trade entry/stop or detailed short procedure appears on this page (p191)."
+  ],
+  "illegible": []
+}

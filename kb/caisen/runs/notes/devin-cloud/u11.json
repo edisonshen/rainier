@@ -1,0 +1,348 @@
+{
+  "unit_id": "u11",
+  "model": "devin-cloud",
+  "pages_read": [
+    97,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104
+  ],
+  "summary": "The converging (symmetrical) triangle top is the mirror of the triangle bottom: a break of the lower edge (neckline) is a short signal, and the triangle's side length (first high to first low) is subtracted from the break price for the first-wave decline target, then subtracted again for the second (and third) waves. The break should occur at 1/2-3/4 of the triangle; breaks near the apex fail more often. Five Taiwan daily cases (仁宝 2002, 台玻 2008, 扬明光 2011, 所罗门 2010, 华硕 2011) show the arithmetic, abnormal volume as top confirmation, continuation patterns as further short points, and 破底翻 at the target as the cover / reverse-to-long signal.",
+  "patterns": [
+    {
+      "name_zh": "收敛三角形头部",
+      "name_en": "Converging (symmetrical) triangle top with measured-move decline target",
+      "direction": "short",
+      "structure": "After an advance, price contracts between a descending upper line from the first high and an ascending lower line (neckline) from the first low. Schematic: high 80, low 60 (side length 20), break of the lower edge at 65. The reverse structure of the triangle bottom.",
+      "entry": "Short when price breaks the triangle's lower edge/neckline (头部确立空单进场; schematic short ~64 after break at 65). Cases: 仁宝 14.5 on a volume long-black break; 台玻 23.3; 扬明光 131 on a volume break; 所罗门 14.9; 华硕 204.5 after gap-down black candle confirmed by closing below prior low 204.57.",
+      "stop": "5%-7%, which is also price reclaiming the neckline (站回颈线之上). Cases: break-day long-black high (仁宝 15.08, 4%), prior-day high (台玻 24.13, 3.6%), neckline reclaim (扬明光 137.5, 5%; 所罗门 15.4, 3.4%), filling the breakaway gap and reclaiming the neckline (华硕 211.5, 3.4%).",
+      "target": {
+        "formula": "side = triangle first high - first low (边长); target_1 = break_price - side; target_n = target_(n-1) - side",
+        "worked_example": "Schematic: 80 - 60 = 20; 65 - 20 = 45; 45 - 20 = 25. 仁宝: 17.29 - 12.7 = 4.59; 14.9 - 4.59 = 10.31. 台玻: 31.96 - 20.1 = 11.86; 23.7 - 11.86 = 11.84. 扬明光: 159.41 - 132 = 27.41; 132.8 - 27.41 = 105.39; 77.98; 50.57. 所罗门: 16.61 - 14.7 = 1.91; 15.25 - 1.91 = 13.34; 11.43. 华硕: 231 - 189 = 42; 207.5 - 42 = 165.5.",
+        "pages": [
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104
+        ]
+      },
+      "confirmation": [
+        "Valid break only at 1/2-3/4 of the triangle's length; breaks near the apex fail more easily.",
+        "Break on volume / long black candle / gap (仁宝 带量长黑, 扬明光 带量破线, 华硕 跳空翻黑).",
+        "Abnormal volume inside the top (sudden largest volume while price fails to exceed the prior high), confirmed after the break (仁宝 3/22, 4/24).",
+        "Bearish continuation patterns after the break (上飘旗形, weak triangle) whose neckline breaks justify subsequent target waves and further shorts (扬明光)."
+      ],
+      "invalidation": [
+        "Price reclaims the neckline (站回颈线) — stop.",
+        "Gap filled and neckline reclaimed (华硕).",
+        "破底翻 at/near the target ends the decline: cover shorts and consider reversing to long."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "The triangle top is the reverse of the triangle bottom; a break of its neckline is a short signal.",
+      "kind": "entry",
+      "quote_zh": "三角形头部为三角形底部的反向结构。收敛三角形头部的颈线跌破是一种做空信号。",
+      "pages": [
+        97
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "The break must occur at 1/2-3/4 of the triangle to be valid; the closer to the apex, the more likely the break fails and reverses.",
+      "kind": "filter",
+      "quote_zh": "收敛三角形需在1/2～3/4处跌破才算有效跌破，整理至越尾端的跌破，越容易产生失败，出现反方向的走势。",
+      "pages": [
+        97
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Side length equals the projected decline after the break: high 80 to low 60 = 20; break 65 - 20 = 45; second wave 45 - 20 = 25.",
+      "kind": "target",
+      "quote_zh": "边长＝跌破后的等长。……破线处65－20＝等幅计算的跌幅满足45。",
+      "pages": [
+        98
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Short on the break of the lower edge (~64), stop 5%-7% = reclaiming the neckline; while the neckline acts as resistance, cover at the first or second wave target (29%-60%).",
+      "kind": "entry",
+      "quote_zh": "跌破收敛三角形下缘，头部确立空单进场约可空在64，停损设5%～7%，也是站回颈线之上时，颈线反压站不回，则达一至两波跌幅满足附近，空单获利了结29%～60%。",
+      "pages": [
+        98
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Abnormal volume: within the top, days with sudden maximum volume where price fails to exceed the prior high are 异常量; after the break, they confirm the top structure.",
+      "kind": "volume",
+      "quote_zh": "注意3月22日及4月24日出现的大量，价未过前高，但却出现突发性最大量属异常量。在5月2日破线后这两日的异常量确立，也更确立头部的结构。",
+      "pages": [
+        99
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Stop for a long-black break: the break day's high, which is also reclaiming the neckline.",
+      "kind": "stop",
+      "quote_zh": "约可空在14.5元附近，停损设在当日长黑高点15.08元，也是站上颈线时，风险约4%",
+      "pages": [
+        99
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Keep counting further decline waves while no bottom-ending structure appears; bear flags (上飘旗形) and weak triangles are downtrend relay structures, and their neckline breaks are also short entries.",
+      "kind": "target",
+      "quote_zh": "这波跌势当中的前两波皆无出现底部结束空头的结构，两次的上飘旗形加上一次弱势整理的三角形，皆是往下破线的空头中继结构，直到第三波才破底翻打出头肩底回升，因此总共计算了三波跌幅满足。",
+      "pages": [
+        101
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Flag and triangle neckline breaks during the decline are additional shorting opportunities.",
+      "kind": "entry",
+      "quote_zh": "（上飘旗形及三角形整理的颈线跌破，也是放空时机）",
+      "pages": [
+        102
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "A 破底翻 at the target ends the downtrend; shorts should be covered and the bias flipped to long.",
+      "kind": "stop",
+      "quote_zh": "达跌幅满足或破底翻时，空单获利了结约19%，且破底翻应翻空为多。",
+      "pages": [
+        104
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "For a gap-down break, confirm by a close below the prior low; stop on filling the gap and reclaiming the neckline.",
+      "kind": "stop",
+      "quote_zh": "约可空在204.5元附近（跌破前低204.57元收线确立），停损设211.5元，也是回补跳空缺口站回颈线时，风险约3.4%",
+      "pages": [
+        104
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Never put everything on one bet (George Soros quote).",
+      "kind": "risk",
+      "quote_zh": "永远不要孤注一掷。",
+      "pages": [
+        102
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "仁宝 (2324)",
+      "timeframe": "daily",
+      "period": "2002-01..2002-07",
+      "pattern": "收敛三角形头部 + 异常量",
+      "levels": {
+        "bar_high": 17.45,
+        "side_high": 17.29,
+        "side_low": 12.7,
+        "side": 4.59,
+        "break": 14.9,
+        "target_1": 10.31,
+        "low": 9.51,
+        "entry": 14.5,
+        "stop": 15.08,
+        "risk_pct": 4,
+        "abnormal_volume_days": [
+          "03-22",
+          "04-24"
+        ],
+        "abnormal_volume_highs": [
+          15.56,
+          16.17
+        ],
+        "inner_highs": [
+          16.97,
+          15.69,
+          15.65
+        ],
+        "inner_lows": [
+          14.5,
+          13.61,
+          14.41,
+          14.57
+        ],
+        "post_break": {
+          "break_bar_low": 13.64,
+          "rebound_high": 14.47,
+          "later_low": 12.52,
+          "rebound_high_2": 12.97,
+          "later_low_2": 10.73
+        },
+        "pre_triangle": {
+          "high": 14.34,
+          "low": 12.13
+        }
+      },
+      "outcome": "2002-05-02 volume long-black break; reached target (low 9.51); short profit ~29%",
+      "pages": [
+        99
+      ]
+    },
+    {
+      "instrument": "台玻 (1802)",
+      "timeframe": "daily",
+      "period": "2007-08..2008-12",
+      "pattern": "收敛三角形头部",
+      "levels": {
+        "bar_high": 32.96,
+        "side_high": 31.96,
+        "side_low": 20.1,
+        "side": 11.86,
+        "inner_highs": [
+          29.38,
+          28.55,
+          29.12
+        ],
+        "inner_lows": [
+          21.25,
+          21.32,
+          23.64,
+          24.92
+        ],
+        "break": 23.7,
+        "target_1": 11.84,
+        "low": 10.38,
+        "entry": 23.3,
+        "stop": 24.13,
+        "risk_pct": 3.6
+      },
+      "outcome": "2008-06-19 break; reached target (low 10.38) and stabilised; short profit ~49%",
+      "pages": [
+        100
+      ]
+    },
+    {
+      "instrument": "扬明光 (3504)",
+      "timeframe": "daily",
+      "period": "2011-05..2012-02",
+      "pattern": "收敛三角形头部 → 上飘旗形×2 → 三角形 → 破底翻头肩底",
+      "levels": {
+        "side_high": 159.41,
+        "side_low": 132,
+        "side": 27.41,
+        "break": 132.8,
+        "target_1": 105.39,
+        "wave1_low": 100.7,
+        "flag_highs": [
+          127.86,
+          109.13
+        ],
+        "target_2": 77.98,
+        "wave2_low": 74.0,
+        "triangle_high": 87.87,
+        "target_3": 50.57,
+        "wave3_low": 50.21,
+        "entry": 131,
+        "stop": 137.5,
+        "risk_pct": 5
+      },
+      "outcome": "2011-06-15 volume break; three decline targets hit; 破底翻 at 50.21 ended the downtrend; short profit ~40% (target 2) to ~61% (target 3)",
+      "pages": [
+        101,
+        102
+      ]
+    },
+    {
+      "instrument": "所罗门 (2359)",
+      "timeframe": "daily",
+      "period": "2009-12..2010-03",
+      "pattern": "收敛三角形头部 → 破底翻",
+      "levels": {
+        "side_high": 16.61,
+        "side_low": 14.7,
+        "side": 1.91,
+        "break": 15.25,
+        "target_1": 13.34,
+        "target_2": 11.43,
+        "low": 11.43,
+        "entry": 14.9,
+        "stop": 15.4,
+        "risk_pct": 3.4
+      },
+      "outcome": "2010-01-21 break; reached exactly the second target then 破底翻 rebound; short profit ~23%",
+      "pages": [
+        103
+      ]
+    },
+    {
+      "instrument": "华硕 (2357)",
+      "timeframe": "daily",
+      "period": "2011-06..2011-12",
+      "pattern": "收敛三角形头部 → 破底翻",
+      "levels": {
+        "bar_high": 231.67,
+        "side_high_text": 231,
+        "side_low": 189,
+        "side": 42,
+        "break": 207.5,
+        "target_1": 165.5,
+        "low": 155.61,
+        "entry": 204.5,
+        "prior_low": 204.57,
+        "stop": 211.5,
+        "risk_pct": 3.4
+      },
+      "outcome": "2011-09-23 gap-down black break; reached target zone (low 155.61) with 破底翻; short profit ~19%, reverse to long on 破底翻",
+      "pages": [
+        104
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Detect converging triangle after an uptrend: descending upper line from first swing high, ascending lower line from first swing low, >= 2 touches each.",
+    "side = first_high - first_low; target_k = break_price - k * side.",
+    "Validity filter: break bar index between 0.5 and 0.75 of the distance from triangle start to apex.",
+    "Entry: close below lower trendline; stop = min(entry*1.07, break-bar high / prior-day high) or close back above the lower line.",
+    "Abnormal-volume flag: bar volume = max over the pattern window while high < prior swing high; boosts top confidence after break.",
+    "Continue to next wave target only if no bottom reversal (破底翻 / head-and-shoulders bottom) has formed; re-enter shorts on bear-flag/triangle lower-line breaks.",
+    "Cover / reverse long on a 破底翻 within the target zone."
+  ],
+  "ambiguities": [
+    "Side high used is not always the bar high: 仁宝 text uses 17.29 while chart high box reads 17.45; 台玻 uses 31.96 while box reads 32.96 (chart annotation shows 31.96); 华硕 uses 231 vs. box 231.67 (rounded; using 231.67 gives 164.83, not 165.5). The book seems to use an approximate/body level, unstated.",
+    "Side low 'about' (约) value is taken where the lower line starts (12.7, 20.1, 132, 14.7, 189), not necessarily the lowest bar (台玻 box low 19.15; 仁宝 12.13).",
+    "Break price is approximate and is not the entry price (台玻 break 23.7, entry 23.3).",
+    "'1/2-3/4 of the triangle' is not defined as time or price fraction; presumably horizontal length to apex.",
+    "Schematic R4 says stop 5-7%, but cases use structural stops of 3.4-5%."
+  ],
+  "illegible": [
+    {
+      "page": 101,
+      "what": "price-axis tick labels and header values of the 扬明光 chart not transcribed (not needed for the arithmetic)"
+    }
+  ]
+}

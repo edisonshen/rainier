@@ -1,0 +1,601 @@
+{
+  "unit_id": "u14d",
+  "model": "devin-cloud",
+  "pages_read": [
+    152,
+    153,
+    154,
+    155,
+    156,
+    157,
+    158,
+    159,
+    160,
+    161
+  ],
+  "summary": "Continuation of the 大盘 (TAIEX index) case studies, 2007-2009, tracing the full top-to-bottom-to-recovery cycle with equal-distance (等幅) measured moves. It covers the 2007-07-26 volume-spike false breakout (爆量假突破) and its V-shaped recovery, the October 2007 量价背离假突破 that began the long bear, the 2008 double bottom/破底翻 and W-bottom target, the second-high false breakout (May 2008) and the subprime crash with daily and weekly 跌幅满足 targets (4775, 4352, 4225), and the 2009 收敛三角形 breakout with first/second-wave targets (5765, 6950) plus a 下飘旗形 continuation. Each case gives concrete entries, stops (gap / neckline / volume-high resistance) and % risk vs % profit, and stresses 随势而为 and never catching a falling knife.",
+  "patterns": [
+    {
+      "name_zh": "爆量假突破 / 量价背离假突破（头部）",
+      "name_en": "False breakout at a top (on a volume spike, or on price-volume divergence)",
+      "direction": "short",
+      "structure": "Price breaks above a prior high/consolidation top (爆量: on a huge volume spike, e.g. 9807 on 2007-07-26; 量价背离: new price high while volume fails to exceed prior high volume / shows a shrinking trend, e.g. 9859 in Oct 2007), then falls back below the broken level / neckline, often via a downside gap.",
+      "entry": "Short once the false breakout is confirmed by falling back (e.g. gap-down day after the spike: short ~9250 on 2007-07-27; gap-down through the neckline: short ~9300 on 2007-11-12; day after the 5/20/2008 false-breakout high: short ~8950).",
+      "stop": "The prior day's close / the gap (利空跳空的缺口通常不会被回补; 空头第一个跳空缺口大多不会回补), which often equals reclaiming the neckline; or the resistance of the upper edge of the consolidation (e.g. 9670) or a high-volume high (e.g. 9194). 空头看反压: the resistance is the short stop.",
+      "target": {
+        "formula": "跌幅满足 (equal-distance decline): target = rebound high − (prior high − first low), computed once price breaks the rebound low",
+        "worked_example": "9859 − 8207 = 1652; 8804 − 1652 = 7152 (low reached 7384). 9309 − 6708 = 2601; 7376 − 2601 = 4775. 7376 − 5530 = 1846; 6198 − 1846 = 4352 (low 4110). Weekly: 9859 − 6708 = 3151; 7376 − 3151 = 4225.",
+        "pages": [
+          155,
+          157,
+          158,
+          161
+        ]
+      },
+      "confirmation": [
+        "High-level volume spike (高档爆量) = main player beginning to distribute (p153).",
+        "Price makes new high but volume does not exceed the prior high volume / volume trend shrinks (量价背离) (p154).",
+        "A downside gap on the break-back day (p152, p156)."
+      ],
+      "invalidation": [
+        "Price stands back above the resistance / neckline (站上反压 / 站回颈线) — short stop (p156, p158).",
+        "A single volume spike usually still has a later high (大量后几乎都还有高点); a top built by a sudden news shock is an incomplete head, so not a long-term short (p152, p153)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        152,
+        153,
+        154,
+        155,
+        156,
+        158
+      ]
+    },
+    {
+      "name_zh": "双底（W底）+ 破底翻",
+      "name_en": "Double bottom (W bottom) with break-bottom reversal",
+      "direction": "long",
+      "structure": "After reaching the 跌幅满足 zone, index makes two lows (Jan-Feb 2008, lows ~7664 and 7384 on chart); the second low briefly undercuts then reclaims (破底翻企稳, mid-Feb 2008); neckline breakout on 2008-02-25 confirms the double bottom.",
+      "entry": "Buy at the 破底翻 position ~7900 (2008-02-18); neckline breakout 2/25 confirms the W.",
+      "stop": "Below the low of the long red candle before the 破底翻: 7707 (risk ~2.7%).",
+      "target": {
+        "formula": "neckline_at_breakout + (neckline − midpoint of the two bottoms)",
+        "worked_example": "midpoint of bottoms ~7510 to neckline ~8540 = ~1030; neckline at the 2/25 breakout ~8140 + 1030 = 9170 (high 9194 on 2008-04-17).",
+        "pages": [
+          156
+        ]
+      },
+      "confirmation": [
+        "破底翻企稳 after the 跌幅满足 zone",
+        "neckline breakout (2/25)"
+      ],
+      "invalidation": [
+        "Break below the 破底翻 long-red low (7707)"
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        155,
+        156
+      ]
+    },
+    {
+      "name_zh": "收敛三角形（底部）",
+      "name_en": "Converging (symmetrical) triangle bottom",
+      "direction": "long",
+      "structure": "After the 跌幅满足 low (Oct-Nov 2008), the index consolidates in a converging triangle: first side from high 5095 to low ~3910 (side length 1185); lower highs 4817, 4607 and higher lows 3955, 4164. Neckline = the falling upper edge, broken on 2009-03-05 (~4580). On the weekly chart the same is a 三角形收敛型态 broken with volume (带量突破颈线底部确立).",
+      "entry": "Buy on the neckline breakout ~4620 (2009-03-05). Those who positioned near the 跌幅满足 add aggressively when the bottom is confirmed.",
+      "stop": "~4500, i.e. falling back below the line (跌落线下), risk ~2.5%. After a volume breakout, a pullback must not break the neckline again.",
+      "target": {
+        "formula": "target_1 = breakout point + triangle first-side length; target_2 = target_1 + side length",
+        "worked_example": "5095 − 3910 = 1185; 4580 + 1185 = 5765; 5765 + 1185 = 6950 (chart high 7084.83, then a big pullback).",
+        "pages": [
+          159,
+          160
+        ]
+      },
+      "confirmation": [
+        "Volume on the neckline breakout (weekly: 带量突破颈线底部确立)",
+        "Triangle formed in the 跌幅满足 zone"
+      ],
+      "invalidation": [
+        "Pullback that breaks the neckline again after the volume breakout"
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        159,
+        160,
+        161
+      ]
+    },
+    {
+      "name_zh": "下飘旗形（多头中继）",
+      "name_en": "Downward-drifting flag (bullish continuation)",
+      "direction": "long",
+      "structure": "After the first-wave target 5765, a downward-sloping consolidation (high 6071, low 5571); a gap breakout above its upper line on 2009-04-30 completes the flag and confirms the second wave.",
+      "entry": "Gap breakout above the flag line (4/30/2009).",
+      "stop": "Not stated explicitly for the flag.",
+      "target": {
+        "formula": "second-wave target of the triangle: target_1 + side length",
+        "worked_example": "5765 + 1185 = 6950",
+        "pages": [
+          159,
+          160
+        ]
+      },
+      "confirmation": [
+        "跳空突破颈线 (gap breakout)"
+      ],
+      "invalidation": [
+        "Not stated"
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        159,
+        160
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Shorting makes money fast: the 2007 rise from 8100 took two months, but the drop from the 9807 volume spike back below 8000 (1807 points) took only about half a month.",
+      "kind": "psychology",
+      "quote_zh": "所谓做空赚得快，2007年5月21日突破8100点，越过前高，花了两个多月的时间才到达高点，但9807点爆量反转至跌破8000点，共跌1807点的时间仅半个多月，这便是空头迷人的地方",
+      "pages": [
+        152
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "When entering short on a big gap-down day, risk is higher; put the stop at the prior day's close (the gap), since a bearish news gap usually is not filled.",
+      "kind": "stop",
+      "quote_zh": "约可空在9250点附近，停损设在9566点也就是前一日收盘补空的位置（利空跳空的缺口通常不会被回补），风险约3.4%，达跌幅满足附近空单回补获利约12%。",
+      "pages": [
+        152
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "A sharp drop caused by news, with an incomplete head structure, is not a long-term short: take one swing short, then wait for a more complete top structure.",
+      "kind": "filter",
+      "quote_zh": "此处为消息面影响急回，虽有空头波段利润，但头部结构不完整并非长空时机，操作一波空单后，需等待较完整的头部结构出现。",
+      "pages": [
+        152
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Normally a big volume spike is followed by another high; a high-level volume spike means the main player is starting to distribute but needs time oscillating at the top to finish.",
+      "kind": "volume",
+      "quote_zh": "所谓大量后几乎都还有高点，就是主力高档震荡出货手法产生的现象。",
+      "pages": [
+        153
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Watching the price-volume structure lets you exit fully after a false breakout, or even reverse to short.",
+      "kind": "entry",
+      "quote_zh": "因此只要注意量价结构的变化，仍可在假突破后全身而退，甚至反手做空。",
+      "pages": [
+        153
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Once price breaks above a consolidation's upper edge (resistance turns support), compute the 涨幅满足; as long as support holds, look for the target.",
+      "kind": "target",
+      "quote_zh": "越过整理区高点便能计算涨幅满足（整理区上缘9078点附近压力突破变支撑，支撑不破看满足点）",
+      "pages": [
+        154
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "After the top is complete (false breakout with price-volume divergence), trade short as the principle; the upper edge of the consolidation after the false breakout is the resistance and the short stop; keep shorting with the trend until the trend changes.",
+      "kind": "stop",
+      "quote_zh": "头部完成后，曲终人散，以空单操作为原则。以这次为例，假突破后整理区上缘9670点附近为反压，空头看反压（反压是做空的停损点），反压未突破前，一路顺势做空直到趋势改变为止",
+      "pages": [
+        154
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "A false breakout with price-volume divergence that forms the second high is the start of a long-term bear.",
+      "kind": "filter",
+      "quote_zh": "这次量价背离假突破，产生了第二个高点头部，才是长空的开始。",
+      "pages": [
+        154
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Definition of 量价背离: after a big rise, price makes a new high but volume does not exceed the prior high, showing a shrinking trend — a warning that often triggers selling and forms a top that traps chasers.",
+      "kind": "volume",
+      "quote_zh": "通常涨高后的量价背离，大多是主力已出货不再积极滚量作价，且相对高档市场认同度不高，因此价创新高量却未过高，反而出现量缩趋势是量价背离警讯，很容易引发市场筹码的反手杀出，形成追高者套牢的头部区。",
+      "pages": [
+        154
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "跌幅满足 can be computed once price breaks the rebound low; the market usually overshoots, but an undershoot of ~2.3% (229 points out of a 2475-point decline) is acceptable error.",
+      "kind": "target",
+      "quote_zh": "这波有未达满足229点的误差（约2.3%），不过仍是共跌2475点可接受的误差",
+      "pages": [
+        155
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "W-bottom target: distance from the midpoint of the line joining the two bottoms to the neckline equals the distance after the neckline breakout.",
+      "kind": "target",
+      "quote_zh": "双底连线中间值至颈线的距离=突破颈线后的距离。",
+      "pages": [
+        156
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "Short entry on a gap down through the neckline after the false breakout; the first gap in a downtrend is usually not filled, so the prior close (= reclaiming the neckline) is the stop.",
+      "kind": "stop",
+      "quote_zh": "停损设9598点，也是前一日收盘的缺口（通常空头第一个跳空缺口大多不会回补），也刚好是站回颈线",
+      "pages": [
+        156
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Reverse from short to long at the 破底翻; stop at the low of the long red candle before the 破底翻.",
+      "kind": "entry",
+      "quote_zh": "破底翻的位置翻空为多，约可买在7900点附近（2008年2月18日），停损设破底翻前长红低点7707点风险约2.7%",
+      "pages": [
+        156
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Even in panic overshoot, after reaching the big-swing 跌幅满足 the market is in a relatively low zone; the weekly chart computes the big-swing target more accurately.",
+      "kind": "target",
+      "quote_zh": "不过达大波段跌幅满足后，即使超跌也大多是相对低档区（周线图会更精确的计算出大波段跌幅满足）",
+      "pages": [
+        157
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "In a formed bear trend, trade short with the trend; only take profit/reduce on standing above resistance or reaching 跌幅满足, and switch to long only on a bottom-stabilisation signal. Never catch a falling knife or speculate on oversold bounces.",
+      "kind": "psychology",
+      "quote_zh": "空头成形需随势空单波段操作，除非站上反压（空头看反压）停损利，或达跌幅满足附近，才作波段空单的获利或减码，直到技术面出现底部企稳信号才翻空为多，空头千万不要有捡便宜的心态去接掉下来的刀子，尤其是投机抢跌深反弹，切记随势而为。",
+      "pages": [
+        158
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "A break of the neckline of the rebound consolidation is another short entry; stop at the resistance where price would stand back above the neckline.",
+      "kind": "entry",
+      "quote_zh": "9月1日跌破颈线为技术面又一次空单进场点，约可空在6900点附近，停损设7050点反压，也是站回颈线时，风险约2.2%",
+      "pages": [
+        158
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "Converging triangle target: breakout point + first side length (high to low); second-wave target adds the same length again.",
+      "kind": "target",
+      "quote_zh": "突破颈线的位置约在4580点+1185点=等幅计算的涨幅满足5765点。",
+      "pages": [
+        159,
+        160
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "下飘旗形 is a bullish continuation (多头中继站); a gap breakout above its line confirms the second wave.",
+      "kind": "entry",
+      "quote_zh": "4月30日跳空突破颈线，完成下飘旗形（多头中继站），第二波涨势确立。",
+      "pages": [
+        159
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "If positioned long near the 跌幅满足, add aggressively when the bottom is confirmed; conservative swing traders enter quickly on bottom confirmation with the stop at a neckline break — after a volume breakout the pullback must not break the neckline again.",
+      "kind": "risk",
+      "quote_zh": "操作上若在跌幅满足附近布局多单，则底部确立时便是积极加码时，稳健的波段操作者则在确定底部时快速积极进场，停损设在跌破颈线时（技术面带量突破颈线后拉回便不能再跌破颈线），如此便可在有限的风险下获取大波段利润",
+      "pages": [
+        160
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "On the weekly chart, the big-swing 跌幅满足 can be computed from either the 9309 high or the year high 9859; whichever method, the result lies in a relatively low bottom zone.",
+      "kind": "target",
+      "quote_zh": "周线除了同日线9309高点计算的大波段跌幅满足外，当年最高9859点也可以同样的方式计算跌幅满足，但无论哪种方式计算出来的位置都属相对低档底部区。",
+      "pages": [
+        161
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "Kostolany quote: professional investors waste 95% of their time reading charts and reports and forget to think.",
+      "kind": "psychology",
+      "quote_zh": "职业投资者的工作，95%是在浪费时间，他们在阅读图表及营业报告，却忘记思考，但对投资者来说，这才是最重要的。",
+      "pages": [
+        152
+      ]
+    },
+    {
+      "id": "R22",
+      "rule": "Kostolany quote: three ways to get rich fast — marriage, a lucky business idea, speculation.",
+      "kind": "psychology",
+      "quote_zh": "三种迅速致富的可能：一透过带来财富的婚姻，二透过幸运的商业点子，三透过投机。",
+      "pages": [
+        160
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2007-07..2007-08 (end of example 十五)",
+      "pattern": "爆量假突破 short",
+      "levels": {
+        "spike_high": 9807,
+        "entry_short": 9250,
+        "stop": 9566,
+        "risk_pct": 3.4,
+        "profit_pct": 12
+      },
+      "outcome": "short covered near 跌幅满足 for ~12%; head structure incomplete, not a long-term short",
+      "pages": [
+        152
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2007-07..2007-10 (example 十六)",
+      "pattern": "V反转 → 整理区突破涨幅满足 → 量价背离假突破",
+      "levels": {
+        "low_1": 7987,
+        "consolidation_high": 9078,
+        "rise": 1091,
+        "low_2": 8845,
+        "target": 9936,
+        "actual_high": 9859,
+        "resistance_after_false_breakout": 9670
+      },
+      "outcome": "reached near target (high 9859) then false breakout with 量价背离; second high = start of long bear",
+      "pages": [
+        153,
+        154
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2007-10..2008-01 (example 十七)",
+      "pattern": "跌幅满足",
+      "levels": {
+        "high": 9859,
+        "low": 8207,
+        "drop": 1652,
+        "rebound_high": 8804,
+        "target": 7152,
+        "actual_low": 7384
+      },
+      "outcome": "stopped 229 points (~2.3%) short of target — acceptable error; short bottom then 破底翻",
+      "pages": [
+        155
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2007-11..2008-01 (example 十七, trade 1)",
+      "pattern": "量价背离假突破 gap-down short",
+      "levels": {
+        "entry_short": 9300,
+        "stop": 9598,
+        "risk_pct": 5,
+        "exit": 7900,
+        "profit_pct": 15
+      },
+      "outcome": "short profit ~15% at 跌幅满足 / 破底翻 zone",
+      "pages": [
+        156
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2008-02..2008-04 (example 十七, W bottom)",
+      "pattern": "双底/W底 + 破底翻",
+      "levels": {
+        "bottoms_mid": 7510,
+        "neckline": 8540,
+        "height": 1030,
+        "neckline_at_breakout": 8140,
+        "target": 9170,
+        "actual_high": 9194,
+        "entry": 7900,
+        "stop": 7707,
+        "risk_pct": 2.7,
+        "profit_pct": 16
+      },
+      "outcome": "hit target (9194 on 2008-04-17), long profit ~16%",
+      "pages": [
+        155,
+        156
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2008-05..2008-10 (example 十七 trade 3 / 十八)",
+      "pattern": "假突破 short (second high)",
+      "levels": {
+        "false_breakout_high_text": 9359,
+        "entry_short": 8950,
+        "stop": 9194,
+        "risk_pct": 2.7,
+        "targets": [
+          4352,
+          4225
+        ]
+      },
+      "outcome": "short profit >50% at daily 4352 or weekly 4225 target; total collapse 5354 points",
+      "pages": [
+        156
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2008-05..2008-10 (example 十八, leg 1)",
+      "pattern": "跌幅满足",
+      "levels": {
+        "high": 9309,
+        "low": 6708,
+        "drop": 2601,
+        "rebound_high": 7376,
+        "target": 4775
+      },
+      "outcome": "overshot in subprime panic (table limit halved); still relative low zone",
+      "pages": [
+        157
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2008-09..2008-10 (example 十八, leg 2)",
+      "pattern": "跌幅满足",
+      "levels": {
+        "high": 7376,
+        "low": 5530,
+        "drop": 1846,
+        "rebound_high": 6198,
+        "target": 4352,
+        "actual_low": 4110,
+        "later_low": 3955
+      },
+      "outcome": "reached ~4110 on 2008-10-28; four-month base, 破底翻 bottom confirmed",
+      "pages": [
+        158
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2008-09 (example 十八 trade)",
+      "pattern": "neckline break short",
+      "levels": {
+        "entry_short": 6900,
+        "stop": 7050,
+        "risk_pct": 2.2,
+        "profit_pct": 40
+      },
+      "outcome": "short profit ~40% at 跌幅满足",
+      "pages": [
+        158
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2008-11..2009-06 (example 十九)",
+      "pattern": "收敛三角形 + 下飘旗形",
+      "levels": {
+        "side_high": 5095,
+        "side_low": 3910,
+        "side_length": 1185,
+        "breakout": 4580,
+        "target_1": 5765,
+        "target_2": 6950,
+        "flag_high": 6071,
+        "flag_low": 5571,
+        "entry": 4620,
+        "stop": 4500,
+        "risk_pct": 2.5,
+        "profit_pct": 50,
+        "chart_high": 7084.83
+      },
+      "outcome": "hit both targets; big pullback after second target; bull lasted ~2 years",
+      "pages": [
+        159,
+        160
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "2007..2009 (example 二十, continues past this unit)",
+      "pattern": "跌幅满足 + 三角形底部收敛",
+      "levels": {
+        "high": 9859,
+        "low": 6708,
+        "drop": 3151,
+        "rebound_high": 7376,
+        "target": 4225
+      },
+      "outcome": "reached near target Nov 2008, stabilised and based; 3/14 带量突破颈线底部确立",
+      "pages": [
+        161
+      ]
+    }
+  ],
+  "quantifiable": [
+    "跌幅满足: once close < rebound low, target = rebound_high − (prior_high − first_low); same arithmetic for 涨幅满足 with lows/highs swapped (pp. 154, 155, 157, 158, 161).",
+    "Acceptable target error: undershoot of ~2-3% of the index level (229 points ≈ 2.3%) still counts as 'reached' (p155).",
+    "W bottom target = neckline_at_breakout + (neckline − mean(bottom1, bottom2)) (p156).",
+    "Triangle target_k = breakout_level + k × (first_side_high − first_side_low), k = 1, 2 (pp. 159-160).",
+    "量价背离 at a top: close makes new N-bar high while volume at that high < volume at the prior high and volume trend declining (p154).",
+    "False breakout short: after a new high above a prior high, a close/gap back below the broken level → short; stop = prior day close (gap level) or consolidation upper edge (pp. 152, 154, 156).",
+    "Stop risk in these index trades is 2.2%-5% with rewards 12%-50%+; filter trades with risk ≤ ~5%.",
+    "Breakout on a gap (跳空长红 / 跳空跌破) is treated as confirmation; first gap in a trend assumed not to be filled (pp. 152, 154, 156, 159)."
+  ],
+  "ambiguities": [
+    "p155: 7384 − 7152 = 232, but the book says the undershoot error is 229 points; '约2.3%' corresponds to 229/9859 (or relative to index level), not to the 2475-point decline.",
+    "p155 says the market 通常都会超跌 (usually overshoots), yet this example undershot the target; the tolerance is not formalised beyond '可接受的误差'.",
+    "p156 trade 1: entry 9300, stop 9598 gives ~3.2% risk, but the book says ~5%.",
+    "p156 trade 3 says the 5/20/2008 high was 9359, but the chart (pp. 155, 157) shows 9309.95 and p157 computes from 9309 — likely a typo.",
+    "p156 refers to the 9194 resistance as the '4月14日大量高点', whereas earlier on the same page 9194 is the 2008-04-17 high.",
+    "p156: the W-bottom target uses the neckline at the breakout point (~8140), not the neckline level used for the height (~8540) — consistent with a sloping neckline but the book does not say how to pick the breakout neckline value.",
+    "p159: triangle low '约在3910' does not match either marked low on the chart (4110.09, 3955.43); 3910 seems to be 5095 − 1185 or a trendline value, so how the side low is measured is unclear.",
+    "p152-154: '大量后几乎都还有高点' vs the 7/26 volume-spike false breakout — the book explains the exception as a news shock but gives no rule for when the spike is final.",
+    "Weekly breakout label reads 3/14 (p161) while the daily breakout is 3/5 (p159); presumably week-ending date, not stated.",
+    "Stop for the 下飘旗形 continuation is not stated."
+  ],
+  "illegible": [
+    {
+      "page": 155,
+      "what": "Small chart labels for the first double-bottom low (reads ~7664.6x) and the low after the 2/25 rally (~7900.8x) — last digits unclear"
+    },
+    {
+      "page": 157,
+      "what": "Exact decimals of chart labels near 6809.96 and 5530.1x; low label under 7376.89 partly unclear"
+    },
+    {
+      "page": 159,
+      "what": "Decimals of labels 4607.97, 4328.65 and 5571.93 are small/blurry"
+    },
+    {
+      "page": 153,
+      "what": "Low label under 9219 (reads ~8727.64) and left-side labels partly blurry"
+    }
+  ]
+}

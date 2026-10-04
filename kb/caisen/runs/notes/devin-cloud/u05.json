@@ -1,0 +1,396 @@
+{
+  "unit_id": "u05",
+  "model": "devin-cloud",
+  "pages_read": [
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46
+  ],
+  "summary": "Mirror of u04 for shorts: the 波段跌幅满足 (swing measured-move downside target) uses a 上飘旗形 (up-drifting bear flag, a bearish relay). Only after price breaks the prior swing low is the rebound high fixed; target = rebound_high - (swing_high - swing_low). Entry is the break of the flag's lower-edge neckline (or an earlier 假突破), the broken neckline is resistance/stop, and price must not reclaim it. Cases: 台苯, 台达化, 远东新, 亚聚 and the 2011 台股 hourly trendline (假突破 at a weekly target, two overlapping downside targets).",
+  "patterns": [
+    {
+      "name_zh": "上飘旗形（波段跌幅满足）",
+      "name_en": "Up-drifting bear flag with swing measured-move downside target",
+      "direction": "short",
+      "structure": "Down-leg from a swing high A (schematic 90) to a swing low B (70); a rebound consolidation drifting upward between parallel up-sloping lines (上飘旗形) to a rebound high C (75). The lower edge is the neckline. A bear-swing relay (空头的中继站), the inverse of the 下飘旗形.",
+      "entry": "Short when price breaks below the flag's lower-edge neckline (schematic: neckline ≈73, short ≈72). Cases: 远东新 8/16 week ≈25.4, 亚聚 11/15 ≈30.6, 台达化 6/2 ≈13.9. An earlier 假突破 sell (台苯 6/29 ≈41.8; 台股 hourly 2/9 ≈9080) also qualifies, with the same handling for the flag break.",
+      "stop": "Price reclaiming the broken neckline (站回线上). Schematic: short 72, stop 74 (≈3%). Cases: 台苯 day high 44 (≈5%), 台达化 14.5 resistance (≈4%), 远东新 long-black high 27.1 (≈6.6%), 亚聚 the 11/10 heavy-volume high 31.89 (≈4%), 台股 hourly 9159 (≈0.9%) and add-on black-K high 8754 (≈0.74%).",
+      "target": {
+        "formula": "target = C - (A - B), where A = swing high, B = swing low, C = rebound (flag) high; valid only after price breaks below B (跌破前低), which confirms C.",
+        "worked_example": "Schematic: 90 - 70 = 20; 75 - 20 = 55. 台苯: 45.3 - 26.5 = 18.8; 36.4 - 18.8 = 17.6 (low 16.7). 台达化: 22.15 - 12.08 = 10.07; 15.18 - 10.07 = 5.11 (low 3.84). 远东新: 39.09 - 23.97 = 15.12; 28.73 - 15.12 = 13.61 (low 11.18). 亚聚: 39.98 - 27.14 = 12.84; 33.48 - 12.84 = 20.64 (low 21.78). 台股 hourly: 9220 - 8565 = 655, 8874 - 655 = 8219; 9220 - 8470 = 750, 8829 - 750 = 8079 (low 8070).",
+        "pages": [
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          46
+        ]
+      },
+      "confirmation": [
+        "Break of the prior swing low B fixes the rebound high and arms the target (p39).",
+        "Abnormal heavy-volume decline inside the consolidation before the break (亚聚 11/10).",
+        "Long black candle on the break (远东新)."
+      ],
+      "invalidation": [
+        "Price reclaiming the broken neckline (颈线跌破，就不能再站回).",
+        "A 破底翻 near the target ends the short (亚聚: cover at target or on 破底翻)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly",
+        "60-minute"
+      ],
+      "pages": [
+        39,
+        40,
+        41,
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "name_zh": "小时趋势线假突破（涨幅满足高风险区）",
+      "name_en": "Hourly-chart false breakout at a higher-timeframe target",
+      "direction": "short",
+      "structure": "Higher timeframe (weekly) has reached its upside target zone. On the 60-minute chart (小时趋势线), price breaks above the upper edge of a consolidation, then the first hour shows heavy volume without a rise (带量不涨) and the next session opens black and falls back below the consolidation's upper-edge neckline.",
+      "entry": "Short on the fall back below the neckline (台股 2011-02-09 open, ≈9080); add on a later hourly black candle breaking the line (3/10, ≈8690).",
+      "stop": "Resistance / reclaim of the line: 9159 for the first short; the add-on's stop is the opening-hour black-K high 8754.",
+      "target": {
+        "formula": "Swing downside targets from each rebound high once the prior low breaks: C_i - (A - B_i)",
+        "worked_example": "8874 - (9220 - 8565) = 8219; 8829 - (9220 - 8470) = 8079; low 8070.",
+        "pages": [
+          45,
+          46
+        ]
+      },
+      "confirmation": [
+        "Weekly upside target already reached (高风险区).",
+        "Heavy volume without price progress in the first hour."
+      ],
+      "invalidation": [
+        "Reclaim of the neckline / stop levels 9159 or 8754."
+      ],
+      "timeframes": [
+        "60-minute",
+        "5-minute",
+        "weekly"
+      ],
+      "pages": [
+        45,
+        46
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "The downside measured move is the inverse of the upside one: only after a rebound consolidation and a break of the prior low is the rebound high fixed and the target computable.",
+      "kind": "target",
+      "quote_zh": "波段跌幅满足计算与波段涨幅满足计算为反向关系。如图示，自波段低点70反弹整理一段时间，回跌再破前低70，便能确定75为反弹的高点，此时才能计算跌幅满足。",
+      "pages": [
+        39
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Target = rebound high - first down-wave size.",
+      "kind": "target",
+      "quote_zh": "❶自90高点跌至70低点，共跌20。❷自75高点-20＝等幅计算的跌幅满足55。",
+      "pages": [
+        40
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "A 上飘旗形 is usually a bear relay; breaking its lower-edge neckline is the renewed bear attack signal; the broken neckline must not be reclaimed.",
+      "kind": "entry",
+      "quote_zh": "通常上飘旗形为空头的中继站结构，当跌破上飘旗形的下缘颈线，便可视为结束整理的空头再度攻击信号，技术面颈线跌破，就不能再站回。",
+      "pages": [
+        40
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Schematic trade: break at 73, short 72, stop 74 (reclaim of the line, ≈3% risk); while 73 is not reclaimed, target 55 (≈24% gain) — big wins, small losses.",
+      "kind": "stop",
+      "quote_zh": "如空在72，停损设74也就是站回线上时，风险约3%，反压站不回看跌幅满足55，获利约24%，这便是大赚小赔的操作方式。",
+      "pages": [
+        40
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "A false breakout (break above then falling back below the line) is itself a short entry; the same short handling applies when the bear flag later breaks.",
+      "kind": "entry",
+      "quote_zh": "2000年6月29日跌落线下，假突破确立，空单进场，约可空在41.8元附近，停损设当日高点反压44元，也是站回线上时，风险约5%。达跌幅满足空单获利了结，约58%。跌破上飘旗形时的空单操作亦同。",
+      "pages": [
+        41
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Reaching the measured target tends to produce a base even when overshooting due to news (台达化 fell to 3.84 vs target 5.11 amid political shocks and three limit-halvings, then rebounded).",
+      "kind": "target",
+      "quote_zh": "但是虽有超跌，仍因达跌幅满足后企稳打底后大幅反弹。",
+      "pages": [
+        42
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "An abnormal heavy-volume drop inside the consolidation is an early warning before the flag breaks; its high is the stop.",
+      "kind": "volume",
+      "quote_zh": "2001年11月10日亚聚日线在整理区已率先出现不正常大量下跌的现象，11月15日破线上飘旗形确立",
+      "pages": [
+        44
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Cover shorts at the target zone or when a 破底翻 appears.",
+      "kind": "target",
+      "quote_zh": "达跌幅满足附近或破底翻时，空单回补获利了结，约24%。",
+      "pages": [
+        44
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "When the index is in a high-risk zone near its upside target, use 5-minute and 60-minute charts to time the reversal; the 60-minute chart is the 'hourly trendline' where trend turns are established.",
+      "kind": "time",
+      "quote_zh": "当大盘达涨幅满足附近高风险区，此时5分钟线及60分钟的小时线，便可更精确的帮助判断反转时机，也就是所谓的转折点，尤其是小时线确立转折时趋势形成，因此我习惯把60分钟线称做小时趋势线。",
+      "pages": [
+        45
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Heavy volume without a rise in the first hour, then a black open back below the broken range's upper neckline = confirmed 假突破 sell.",
+      "kind": "volume",
+      "quote_zh": "当天开盘第一个小时出现带量不涨，隔日开盘立即翻黑跌落原本突破的整理区上缘颈线之下，技术面假突破卖出信号确立",
+      "pages": [
+        45
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Add-on short on a black candle breaking the line, stop at that hour's black-K high; while not reclaimed, hold for the target.",
+      "kind": "entry",
+      "quote_zh": "同年3月10日翻黑破线则是加码放空点，停损为当日开盘小时线，黑K高点8754点，站不回，看跌幅满足附近。",
+      "pages": [
+        45
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "Each successive rebound high in a topping decline can generate its own downside target once the prior low breaks; multiple targets can cluster.",
+      "kind": "target",
+      "quote_zh": "这波头部区震荡的盘跌中，两个反弹高点8874点及8829点，在跌破前低后，皆可计算跌幅满足。",
+      "pages": [
+        46
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Index futures are high leverage — small % moves are large gains/risks.",
+      "kind": "risk",
+      "quote_zh": "（期指属高杠杆操作）",
+      "pages": [
+        46
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "台苯 (1310)",
+      "timeframe": "daily",
+      "period": "2000-04..2001-02",
+      "pattern": "假突破 + 上飘旗形",
+      "levels": {
+        "swing_high_false_breakout": 45.3,
+        "swing_low": 26.5,
+        "first_wave": 18.8,
+        "rebound_high": 36.4,
+        "target": 17.6,
+        "low": 16.7,
+        "entry": 41.8,
+        "stop": 44,
+        "risk_pct": 5,
+        "other_labels": [
+          35.4,
+          42.6,
+          35.6,
+          42.3,
+          38.0,
+          33.0,
+          34.5,
+          28.8,
+          20.2,
+          17.3,
+          21.8,
+          19.5
+        ]
+      },
+      "outcome": "假突破 sell 2000-06-29; bear flag break 9/19 then break of 26.5 armed target 17.6; low 16.7 then big rebound; short profit ≈58%.",
+      "pages": [
+        41
+      ]
+    },
+    {
+      "instrument": "台达化",
+      "timeframe": "daily",
+      "period": "2000-03..2001-02",
+      "pattern": "上飘旗形",
+      "levels": {
+        "swing_high": 22.15,
+        "swing_low": 12.08,
+        "first_wave": 10.07,
+        "rebound_high": 15.18,
+        "target": 5.11,
+        "low": 3.84,
+        "entry": 13.9,
+        "stop": 14.5,
+        "risk_pct": 4,
+        "other_labels": [
+          15.31
+        ]
+      },
+      "outcome": "Flag break 2000-06-02 (short); 7/10 broke 12.08 arming target; overshot to 3.84 (political shocks, three limit-halvings Oct-Dec) then rebounded; profit ≈63%.",
+      "pages": [
+        42
+      ]
+    },
+    {
+      "instrument": "远东新 (1402)",
+      "timeframe": "weekly",
+      "period": "2008-02..2009-04",
+      "pattern": "上飘旗形",
+      "levels": {
+        "swing_high": 39.09,
+        "swing_low": 23.97,
+        "first_wave": 15.12,
+        "rebound_high": 28.73,
+        "target": 13.61,
+        "low": 11.18,
+        "entry": 25.4,
+        "stop": 27.1,
+        "risk_pct": 6.6,
+        "other_labels": [
+          34.23,
+          25.96,
+          18.13,
+          14.05,
+          13.76
+        ]
+      },
+      "outcome": "Neckline break 2008-08-16 week; 8/23 week broke 23.97 arming target; low 11.18 then base; short profit ≈46%.",
+      "pages": [
+        43
+      ]
+    },
+    {
+      "instrument": "亚聚 (1308)",
+      "timeframe": "daily",
+      "period": "2011-07..2012-01",
+      "pattern": "上飘旗形",
+      "levels": {
+        "swing_high": 39.98,
+        "swing_low": 27.14,
+        "first_wave": 12.84,
+        "rebound_high": 33.48,
+        "target": 20.64,
+        "low": 21.78,
+        "entry": 30.6,
+        "stop": 31.89,
+        "risk_pct": 4,
+        "other_labels": [
+          26.72,
+          36.71,
+          31.19,
+          32.9,
+          25.12
+        ]
+      },
+      "outcome": "Heavy-volume drop in the range 11/10; flag break 11/15 (short); low 21.78 (above target 20.64) then 破底翻; short covered, stated profit ≈24%.",
+      "pages": [
+        44
+      ]
+    },
+    {
+      "instrument": "台股加权指数 (60-minute)",
+      "timeframe": "60-minute",
+      "period": "2010-12..2011-03",
+      "pattern": "小时线假突破 + 跌幅满足",
+      "levels": {
+        "labels": [
+          8364.95,
+          8226.71,
+          9046.18,
+          8738.93,
+          9092.28,
+          8888.88
+        ],
+        "top": 9220.69,
+        "rebound_high_1": 8874.5,
+        "low_1": 8565.05,
+        "target_1": 8219,
+        "rebound_high_2": 8829.23,
+        "low_2": 8470.09,
+        "target_2": 8079,
+        "low": 8070.52,
+        "entry": 9080,
+        "stop": 9159,
+        "risk_pct": 0.9,
+        "addon_entry": 8690,
+        "addon_stop": 8754,
+        "addon_risk_pct": 0.74
+      },
+      "outcome": "2011-02-08 heavy volume no rise at weekly target; 2/9 black open below neckline = 假突破 short; 3/10 add-on; mid-March low 8070 at targets, rebound back to ≈9220 (completing the weekly M top's second high); profit ≈5.4%-11% (high-leverage futures).",
+      "pages": [
+        45,
+        46
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Bear flag: swing high A, swing low B, rebound C with B < C < A formed by higher lows/higher highs (up-sloping channel). Short trigger = close below the line through the flag's higher lows (lower edge).",
+    "Target armed only when close < B after C: target = C - (A - B).",
+    "Stop = close back above the broken lower edge (reclaim), or the breakdown bar's high / a nearby heavy-volume high; typical risk 3%-7%.",
+    "Cover at target zone or on a 破底翻 signal (close below a range low followed by close back above).",
+    "False-breakout short: after a higher-timeframe target is hit, intraday (60m) bar with volume > average and close <= open near the high, followed by a close back below the broken range top → short; stop = recent swing high.",
+    "Multiple rebound highs in a topping decline each produce a target C_i - (A - B_i); treat clustered targets as a zone."
+  ],
+  "ambiguities": [
+    "Schematic stop: text says the stop point is reclaiming the 73 resistance, then gives stop 74 for a short at 72 — exact stop level (73 vs 74) not pinned.",
+    "亚聚: text says 2001年11月10日 though the chart/heading is 2011 (typo). Stated profit ≈24% does not match 30.6 → target 20.64 (≈32.5%) or → low 21.78 (≈29%); likely covered earlier (e.g. 破底翻 exit) but not stated.",
+    "Several targets were overshot (台达化 3.84 vs 5.11, 远东新 11.18 vs 13.61) and one not reached (亚聚 21.78 vs 20.64): 'near' (附近) tolerance is undefined.",
+    "台股 hourly: the 5.4%-11% range matches 8690→8219 (5.4%) and 9080→8079 (11.0%), i.e. add-on to first target and initial short to second target; the book doesn't spell this out.",
+    "Swing low B for 台苯 (26.5) vs the 9/19 flag break: the text says the flag broke first, then 26.5 broke, so the short entry precedes target confirmation — same as u04 (entry on neckline break, target armed later)."
+  ],
+  "illegible": [
+    {
+      "page": 42,
+      "what": "Small labels on the 台达化 chart (secondary highs/lows near 14-15 and the right-side rebound high ≈8) are too low-resolution to read reliably."
+    },
+    {
+      "page": 44,
+      "what": "Small labels near 32.1x/32.2x and 28.6x on the 亚聚 chart are low-resolution."
+    },
+    {
+      "page": 45,
+      "what": "The two boxed 跌幅满足 level labels on the 60-minute chart are too small to read (text gives 8219 and 8079)."
+    },
+    {
+      "page": 43,
+      "what": "Label under the 39.09 high on the 远东新 chart (≈31.35) is low-resolution."
+    }
+  ]
+}
