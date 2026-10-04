@@ -155,7 +155,7 @@ def _is_watch_buy_signal(
     )
 
 
-def _is_long_shape(levels: dict[str, Any], pattern_type: str | None) -> bool:
+def is_long_shape(levels: dict[str, Any], pattern_type: str | None) -> bool:
     """WS A long-shape guard: a valid LONG setup has entry below target and stop
     below entry, and a bullish pattern. An exact `false_breakout` (bearish) is
     excluded — it would open a level-less / wrong-direction long otherwise."""
@@ -329,7 +329,7 @@ def _create_one(thesis: dict[str, Any], scan_date: date, *, shadow: bool = False
     # bullish pattern. A level-less or bearish (false_breakout) candidate never
     # opens. This is the regression that a `watch` on `false_breakout` does NOT
     # open a shadow position.
-    if shadow and not _is_long_shape(levels, getattr(screened, "pattern_type", None)):
+    if shadow and not is_long_shape(levels, getattr(screened, "pattern_type", None)):
         return False
 
     # Active-symbol resolution (D7 + D10 cross-session). `create_positions_for_

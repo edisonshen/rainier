@@ -18,10 +18,10 @@ from rainier.core.database import get_session
 from rainier.core.models import PaperSkip, PaperTrade
 from rainier.llm_thesis.eval import _hit
 from rainier.paper.positions import (
-    _is_long_shape,
     _is_watch_buy_signal,
     create_positions_for_theses,
     create_shadow_positions_for_theses,
+    is_long_shape,
 )
 from rainier.paper.replay import benchmark_return, shadow_book_return
 
@@ -49,23 +49,23 @@ def test_watch_buy_gate_rejects_non_actionable_session():
 
 def test_long_shape_accepts_valid_bullish_setup():
     levels = {"entry_price": 100.0, "stop_loss": 95.0, "target_price": 110.0}
-    assert _is_long_shape(levels, "w_bottom") is True
+    assert is_long_shape(levels, "w_bottom") is True
 
 
 def test_long_shape_rejects_false_breakout_bearish_pattern():
     # Even with numerically long-looking levels, false_breakout is bearish.
     levels = {"entry_price": 100.0, "stop_loss": 95.0, "target_price": 110.0}
-    assert _is_long_shape(levels, "false_breakout") is False
+    assert is_long_shape(levels, "false_breakout") is False
 
 
 def test_long_shape_rejects_inverted_levels():
     levels = {"entry_price": 100.0, "stop_loss": 105.0, "target_price": 110.0}
-    assert _is_long_shape(levels, "w_bottom") is False
+    assert is_long_shape(levels, "w_bottom") is False
 
 
 def test_long_shape_rejects_missing_level():
     levels = {"entry_price": 100.0, "stop_loss": None, "target_price": 110.0}
-    assert _is_long_shape(levels, "w_bottom") is False
+    assert is_long_shape(levels, "w_bottom") is False
 
 
 def test_replay_book_return_equal_weight_mean():
