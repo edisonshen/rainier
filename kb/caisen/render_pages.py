@@ -17,8 +17,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pymupdf
@@ -77,7 +79,21 @@ def main() -> None:
     if not units:
         raise SystemExit("no units found in the PDF table of contents")
 
+    # Cached PNGs are only reused when they came from this exact PDF + render
+    # settings; otherwise readers would study stale pages under a new manifest.
+    stamp = {
+        "pdf_sha256": hashlib.sha256(args.pdf.read_bytes()).hexdigest(),
+        "dpi": args.dpi,
+        "max_pages": args.max_pages,
+    }
+    stamp_path = args.out / "render.json"
     pages_root = args.out / "pages"
+    previous = json.loads(stamp_path.read_text(encoding="utf-8")) if stamp_path.exists() else None
+    if pages_root.exists() and previous != stamp:
+        print("source PDF or render settings changed: discarding cached pages")
+        shutil.rmtree(pages_root)
+    stamp_path.unlink(missing_ok=True)
+
     for unit in units:
         unit_dir = pages_root / unit["id"]
         unit_dir.mkdir(parents=True, exist_ok=True)
@@ -90,6 +106,7 @@ def main() -> None:
     (args.out / "units.json").write_text(
         json.dumps(units, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    stamp_path.write_text(json.dumps(stamp, indent=2) + "\n", encoding="utf-8")
     total = sum(u["last_page"] - u["first_page"] + 1 for u in units)
     print(f"{len(units)} units, {total} pages -> {args.out}")
 
