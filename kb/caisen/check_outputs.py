@@ -15,6 +15,9 @@ from pathlib import Path
 
 KB = Path(__file__).resolve().parent
 MODELS = ("opus-5-5", "gpt-5-5", "gemini-3-1-pro", "grok-4-7")
+# Optional extra readers (e.g. a cloud Devin run whose model is not pinned):
+# reported when their notes exist, never required for convergence.
+EXTRA_MODELS = ("devin-cloud",)
 NOTE_KEYS = ("unit_id", "model", "pages_read", "summary", "patterns", "rules")
 FINDING_KEYS = ("id", "about", "severity", "type", "claim", "correction", "evidence_pages")
 MAX_ROUND = 4
@@ -31,7 +34,8 @@ def _load(path: Path) -> tuple[dict | None, str | None]:
 
 def check_read(units: list[dict]) -> int:
     problems = 0
-    for model in MODELS:
+    extras = [m for m in EXTRA_MODELS if (KB / "runs" / "notes" / m).is_dir()]
+    for model in (*MODELS, *extras):
         done, issues = 0, []
         for unit in units:
             data, err = _load(KB / "runs" / "notes" / model / f"{unit['id']}.json")
