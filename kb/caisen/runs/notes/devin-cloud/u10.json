@@ -1,0 +1,335 @@
+{
+  "unit_id": "u10",
+  "model": "devin-cloud",
+  "pages_read": [
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96
+  ],
+  "summary": "Head-and-shoulders bottom measured move: the vertical distance from the head low to the neckline (measured at the head) is added to the neckline breakout price to get the first-wave target, and added again for the second (and third) wave. Long entry on the neckline breakout (stop 5-7% / falling back below the neckline); when a 破底翻 forms at the head or right shoulder it gives an earlier, lower entry and the breakout becomes an add-on. Four Taiwan daily cases (东元 1999-2000, 蓝天 2008-09, 扬明光 2010, 广宇 2011-12) show the arithmetic, multi-wave targets, false-breakout exits, and the base-size vs. move-duration judgement for whether to expect a second wave.",
+  "patterns": [
+    {
+      "name_zh": "头肩底",
+      "name_en": "Head-and-shoulders bottom (inverse H&S) with measured-move target",
+      "direction": "long",
+      "structure": "Left shoulder, lower head, right shoulder, with a neckline joining the reaction highs; the neckline may slope (schematic neckline labels 80 → 78 → 76 → 74, and 东元/蓝天/广宇 slope down) or be horizontal (扬明光 142.1, '颈线为平行线'). Schematic: head low 60, neckline above the head at 78, breakout of the (down-sloping) neckline at 74. The head is often itself a 破底翻 (break below the left-shoulder lows then reclaim), as in 东元 2/22, 扬明光 11/15, 广宇 12/23.",
+      "entry": "Buy when price breaks above the neckline (突破颈线时多单进场; schematic buy ~75 after break at 74). Breakout is treated as confirmed when price clears the nearby prior high on the neckline (蓝天 buy 20.4 when above 20.34; 广宇 buy 24.7 when above 24.63). If a 破底翻 forms at the head, buy that first and add on the neckline breakout (多单加码).",
+      "stop": "5%-7%, which is also the point of falling back below the neckline (停损设5%～7%，也是跌破颈线时). Cases use the breakout-day long-red low (蓝天 19.26, 5.6%), prior-day close (广宇 24.14, 4%), or a level just below the neckline (东元 14.1, 3.4%; 扬明光 137, 4%). For a 破底翻 entry, stop at the support/re-break level rather than the extreme low if the extreme low is >10% away (东元: 10.2 instead of 9.34; 扬明光 127; 广宇 21.5).",
+      "target": {
+        "formula": "distance = neckline_at_head - head_low; target_1 = neckline_breakout_price + distance; target_n = target_(n-1) + distance",
+        "worked_example": "Schematic: 78 - 60 = 18; 74 + 18 = 92; 92 + 18 = 110. 东元: 15.3 - 9.34 = 5.96; 14.2 + 5.96 = 20.16; 20.16 + 5.96 = 26.12 (high 26.13). 蓝天: 20.8 - 13.59 = 7.21; 20 + 7.21 = 27.21; 34.42; 41.63 (high 42.52). 扬明光: 142.1 - 115.68 = 26.42; 142.1 + 26.42 = 168.52 (high 171.25). 广宇: 25.2 - 20.28 = 4.92; 24.5 + 4.92 = 29.42 (high 32.26).",
+        "pages": [
+          89,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96
+        ]
+      },
+      "confirmation": [
+        "Breakout with volume (带量突破/带量跳空/带量长红): 东元 1/5 gap with volume, 蓝天 12/19 volume breakout, 广宇 1/30 volume gap long red.",
+        "Clearing the most recent prior high near the neckline confirms the breakout (蓝天 20.34, 广宇 24.63).",
+        "A 破底翻 at the head confirms the bottom early (东元 2/22, 扬明光 11/15, 广宇 12/23)."
+      ],
+      "invalidation": [
+        "Falling back below the neckline after the breakout (跌破颈线 / 跌落线下) — stop on the add-on position.",
+        "A false breakout (假突破) near the target is the sell signal (蓝天 8/4, 扬明光 12/27, 广宇)."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Measured move: the distance from the head low to the neckline equals the distance projected above the neckline breakout.",
+      "kind": "target",
+      "quote_zh": "低点到颈线的距离＝突破颈线后的距离。",
+      "pages": [
+        89
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Schematic arithmetic: head low 60 to neckline 78 = 18; breakout 74 + 18 = 92 first target; 92 + 18 = 110 second target.",
+      "kind": "target",
+      "quote_zh": "突破颈线的位置74+18＝等幅计算的涨幅满足92。",
+      "pages": [
+        89
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Enter long on the neckline breakout (e.g. buy ~75), stop 5%-7% which coincides with falling back below the neckline; if the neckline holds, take profit at the first or second wave target (~22%-46%).",
+      "kind": "entry",
+      "quote_zh": "突破颈线时多单进场，如买在75附近停损设5%～7%，也是跌破颈线时，颈线不破，达一至两波涨幅满足时，多单获利了结，约22%～46%。",
+      "pages": [
+        90
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "If the 破底翻 low gives a stop more than 10% away, the risk is too high; place the stop at the re-break of the line instead (东元 10.2, risk 6.5%).",
+      "kind": "stop",
+      "quote_zh": "停损若设9.34元低点，风险超过10%太高，可设在10.2元附近，也就是再度破线确立时，风险6.5%。",
+      "pages": [
+        92
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Base size vs. move duration: a base lasting over 1.5 years that reaches the first target after only half a month of rally should be expected to continue to the second-wave target.",
+      "kind": "time",
+      "quote_zh": "以东元长达逾一年半以上的底部规模仅涨半个多月，便达首波涨幅满足，因此，可续看第二波涨幅满足。",
+      "pages": [
+        91
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Breakout is confirmed when price clears the nearby prior high of the pre-breakout range; stop at the breakout day's volume long-red low (falling back below the line).",
+      "kind": "entry",
+      "quote_zh": "约可买在20.4元附近（突破关前整理区的近期高点20.34元，确定突破时），停损设当日带量长红低点19.26元，也是跌落线下时，风险约5.6%。",
+      "pages": [
+        94
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Usually take profit at the two-wave target; if the move extends to the third wave, the false breakout is the confirmed sell signal.",
+      "kind": "target",
+      "quote_zh": "通常达两波段涨幅满足，便获利了结约68%，若达第三波涨幅满足后，2009年8月4日出现假突破，确定卖出信号，获利了结约96%。",
+      "pages": [
+        94
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "A new high followed within a few days by falling back below the line confirms a false breakout and that the stock only rises one wave; the topping structure is comparable in size to the base.",
+      "kind": "target",
+      "quote_zh": "12月22日长红突破再创新高后第三个交易日12月27日，便跌落线下，假突破确立，也确立扬明光技术面只涨一波，盘头的规模与盘底的规模相当。",
+      "pages": [
+        95
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "If after the first target the high-level consolidation lasts long (comparable to the base) and then a false breakout occurs, expect only one wave.",
+      "kind": "time",
+      "quote_zh": "高档震荡续创新高后，立即回跌出现假突破，且破线后整理的时间过长与底部的规模相当，因此只看一波。",
+      "pages": [
+        96
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Stage the position: buy at the 破底翻 (lower, wider profit) and add on the neckline breakout (tighter stop); the 破底翻 position earns the larger percentage.",
+      "kind": "entry",
+      "quote_zh": "多单获利了结约19%（加码多单）～30%（破底翻多单）。",
+      "pages": [
+        96
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Without a second wave, exit both positions on the false breakout / fall below the line after the target.",
+      "kind": "stop",
+      "quote_zh": "达涨幅满足附近后的12月27日跌落线下，假突破确立，无第二波行情时，多单获利了结约17%（加码多单）～25%（破底翻多单）。",
+      "pages": [
+        95
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "Risk control first: accept losses and never let them get out of control (Marty Schwartz quote).",
+      "kind": "psychology",
+      "quote_zh": "我更关心的是，怎么控制失利状况。要学会接受亏损。想赚钱，最重要的就是不能让亏损失控。",
+      "pages": [
+        92
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Have the courage to admit mistakes and correct them immediately (George Soros quote).",
+      "kind": "psychology",
+      "quote_zh": "我有认错的勇气。当我一发现犯错，马上改正，这对我的事业十分有帮助。",
+      "pages": [
+        94
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "东元 (1504)",
+      "timeframe": "daily",
+      "period": "1998-03..2000-09",
+      "pattern": "头肩底 + 破底翻底部",
+      "levels": {
+        "left_shoulder_lows": [
+          11.5,
+          11.56
+        ],
+        "head_low": 9.34,
+        "neckline_at_head": 15.3,
+        "distance": 5.96,
+        "right_shoulder_lows": [
+          9.95,
+          10.6
+        ],
+        "neckline_highs": [
+          16.03,
+          14.77,
+          15.29,
+          14.77,
+          14.48
+        ],
+        "breakout": 14.2,
+        "post_target_lows": [
+          17.57,
+          17.17
+        ],
+        "post_target_high": 21.8,
+        "target_1": 20.16,
+        "target_2": 26.12,
+        "high": 26.13,
+        "pobifan_entry": 10.9,
+        "pobifan_stop": 10.2,
+        "pobifan_risk_pct": 6.5,
+        "addon_entry": 14.6,
+        "addon_stop": 14.1,
+        "addon_risk_pct": 3.4
+      },
+      "outcome": "破底翻 1999-02-22; 2000-01-05 volume gap breakout of neckline; hit both targets (high 26.13) then pulled back sharply; profit ~78% (add-on) to ~140% (破底翻 entry)",
+      "pages": [
+        91,
+        92
+      ]
+    },
+    {
+      "instrument": "蓝天",
+      "timeframe": "daily",
+      "period": "2008-11..2009-08",
+      "pattern": "头肩底 → 三波涨幅满足 → 假突破",
+      "levels": {
+        "head_low": 13.59,
+        "neckline_at_head": 20.8,
+        "distance": 7.21,
+        "left_high": 24.85,
+        "breakout": 20,
+        "pre_target_high": 24.1,
+        "pullback_low": 20.76,
+        "entry": 20.4,
+        "prior_high": 20.34,
+        "stop": 19.26,
+        "risk_pct": 5.6,
+        "target_1": 27.21,
+        "first_wave_high": 29.43,
+        "target_2": 34.42,
+        "range_high": 40.52,
+        "range_low": 32.68,
+        "target_3": 41.63,
+        "high": 42.52
+      },
+      "outcome": "2008-12-19 volume breakout; target 1 hit with brief 2-day pullback; 2nd wave then wide range; 3rd target then 2009-08-04 false breakout sell; profit ~68% at two waves, ~96% at the false breakout",
+      "pages": [
+        93,
+        94
+      ]
+    },
+    {
+      "instrument": "扬明光 (3504)",
+      "timeframe": "daily",
+      "period": "2010-10..2011-03",
+      "pattern": "破底翻 + 头肩底 (horizontal neckline) → 假突破",
+      "levels": {
+        "left_shoulder_low": 125.25,
+        "head_low": 115.68,
+        "neckline": 142.1,
+        "distance": 26.42,
+        "right_shoulder_low": 132.08,
+        "target_1": 168.52,
+        "first_high": 171.25,
+        "false_breakout_high": 178.54,
+        "post_break_lows": [
+          153.49,
+          153.49
+        ],
+        "pobifan_entry": 135,
+        "pobifan_stop": 127,
+        "pobifan_risk_pct": 6,
+        "addon_entry": 143,
+        "addon_stop": 137,
+        "addon_risk_pct": 4
+      },
+      "outcome": "破底 2010-11-03, 破底翻 11-15, neckline breakout 12-03; target hit in 3 days; new high 12-22 then 12-27 fell below line = false breakout, only one wave; profit ~17% (add-on) to ~25% (破底翻)",
+      "pages": [
+        95
+      ]
+    },
+    {
+      "instrument": "广宇 (2328)",
+      "timeframe": "daily",
+      "period": "2011-11..2012-03",
+      "pattern": "破底翻 + 头肩底 → 假突破",
+      "levels": {
+        "left_shoulder_low": 22.19,
+        "head_low": 20.28,
+        "neckline_at_head": 25.2,
+        "distance": 4.92,
+        "right_shoulder_low": 22.58,
+        "breakout": 24.5,
+        "target_1": 29.42,
+        "high": 32.26,
+        "pobifan_entry": 22.6,
+        "pobifan_stop": 21.5,
+        "pobifan_risk_pct": 5,
+        "addon_entry": 24.7,
+        "prior_high": 24.63,
+        "addon_stop": 24.14,
+        "addon_risk_pct": 4
+      },
+      "outcome": "破底翻 2011-12-23 (broke above long-black high); 2012-01-30 volume gap long red neckline breakout; high 32.26 then false breakout, only one wave; profit ~19% (add-on) to ~30% (破底翻)",
+      "pages": [
+        96
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Detect inverse H&S: three troughs with middle lowest; neckline = line through the two reaction highs between them (may slope).",
+    "distance = neckline_value_at_head_bar - head_low; target_k = breakout_price + k * distance for k = 1, 2, 3.",
+    "Entry: close above the neckline AND above the nearest prior swing high on the neckline; stop = max(entry*(1-0.07), breakout-bar low) and/or close back below neckline.",
+    "Early entry: 破底翻 at the head (new low below left-shoulder range then close back above it); stop at the reclaimed level if (entry - head_low)/entry > 10%.",
+    "Expect a second wave if target_1 was reached in much less time than the base duration (东元: base >1.5 yr, rally ~0.5 month); expect only one wave if post-target consolidation lasts about as long as the base and ends with a false breakout.",
+    "Exit: false breakout = new high above target zone followed within ~3 bars by close back below the breakout line."
+  ],
+  "ambiguities": [
+    "Breakout price used for the projection is approximate (约) and differs from the neckline-at-head value on sloping necklines (东元 14.2 vs 15.3; 蓝天 20 vs 20.8; 广宇 24.5 vs 25.2); the book does not define it precisely (break bar close? intersection price?).",
+    "Stop rule mixes a percentage (5-7%) with a structural level (below neckline / breakout bar low / prior close); which takes precedence is not stated.",
+    "'Base size' vs. 'move duration' judgement (R5, R9) is qualitative; no numeric ratio given.",
+    "Third-wave target (蓝天 41.63) is presented without saying when a third wave should be expected beyond 'after second-wave consolidation'."
+  ],
+  "illegible": [
+    {
+      "page": 93,
+      "what": "stock code in the small chart header for 蓝天 (not stated in text); not transcribed"
+    }
+  ]
+}

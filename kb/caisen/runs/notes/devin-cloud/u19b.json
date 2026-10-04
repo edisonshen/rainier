@@ -1,0 +1,421 @@
+{
+  "unit_id": "u19b",
+  "model": "devin-cloud",
+  "pages_read": [
+    238,
+    239,
+    240,
+    241,
+    242,
+    243,
+    244
+  ],
+  "summary": "Chart-only continuation of the A-share appendix: measured-move worked examples on A-share indices and stocks — 上证 false breakout and trendline breaks (破线) with a converging-triangle target, 创业板 W bottom and H&S top, 沪深300 triangle tops, M top, 下飘旗 flag, H&S bottom with three stacked targets, plus stock examples (国元证券 triangle, 梦牛山 H&S bottom, 深圳惠程 flag + 假突破, 铜陵有色 triangle top, 黑芝麻 上飘旗, 楚天高速 M top). Introduces the 三周低点 (weekly) / 三日低点 (daily) break as a strength gauge during an upward blow-off.",
+  "patterns": [
+    {
+      "name_zh": "W底 / 头肩底（多重涨幅满足）",
+      "name_en": "W bottom / H&S bottom with stacked targets",
+      "direction": "long",
+      "structure": "Neckline above one or more lows; distance = neckline - low; project from the breakout (or right shoulder) point, repeatedly for 2nd/3rd targets.",
+      "entry": "Neckline breakout.",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "t1 = breakout_point + (neckline - low); t_n = t_{n-1} + (neckline - low)",
+        "worked_example": "创业板指: 2115 - 1780 = 335; 2135 + 335 = 2470; 2470 + 335 = 2805. 沪深300周线 头肩底: 2200 - 1606 = 594; 2010 + 594 = 2604; 3198; 3792 (high 3803.06). 梦牛山: neckline 6.8, head 5.06, right shoulder 6.6, target 8.4.",
+        "pages": [
+          238,
+          241,
+          243
+        ]
+      },
+      "confirmation": [
+        "During an upward blow-off, watch whether the prior 3-week low (daily: 3-day low) is broken as a strength gauge."
+      ],
+      "invalidation": [
+        "跌破前面三周低点 after the final target marked the end of the 沪深300 rally."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        238,
+        241,
+        243
+      ]
+    },
+    {
+      "name_zh": "头肩顶 / M头",
+      "name_en": "H&S top / M top measured drop",
+      "direction": "short",
+      "structure": "Peak(s) over a neckline; distance = head/top - neckline; project from breakdown point, repeated for second target.",
+      "entry": "Neckline breakdown.",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "t1 = breakdown_point - (top - neckline); t2 = t1 - same distance",
+        "worked_example": "创业板 头肩顶: 2915 - 2535 = 380; 2700 - 380 = 2320; 2320 - 380 = 1940. 楚天高速 M头: 10.1 - 7.2 = 2.9; 7.7 - 2.9 = 4.8. 沪深300周线 M头: labels 4850 / 4550 / 3250 / 1950 (see ambiguities).",
+        "pages": [
+          238,
+          239,
+          243
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        238,
+        239,
+        243
+      ]
+    },
+    {
+      "name_zh": "收敛三角形（整理/头部）",
+      "name_en": "Converging triangle (continuation or top)",
+      "direction": "neutral",
+      "structure": "Triangle high and low define the height; project from the break point.",
+      "entry": "Break of the triangle boundary.",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "target = break_point ± (triangle_high - triangle_low); 2nd target adds the same height again",
+        "worked_example": "上证: 3310 - 2900 = 410; 3190 + 410 = 3600. 沪深300日线: 2780 - 2380 = 400; 2450 - 400 = 2050 (low 2023.17). 沪深300周线: 3550 - 2850 = 700; 3080 - 700 = 2380. 国元证券: 18.6 - 14.3 = 4.3; 17.7 + 4.3 = 22; 22 + 4.3 = 26.3. 铜陵有色: 4.5 - 3.6 = 0.9; 3.6 - 0.9 = 2.7.",
+        "pages": [
+          238,
+          239,
+          240,
+          242,
+          244
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        238,
+        239,
+        240,
+        242,
+        244
+      ]
+    },
+    {
+      "name_zh": "下飘旗 / 上飘旗",
+      "name_en": "Down-sloping (bull) flag / up-sloping (bear) flag",
+      "direction": "neutral",
+      "structure": "Bull: leg low -> flag high, down-drifting flag (下飘旗) to flag low; target = flag low + leg. Bear: leg high -> flag low, up-drifting flag (上飘旗) to flag high; target = flag high - leg.",
+      "entry": "Flag breakout in the trend direction.",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "bull: flag_low + (flag_high - leg_low); bear: flag_high - (leg_high - flag_low)",
+        "worked_example": "沪深300周线: 3689 - 2077 = 1612; 3285 + 1612 = 4897 (then 假突破). 深圳惠程: 16.16 - 8.28 = 7.88; 13.09 + 7.88 = 20.97 (then 假突破). 黑芝麻: 25.55 - 16.25 = 9.3; 18 - 9.3 = 8.7.",
+        "pages": [
+          240,
+          241,
+          242
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [
+        "假突破 after the target = top (沪深300, 深圳惠程)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        240,
+        241,
+        242
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "When a bull wave blows off upward, use whether the prior 3-week low (3-day low on daily) is broken as the strength/weakness gauge.",
+      "kind": "stop",
+      "quote_zh": "多头波向上喷出时可配合三周低点（日线则三日低点）是否跌破作为强弱势的参考",
+      "pages": [
+        243
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "A false breakout at/after the measured target marks the top (charts: 上证, 沪深300 weekly, 深圳惠程).",
+      "kind": "target",
+      "quote_zh": "假突破",
+      "pages": [
+        238,
+        240,
+        241
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Trendline breaks (破线) mark exits/turns after moves (上证日线 multiple 破线 labels).",
+      "kind": "stop",
+      "quote_zh": "破线",
+      "pages": [
+        238
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "上证指数",
+      "timeframe": "daily",
+      "period": "2015-05..2016-01",
+      "pattern": "假突破 / 破线 / 收敛三角形",
+      "levels": {
+        "triangle_high": 3310,
+        "triangle_low": 2900,
+        "breakout": 3190,
+        "target": 3600
+      },
+      "outcome": "reached ~3600 area, then 破线",
+      "pages": [
+        238
+      ]
+    },
+    {
+      "instrument": "创业板指",
+      "timeframe": "daily",
+      "period": "2015-09..2016-02",
+      "pattern": "W底 + 头肩顶",
+      "levels": {
+        "neckline": 2115,
+        "low": 1780,
+        "breakout": 2135,
+        "target_1": 2470,
+        "target_2": 2805,
+        "head": 2915,
+        "hs_neckline": 2535,
+        "breakdown": 2700,
+        "down_target_1": 2320,
+        "down_target_2": 1940
+      },
+      "outcome": "both hit",
+      "pages": [
+        238
+      ]
+    },
+    {
+      "instrument": "沪深300",
+      "timeframe": "daily",
+      "period": "2012-11..2013-09",
+      "pattern": "收敛三角形头部",
+      "levels": {
+        "high": 2780,
+        "low": 2380,
+        "breakdown": 2450,
+        "target": 2050,
+        "actual_low": 2023.17
+      },
+      "outcome": "hit target",
+      "pages": [
+        239
+      ]
+    },
+    {
+      "instrument": "沪深300",
+      "timeframe": "weekly",
+      "period": "2007..2009",
+      "pattern": "M头",
+      "levels": {
+        "top_label": 4850,
+        "neckline": 4550,
+        "target_1": 3250,
+        "target_2": 1950,
+        "actual_low": 1606.73
+      },
+      "outcome": "hit second target",
+      "pages": [
+        239
+      ]
+    },
+    {
+      "instrument": "沪深300",
+      "timeframe": "weekly",
+      "period": "2014..2015",
+      "pattern": "下飘旗 + 假突破",
+      "levels": {
+        "leg_low": 2077,
+        "flag_high": 3689,
+        "flag_low": 3285,
+        "target": 4897
+      },
+      "outcome": "hit target; 假突破 above it then fell",
+      "pages": [
+        240
+      ]
+    },
+    {
+      "instrument": "国元证券",
+      "timeframe": "daily",
+      "period": "2014-08..2014-11",
+      "pattern": "收敛三角形",
+      "levels": {
+        "triangle_high": 18.6,
+        "triangle_low": 14.3,
+        "breakout": 17.7,
+        "target_1": 22,
+        "target_2": 26.3
+      },
+      "outcome": "both reached",
+      "pages": [
+        240
+      ]
+    },
+    {
+      "instrument": "梦牛山",
+      "timeframe": "daily",
+      "period": "2015-09..2016-01",
+      "pattern": "头肩底",
+      "levels": {
+        "head": 5.06,
+        "neckline": 6.8,
+        "right_shoulder": 6.6,
+        "target": 8.4
+      },
+      "outcome": "reached",
+      "pages": [
+        241
+      ]
+    },
+    {
+      "instrument": "深圳惠程",
+      "timeframe": "daily",
+      "period": "2015-02..2015-07",
+      "pattern": "下飘旗型 + 假突破",
+      "levels": {
+        "leg_low": 8.28,
+        "leg": 7.88,
+        "flag_high": 16.16,
+        "flag_low": 13.09,
+        "target": 20.97
+      },
+      "outcome": "hit, then 假突破 and crash",
+      "pages": [
+        241
+      ]
+    },
+    {
+      "instrument": "铜陵有色",
+      "timeframe": "daily",
+      "period": "2015-10..2016-03",
+      "pattern": "收敛三角形头部",
+      "levels": {
+        "high": 4.5,
+        "low": 3.6,
+        "breakdown": 3.6,
+        "target": 2.7
+      },
+      "outcome": "hit",
+      "pages": [
+        242
+      ]
+    },
+    {
+      "instrument": "黑芝麻",
+      "timeframe": "daily",
+      "period": "2015-06..2015-12",
+      "pattern": "上飘旗",
+      "levels": {
+        "leg_high": 25.55,
+        "flag_low": 16.25,
+        "flag_high": 18,
+        "target": 8.7
+      },
+      "outcome": "approx. reached (low label ~9.54)",
+      "pages": [
+        242
+      ]
+    },
+    {
+      "instrument": "楚天高速",
+      "timeframe": "daily",
+      "period": "2014-11..2015-08",
+      "pattern": "M头",
+      "levels": {
+        "top": 10.1,
+        "neckline": 7.2,
+        "breakdown": 7.7,
+        "target": 4.8
+      },
+      "outcome": "hit",
+      "pages": [
+        243
+      ]
+    },
+    {
+      "instrument": "沪深300",
+      "timeframe": "weekly",
+      "period": "2008..2009",
+      "pattern": "头肩底",
+      "levels": {
+        "head": 1606,
+        "neckline": 2200,
+        "right_shoulder": 2010,
+        "target_1": 2604,
+        "target_2": 3198,
+        "target_3": 3792,
+        "high": 3803.06
+      },
+      "outcome": "hit third target; then broke prior 3-week low",
+      "pages": [
+        243
+      ]
+    },
+    {
+      "instrument": "沪深300",
+      "timeframe": "weekly",
+      "period": "2010..2012",
+      "pattern": "收敛三角形头部",
+      "levels": {
+        "high": 3550,
+        "low": 2850,
+        "breakdown": 3080,
+        "target": 2380
+      },
+      "outcome": "hit (low label ~2254.x)",
+      "pages": [
+        244
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Stacked targets: after a neckline break, t_k = break_point ± k*height for k = 1..3.",
+    "Blow-off strength: in a strong up-leg, exit/trim on a weekly close below the low of the prior 3 weeks (daily: prior 3 days).",
+    "False breakout after target: new high above the measured target followed by close back below the prior range -> exit/short."
+  ],
+  "ambiguities": [
+    "沪深300周线 M头: printed top label '4850' with neckline 4550 gives a 300-pt height, but targets 3250/1950 imply a 1300-pt height (top ≈ 5850); the chart scale puts the top near 5800-5900, so '4850' looks like a misprint for 5850.",
+    "梦牛山 H&S bottom: 6.8 - 5.06 = 1.74; 6.6 + 1.74 = 8.34 and 6.8 + 1.74 = 8.54 — printed target 8.4 does not exactly match either.",
+    "Break point used for projection varies: sometimes the neckline value (铜陵有色 3.6), sometimes the actual break price (2135 vs neckline 2115; 2700 for 创业板 H&S; 2010 right shoulder for 沪深300).",
+    "No prose in this unit; rules are inferred from chart labels except the 三周低点 annotation."
+  ],
+  "illegible": [
+    {
+      "page": 238,
+      "what": "上证 false-breakout top label (~5178.x) too small."
+    },
+    {
+      "page": 240,
+      "what": "沪深300 weekly top label near 假突破 (~5380.x) and 国元证券 high label (~26.10) small."
+    },
+    {
+      "page": 242,
+      "what": "铜陵有色 low (~2.38) and 黑芝麻 low (~9.54) labels small/uncertain."
+    },
+    {
+      "page": 244,
+      "what": "沪深300 weekly triangle low label (~2254.x) partially legible; lower half of page shows only bleed-through text from the reverse side, not readable content."
+    }
+  ]
+}

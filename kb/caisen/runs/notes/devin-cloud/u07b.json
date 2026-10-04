@@ -1,0 +1,552 @@
+{
+  "unit_id": "u07b",
+  "model": "devin-cloud",
+  "pages_read": [
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74
+  ],
+  "summary": "Second half of the false-breakout (假突破) short-entry chapter: four case studies (正峰新 daily+weekly 2011, 晟铭电 daily 2011, 晶电 daily+weekly 2010-2011, 微软 monthly 1993-2011). A breakout to new highs (often on heavy volume) that falls back below the breakout candle's low or the broken neckline within a few days confirms a false breakout and a short entry; the downside target is then measured with the equal-distance method (prior swing high minus the latest swing low, subtracted from the rebound high once the prior low breaks). The unit also teaches chip/margin structure (价涨券增 = retail shorting into strength, 价跌券增 = main-player shorting), 'short weak, not strong' (空弱不空强), and on long-term charts uses 假突破 to exit and 破底翻 to re-enter.",
+  "patterns": [
+    {
+      "name_zh": "假突破（空单进场）",
+      "name_en": "False breakout above a range/neckline (short entry)",
+      "direction": "short",
+      "structure": "After a big rise, price consolidates, then breaks above the range high/neckline to a new high, often on a heavy-volume long red (bullish) candle (带量长红). Within ~3 trading days it falls back below that breakout candle's low and/or back under the broken neckline, or the breakout day itself turns into a heavy-volume black candle (带量翻黑).",
+      "entry": "Short when price breaks the low of the heavy-volume breakout candle (e.g. 正峰新 6/2 long red, broken within 3 days → short ~52.8; 晟铭电 6/13 breaks the 6/1 long-red low 59.9) or when a heavy-volume black candle breaks back below the line (晶电 4/19 带量翻黑破线 → short ~95.5). Later flat-open days can also be used to sell short (晟铭电 6/14-15, highs 58.8).",
+      "stop": "The false-breakout high (正峰新 56.5, risk ~7%), or price closing back above the broken line/neckline (晟铭电 ~61.5, ~6%; 晶电 99.5 '站回线上', ~4.2%). Add-on shorts on a later break of a prior low get their own stop at a reclaim of the line (晶电 add 75, stop 79, ~5.3%).",
+      "target": {
+        "formula": "Equal-distance decline (等幅跌幅满足): once price breaks the latest rebound low L, target = rebound high H2 - (prior top H1 - L). With a head-and-shoulders-like top: target = neckline break level - (mid of the two highs - neckline).",
+        "worked_example": "晟铭电: 66.5 - 41.9 = 24.6; 48 - 24.6 = 23.4 (about 23.8 after adjusting for dividends). 晶电: 107.3 - 75.16 = 32.14; 88.24 - 32.14 = 56.1; then 88.24 - 65.15 = 23.09; 70.64 - 23.09 = 47.55 (low 47.09). 正峰新: mid of the two highs ~57.5 to neckline ~34.7 = 22.8; 36.5 - 22.8 = 13.7.",
+        "pages": [
+          68,
+          70,
+          71,
+          72
+        ]
+      },
+      "confirmation": [
+        "Breakout failure within about 3 trading days (正峰新 6/2, 晶电 3/8 '三个交易日内便跌破大量低点').",
+        "Heavy volume without further rise (大量不涨) on the breakout bar.",
+        "Heavy-volume black candle breaking the line (带量翻黑破线) confirms the top.",
+        "Chip data: inventory balance (库存余额) falling = main player distributing; 价跌券增 after distribution = main-player short structure.",
+        "Large prior gain (e.g. >200%-300%) makes a false breakout a high-risk distribution signal."
+      ],
+      "invalidation": [
+        "Price closes back above the broken line/neckline or above the false-breakout high (stop).",
+        "Stocks still making new highs are strong; do not short them (空弱不空强)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly",
+        "monthly"
+      ],
+      "pages": [
+        65,
+        66,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74
+      ]
+    },
+    {
+      "name_zh": "涨幅满足（等幅计算）",
+      "name_en": "Equal-distance upside target (measured move)",
+      "direction": "long",
+      "structure": "Weekly chart: a rise from low L1 to high H1, a pullback to low L2, then a breakout above H1 (here a short-squeeze gap, 轧空突破前高).",
+      "entry": "Buy in the week of the heavy-volume breakout above the neckline (正峰新 2011-03-12 week, ~39).",
+      "stop": "A break back below the neckline (37, about 5% risk).",
+      "target": {
+        "formula": "target = L2 + (H1 - L1)",
+        "worked_example": "正峰新 weekly: 47.3 - 14.73 = 32.57; 24.85 + 32.57 = 57.42 (high reached 58).",
+        "pages": [
+          67
+        ]
+      },
+      "confirmation": [
+        "Heavy-volume long red weekly candle breaking the neckline; neckline support ~38 holds."
+      ],
+      "invalidation": [
+        "Falling below the neckline (~38; stop 37)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        67,
+        68
+      ]
+    },
+    {
+      "name_zh": "破底翻（长线企稳）",
+      "name_en": "Break-bottom reversal as a long-term bottoming signal",
+      "direction": "long",
+      "structure": "Monthly chart: price breaks below a long-term neckline/support and makes a new low, then a few months later climbs back above the neckline.",
+      "entry": "Re-enter after the reclaim of the neckline (微软 2009-06 reclaimed the line about 3 months after the 2009-03 low of 14.87) and set a stop.",
+      "stop": "The book only says '设好停损'; the neckline support it names is ~21 USD.",
+      "target": {
+        "formula": "not given in this unit",
+        "worked_example": "n.a.",
+        "pages": [
+          74
+        ]
+      },
+      "confirmation": [
+        "Price holds above the neckline support (~21 USD) for years afterwards."
+      ],
+      "invalidation": [
+        "Not stated explicitly; by the framework, falling back below the neckline."
+      ],
+      "timeframes": [
+        "monthly"
+      ],
+      "pages": [
+        73,
+        74
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "A heavy-volume breakout to a new high that turns into a heavy-volume black candle (带量翻黑) confirms a false breakout and a sell signal.",
+      "kind": "entry",
+      "quote_zh": "2011年4月8日轧至新高随后出现带量翻黑，假突破确立的卖出信号。",
+      "pages": [
+        65
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "A heavy-volume long red candle that breaks the range high but is broken below its own low within 3 days is also a false breakout (the main player's last fake-out before a collapse).",
+      "kind": "entry",
+      "quote_zh": "同年6月2日带量长红隔日高点56.5元突破整理区高点56.1元，但3日内便跌破长红低点也是属于假突破，股价在主力做最后骗线后随之崩盘。",
+      "pages": [
+        65
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "价涨券增 (price up, short interest up) is usually retail shorting into strength and invites a short squeeze by the main player.",
+      "kind": "filter",
+      "quote_zh": "价涨券增，通常是散户往上放空的结构，容易引起主力轧空。",
+      "pages": [
+        66
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Short weak, not strong: a stock making new highs is strong; if wrong, accept the stop; never add to shorts or short strong stocks; wait for a weakening signal such as a confirmed false breakout.",
+      "kind": "risk",
+      "quote_zh": "切记，放空的技巧是空弱不空强，会创新高的股票就是强势股，做错就认输停损，不应加码放空或建立强势股空单，需待有转弱现象出现时才是做空时机（如假突破确立）。",
+      "pages": [
+        66
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "If the inventory balance (库存余额) drops sharply near neckline support, the main player is unloading into dip-buyers in the neckline zone; know the chip structure to avoid this trap.",
+      "kind": "filter",
+      "quote_zh": "库存余额急降，显示主力利用颈线支撑积极作量倒货……洞悉筹码结构，便能避开主力在高档区颈线压低出货陷阱。",
+      "pages": [
+        66
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "After distribution, 价跌券增 (price down, short interest up) is a main-player short structure; a low-volume rebound that only reaches the lower edge of the broken neckline zone is weak (support turned resistance).",
+      "kind": "filter",
+      "quote_zh": "价跌券增属主力放空结构，9至10月的反弹最高33.5元，仅碰触上述33至40元颈线区下缘属弱势反弹（支撑跌破变反压），期间无量，便是主力出货后呈无主力状态",
+      "pages": [
+        66
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Weekly upside measured move: once price breaks the prior high, target = pullback low + (prior high - starting low).",
+      "kind": "target",
+      "quote_zh": "自24.85元低点+32.57元=等幅计算的涨幅满足57.42元附近。",
+      "pages": [
+        67
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "While the neckline support holds after a heavy-volume breakout, keep targeting the measured move.",
+      "kind": "target",
+      "quote_zh": "技术面3月12日周线带量长红，突破颈线的颈线支撑38元附近不破，看涨幅满足57.42元附近。",
+      "pages": [
+        67
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "After the target is reached, a heavy-volume black candle breaking the line confirms the top and starts a long downtrend.",
+      "kind": "entry",
+      "quote_zh": "同年6月25日周线带量翻黑破线，头部确立，就此进入长空",
+      "pages": [
+        67,
+        68
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Market moves are often man-made speculation and leave traces; they are not coincidence.",
+      "kind": "psychology",
+      "quote_zh": "投资市场常常是人为的投机，有迹可循，并非巧合。",
+      "pages": [
+        68
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Downside measured move from a top: target = neckline-break level - (mid of the two highs - neckline).",
+      "kind": "target",
+      "quote_zh": "两个高点中间值约57.5元，至颈线约在34.7元距离约22.8元；7月13日长黑跌破颈线的位置约在36.5元-22.8元=等幅计算的跌幅满足13.7元",
+      "pages": [
+        68
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "A false breakout is often a main-player fake-out: let the market get used to the price during a consolidation, then push volume up to draw retail in.",
+      "kind": "psychology",
+      "quote_zh": "由此可知假突破经常是主力骗线的一种手法，利用一段时间的整理，让市场习惯股价后，再作量转强让市场尤其是散户跟进。",
+      "pages": [
+        69
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "After a large cumulative gain (~300%), a false breakout confirms distribution and is the highest-risk point and the best short opportunity; don't buy deep-dip rebounds in such stocks.",
+      "kind": "risk",
+      "quote_zh": "因此出现假突破后表示主力拉高骗线出货确立，便是风险最高的时候，也是喜好做空者最佳放空时机，此类股切忌跌深抢反弹",
+      "pages": [
+        69
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "The time to short is when the price turns weak.",
+      "kind": "entry",
+      "quote_zh": "做空的技巧就在股价转弱时。",
+      "pages": [
+        70
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "Stop for the false-breakout short: price back above the broken neckline (~61.5), which keeps risk limited (~6%).",
+      "kind": "stop",
+      "quote_zh": "停损设在突破颈线约61.5元时风险有限，约6%。",
+      "pages": [
+        70
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "Practical: margin shorts are force-covered at the ex-dividend date; re-short when margin shorting resumes.",
+      "kind": "risk",
+      "quote_zh": "需注意6月30日除权息融券强迫回补后，7月6日恢复融券将回补的筹码再空即可。",
+      "pages": [
+        70
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "The downside target is computed once price breaks the rebound low: (top - rebound low) subtracted from the rebound high; adjust for dividends if needed.",
+      "kind": "target",
+      "quote_zh": "7月11日跌破反弹低点41.9元，便可计算跌幅满足。自66.5元高点至41.9元低点，共跌24.6元。自48元高点-24.6元=等幅跌幅满足23.4元（通常需填权息计算则在23.8元附近）",
+      "pages": [
+        70
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "Take the short swing profit when price consolidates near the target.",
+      "kind": "target",
+      "quote_zh": "股价8月下旬达跌幅满足附近整理，便是空单波段获利时，约58%。",
+      "pages": [
+        70
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "Heavy volume without a rise (大量不涨): a heavy-volume neckline breakout that breaks the heavy-volume bar's low within three days and falls back under the neckline is a false-breakout sell signal.",
+      "kind": "volume",
+      "quote_zh": "晶电2011年3月8日带量突破颈线，三个交易日内便跌破大量低点，随后更是跌回颈线以下，确立大量不涨的假突破卖出信号",
+      "pages": [
+        71
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "Each new break of a prior low allows a fresh measured-move target (cascade of targets).",
+      "kind": "target",
+      "quote_zh": "8月2日跌破前低65.15元后，也可计算跌幅满足。自88.24元高点至65.15元低点，共跌23.09元。自70.64元高点-23.09元=等幅计算的跌幅满足47.55元。",
+      "pages": [
+        72
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "Short on the heavy-volume black candle breaking the line, stop on a reclaim of the line; add on a break of the prior low with a stop on a reclaim of the line.",
+      "kind": "stop",
+      "quote_zh": "约可空在95.5元停损设99.5元，也就是站回线上时，风险约4.2%，7月8日破线跌破前低空单加码，约可空在75元，停损设79元，也就是站回线上时，风险约5.3%",
+      "pages": [
+        72
+      ]
+    },
+    {
+      "id": "R22",
+      "rule": "Multi-timeframe: the weekly false breakout (black candle breaking the heavy-volume low) lines up with the daily false breakout and marks a long-term sell signal.",
+      "kind": "filter",
+      "quote_zh": "晶电周线跌破大量低点假突破确立长线卖出信号的位置，便是对应上述日线同期假突破的位置",
+      "pages": [
+        73
+      ]
+    },
+    {
+      "id": "R23",
+      "rule": "Volume-price structure reflects fundamentals; lower highs and lower lows after a false breakout mean a long bear phase.",
+      "kind": "psychology",
+      "quote_zh": "量价结构反应基本面的情况……也在假突破后结束再陷长空格局，高点与低点皆越来越低反映了产业窘境。",
+      "pages": [
+        73
+      ]
+    },
+    {
+      "id": "R24",
+      "rule": "Long-term: falling back below a broken neckline is a long-term sell signal (假突破).",
+      "kind": "entry",
+      "quote_zh": "6年多的大多头行情在2000年2月跌回突破的颈线以下，确立了长线卖出信号“假突破”",
+      "pages": [
+        74
+      ]
+    },
+    {
+      "id": "R25",
+      "rule": "Even the best industry can't escape the business cycle; on long-term charts, 假突破 and 破底翻 tell you when the cycle turns: take profits on a false breakout and wait for a 破底翻-type bottoming signal before re-entering with a stop.",
+      "kind": "psychology",
+      "quote_zh": "只是再好的产业都逃不过景气循环，时间长短的问题而已，长线技术面假突破及破底翻是较精确掌握景气是否反转的判断方式，当出现假突破信号时长线便应见好就收，等待类似破底翻的企稳信号，才做介入设好停损等待。",
+      "pages": [
+        74
+      ]
+    },
+    {
+      "id": "R26",
+      "rule": "Master quote (Livermore): it took five years to learn to play the market sensibly.",
+      "kind": "psychology",
+      "quote_zh": "我花了整整五年的时间才觉得自己能理智地玩炒股游戏。",
+      "pages": [
+        70
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "正峰新 (1538)",
+      "timeframe": "daily",
+      "period": "2010-11..2011-12",
+      "pattern": "假突破 ×2 + 主力放空",
+      "levels": {
+        "false_breakout_1_date": "2011-04-08",
+        "high": 58.0,
+        "range_high": 56.1,
+        "false_breakout_2_high": 56.5,
+        "short_entry": 52.8,
+        "stop": 56.5,
+        "risk_pct": 7,
+        "neckline_zone": "33-40",
+        "rebound_high": 33.5,
+        "main_player_cost_below": 20,
+        "mid_of_two_highs": 57.5,
+        "neckline": 34.7,
+        "distance": 22.8,
+        "neckline_break": 36.5,
+        "target": 13.7
+      },
+      "outcome": "6/2 long-red breakout failed within 3 days → short; 7/13 long black candle broke the neckline; reached the target, short profit ≈74%; price later fell below the 10 par value",
+      "pages": [
+        65,
+        66,
+        68
+      ]
+    },
+    {
+      "instrument": "正峰新 (1538)",
+      "timeframe": "weekly",
+      "period": "2008-06..2012",
+      "pattern": "涨幅满足 then 带量翻黑破线 top",
+      "levels": {
+        "start_low": 14.73,
+        "prior_high": 47.3,
+        "rise": 32.57,
+        "pullback_low": 24.85,
+        "target": 57.42,
+        "high": 58,
+        "neckline_support": 38,
+        "entry": 39,
+        "stop": 37,
+        "risk_pct": 5
+      },
+      "outcome": "Breakout week 2011-03-12; reached the target (high 58), long profit ≈47%; 2011-06-25 heavy-volume black weekly candle broke the line → long bear",
+      "pages": [
+        67,
+        68
+      ]
+    },
+    {
+      "instrument": "晟铭电 (3013)",
+      "timeframe": "daily",
+      "period": "2011-03..2011-12",
+      "pattern": "假突破 → 跌幅满足",
+      "levels": {
+        "breakout_date": "2011-06-01",
+        "long_red_low": 59.9,
+        "breakdown_date": "2011-06-13",
+        "breakdown_close": 58,
+        "short_highs_6_14_15": 58.8,
+        "stop": 61.5,
+        "risk_pct": 6,
+        "top": 66.5,
+        "top_unadjusted": 65,
+        "rebound_low_broken": 41.9,
+        "drop": 24.6,
+        "rebound_high": 48,
+        "target": 23.4,
+        "target_dividend_adjusted": 23.8,
+        "later_low_2011_12_09": 18.2,
+        "eps_2011": -0.38
+      },
+      "outcome": "Reached the target in late August, short swing profit ≈58%; kept falling to 18.2 on 2011-12-09",
+      "pages": [
+        69,
+        70
+      ]
+    },
+    {
+      "instrument": "晶电 (2448)",
+      "timeframe": "daily",
+      "period": "2010-09..2011-09",
+      "pattern": "大量不涨假突破 → 带量翻黑破线 → cascading 跌幅满足",
+      "levels": {
+        "breakout_date": "2011-03-08",
+        "top": 107.3,
+        "short_entry": 95.5,
+        "stop": 99.5,
+        "risk_pct": 4.2,
+        "rebound_low_1": 75.16,
+        "drop_1": 32.14,
+        "rebound_high_1": 88.24,
+        "target_1": 56.1,
+        "addon_entry": 75,
+        "addon_stop": 79,
+        "addon_risk_pct": 5.3,
+        "prior_low_2": 65.15,
+        "drop_2": 23.09,
+        "rebound_high_2": 70.64,
+        "target_2": 47.55,
+        "low": 47.09
+      },
+      "outcome": "Top confirmed 2011-04-19; reached the targets, short profit ≈25%-50%; rebounded ~70% from 47.09, then broke to new lows a year later",
+      "pages": [
+        71,
+        72
+      ]
+    },
+    {
+      "instrument": "晶电 (2448)",
+      "timeframe": "weekly",
+      "period": "2008..2012",
+      "pattern": "周线假突破 (翻黑跌破大量低点)",
+      "levels": {
+        "low_2008": 22.71,
+        "high_2010": 111.9,
+        "neckline_lows": "77.33 / 70.84",
+        "false_breakout_high": 107.3,
+        "low_after": 47.09,
+        "rebound_high": 82.41,
+        "later_low": 40.0
+      },
+      "outcome": "Weekly false breakout = long-term sell signal, aligned with the daily one; the rebound to 82.41 ended in another false breakout and new lows",
+      "pages": [
+        72,
+        73
+      ]
+    },
+    {
+      "instrument": "微软 (MSFT)",
+      "timeframe": "monthly",
+      "period": "1993-08..2012",
+      "pattern": "假突破 ×2 then 破底翻",
+      "levels": {
+        "low_1993_08": 2.2,
+        "high_1999_12": 59.97,
+        "gain_multiple": "约26倍",
+        "low_2000_12": 20.12,
+        "false_breakout_2007_10_high": 37.5,
+        "low_2009_03": 14.87,
+        "decline_pct": 60,
+        "neckline_support": 21
+      },
+      "outcome": "2000-02 fell back below the neckline → long-term sell; 2007-10 breakout failed within ~4 months → second sell; 2009-06 破底翻 reclaim → long-term bottom; held above ~21 for 3+ years",
+      "pages": [
+        73,
+        74
+      ]
+    }
+  ],
+  "quantifiable": [
+    "False breakout (short): bar B closes above the N-bar range high with volume > k × average volume; within 3 bars a close below low(B) → short signal; stop = max(high since B) or a close back above the range high.",
+    "Variant: on a breakout day close < open with heavy volume (带量翻黑) and a close back below the line → short.",
+    "Downside measured move: after the top H1 and rebound low L1, a later rebound high H2 < H1; when close < L1, target = H2 - (H1 - L1). Repeat on each new prior-low break.",
+    "Head-type measure: target = neckline_break_price - (mean(two highs) - neckline).",
+    "Upside measured move: after a close above the prior high H1, target = L2 + (H1 - L1), where L1 is the starting low and L2 the pullback low.",
+    "Risk filter: skip a stop that implies more than ~7% risk, or use a ~7% fixed stop; the book's examples carry 4%-7% risk.",
+    "Short filter: do not short while the stock is making new highs unless a false-breakout trigger has fired (空弱不空强).",
+    "Margin/chip filter: (price up & short interest up) = squeeze risk; (price down & short interest up after distribution) = bearish confirmation; falling broker inventory balance = distribution."
+  ],
+  "ambiguities": [
+    "The upside measured move in the 正峰新 weekly example adds (H1-L1) to the pullback low L2 (24.85), not to the breakout level; the downside cases subtract from the rebound high H2. Which anchor (pullback extreme vs. breakout/neckline) applies is not consistent across chapters.",
+    "正峰新 short: the book shorts at 52.8 when the 6/2 long-red low is broken, but computes the target from the neckline break at 36.5 on 7/13 (a later event); the trigger for computing the target isn't defined.",
+    "晟铭电: the stop is set at the 'breakout neckline' ~61.5 while the short is ~58.8, giving ~4.6% by arithmetic; the book says ~6%. The 58% profit also doesn't match exactly (58.8→23.4 ≈ 60%).",
+    "晟铭电 top: 65 vs. 66.5 (unadjusted vs. dividend-adjusted); the target uses 66.5.",
+    "'Within 3 days' is how both 正峰新 and 晶电 confirm, but it isn't stated as a general rule.",
+    "微软 monthly: the stop and target for the 破底翻 re-entry are not given.",
+    "'约26倍' for 2.2→59.97 is a ~26x gain (≈27x the price)."
+  ],
+  "illegible": [
+    {
+      "page": 65,
+      "what": "Small chart labels in the 正峰新 daily chart's lower panels (margin/inventory scale values) and some swing-low labels (e.g. ~30.60, ~24.40, final low ~16.33) are low-resolution."
+    },
+    {
+      "page": 67,
+      "what": "正峰新 weekly chart: the top label (~58.20) and the final low (~7.20) are hard to read; the leftmost low ~13.52 is uncertain."
+    },
+    {
+      "page": 69,
+      "what": "晟铭电 daily chart: the target box label near 跌幅满足 and the final lows (~27.05/23.55) are low-resolution."
+    },
+    {
+      "page": 71,
+      "what": "晶电 daily chart: the lows marked near 84.22 / 90.26 / 90.50 are uncertain; the dashed target-box labels are unreadable."
+    },
+    {
+      "page": 73,
+      "what": "微软 monthly chart: the low label between 20.70 and 21.46 (~25.xx) is unreadable."
+    }
+  ]
+}

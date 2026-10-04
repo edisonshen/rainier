@@ -1,0 +1,605 @@
+{
+  "unit_id": "u14c",
+  "model": "devin-cloud",
+  "pages_read": [
+    142,
+    143,
+    144,
+    145,
+    146,
+    147,
+    148,
+    149,
+    150,
+    151
+  ],
+  "summary": "Continuation of the 大盘 (TAIEX index) case studies for 2005-2007, all built on equal-distance (等幅) measured moves. It finishes the 2005 example (破底翻 long, 假突破 short, 跌幅满足 5681), then shows the 2005-06 破底翻 + neckline breakout run to 涨幅满足 (7523 vs high 7476) and its rare V-reversal exit via the three-day low / uptrend-line break, the 2006 假突破 short to 跌幅满足 6291, the 2006-07 weekly chart computing three successive 涨幅满足 targets from the 5618 low (7523, 8090, 9687), the 2007 复合式头肩顶 (double-head measured like an M top, target 7333) that turned into a 破底翻, and the start of the July 2007 爆量假突破 (9807) with 跌幅满足 8139. Each case lists entry, stop, % risk and % profit, and the master-quote boxes stress cutting losses quickly.",
+  "patterns": [
+    {
+      "name_zh": "破底翻（大盘）",
+      "name_en": "Break-bottom reversal on the index",
+      "direction": "long",
+      "structure": "After a decline reaches (or nears) 跌幅满足, price undercuts a prior low and then recovers (e.g. 2005-10-31 off 5618; 2006-03-30 after the 6436/6344 lows; 2007-03 mid-month after 7306). Confirmation comes when it then breaks the consolidation neckline (e.g. 2006-04-03).",
+      "entry": "Buy on the 破底翻 signal day (2005-05-05 ~5930; 2005-10-31 ~5750; 2006-03-30 ~6530; 2007-03-20 ~7750).",
+      "stop": "Below the long red candle's low on the signal day (5851, also near the neckline), or below the extreme low (5618), or below the pre-破底翻 prior low (6436, 7637). Risks quoted 1.4%-2.2%.",
+      "target": {
+        "formula": "涨幅满足 = later swing low + (prior high − first low), computed once price clears the prior high",
+        "worked_example": "6797 − 5618 = 1179; 6344 + 1179 = 7523 (high 7476). Weekly: 7476 − 5618 = 1858; 6232 + 1858 = 8090 (high 7999). 7999 − 5618 = 2381; 7306 + 2381 = 9687 (high 9807).",
+        "pages": [
+          143,
+          147,
+          148
+        ]
+      },
+      "confirmation": [
+        "Breakout of the consolidation neckline after the 破底翻; neckline resistance turns support (颈线压力变支撑，支撑不破看涨幅满足) (p143, p148).",
+        "On the weekly chart a 破底翻 may appear only as a lower shadow (周线为下影线) (p148, p150)."
+      ],
+      "invalidation": [
+        "Close below the 破底翻 stop low (long-red low / pre-破底翻 low).",
+        "Breaking the up-trend line or the three-day low after reaching target ends the long (p144)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        142,
+        143,
+        144,
+        147,
+        148,
+        150
+      ]
+    },
+    {
+      "name_zh": "假突破（头部）",
+      "name_en": "False breakout at a top",
+      "direction": "short",
+      "structure": "Price reaches near 涨幅满足, breaks out above the prior high/neckline, then falls back below it and below the up-trend line; neckline that had turned support is lost (多头看支撑，跌破支撑便属转弱). The 2007-07-26 version comes with near-record volume (爆量假突破).",
+      "entry": "Short on confirmation: 2005-08-08 ~6380; 2006-05-11 ~7270 when price breaks the up-trend line and the low 7278 of the 5/4 volume breakout red candle (also the 'three-day low'). Add on the break of the rebound low (6791 on 2006-06-05).",
+      "stop": "Prior high (6481), or the high of the trend-line-break black candle (7361); for add-ons, standing back above the line (站回线上停损).",
+      "target": {
+        "formula": "跌幅满足 = rebound high − (top − first low), computed once price breaks the rebound low (假突破跌深反弹后再破前低)",
+        "worked_example": "6481 − 5976 = 505; 6186 − 505 = 5681 (low 5618). 7476 − 6791 = 685; 6976 − 685 = 6291 (low 6268). 9807 − 8727 = 1080; 9219 − 1080 = 8139 (low 7987).",
+        "pages": [
+          142,
+          145,
+          151
+        ]
+      },
+      "confirmation": [
+        "Break of the up-trend line (跌破上升趋势线).",
+        "Volume: 带量回跌 after the target (p144); 2007-07-26 爆出几乎与历史大量相同的历史次天量 = very clear long-term sell signal (p151).",
+        "Break of the rebound low triggers the 跌幅满足 calculation."
+      ],
+      "invalidation": [
+        "Price stands back above the broken line / prior high (stop).",
+        "A brief rally back above the broken-bottom neckline that fails to exceed the rebound high (6186) does not cancel the 跌幅满足 view (p142)."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        142,
+        144,
+        145,
+        146,
+        151
+      ]
+    },
+    {
+      "name_zh": "复合式头肩顶（含双头）",
+      "name_en": "Complex head-and-shoulders top (double head)",
+      "direction": "short",
+      "structure": "Left shoulder 7716.85, double head 7999.42 / 7990.55 (like an M top), right shoulder 7950.20; neckline ~7599 (lows 7599.55, 7637.54; rising trendline also drawn from 7369.09). Head formed over ~three months; 2007-03-01 volume break of the neckline completes it.",
+      "entry": "Short on the volume neckline break, ~7670 (2007-03-01).",
+      "stop": "Standing back above the neckline ~7760 (risk ~1.2%).",
+      "target": {
+        "formula": "Measured like an M top: neckline_at_break − (midpoint of the two head highs − neckline)",
+        "worked_example": "midpoint of heads ~7996 − neckline 7599 = ~397; break point ~7730 − 397 = 7333 (low 7306 in ~4 trading days).",
+        "pages": [
+          149,
+          150
+        ]
+      },
+      "confirmation": [
+        "带量跌破颈线 (volume neckline break)",
+        "Neckline resistance not reclaimed → keep looking for 跌幅满足"
+      ],
+      "invalidation": [
+        "V-reversal straight back above the neckline = 破底翻 buy signal (happened here, leading to new highs) (p150).",
+        "A shorter seeking the second-wave target must stop out once the 破底翻 is confirmed (p150)."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        149,
+        150,
+        151
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Once the decline breaks the rebound low, compute 跌幅满足; a brief rebound above the broken-bottom neckline that fails to clear the rebound high keeps the 跌幅满足 view.",
+      "kind": "target",
+      "quote_zh": "只是这波曾短暂拉回破底的颈线之上，但未过反弹高点6186点，后续再破底后就型态而言，仍续看跌幅满足。",
+      "pages": [
+        142
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "破底翻 buy with stop at the signal day's long red low (also near the neckline).",
+      "kind": "stop",
+      "quote_zh": "2005年5月5日破底翻买进约可买在5930点附近，停损设在当日长红低点5851点，也是颈线附近，风险约1.4%，达涨幅满足6315点附近获利约6.5%。",
+      "pages": [
+        142
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Short on a confirmed false breakout with the stop at the prior high.",
+      "kind": "entry",
+      "quote_zh": "同年8月8日假突破确立做空，约可空在6380点附近，停损设在前高6481点，风险约1.6%，达跌幅满足附近5681点附近，获利约11%。",
+      "pages": [
+        142
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "After breaking out of the consolidation neckline, the neckline resistance becomes support; as long as support holds, look for 涨幅满足.",
+      "kind": "target",
+      "quote_zh": "技术面4月3日突破整理区颈线后颈线压力变支撑，支撑不破看涨幅满足。",
+      "pages": [
+        143
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "涨幅满足 is computed once price climbs past the prior high.",
+      "kind": "target",
+      "quote_zh": "盘涨越过前高6797点后，便可计算涨幅满足。",
+      "pages": [
+        143
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Exit a long on a break of the rising trend line.",
+      "kind": "stop",
+      "quote_zh": "2006年1月18日跌破上升趋势线卖出，约可卖在6550点附近，获利约14%。",
+      "pages": [
+        144
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "If the reversal at 涨幅满足 is a fast V-reversal and you could not exit in time, use the three-day low as reference: when the three-day low breaks (together with the up-trend line), exit. A direct V-reversal after a rally is rare on the TAIEX.",
+      "kind": "stop",
+      "quote_zh": "这次达涨幅满足的反转相当快速，是属于V型反转，若出脱不及可以三日低点为参考，当三日低点跌破时，也同时跌破上升趋势线，涨高后直接V型反转在台股指数属于较为少见的现象。",
+      "pages": [
+        144
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "A false breakout: the broken neckline should be support for bulls; breaking that support means weakening.",
+      "kind": "filter",
+      "quote_zh": "同时在型态上也属假突破确立的卖出信号（颈线突破压力变支撑，多头看支撑，跌破支撑便属转弱）",
+      "pages": [
+        145
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Short when price breaks the up-trend line and the low of the volume breakout red candle; stop at the high of the line-breaking black candle.",
+      "kind": "entry",
+      "quote_zh": "2006年5月11日跌破上升趋势线，也跌破5月4日带量突破整理区的红K低点7278点，空单进场约可空在7270点，停损设5月11日破线黑K高点7361点风险约1.5%，达跌幅满足附近，空单获利了结约13%。",
+      "pages": [
+        146
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Breaking the rebound low is an add-on point for shorts, with the same stop on standing back above the line; take profit at 跌幅满足.",
+      "kind": "entry",
+      "quote_zh": "6月5日跌破反弹低点6791点时，也是空单加码点，同样站回线上停损，达跌幅满足附近，空单获利了结。",
+      "pages": [
+        146
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "On the weekly chart, multiple successive 涨幅满足 targets can be computed from the same major low (5618) using each subsequent high and pullback low.",
+      "kind": "target",
+      "quote_zh": "图示为5618低点计算三个波段高点的涨幅满足。",
+      "pages": [
+        147
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "A weekly neckline breakout after a ~3-month base: neckline turns support; if it holds, look for the 涨幅满足 above the prior high.",
+      "kind": "entry",
+      "quote_zh": "同年9月下旬突破整理区上缘颈线，完成约三个月的底部，颈线6730点附近压力变支撑，支撑不破，看一路盘涨过前高后的涨幅满足附近。",
+      "pages": [
+        147
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "A daily 破底翻 may show on the weekly chart only as a lower shadow; a weekly breakout over the prior high then allows computing 涨幅满足.",
+      "kind": "filter",
+      "quote_zh": "整理期间的日线3月初破底，3月中旬出现破底翻买进信号（周线为下影线），图示周线4月7日当周突破颈线，越过7999点前高，便可计算涨幅满足",
+      "pages": [
+        148
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Reaching the big-swing 涨幅满足 followed by a volume spike reversal begins a large top range and a long bear.",
+      "kind": "volume",
+      "quote_zh": "台股盘涨至同年7月下旬，达大波段涨幅满足附近（最高9807点）便爆量反转，随后大区间震荡作头进入长空型态。",
+      "pages": [
+        148
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "A complex head-and-shoulders top with a double head is measured like an M top: distance from the line joining the head highs to the neckline equals the distance below the neckline break.",
+      "kind": "target",
+      "quote_zh": "双头高点连接与颈线的直线距离=跌破颈线位置后的同等距离。",
+      "pages": [
+        149
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "While neckline resistance is not reclaimed, keep looking for 跌幅满足.",
+      "kind": "target",
+      "quote_zh": "技术面颈线压力未站回前看跌幅满足。",
+      "pages": [
+        150
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "When the computed 跌幅满足 offers limited profit, the trade can be skipped.",
+      "kind": "risk",
+      "quote_zh": "这次计算跌幅满足获利幅度有限，可以不作操作。",
+      "pages": [
+        150
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "A short aiming for a second-wave decline must stop out once a 破底翻 is confirmed; the weekly lower shadow that did not break the line is an important judgement tool.",
+      "kind": "stop",
+      "quote_zh": "若做空以相对规模来看，欲看第二波跌幅满足者，在破底翻确立后，须做停损动作，前一篇“2006-2007台股周线”为下影线未破线，也是重要的判断工具。",
+      "pages": [
+        150
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "A near-record volume spike at the big-swing target followed by a false breakout is a very clear long-term sell signal.",
+      "kind": "volume",
+      "quote_zh": "7月26日出现爆出几乎与历史大量相同的历史次天量，重点这是爆量假突破的结构，极为明显的长线卖出信号。",
+      "pages": [
+        151
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "After a false breakout, a deep drop, a rebound, and a break of the prior low, compute 跌幅满足.",
+      "kind": "target",
+      "quote_zh": "假突破跌深反弹后再破前低，便能计算跌幅满足。",
+      "pages": [
+        151
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "Baruch: cut losses quickly and cleanly; don't expect never to be wrong.",
+      "kind": "psychology",
+      "quote_zh": "要学会迅速而利落地砍断亏损。不要期待自己永远不犯错，而是在错误发生时，尽快砍掉亏损。",
+      "pages": [
+        142
+      ]
+    },
+    {
+      "id": "R22",
+      "rule": "Kostolany: the key is judging which phase the market is in.",
+      "kind": "psychology",
+      "quote_zh": "关键在于判断市场处于哪个阶段。",
+      "pages": [
+        144
+      ]
+    },
+    {
+      "id": "R23",
+      "rule": "O'Neil: novices hold on while losses are small and let them grow out of emotion and wishful thinking.",
+      "kind": "psychology",
+      "quote_zh": "大多数菜鸟散户在亏损还算少的时候死抱不放。他们原本可以在受伤不重的情况下退出，却受制于情绪和人性，一厢情愿地一再延误，造成亏损越来越大，终致损失惨重。",
+      "pages": [
+        146
+      ]
+    },
+    {
+      "id": "R24",
+      "rule": "Kostolany: investing is an art; history and philosophy are more useful than statistics and mathematics.",
+      "kind": "psychology",
+      "quote_zh": "股票投资是一门艺术，历史和哲学在投资决策时显然比统计学和数学更有用。",
+      "pages": [
+        150
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2005-08..2005-10 (end of example 十)",
+      "pattern": "假突破 → 跌幅满足",
+      "levels": {
+        "high": 6481,
+        "low": 5976,
+        "drop": 505,
+        "rebound_high": 6186,
+        "target": 5681,
+        "actual_low": 5618
+      },
+      "outcome": "low 5618 on 2005-10-20 then recovered (overshoot ~63)",
+      "pages": [
+        142
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2005-05 (example 十 trade 1)",
+      "pattern": "破底翻 long",
+      "levels": {
+        "entry": 5930,
+        "stop": 5851,
+        "risk_pct": 1.4,
+        "target": 6315,
+        "profit_pct": 6.5
+      },
+      "outcome": "profit ~6.5% at 涨幅满足",
+      "pages": [
+        142
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2005-08 (example 十 trade 2)",
+      "pattern": "假突破 short",
+      "levels": {
+        "entry_short": 6380,
+        "stop": 6481,
+        "risk_pct": 1.6,
+        "target": 5681,
+        "profit_pct": 11
+      },
+      "outcome": "profit ~11% at 跌幅满足",
+      "pages": [
+        142
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2005-10..2006-05 (example 十一)",
+      "pattern": "破底翻 + 突破颈线 → 涨幅满足",
+      "levels": {
+        "low": 5618,
+        "prior_high": 6797,
+        "rise": 1179,
+        "pullback_low": 6344,
+        "target": 7523,
+        "actual_high": 7476,
+        "neckline_break_date": "2006-04-03"
+      },
+      "outcome": "high 7476 in early May 2006, volume drop 5/10 and up-trend-line break next day; V-reversal",
+      "pages": [
+        143,
+        144
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2005-10..2006-01 (example 十一 trade 1)",
+      "pattern": "破底翻 long / trend-line exit",
+      "levels": {
+        "entry": 5750,
+        "stop": 5618,
+        "risk_pct": 2.2,
+        "exit": 6550,
+        "profit_pct": 14
+      },
+      "outcome": "exited on 2006-01-18 up-trend-line break, ~14%",
+      "pages": [
+        144
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2006-03..2006-05 (example 十一 trade 2)",
+      "pattern": "破底翻 long",
+      "levels": {
+        "entry": 6530,
+        "stop": 6436,
+        "risk_pct": 1.4,
+        "profit_pct": 14
+      },
+      "outcome": "profit ~14% at 涨幅满足",
+      "pages": [
+        144
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2006-05..2006-06 (example 十二)",
+      "pattern": "假突破 → 跌幅满足",
+      "levels": {
+        "high": 7476,
+        "low": 6791,
+        "drop": 685,
+        "rebound_high": 6976,
+        "target": 6291,
+        "actual_low": 6268,
+        "entry_short": 7270,
+        "stop": 7361,
+        "risk_pct": 1.5,
+        "profit_pct": 13,
+        "add_on": 6791
+      },
+      "outcome": "reached ~6268 on 2006-06-09 then base; short profit ~13%",
+      "pages": [
+        145,
+        146
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "2005-10..2007-07 (example 十三)",
+      "pattern": "multi-wave 涨幅满足 from one low",
+      "levels": {
+        "base_low": 5618,
+        "green1_target": 7523,
+        "red_high": 7476,
+        "red_rise": 1858,
+        "red_pullback_low": 6232,
+        "red_target": 8090,
+        "red_actual_high": 7999,
+        "green2_high": 7999,
+        "green2_rise": 2381,
+        "green2_pullback_low": 7306,
+        "green2_target": 9687,
+        "green2_actual_high": 9807,
+        "neckline": 6730
+      },
+      "outcome": "8090 target ~reached (7999, Jan 2007); 9687 target reached (9807, late Jul 2007) then volume reversal",
+      "pages": [
+        147,
+        148
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "2006-09..2007-07 (example 十三 trades)",
+      "pattern": "weekly neckline breakout / 破底翻",
+      "levels": {
+        "entry_1": 6870,
+        "stop_1": 6730,
+        "risk_pct_1": 2,
+        "profit_pct_1": 13,
+        "entry_2": 7750,
+        "stop_2": 7637,
+        "risk_pct_2": 1.5,
+        "profit_pct_2": 25
+      },
+      "outcome": "~13% and ~25% respectively",
+      "pages": [
+        148
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2006-12..2007-03 (example 十四)",
+      "pattern": "复合式头肩顶 (双头)",
+      "levels": {
+        "left_shoulder": 7716.85,
+        "head_1": 7999.42,
+        "head_2": 7990.55,
+        "right_shoulder": 7950.2,
+        "heads_mid": 7996,
+        "neckline": 7599,
+        "height": 397,
+        "break_point": 7730,
+        "target": 7333,
+        "actual_low": 7306,
+        "entry_short": 7670,
+        "stop": 7760,
+        "risk_pct": 1.2,
+        "profit_pct": 4.4
+      },
+      "outcome": "target reached in ~4 trading days, then V-reversal back above neckline = 破底翻 buy; small profit, trade optional",
+      "pages": [
+        149,
+        150
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2007-07..2007-08 (example 十五, continues into u14d)",
+      "pattern": "爆量假突破 → 跌幅满足",
+      "levels": {
+        "high": 9807,
+        "low": 8727,
+        "drop": 1080,
+        "rebound_high": 9219,
+        "target": 8139,
+        "actual_low": 7987
+      },
+      "outcome": "low 7987 on 2007-08-17 (overshoot ~152), then sharp rebound within 1 day",
+      "pages": [
+        151
+      ]
+    }
+  ],
+  "quantifiable": [
+    "涨幅满足 (long): after close > prior_high, target = pullback_low + (prior_high − base_low); 跌幅满足 (short): after close < rebound_low, target = rebound_high − (top − first_low) (pp. 142, 143, 145, 147, 148, 151).",
+    "Multi-wave targets from one base low on weekly bars: for each new swing high H_i and subsequent pullback low L_i, target_i = L_i + (H_i − base_low) (pp. 147-148).",
+    "M-top / complex H&S target = neckline_at_break − (mean(head1, head2) − neckline) (pp. 149-150).",
+    "Exit long on close below the lowest low of the last 3 bars combined with up-trend-line break (V-reversal rule, p144).",
+    "False-breakout short trigger: after reaching near 涨幅满足, close below the up-trend line AND below the low of the most recent volume breakout candle; stop = high of the breaking candle (p146).",
+    "Skip trade if distance to target is small (e.g. ~4.4% profit vs 1.2% risk was deemed optional, p150).",
+    "Volume spike filter: volume at a new high ≈ historical max volume → long-term sell signal if followed by a close back below the breakout (p151).",
+    "Index stop risk in examples is 1.2%-2.2%; reward 4.4%-25%."
+  ],
+  "ambiguities": [
+    "p146: entry 7270, stop 7361 is ~1.25% risk, but the book says ~1.5%.",
+    "p148 trade 1: buy 6870, profit ~13% — the exit level is not stated (the red target 8090 would be ~18%, the actual high 7999 ~16%).",
+    "p149: midpoint of the two head highs 7999.42 and 7990.55 is ~7995, book says ~7996; the break point ~7730 is a sloped-neckline value, while the height uses 7599 — how to read the neckline at the break point is not specified.",
+    "p147 chart dates (9/23, 4/7) are weekly bars; 2006-09-23 is a Saturday, so the 'date' is a week label, not a trading day.",
+    "Targets are often missed or overshot by 50-150 points (7523 vs 7476; 8090 vs 7999; 5681 vs 5618; 8139 vs 7987); the book treats all as 'near 满足' without a formal tolerance.",
+    "'三日低点' (three-day low) on p144 is not defined precisely (lowest low of the last three bars vs low three days ago).",
+    "p142 refers to '破底的颈线' — the neckline of the earlier broken bottom — whose level is on the preceding page (u14b), not in this unit."
+  ],
+  "illegible": [
+    {
+      "page": 143,
+      "what": "Small chart labels in the 2006 consolidation: values read as ~6373.6x, ~6747.4x, ~6594.18, ~6458.2x — last digits unclear"
+    },
+    {
+      "page": 145,
+      "what": "Label on the left rising leg (reads ~7047.96) and the 6/9 low decimals (6268.92 vs 6268.93) are blurry"
+    },
+    {
+      "page": 147,
+      "what": "Labels near the first weekly wave (6373.6x, 6344.73) are small; ❶/❷ dashed-line endpoints partially obscured"
+    },
+    {
+      "page": 149,
+      "what": "Top-right chart label (reads ~8066.77) and the bottom-left low (6550.03 vs 6550.83) unclear"
+    },
+    {
+      "page": 151,
+      "what": "The 8727 low label is partially covered by candles (reads '872…'); value 8727 taken from the text"
+    }
+  ]
+}
