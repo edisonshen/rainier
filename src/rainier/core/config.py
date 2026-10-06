@@ -287,6 +287,7 @@ def _default_thesis_signals() -> dict[str, ThesisSignalConfig]:
         "capital_flow_streak": ThesisSignalConfig(params={"days": 10}),
         "sector_momentum": ThesisSignalConfig(params={"days": 10}),
         "fundamentals": ThesisSignalConfig(params={}),
+        "openstock_feed": ThesisSignalConfig(enabled=False, params={"max_age_days": 3}),
     }
 
 
