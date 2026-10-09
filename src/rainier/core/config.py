@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -317,6 +317,13 @@ class LLMThesisConfig(BaseModel):
     # value loads fine but the provider rejects every thesis call, so we fail
     # fast at config load instead.
     thinking_budget_tokens: int = Field(24000, ge=1024)
+    # Models with adaptive thinking (Claude Opus 5.5 / 4.7+) reject the manual
+    # type="enabled" form above. For them service._call_llm sends
+    # thinking={"type": "adaptive"} + output_config={"effort": <this>}, no
+    # temperature, and keeps max_tokens = thinking_budget_tokens + headroom as
+    # the output (cost) cap. litellm 1.82 validates effort client-side and only
+    # passes low/medium/high for non-Opus-4.6 models.
+    thinking_effort: Literal["low", "medium", "high"] = "high"
     # Bumped v1->v2 with the D7a calibration block, v2->v3 with the R-A
     # reflections block, v3->v4 with the switch to xhigh extended thinking. The
     # Tier-1 cache key is built from THIS runtime value (service.generate_thesis

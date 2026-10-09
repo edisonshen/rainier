@@ -25,7 +25,7 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from sqlalchemy import func
 
@@ -278,6 +278,7 @@ def _call_llm(
     user_prompt: str,
     image_bytes: bytes | None,
     thinking_budget_tokens: int,
+    thinking_effort: str = "high",
 ) -> tuple[str, int, int]:
     """Single LiteLLM completion. Returns (content, prompt_tokens, completion_tokens).
 
@@ -295,6 +296,12 @@ def _call_llm(
     ``thinking_blocks`` field; ``message["content"]`` is still the final answer
     text (the JSON thesis _parse_thesis expects), so we keep reading ``content``
     and thinking text never leaks into the parsed thesis.
+
+    Adaptive-thinking models (Claude Opus 5.5 / 4.7+, per litellm's
+    ``supports_adaptive_thinking``) 400 on ``type="enabled"`` and reject
+    sampling params. For them we send ``thinking={"type": "adaptive"}`` +
+    ``output_config={"effort": thinking_effort}`` with no ``temperature``;
+    ``max_tokens`` stays ``budget + headroom`` as the output-spend cap.
 
     Model gate: the ``thinking={"type": "enabled", "budget_tokens": N}`` payload
     is ANTHROPIC-specific (OpenAI reasoning models use ``reasoning_effort``), so
@@ -339,7 +346,16 @@ def _call_llm(
     anthropic_thinking = _provider == "anthropic" and litellm.supports_reasoning(
         model=model
     )
-    if anthropic_thinking:
+    adaptive_thinking = anthropic_thinking and bool(
+        litellm.model_cost.get(model, {}).get("supports_adaptive_thinking")
+    )
+    if adaptive_thinking:
+        completion_kwargs["thinking"] = {"type": "adaptive"}
+        completion_kwargs["output_config"] = {"effort": thinking_effort}
+        completion_kwargs["max_tokens"] = (
+            thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
+        )
+    elif anthropic_thinking:
         # Extended thinking: temperature MUST be 1.0 and max_tokens MUST exceed
         # the thinking budget (final-answer headroom on top).
         completion_kwargs["thinking"] = {
@@ -391,6 +407,21 @@ def _parse_thesis(raw: str) -> TradeThesis:
 # ---------------------------------------------------------------------------
 
 
+class ThesisOutcome(NamedTuple):
+    thesis: TradeThesis | None
+    cost_usd: float
+    record_id: int | None
+    error: str | None = None
+
+
+class ThesisBatch(NamedTuple):
+    """Per-scan result: successful theses plus ``{symbol: reason}`` for every
+    requested ticker that produced none, so callers can alert on outages."""
+
+    theses: dict[str, dict[str, Any]]
+    failures: dict[str, str]
+
+
 async def generate_thesis(
     *,
     symbol: str,
@@ -399,11 +430,12 @@ async def generate_thesis(
     evidence_provider: Callable[[], "tuple[EvidencePack, list[str], bytes | None]"],
     settings: Settings,
     max_usd_remaining: float,
-) -> tuple[TradeThesis | None, float, int | None]:
+) -> ThesisOutcome:
     """Generate one thesis with two-tier cache + 3-retry validation.
 
-    Returns `(thesis, cost_usd_charged, llm_record_id)`. `cost_usd_charged` is
-    the marginal cost paid on this call; cache hits and kill-switch aborts return 0.
+    Returns `ThesisOutcome(thesis, cost_usd_charged, llm_record_id, error)`.
+    `cost_usd_charged` is the marginal cost paid on this call; cache hits and
+    kill-switch aborts return 0. `error` is set whenever `thesis` is None.
     """
     thesis_cfg = settings.llm_thesis
     prompt_version = thesis_cfg.prompt_version
@@ -434,7 +466,7 @@ async def generate_thesis(
                 scan_date,
                 record_id,
             )
-            return thesis, 0.0, record_id
+            return ThesisOutcome(thesis, 0.0, record_id)
         except Exception:
             log.warning(
                 "thesis_cache_invalid_skip symbol=%s record_id=%s — falling through to Tier 2",
@@ -445,7 +477,7 @@ async def generate_thesis(
     # Tier 2: budget gate BEFORE any expensive work.
     if max_usd_remaining <= 0:
         log.warning("thesis_killed_budget_exhausted symbol=%s", symbol)
-        return None, 0.0, None
+        return ThesisOutcome(None, 0.0, None, "scan budget exhausted")
 
     pack, renders, image_bytes = await asyncio.to_thread(evidence_provider)
     # Fold the thinking budget into the Tier-2 idempotency key so a retuned
@@ -525,6 +557,7 @@ async def generate_thesis(
                 user_prompt=attempt_user_prompt,
                 image_bytes=image_bytes,
                 thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
+                thinking_effort=thesis_cfg.thinking_effort,
             )
         except Exception as exc:
             last_error = f"llm_call_failed: {exc}"
@@ -545,7 +578,13 @@ async def generate_thesis(
                 cost_charged,
                 max_usd_remaining,
             )
-            return None, cost_charged, None
+            return ThesisOutcome(
+                None,
+                cost_charged,
+                None,
+                f"budget overrun: charged ${cost_charged:.2f} > "
+                f"remaining ${max_usd_remaining:.2f}",
+            )
 
         try:
             thesis = _parse_thesis(content)
@@ -570,14 +609,14 @@ async def generate_thesis(
             cost_usd=attempt_cost,
             session_name=session_name,
         )
-        return thesis, cost_charged, record_id
+        return ThesisOutcome(thesis, cost_charged, record_id)
 
     log.warning(
         "thesis_validation_retries_exhausted symbol=%s last_error=%s",
         symbol,
         last_error,
     )
-    return None, cost_charged, None
+    return ThesisOutcome(None, cost_charged, None, last_error or "unknown error")
 
 
 def _persist_thesis(
@@ -655,19 +694,20 @@ def compute_theses_and_persist(
     scan_date: date,
     session_name: str,
     settings: Settings,
-) -> dict[str, dict[str, Any]]:
+) -> ThesisBatch:
     """Run thesis generation across the top-N candidates synchronously.
 
     Synchronous wrapper so `scheduler/service.run_qu_scrape` can call it via
     `asyncio.to_thread` — keeps the async event loop free.
 
-    Returns a `dict[symbol -> thesis_dict]` ready for Discord rendering. Each
+    Returns a `ThesisBatch`: `theses` is `{symbol -> thesis_dict}` ready for
+    Discord rendering, `failures` is `{symbol -> reason}` for the rest. Each
     successful thesis also patches the matching ScreenedStockRecord row with
     `llm_confidence`, `shadow_combined_score`, `would_be_combined_rank`,
     `thesis_id`, `patterns_in_chart_not_in_indicators_count`.
     """
     if not candidates:
-        return {}
+        return ThesisBatch({}, {})
 
     return asyncio.run(
         _compute_theses_async(
@@ -721,7 +761,7 @@ async def _compute_theses_async(
     scan_date: date,
     session_name: str,
     settings: Settings,
-) -> dict[str, dict[str, Any]]:
+) -> ThesisBatch:
     from .chart_export import render_chart_png
     from .chart_persistence import attach_chart_id_to_thesis, persist_chart_image
 
@@ -729,6 +769,7 @@ async def _compute_theses_async(
     max_usd = float(thesis_cfg.max_usd_per_scan)
     cost_used = 0.0
     out: dict[str, dict[str, Any]] = {}
+    failures: dict[str, str] = {}
 
     # Pre-rank by composite_score so we can compute would_be_combined_rank
     # within just the LLM-augmented set (top N — typically 5).
@@ -738,13 +779,17 @@ async def _compute_theses_async(
     # to top-N candidates, so dict size is trivial.
     chart_ids_by_symbol: dict[str, int] = {}
 
-    for candidate in candidates:
+    for idx, candidate in enumerate(candidates):
         if cost_used >= max_usd:
             log.warning(
                 "thesis_budget_exhausted_skipping_remaining symbol=%s cost_used=%.4f",
                 candidate.symbol,
                 cost_used,
             )
+            for skipped in candidates[idx:]:
+                failures[skipped.symbol] = (
+                    f"skipped: scan budget ${max_usd:.2f} exhausted"
+                )
             break
 
         symbol = candidate.symbol
@@ -798,7 +843,7 @@ async def _compute_theses_async(
             return asyncio.run(_async_provider())
 
         try:
-            thesis, cost_charged, record_id = await generate_thesis(
+            thesis, cost_charged, record_id, error = await generate_thesis(
                 symbol=symbol,
                 scan_date=scan_date,
                 session_name=session_name,
@@ -808,10 +853,12 @@ async def _compute_theses_async(
             )
         except Exception as exc:
             log.exception("thesis_unexpected_failure symbol=%s error=%s", symbol, exc)
+            failures[symbol] = f"unexpected: {exc}"
             continue
 
         cost_used += cost_charged
         if thesis is None:
+            failures[symbol] = error or "unknown error"
             continue
 
         thesis_dict = thesis.model_dump()
@@ -946,4 +993,4 @@ async def _compute_theses_async(
     except Exception:
         log.exception("shadow_position_creation_failed scan_date=%s", scan_date)
 
-    return out
+    return ThesisBatch(out, failures)

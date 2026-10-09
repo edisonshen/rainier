@@ -26,7 +26,7 @@ from datetime import date
 
 import structlog
 
-from rainier.alerts.discord import send_stock_candidates
+from rainier.alerts.discord import send_stock_candidates, send_thesis_failure_alert
 from rainier.analysis.stock_screener import screen_stocks
 from rainier.core.config import Settings
 from rainier.llm_thesis.persistence import persist_screened_stocks
@@ -126,15 +126,18 @@ def run_post_scrape_pipeline(
         session_in_allowlist=session_name in settings.llm_thesis.enabled_sessions,
         has_candidates=bool(candidates),
     )
+    thesis_failures: dict[str, str] = {}
     if llm_gate_open:
+        thesis_targets = candidates[:5]
         try:
-            theses = compute_theses_and_persist(
-                candidates[:5],
+            batch = compute_theses_and_persist(
+                thesis_targets,
                 ohlcv_by_symbol,
                 scan_date=scan_date,
                 session_name=session_name,
                 settings=settings,
             )
+            theses, thesis_failures = batch.theses, batch.failures
         except Exception as exc:
             log.error(
                 "compute_theses_unexpected_failure",
@@ -142,6 +145,22 @@ def run_post_scrape_pipeline(
                 error=str(exc),
             )
             theses = {}
+            thesis_failures = {
+                c.symbol: f"compute_theses crashed: {exc}" for c in thesis_targets
+            }
+        if thesis_failures:
+            log.error(
+                "post_scrape_theses_failed",
+                session=session_name,
+                requested=len(thesis_targets),
+                failures=thesis_failures,
+            )
+            send_thesis_failure_alert(
+                settings.alerts.discord,
+                session=session_name,
+                requested=len(thesis_targets),
+                failures=thesis_failures,
+            )
 
     # 4. Discord. ``theses or None`` preserves the legacy top-20-only path
     # when theses is empty (gate disabled, or compute failed). dashboard URL
@@ -171,6 +190,7 @@ def run_post_scrape_pipeline(
         discord_payloads_ok=send_result.candidate_payloads_ok,
         discord_payloads_failed=send_result.candidate_payloads_failed,
         theses_attached=len(theses),
+        theses_generation_failed=len(thesis_failures),
         theses_sent=send_result.thesis_ok,
         theses_failed=send_result.thesis_failed,
     )

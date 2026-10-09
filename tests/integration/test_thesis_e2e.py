@@ -45,7 +45,7 @@ def test_real_sonnet_returns_valid_trade_thesis():
     def _provider():
         return pack, ["Rank trajectory: rising (Δ +22)."], None
 
-    thesis, cost, _ = asyncio.run(
+    thesis, cost, _, _ = asyncio.run(
         generate_thesis(
             symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
             evidence_provider=_provider, settings=settings, max_usd_remaining=1.0,

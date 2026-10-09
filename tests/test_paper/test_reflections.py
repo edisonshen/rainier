@@ -698,7 +698,7 @@ async def _run_thesis_capture(monkeypatch) -> tuple:
     ), patch(
         "rainier.llm_thesis.service._persist_thesis", return_value=1
     ):
-        thesis, _cost, _rid = await generate_thesis(
+        thesis, _cost, _rid, _err = await generate_thesis(
             symbol="NVDA",
             scan_date=date(2026, 6, 8),
             session_name="close",

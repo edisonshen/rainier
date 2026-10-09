@@ -1130,6 +1130,57 @@ def send_eval_report(
         )
 
 
+def _format_thesis_failure_message(
+    *, session: str, requested: int, failures: dict[str, str]
+) -> str:
+    ok = requested - len(failures)
+    label = SESSION_LABELS.get(session, session)
+    lines = [
+        f"**QU100-LLM thesis failure — {label}**: {ok}/{requested} theses generated."
+    ]
+    for symbol, reason in failures.items():
+        lines.append(f"- `{symbol}`: {_truncate(_scrub_discord_text(reason), 300)}")
+    return _truncate("\n".join(lines), 1900)
+
+
+def send_thesis_failure_alert(
+    config: DiscordConfig,
+    *,
+    session: str,
+    requested: int,
+    failures: dict[str, str],
+) -> bool:
+    """Post an ops alert to the LLM channel when a scan's theses failed.
+
+    The scrape itself exits 0 in this case, so cron-wrapper never alerts;
+    without this a provider outage (bad key, no credit, rejected params) shows
+    up only as an empty channel. Returns True when the alert landed.
+    """
+    if not failures:
+        return False
+    if not config.enabled:
+        log.debug("discord_alerts_disabled")
+        return False
+    webhook_url = _resolve_llm_webhook_url(config)
+    if not webhook_url:
+        log.warning("discord_no_webhook_url_thesis_failure")
+        return False
+    message = _format_thesis_failure_message(
+        session=session, requested=requested, failures=failures
+    )
+    try:
+        response = httpx.post(webhook_url, json={"content": message}, timeout=10)
+        response.raise_for_status()
+        log.info("discord_thesis_failure_alert_ok", status=response.status_code)
+        return True
+    except Exception as exc:
+        log.error(
+            "discord_thesis_failure_alert_failed",
+            status=_http_status(exc), error_type=type(exc).__name__,
+        )
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Weekly research report (PR3) — auto-research insight summary
 # ---------------------------------------------------------------------------

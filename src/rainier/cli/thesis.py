@@ -69,13 +69,16 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     )
 
     click.echo(f"Running LLM thesis on top {top_n} (max_usd={effective_max_usd:.2f})...")
-    theses = compute_theses_and_persist(
+    batch = compute_theses_and_persist(
         candidates[:top_n],
         ohlcv_by_symbol,
         scan_date=scan_date,
         session_name=session_name,
         settings=settings,
     )
+    theses = batch.theses
+    for sym, reason in batch.failures.items():
+        click.echo(f"  {sym}: no thesis — {reason}", err=True)
 
     if dry_run or not discord:
         import json as _json
@@ -132,14 +135,16 @@ def thesis_ticker(ctx, symbol, session_name, max_usd):
         click.echo(f"{symbol} not in screener output.")
         return
 
-    theses = compute_theses_and_persist(
+    batch = compute_theses_and_persist(
         [target], ohlcv,
         scan_date=_date.today(),
         session_name=session_name,
         settings=settings,
     )
     import json as _json
-    click.echo(_json.dumps(theses, indent=2, default=str))
+    click.echo(_json.dumps(batch.theses, indent=2, default=str))
+    for sym, reason in batch.failures.items():
+        click.echo(f"{sym}: no thesis — {reason}", err=True)
 
 
 @thesis.command("log")
