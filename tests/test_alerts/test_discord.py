@@ -541,3 +541,44 @@ def test_live_delivery_to_real_channel():
         "Discord did not accept the summary POST — message NOT delivered to "
         f"the channel (payloads_failed={result.candidate_payloads_failed})"
     )
+
+
+def test_thesis_failure_alert_routes_to_llm_channel_and_scrubs_mentions():
+    from unittest.mock import patch as _patch
+
+    from rainier.alerts.discord import send_thesis_failure_alert
+    from rainier.core.config import DiscordConfig as _DiscordConfig
+
+    config = _DiscordConfig(
+        enabled=True,
+        webhook_url="https://discord.test/main",
+        stock_webhook_url="https://discord.test/stock",
+        llm_webhook_url="https://discord.test/llm",
+    )
+    with _patch("rainier.alerts.discord.httpx.post") as mock_post:
+        ok = send_thesis_failure_alert(
+            config,
+            session="afternoon",
+            requested=5,
+            failures={"NVDA": "llm_call_failed: @everyone 400 `thinking`"},
+        )
+    assert ok is True
+    assert mock_post.call_args.args[0] == "https://discord.test/llm"
+    content = mock_post.call_args.kwargs["json"]["content"]
+    assert "4/5 theses generated" in content
+    assert "Afternoon" in content
+    assert "@everyone" not in content
+
+
+def test_thesis_failure_alert_noop_without_failures():
+    from unittest.mock import patch as _patch
+
+    from rainier.alerts.discord import send_thesis_failure_alert
+    from rainier.core.config import DiscordConfig as _DiscordConfig
+
+    with _patch("rainier.alerts.discord.httpx.post") as mock_post:
+        assert send_thesis_failure_alert(
+            _DiscordConfig(enabled=True, webhook_url="https://discord.test/main"),
+            session="afternoon", requested=5, failures={},
+        ) is False
+    mock_post.assert_not_called()
