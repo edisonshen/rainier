@@ -131,17 +131,17 @@ def run_post_scrape_pipeline(
     thesis_failures: dict[str, str] = {}
     thesis_targets: list = []
     if llm_gate_open:
-        selection = select_thesis_targets(scan_candidates, settings)
-        thesis_targets = selection.targets
-        log.info(
-            "post_scrape_thesis_selection",
-            session=session_name,
-            source=selection.source,
-            picks=[c.symbol for c in thesis_targets],
-            cost_usd=round(selection.cost_usd, 4),
-            error=selection.error,
-        )
         try:
+            selection = select_thesis_targets(scan_candidates, settings)
+            thesis_targets = selection.targets
+            log.info(
+                "post_scrape_thesis_selection",
+                session=session_name,
+                source=selection.source,
+                picks=[c.symbol for c in thesis_targets],
+                cost_usd=round(selection.cost_usd, 4),
+                error=selection.error,
+            )
             batch = compute_theses_and_persist(
                 thesis_targets,
                 ohlcv_by_symbol,

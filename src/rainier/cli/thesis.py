@@ -28,7 +28,7 @@ def thesis():
 @click.option(
     "--top-n",
     default=None,
-    type=int,
+    type=click.IntRange(min=1),
     help="How many candidates the LLM picks to thesis (default: llm_thesis.top_n).",
 )
 @click.option("--discord/--no-discord", default=False, help="Post results to Discord.")

@@ -9,11 +9,13 @@ must fall back to the screener's composite top-5, never drop the thesis set.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from unittest.mock import patch
 
 import pytest
 
+from rainier.llm_thesis.selection import select_thesis_targets
 from rainier.llm_thesis.service import ThesisBatch
 from tests.test_pipeline.test_post_scrape import _candidates, _make_settings
 
@@ -52,10 +54,23 @@ def _fake_compute(targets, _ohlcv, **kwargs):
     return ThesisBatch({c.symbol: _thesis(c.symbol, reasons.get(c.symbol)) for c in targets}, {})
 
 
-def _run_scan(llm_completion, *, selection_enabled: bool = True):
+def _run_scan(
+    llm_completion,
+    *,
+    selection_enabled: bool = True,
+    pool_size: int | None = None,
+    selector_crash: Exception | None = None,
+):
     """Run the real post-scrape pipeline + real Discord renderer; mock only the
     screener, DB writes, the thesis LLM batch, and the network edges."""
     settings = _make_settings(llm_selection_enabled=selection_enabled)
+    if pool_size is not None:
+        settings.llm_thesis.selection_pool_size = pool_size
+    selector_patch = (
+        patch("rainier.pipeline.post_scrape.select_thesis_targets", side_effect=selector_crash)
+        if selector_crash
+        else contextlib.nullcontext()
+    )
     posted_embeds: list[dict] = []
 
     with (
@@ -69,7 +84,8 @@ def _run_scan(llm_completion, *, selection_enabled: bool = True):
             side_effect=_fake_compute,
         ) as mock_compute,
         patch("litellm.completion", side_effect=llm_completion) as mock_llm,
-        patch("rainier.alerts.discord.httpx.post"),
+        patch("rainier.alerts.discord.httpx.post") as mock_http,
+        selector_patch,
         patch(
             "rainier.alerts.discord._post_thesis_embed",
             side_effect=lambda **kw: posted_embeds.append(kw["embed"]),
@@ -80,7 +96,7 @@ def _run_scan(llm_completion, *, selection_enabled: bool = True):
 
         run_post_scrape_pipeline(settings, "afternoon")
 
-    return mock_compute, mock_llm, posted_embeds
+    return mock_compute, mock_llm, posted_embeds, mock_http
 
 
 def _embed_symbol(embed: dict) -> str:
@@ -104,7 +120,7 @@ def test_llm_picks_drive_thesis_and_discord_even_outside_top_20():
         ("S040", "sector diversifier"),
         ("S007", "clean flag"),
     ])
-    mock_compute, mock_llm, embeds = _run_scan(lambda **_: reply)
+    mock_compute, mock_llm, embeds, _ = _run_scan(lambda **_: reply)
 
     # The selector saw the full 50-name pool, not the Discord top-20.
     prompt = mock_llm.call_args.kwargs["messages"][1]["content"]
@@ -122,7 +138,7 @@ def test_llm_picks_drive_thesis_and_discord_even_outside_top_20():
 
 def test_short_llm_list_is_filled_in_screener_order():
     reply = _llm_reply([("S030", "only pick")], fenced=True)
-    mock_compute, _, embeds = _run_scan(lambda **_: reply)
+    mock_compute, _, embeds, _ = _run_scan(lambda **_: reply)
 
     targets = [c.symbol for c in mock_compute.call_args.args[0]]
     assert targets == ["S030", "S000", "S001", "S002", "S003"]
@@ -147,7 +163,7 @@ def test_short_llm_list_is_filled_in_screener_order():
     ],
 )
 def test_selector_failure_falls_back_to_screener_top_5(llm_completion):
-    mock_compute, _, embeds = _run_scan(llm_completion)
+    mock_compute, _, embeds, _ = _run_scan(llm_completion)
 
     targets = [c.symbol for c in mock_compute.call_args.args[0]]
     assert targets == ["S000", "S001", "S002", "S003", "S004"]
@@ -156,8 +172,41 @@ def test_selector_failure_falls_back_to_screener_top_5(llm_completion):
 
 
 def test_selection_disabled_uses_composite_top_5_without_llm_call():
-    mock_compute, mock_llm, _ = _run_scan(lambda **_: _llm_reply([]), selection_enabled=False)
+    mock_compute, mock_llm, _, _ = _run_scan(
+        lambda **_: _llm_reply([]), selection_enabled=False
+    )
 
     mock_llm.assert_not_called()
     targets = [c.symbol for c in mock_compute.call_args.args[0]]
     assert targets == ["S000", "S001", "S002", "S003", "S004"]
+
+
+def test_llm_reason_cannot_mass_mention_the_discord_channel():
+    reply = _llm_reply([("S029", "@everyone buy now @here")])
+    _, _, embeds, _ = _run_scan(lambda **_: reply)
+
+    reason = _picked_reason(embeds[0])
+    assert "@everyone" not in reason and "@here" not in reason
+
+
+def test_pool_smaller_than_top_n_still_theses_top_n():
+    _, mock_llm, embeds, _ = _run_scan(lambda **_: _llm_reply([]), pool_size=3)
+
+    mock_llm.assert_not_called()
+    assert [_embed_symbol(e) for e in embeds] == ["S000", "S001", "S002", "S003", "S004"]
+
+
+def test_selector_crash_still_posts_the_top_20_summary():
+    mock_compute, _, embeds, mock_http = _run_scan(
+        lambda **_: _llm_reply([]), selector_crash=RuntimeError("boom")
+    )
+
+    mock_compute.assert_not_called()
+    assert embeds == []
+    assert mock_http.called  # rule-based top-20 summary still went out
+
+
+@pytest.mark.parametrize("top_n", [0, -1])
+def test_non_positive_top_n_is_rejected_instead_of_thesising_the_pool(top_n):
+    with pytest.raises(ValueError):
+        select_thesis_targets(_candidates(50), _make_settings(), top_n=top_n)
