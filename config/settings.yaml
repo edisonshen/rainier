@@ -188,6 +188,13 @@ llm_thesis:
     - afternoon
     - close
   fallback_to_anthropic_sdk: false
+  # Claude picks which top_n names get a thesis from the screener's top
+  # selection_pool_size (one cheap text-only call, ~$0.02-0.05/scan); falls back
+  # to the composite top_n on any selector failure. selection_model null = model.
+  top_n: 5
+  llm_selection_enabled: true
+  selection_pool_size: 50
+  selection_model: null
   # PR5: when set, the Discord per-ticker embed gets a clickable link to the
   # dashboard pre-filtered to this thesis. Leave as ``null`` to render no
   # link (graceful degradation when the dashboard isn't running). Override

@@ -694,6 +694,8 @@ def compute_theses_and_persist(
     scan_date: date,
     session_name: str,
     settings: Settings,
+    already_spent_usd: float = 0.0,
+    selection_reasons: dict[str, str] | None = None,
 ) -> ThesisBatch:
     """Run thesis generation across the top-N candidates synchronously.
 
@@ -705,6 +707,10 @@ def compute_theses_and_persist(
     successful thesis also patches the matching ScreenedStockRecord row with
     `llm_confidence`, `shadow_combined_score`, `would_be_combined_rank`,
     `thesis_id`, `patterns_in_chart_not_in_indicators_count`.
+
+    ``already_spent_usd`` (e.g. the selection call) counts against the per-scan
+    kill switch. ``selection_reasons`` ``{symbol: why the LLM picked it}`` is
+    stamped on each thesis dict as ``_selection_reason`` for Discord.
     """
     if not candidates:
         return ThesisBatch({}, {})
@@ -716,6 +722,8 @@ def compute_theses_and_persist(
             scan_date=scan_date,
             session_name=session_name,
             settings=settings,
+            already_spent_usd=already_spent_usd,
+            selection_reasons=selection_reasons,
         )
     )
 
@@ -761,13 +769,15 @@ async def _compute_theses_async(
     scan_date: date,
     session_name: str,
     settings: Settings,
+    already_spent_usd: float = 0.0,
+    selection_reasons: dict[str, str] | None = None,
 ) -> ThesisBatch:
     from .chart_export import render_chart_png
     from .chart_persistence import attach_chart_id_to_thesis, persist_chart_image
 
     thesis_cfg = settings.llm_thesis
     max_usd = float(thesis_cfg.max_usd_per_scan)
-    cost_used = 0.0
+    cost_used = already_spent_usd
     out: dict[str, dict[str, Any]] = {}
     failures: dict[str, str] = {}
 
@@ -870,6 +880,9 @@ async def _compute_theses_async(
         # `_session_name` precedent in service._persist_thesis.
         if record_id is not None:
             thesis_dict["_thesis_id"] = int(record_id)
+        reason = (selection_reasons or {}).get(symbol)
+        if reason:
+            thesis_dict["_selection_reason"] = reason
         out[symbol] = thesis_dict
         ranked.append((candidate, thesis_dict))
 

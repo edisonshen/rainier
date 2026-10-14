@@ -730,6 +730,14 @@ def format_thesis_embed(
 
     fields: list[dict[str, Any]] = []
 
+    selection_reason = thesis.get("_selection_reason")
+    if selection_reason:
+        fields.append({
+            "name": "PICKED BY LLM",
+            "value": _truncate_at_word(str(selection_reason), _EMBED_FIELD_VALUE_MAX),
+            "inline": False,
+        })
+
     why_bullets = _why_bullets(thesis)
     if why_bullets:
         why_value = "\n".join(f"• {b}" for b in why_bullets)
@@ -871,6 +879,7 @@ def send_stock_candidates(
     *,
     dashboard_base_url: str | None = None,
     session: str | None = None,
+    thesis_candidates: list[StockCandidate] | None = None,
 ) -> DiscordSendResult:
     """Send QU100 stock candidate alerts to Discord.
 
@@ -891,6 +900,9 @@ def send_stock_candidates(
             Morning/Midday/Afternoon/Close` suffix so operators can tell
             multiple same-day scans apart in the stock channel. ``None``
             preserves the legacy session-less title.
+        thesis_candidates: The candidates the theses were generated for, in
+            render order (the LLM picks may sit outside ``candidates``).
+            ``None`` falls back to the first 5 of ``candidates``.
     """
     reported = len(candidates)
     if not candidates:
@@ -959,10 +971,12 @@ def send_stock_candidates(
             reported, payloads_ok, payloads_failed, 0, 0, summary_ok=summary_ok,
         )
 
-    # Per-ticker rich thesis embeds — top 5 only, in candidate order.
+    # Per-ticker rich thesis embeds, in thesis-target order.
     thesis_ok = 0
     thesis_failed = 0
-    for candidate in candidates[:5]:
+    if thesis_candidates is None:
+        thesis_candidates = candidates[:5]
+    for candidate in thesis_candidates:
         thesis = theses.get(candidate.symbol)
         if not thesis:
             continue

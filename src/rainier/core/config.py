@@ -336,6 +336,14 @@ class LLMThesisConfig(BaseModel):
         default_factory=lambda: ["afternoon", "close"]
     )
     fallback_to_anthropic_sdk: bool = False
+    # How many names get a full thesis per scan.
+    top_n: int = Field(5, ge=1)
+    # When on, one cheap text-only LLM call picks the top_n from the screener's
+    # top selection_pool_size (llm_thesis/selection.py); off = composite top_n.
+    llm_selection_enabled: bool = True
+    selection_pool_size: int = Field(50, ge=1)
+    # None = use `model`.
+    selection_model: str | None = None
     signals: dict[str, ThesisSignalConfig] = Field(
         default_factory=_default_thesis_signals
     )

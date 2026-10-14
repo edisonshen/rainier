@@ -35,6 +35,7 @@ def _make_settings(
     llm_enabled: bool = True,
     enabled_sessions: tuple[str, ...] = ("afternoon", "close"),
     dashboard_base_url: str | None = "https://dash.example.com",
+    llm_selection_enabled: bool = False,
 ) -> Settings:
     """Build a Settings object exercising the LLM thesis fields the pipeline
     inspects.
@@ -59,6 +60,7 @@ def _make_settings(
             max_usd_per_scan=1.0,
             enabled_sessions=list(enabled_sessions),
             dashboard_base_url=dashboard_base_url,
+            llm_selection_enabled=llm_selection_enabled,
         ),
     )
 

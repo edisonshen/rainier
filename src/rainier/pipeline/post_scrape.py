@@ -5,7 +5,8 @@ QU100 scrape, regardless of how that scrape was triggered:
 
     screen_stocks      -> 3-layer screener (returns candidates + ohlcv)
     persist top-50     -> shadow-validation dataset (PR2 carry-over)
-    LLM thesis top-5   -> only on sessions in `enabled_sessions`
+    LLM pick + thesis  -> only on sessions in `enabled_sessions`: the LLM picks
+                          top_n (default 5) of the top-50, then theses them
     Discord top-20     -> rich per-ticker embeds when theses dict is non-empty
 
 Before this module existed, the CLI path (``rainier scrape qu``, called
@@ -30,6 +31,7 @@ from rainier.alerts.discord import send_stock_candidates, send_thesis_failure_al
 from rainier.analysis.stock_screener import screen_stocks
 from rainier.core.config import Settings
 from rainier.llm_thesis.persistence import persist_screened_stocks
+from rainier.llm_thesis.selection import select_thesis_targets
 from rainier.llm_thesis.service import compute_theses_and_persist
 
 log = structlog.get_logger()
@@ -49,8 +51,10 @@ def run_post_scrape_pipeline(
        swallowed — persistence must not block the Discord post.
     3. If ``settings.llm_thesis.enabled`` AND ``session_name`` is in
        ``settings.llm_thesis.enabled_sessions`` AND there are candidates,
-       call ``compute_theses_and_persist`` on the top-5. Failures fall back
-       to an empty ``theses`` dict so the regular top-20 post still goes out.
+       ``select_thesis_targets`` lets the LLM pick ``top_n`` of the top-50
+       (composite top-N on selector failure), then ``compute_theses_and_persist``
+       theses those picks. Failures fall back to an empty ``theses`` dict so
+       the regular top-20 post still goes out.
     4. ``send_stock_candidates(top-20, theses or None, dashboard_base_url)`` —
        Discord display set is always top-20; passing ``theses=None`` triggers
        the legacy top-20-only embed; passing a non-empty dict adds the
@@ -78,7 +82,7 @@ def run_post_scrape_pipeline(
     # Three windows on the same sorted list:
     #   - top-50 -> persistence (unbiased shadow dataset)
     #   - top-20 -> Discord display
-    #   - top-5  -> LLM thesis (expensive; per-call cost cap)
+    #   - LLM-picked top_n of the top-50 -> LLM thesis (expensive; cost cap)
     scan_candidates = all_candidates[:50]
     candidates = all_candidates[:20]
 
@@ -108,10 +112,8 @@ def run_post_scrape_pipeline(
             error=str(exc),
         )
 
-    # 3. LLM thesis — gated by enabled flag + session allowlist + non-empty
-    # candidates. compute_theses_and_persist itself enforces the top-5 cap,
-    # but we slice here too so the call signature matches the historic
-    # service.py contract and so the test layer can assert on the slice.
+    # 3. LLM pick + thesis — gated by enabled flag + session allowlist +
+    # non-empty candidates.
     theses: dict[str, dict] = {}
     llm_gate_open = (
         settings.llm_thesis.enabled
@@ -127,8 +129,18 @@ def run_post_scrape_pipeline(
         has_candidates=bool(candidates),
     )
     thesis_failures: dict[str, str] = {}
+    thesis_targets: list = []
     if llm_gate_open:
-        thesis_targets = candidates[:5]
+        selection = select_thesis_targets(scan_candidates, settings)
+        thesis_targets = selection.targets
+        log.info(
+            "post_scrape_thesis_selection",
+            session=session_name,
+            source=selection.source,
+            picks=[c.symbol for c in thesis_targets],
+            cost_usd=round(selection.cost_usd, 4),
+            error=selection.error,
+        )
         try:
             batch = compute_theses_and_persist(
                 thesis_targets,
@@ -136,6 +148,8 @@ def run_post_scrape_pipeline(
                 scan_date=scan_date,
                 session_name=session_name,
                 settings=settings,
+                already_spent_usd=selection.cost_usd,
+                selection_reasons=selection.reasons,
             )
             theses, thesis_failures = batch.theses, batch.failures
         except Exception as exc:
@@ -175,6 +189,7 @@ def run_post_scrape_pipeline(
         theses=theses or None,
         dashboard_base_url=settings.llm_thesis.dashboard_base_url,
         session=session_name,
+        thesis_candidates=thesis_targets,
     )
     # discord_sent reflects what actually LANDED, not len(candidates). The
     # summary embed (payload idx 0) lists ALL candidates, so summary_ok is the

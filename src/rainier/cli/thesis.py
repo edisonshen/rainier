@@ -25,7 +25,12 @@ def thesis():
     type=click.Choice(["morning", "midday", "afternoon", "close"]),
     help="Which scan to attribute this run to.",
 )
-@click.option("--top-n", default=5, type=int, help="How many top candidates to LLM-thesis.")
+@click.option(
+    "--top-n",
+    default=None,
+    type=int,
+    help="How many candidates the LLM picks to thesis (default: llm_thesis.top_n).",
+)
 @click.option("--discord/--no-discord", default=False, help="Post results to Discord.")
 @click.option("--dry-run", is_flag=True, help="Skip Discord, print theses to stdout.")
 @click.option(
@@ -44,6 +49,7 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     from rainier.analysis.stock_screener import screen_stocks
     from rainier.core.config import load_settings_fresh
     from rainier.llm_thesis.persistence import persist_screened_stocks
+    from rainier.llm_thesis.selection import select_thesis_targets
     from rainier.llm_thesis.service import compute_theses_and_persist
 
     settings = load_settings_fresh(_settings_path(ctx))
@@ -56,7 +62,7 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     click.echo(f"Running screener for session={session_name}...")
     all_candidates, ohlcv_by_symbol = screen_stocks(settings)
     # PR2 carry-over P2 #3: persist top-50 for unbiased shadow validation;
-    # display set capped at top-20; LLM thesis on top-N (default 5).
+    # display set capped at top-20; the LLM picks top-N of the top-50 to thesis.
     scan_candidates = all_candidates[:50]
     candidates = all_candidates[:20]
     if not candidates:
@@ -68,13 +74,28 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
         scan_candidates, scan_date=scan_date, session_name=session_name
     )
 
-    click.echo(f"Running LLM thesis on top {top_n} (max_usd={effective_max_usd:.2f})...")
+    selection = select_thesis_targets(scan_candidates, settings, top_n=top_n)
+    click.echo(
+        f"Thesis picks ({selection.source}, ${selection.cost_usd:.4f}): "
+        + ", ".join(c.symbol for c in selection.targets)
+    )
+    if selection.error:
+        click.echo(f"  selector fell back to screener order: {selection.error}", err=True)
+    for sym, reason in selection.reasons.items():
+        click.echo(f"  {sym}: {reason}")
+
+    click.echo(
+        f"Running LLM thesis on {len(selection.targets)} picks "
+        f"(max_usd={effective_max_usd:.2f})..."
+    )
     batch = compute_theses_and_persist(
-        candidates[:top_n],
+        selection.targets,
         ohlcv_by_symbol,
         scan_date=scan_date,
         session_name=session_name,
         settings=settings,
+        already_spent_usd=selection.cost_usd,
+        selection_reasons=selection.reasons,
     )
     theses = batch.theses
     for sym, reason in batch.failures.items():
@@ -97,6 +118,7 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
         # `— Morning/Midday/Afternoon/Close` suffix when multiple scans
         # land in the same channel on the same day.
         session=session_name,
+        thesis_candidates=selection.targets,
     )
     click.echo(f"Sent {len(theses)} theses + summary to Discord.")
 
