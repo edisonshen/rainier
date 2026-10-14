@@ -195,6 +195,20 @@ llm_thesis:
   llm_selection_enabled: true
   selection_pool_size: 50
   selection_model: null
+  # Close reuses the afternoon thesis (no LLM call) when pattern type/status and
+  # entry/stop/target are unchanged, price moved <= reuse_max_price_move_pct and
+  # QU rank moved <= reuse_max_rank_move.
+  reuse_prior_session:
+    close: afternoon
+  reuse_max_price_move_pct: 2.0
+  reuse_max_rank_move: 10
+  # Close-scan theses go through Anthropic's Message Batches API (50% price).
+  # A batch still running after batch_timeout_minutes is cancelled and the
+  # remaining calls run synchronously at full price, so the close post lands.
+  batch_sessions:
+    - close
+  batch_timeout_minutes: 45
+  batch_poll_seconds: 30
   # PR5: when set, the Discord per-ticker embed gets a clickable link to the
   # dashboard pre-filtered to this thesis. Leave as ``null`` to render no
   # link (graceful degradation when the dashboard isn't running). Override
