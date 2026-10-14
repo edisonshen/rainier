@@ -342,6 +342,20 @@ class LLMThesisConfig(BaseModel):
     # top selection_pool_size (llm_thesis/selection.py); off = composite top_n.
     llm_selection_enabled: bool = True
     selection_pool_size: int = Field(50, ge=1)
+    # Cross-session reuse: a session listed here (key) reuses the same-day thesis
+    # from the mapped earlier session (value) instead of a new LLM call when the
+    # evidence is materially unchanged (service._evidence_unchanged).
+    reuse_prior_session: dict[str, str] = Field(
+        default_factory=lambda: {"close": "afternoon"}
+    )
+    reuse_max_price_move_pct: float = Field(2.0, ge=0)
+    reuse_max_rank_move: int = Field(10, ge=0)
+    # Sessions whose thesis calls go through Anthropic's Message Batches API
+    # (50% price, async). Past batch_timeout_minutes the batch is cancelled and
+    # the remaining calls run synchronously at full price.
+    batch_sessions: list[str] = Field(default_factory=lambda: ["close"])
+    batch_timeout_minutes: float = Field(45.0, gt=0)
+    batch_poll_seconds: float = Field(30.0, ge=0)
     # None = use `model`.
     selection_model: str | None = None
     signals: dict[str, ThesisSignalConfig] = Field(
