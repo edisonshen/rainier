@@ -31,7 +31,7 @@ from rainier.alerts.discord import send_stock_candidates, send_thesis_failure_al
 from rainier.analysis.stock_screener import screen_stocks
 from rainier.core.config import Settings
 from rainier.llm_thesis.persistence import persist_screened_stocks
-from rainier.llm_thesis.selection import select_thesis_targets
+from rainier.llm_thesis.selection import ThesisSelection, select_thesis_targets
 from rainier.llm_thesis.service import compute_theses_and_persist
 
 log = structlog.get_logger()
@@ -133,15 +133,20 @@ def run_post_scrape_pipeline(
     if llm_gate_open:
         try:
             selection = select_thesis_targets(scan_candidates, settings)
-            thesis_targets = selection.targets
-            log.info(
-                "post_scrape_thesis_selection",
-                session=session_name,
-                source=selection.source,
-                picks=[c.symbol for c in thesis_targets],
-                cost_usd=round(selection.cost_usd, 4),
-                error=selection.error,
+        except Exception as exc:
+            selection = ThesisSelection(
+                scan_candidates[: settings.llm_thesis.top_n], {}, "screener", 0.0, str(exc)
             )
+        thesis_targets = selection.targets
+        log.info(
+            "post_scrape_thesis_selection",
+            session=session_name,
+            source=selection.source,
+            picks=[c.symbol for c in thesis_targets],
+            cost_usd=round(selection.cost_usd, 4),
+            error=selection.error,
+        )
+        try:
             batch = compute_theses_and_persist(
                 thesis_targets,
                 ohlcv_by_symbol,

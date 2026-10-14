@@ -196,13 +196,14 @@ def test_pool_smaller_than_top_n_still_theses_top_n():
     assert [_embed_symbol(e) for e in embeds] == ["S000", "S001", "S002", "S003", "S004"]
 
 
-def test_selector_crash_still_posts_the_top_20_summary():
+def test_selector_crash_falls_back_to_screener_top_5_and_posts_summary():
     mock_compute, _, embeds, mock_http = _run_scan(
         lambda **_: _llm_reply([]), selector_crash=RuntimeError("boom")
     )
 
-    mock_compute.assert_not_called()
-    assert embeds == []
+    targets = [c.symbol for c in mock_compute.call_args.args[0]]
+    assert targets == ["S000", "S001", "S002", "S003", "S004"]
+    assert [_embed_symbol(e) for e in embeds] == targets
     assert mock_http.called  # rule-based top-20 summary still went out
 
 
