@@ -487,16 +487,21 @@ def _reuse_prior_session_thesis(
     prior_session = thesis_cfg.reuse_prior_session.get(session_name)
     if not prior_session:
         return None
-    try:
-        cached = _tier1_lookup(
+    def _lookup(session: str) -> tuple[int, dict[str, Any]] | None:
+        return _tier1_lookup(
             candidate.symbol,
             scan_date,
             thesis_cfg.prompt_version,
-            session_name=prior_session,
+            session_name=session,
             llm_model=thesis_cfg.model,
             enabled_signals=_enabled_signal_names(thesis_cfg),
             thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
         )
+
+    try:
+        if _lookup(session_name) is not None:
+            return None  # rerun: generate_thesis serves this session's own cached thesis
+        cached = _lookup(prior_session)
     except Exception:
         log.warning("thesis_reuse_lookup_failed symbol=%s", candidate.symbol, exc_info=True)
         return None

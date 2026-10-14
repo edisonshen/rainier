@@ -67,9 +67,10 @@ def _afternoon_row(candidate: StockCandidate, record_id: int) -> tuple[int, dict
 class FakeAnthropicBatches:
     """Message Batches API double: records submissions, answers from `reply`."""
 
-    def __init__(self, reply=_thesis_json, *, ends: bool = True):
+    def __init__(self, reply=_thesis_json, *, ends: bool = True, poll_fails: bool = False):
         self.reply = reply
         self.ends = ends
+        self.poll_fails = poll_fails
         self.submitted: list[list[dict]] = []
         self.cancelled: list[str] = []
 
@@ -90,6 +91,8 @@ class FakeAnthropicBatches:
     def get(self, url, headers=None, timeout=None, follow_redirects=False):
         batch_id = url.rsplit("/", 2)[-2] if url.endswith("/results") else url.rsplit("/", 1)[-1]
         if not url.endswith("/results"):
+            if self.poll_fails:
+                raise RuntimeError("503 from batch status endpoint")
             status = "ended" if self.ends else "in_progress"
             return self._resp({"id": batch_id, "processing_status": status,
                                "results_url": f"https://x/batches/{batch_id}/results"})
@@ -118,13 +121,15 @@ def _sync_completion(**kwargs):
     }
 
 
-def _run_close_scan(candidates, *, settings, afternoon_rows=None, batch_api=None):
+def _run_close_scan(
+    candidates, *, settings, afternoon_rows=None, close_rows=None, batch_api=None
+):
     """Real close-scan thesis pipeline; DB, chart render and network are faked."""
-    afternoon_rows = afternoon_rows or {}
+    rows_by_session = {"afternoon": afternoon_rows or {}, "close": close_rows or {}}
     persisted: list[dict] = []
 
     def tier1(symbol, scan_date, prompt_version, *, session_name, **_):
-        return afternoon_rows.get(symbol) if session_name == "afternoon" else None
+        return rows_by_session.get(session_name, {}).get(symbol)
 
     async def assemble(candidate, *_args):
         pack = EvidencePack(symbol=candidate.symbol, scan_date=SCAN_DATE.isoformat(),
@@ -257,3 +262,30 @@ def test_reused_thesis_is_labelled_in_discord():
         )
     fields = {f["name"]: f["value"] for f in embeds[0]["fields"]}
     assert fields["REUSED"].startswith("afternoon thesis")
+
+
+def test_close_rerun_keeps_its_own_close_thesis_instead_of_the_afternoon_one():
+    candidate = _candidate("AAA")
+    close_id, close_output = _afternoon_row(candidate, 91)
+    close_output["_session_name"] = "close"
+
+    batch, persisted, api, sync_llm = _run_close_scan(
+        [candidate], settings=_settings(),
+        afternoon_rows={"AAA": _afternoon_row(candidate, 77)},
+        close_rows={"AAA": (close_id, close_output)},
+    )
+
+    assert batch.theses["AAA"]["_thesis_id"] == 91
+    assert "_reused_from_session" not in batch.theses["AAA"]
+    assert api.submitted == [] and persisted == []
+    sync_llm.assert_not_called()
+
+
+def test_batch_poll_error_cancels_before_falling_back_to_sync_calls():
+    api = FakeAnthropicBatches(poll_fails=True)
+    batch, _, api, sync_llm = _run_close_scan(
+        [_candidate("AAA"), _candidate("BBB")], settings=_settings(), batch_api=api
+    )
+    assert set(batch.theses) == {"AAA", "BBB"} and not batch.failures
+    assert len(api.cancelled) == 1  # the original batch can't also be billed
+    assert sync_llm.call_count == 2

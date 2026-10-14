@@ -72,6 +72,14 @@ def _native_content(content: Any) -> Any:
     return parts
 
 
+def _cancel_batch(batch_id: str, headers: dict[str, str]) -> None:
+    try:
+        httpx.post(f"{ANTHROPIC_API_BASE}/messages/batches/{batch_id}/cancel",
+                   headers=headers, timeout=30)
+    except Exception:
+        log.warning("thesis_batch_cancel_failed batch_id=%s", batch_id, exc_info=True)
+
+
 def run_message_batch(
     requests: list[dict[str, Any]],
     *,
@@ -96,20 +104,25 @@ def run_message_batch(
     batch = resp.json()
     log.info("thesis_batch_submitted batch_id=%s requests=%d", batch["id"], len(requests))
 
-    deadline = time.monotonic() + timeout_s
-    while batch["processing_status"] != "ended":
-        if time.monotonic() >= deadline:
-            httpx.post(f"{ANTHROPIC_API_BASE}/messages/batches/{batch['id']}/cancel",
-                       headers=headers, timeout=30)
-            raise BatchTimeoutError(f"batch {batch['id']} not done after {timeout_s:.0f}s")
-        time.sleep(poll_s)
-        resp = httpx.get(f"{ANTHROPIC_API_BASE}/messages/batches/{batch['id']}",
-                         headers=headers, timeout=30)
-        resp.raise_for_status()
-        batch = resp.json()
+    batch_id = batch["id"]
+    try:
+        deadline = time.monotonic() + timeout_s
+        while batch["processing_status"] != "ended":
+            if time.monotonic() >= deadline:
+                raise BatchTimeoutError(f"batch {batch_id} not done after {timeout_s:.0f}s")
+            time.sleep(poll_s)
+            resp = httpx.get(f"{ANTHROPIC_API_BASE}/messages/batches/{batch_id}",
+                             headers=headers, timeout=30)
+            resp.raise_for_status()
+            batch = resp.json()
 
-    resp = httpx.get(batch["results_url"], headers=headers, timeout=60, follow_redirects=True)
-    resp.raise_for_status()
+        resp = httpx.get(batch["results_url"], headers=headers, timeout=60,
+                         follow_redirects=True)
+        resp.raise_for_status()
+    except Exception:
+        # The caller falls back to sync calls; cancel so the batch can't also bill.
+        _cancel_batch(batch_id, headers)
+        raise
     results: dict[int, LLMReply | str] = {}
     for line in resp.text.splitlines():
         if not line.strip():
