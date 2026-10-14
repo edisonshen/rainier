@@ -67,10 +67,12 @@ def _afternoon_row(candidate: StockCandidate, record_id: int) -> tuple[int, dict
 class FakeAnthropicBatches:
     """Message Batches API double: records submissions, answers from `reply`."""
 
-    def __init__(self, reply=_thesis_json, *, ends: bool = True, poll_fails: bool = False):
+    def __init__(self, reply=_thesis_json, *, ends: bool = True, poll_fails: bool = False,
+                 results_failures: int = 0):
         self.reply = reply
         self.ends = ends
         self.poll_fails = poll_fails
+        self.results_failures = results_failures
         self.submitted: list[list[dict]] = []
         self.cancelled: list[str] = []
 
@@ -96,6 +98,9 @@ class FakeAnthropicBatches:
             status = "ended" if self.ends else "in_progress"
             return self._resp({"id": batch_id, "processing_status": status,
                                "results_url": f"https://x/batches/{batch_id}/results"})
+        if self.results_failures:
+            self.results_failures -= 1
+            raise RuntimeError("502 downloading batch results")
         requests = self.submitted[int(batch_id[1:]) - 1]
         lines = []
         for req in requests:
@@ -289,3 +294,14 @@ def test_batch_poll_error_cancels_before_falling_back_to_sync_calls():
     assert set(batch.theses) == {"AAA", "BBB"} and not batch.failures
     assert len(api.cancelled) == 1  # the original batch can't also be billed
     assert sync_llm.call_count == 2
+
+
+def test_ended_batch_results_download_is_retried_not_paid_twice():
+    api = FakeAnthropicBatches(results_failures=1)
+    batch, persisted, api, sync_llm = _run_close_scan(
+        [_candidate("AAA"), _candidate("BBB")], settings=_settings(), batch_api=api
+    )
+    assert set(batch.theses) == {"AAA", "BBB"} and not batch.failures
+    assert api.cancelled == []
+    sync_llm.assert_not_called()
+    assert persisted[0]["cost_usd"] == pytest.approx(_full_cost() / 2)

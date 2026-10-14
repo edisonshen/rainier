@@ -80,6 +80,23 @@ def _cancel_batch(batch_id: str, headers: dict[str, str]) -> None:
         log.warning("thesis_batch_cancel_failed batch_id=%s", batch_id, exc_info=True)
 
 
+def _fetch_results(
+    url: str, headers: dict[str, str], *, retry_wait_s: float, attempts: int = 3
+) -> httpx.Response:
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = httpx.get(url, headers=headers, timeout=60, follow_redirects=True)
+            resp.raise_for_status()
+            return resp
+        except Exception:
+            if attempt == attempts:
+                raise
+            log.warning("thesis_batch_results_retry attempt=%d url=%s", attempt, url,
+                        exc_info=True)
+            time.sleep(retry_wait_s)
+    raise AssertionError("unreachable")
+
+
 def run_message_batch(
     requests: list[dict[str, Any]],
     *,
@@ -115,14 +132,13 @@ def run_message_batch(
                              headers=headers, timeout=30)
             resp.raise_for_status()
             batch = resp.json()
-
-        resp = httpx.get(batch["results_url"], headers=headers, timeout=60,
-                         follow_redirects=True)
-        resp.raise_for_status()
     except Exception:
         # The caller falls back to sync calls; cancel so the batch can't also bill.
         _cancel_batch(batch_id, headers)
         raise
+    # The batch has ended and is already billed, so retry the download rather
+    # than paying again through the sync fallback.
+    resp = _fetch_results(batch["results_url"], headers, retry_wait_s=poll_s)
     results: dict[int, LLMReply | str] = {}
     for line in resp.text.splitlines():
         if not line.strip():
