@@ -137,10 +137,10 @@ def _resolve_picks(
             continue
         targets.append(candidate)
         reasons[symbol] = pick.reason.strip()[:_REASON_MAX_CHARS]
-        if len(targets) == top_n:
+        if len(targets) >= top_n:
             break
     for candidate in pool:
-        if len(targets) == top_n:
+        if len(targets) >= top_n:
             break
         if candidate.symbol not in reasons:
             targets.append(candidate)
@@ -158,7 +158,9 @@ def select_thesis_targets(
     """
     cfg = settings.llm_thesis
     n = cfg.top_n if top_n is None else top_n
-    pool = candidates[: cfg.selection_pool_size]
+    if n < 1:
+        raise ValueError(f"top_n must be >= 1, got {n}")
+    pool = candidates[: max(cfg.selection_pool_size, n)]
     screener_pick = pool[:n]
 
     if not cfg.llm_selection_enabled or len(pool) <= n:
