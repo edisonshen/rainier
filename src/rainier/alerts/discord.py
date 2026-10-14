@@ -738,6 +738,14 @@ def format_thesis_embed(
             "inline": False,
         })
 
+    reused_from = thesis.get("_reused_from_session")
+    if reused_from:
+        fields.append({
+            "name": "REUSED",
+            "value": f"{reused_from} thesis: evidence unchanged, no new LLM call",
+            "inline": False,
+        })
+
     why_bullets = _why_bullets(thesis)
     if why_bullets:
         why_value = "\n".join(f"• {b}" for b in why_bullets)

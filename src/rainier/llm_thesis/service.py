@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable, NamedTuple
@@ -34,6 +35,7 @@ from rainier.core.database import get_session
 from rainier.core.models import LLMAnalysisRecord
 from rainier.core.types import PatternSignal, StockCandidate
 
+from .batch import LLMReply, ThesisLLMBatcher
 from .persistence import update_with_thesis
 from .prompt import SYSTEM_PROMPT, build_user_message
 from .schemas import EvidencePack, TradeThesis, compute_input_hash
@@ -280,7 +282,29 @@ def _call_llm(
     thinking_budget_tokens: int,
     thinking_effort: str = "high",
 ) -> tuple[str, int, int]:
-    """Single LiteLLM completion. Returns (content, prompt_tokens, completion_tokens).
+    """Single LiteLLM completion. Returns (content, prompt_tokens, completion_tokens)."""
+    return _complete(
+        _build_completion_kwargs(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            image_bytes=image_bytes,
+            thinking_budget_tokens=thinking_budget_tokens,
+            thinking_effort=thinking_effort,
+        )
+    )
+
+
+def _build_completion_kwargs(
+    *,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    image_bytes: bytes | None,
+    thinking_budget_tokens: int,
+    thinking_effort: str = "high",
+) -> dict[str, Any]:
+    """LiteLLM completion kwargs for one thesis call (sync or batched).
 
     Image bytes are passed as base64 data URL when present.
 
@@ -381,6 +405,12 @@ def _call_llm(
             "degraded no-thinking thesis"
         )
 
+    return completion_kwargs
+
+
+def _complete(completion_kwargs: dict[str, Any]) -> tuple[str, int, int]:
+    import litellm  # local import — tests mock this without pulling LiteLLM at import time
+
     resp = litellm.completion(**completion_kwargs)
     text = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage") or {}
@@ -400,6 +430,119 @@ def _parse_thesis(raw: str) -> TradeThesis:
             text = text[4:]
         text = text.strip()
     return TradeThesis.model_validate_json(text)
+
+
+def _enabled_signal_names(thesis_cfg: LLMThesisConfig) -> list[str]:
+    return sorted(name for name, cfg in thesis_cfg.signals.items() if cfg.enabled)
+
+
+_REUSE_LEVEL_KEYS = ("pattern_type", "pattern_status", "entry_price", "stop_loss", "target_price")
+
+
+def thesis_reuse_basis(candidate: StockCandidate) -> dict[str, Any]:
+    """The evidence a thesis is judged stale against (stamped as ``_reuse_basis``)."""
+
+    def _level(value: float | None) -> float | None:
+        return None if value is None else round(float(value), 4)
+
+    return {
+        "pattern_type": candidate.pattern_type,
+        "pattern_status": candidate.pattern_status,
+        "entry_price": _level(candidate.entry_price),
+        "stop_loss": _level(candidate.stop_loss),
+        "target_price": _level(candidate.target_price),
+        "current_price": _level(candidate.current_price),
+        "rank": candidate.rank,
+    }
+
+
+def _evidence_unchanged(
+    prior: dict[str, Any] | None, current: dict[str, Any], thesis_cfg: LLMThesisConfig
+) -> bool:
+    if not prior:
+        return False
+    if any(prior.get(key) != current.get(key) for key in _REUSE_LEVEL_KEYS):
+        return False
+    prior_price, price = prior.get("current_price"), current.get("current_price")
+    if not prior_price or price is None:
+        return False
+    if abs(price - prior_price) / prior_price * 100 > thesis_cfg.reuse_max_price_move_pct:
+        return False
+    prior_rank, rank = prior.get("rank"), current.get("rank")
+    if prior_rank is None or rank is None:
+        return False
+    return abs(int(rank) - int(prior_rank)) <= thesis_cfg.reuse_max_rank_move
+
+
+def _reuse_prior_session_thesis(
+    candidate: StockCandidate,
+    *,
+    scan_date: date,
+    session_name: str,
+    settings: Settings,
+) -> tuple[str, ThesisOutcome] | None:
+    """Reuse today's thesis from the mapped earlier session (no LLM call) when the
+    evidence it was built on is materially unchanged. Returns (prior_session, outcome)."""
+    thesis_cfg = settings.llm_thesis
+    prior_session = thesis_cfg.reuse_prior_session.get(session_name)
+    if not prior_session:
+        return None
+    try:
+        cached = _tier1_lookup(
+            candidate.symbol,
+            scan_date,
+            thesis_cfg.prompt_version,
+            session_name=prior_session,
+            llm_model=thesis_cfg.model,
+            enabled_signals=_enabled_signal_names(thesis_cfg),
+            thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
+        )
+    except Exception:
+        log.warning("thesis_reuse_lookup_failed symbol=%s", candidate.symbol, exc_info=True)
+        return None
+    if cached is None:
+        return None
+    record_id, output = cached
+    if not _evidence_unchanged(
+        output.get("_reuse_basis"), thesis_reuse_basis(candidate), thesis_cfg
+    ):
+        return None
+    try:
+        thesis = TradeThesis.model_validate(output)
+    except Exception:
+        return None
+    log.info(
+        "thesis_reused_from_prior_session symbol=%s prior_session=%s record_id=%s",
+        candidate.symbol,
+        prior_session,
+        record_id,
+    )
+    return prior_session, ThesisOutcome(thesis, 0.0, record_id)
+
+
+def _thesis_batcher(settings: Settings, session_name: str) -> ThesisLLMBatcher | None:
+    """A Message Batches batcher when this session is configured for batching."""
+    thesis_cfg = settings.llm_thesis
+    if session_name not in thesis_cfg.batch_sessions:
+        return None
+    import litellm
+
+    try:
+        provider = litellm.get_llm_provider(thesis_cfg.model)[1]
+    except Exception:
+        provider = ""
+    if provider != "anthropic":
+        return None
+    api_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        log.warning("thesis_batch_disabled_no_api_key session=%s", session_name)
+        return None
+    return ThesisLLMBatcher(
+        api_key=api_key,
+        sync_call=_complete,
+        timeout_s=thesis_cfg.batch_timeout_minutes * 60,
+        poll_s=thesis_cfg.batch_poll_seconds,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +573,8 @@ async def generate_thesis(
     evidence_provider: Callable[[], "tuple[EvidencePack, list[str], bytes | None]"],
     settings: Settings,
     max_usd_remaining: float,
+    reuse_basis: dict[str, Any] | None = None,
+    llm_batcher: ThesisLLMBatcher | None = None,
 ) -> ThesisOutcome:
     """Generate one thesis with two-tier cache + 3-retry validation.
 
@@ -442,9 +587,7 @@ async def generate_thesis(
 
     # PR2 carry-over P2 #2: include the current enabled-signals set so a
     # YAML toggle invalidates the cache for the next scan.
-    enabled_signal_names = sorted(
-        name for name, cfg in thesis_cfg.signals.items() if cfg.enabled
-    )
+    enabled_signal_names = _enabled_signal_names(thesis_cfg)
 
     # Tier 1: cache hit on same (date, symbol, prompt_template, session, model)?
     cached = _tier1_lookup(
@@ -549,16 +692,20 @@ async def generate_thesis(
                 + last_error
                 + "\nReturn the JSON object that strictly matches the schema."
             )
+        call_kwargs: dict[str, Any] = {
+            "model": thesis_cfg.model,
+            "system_prompt": SYSTEM_PROMPT,
+            "user_prompt": attempt_user_prompt,
+            "image_bytes": image_bytes,
+            "thinking_budget_tokens": thesis_cfg.thinking_budget_tokens,
+            "thinking_effort": thesis_cfg.thinking_effort,
+        }
         try:
-            content, p_tok, c_tok = await asyncio.to_thread(
-                _call_llm,
-                model=thesis_cfg.model,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=attempt_user_prompt,
-                image_bytes=image_bytes,
-                thinking_budget_tokens=thesis_cfg.thinking_budget_tokens,
-                thinking_effort=thesis_cfg.thinking_effort,
-            )
+            if llm_batcher is not None:
+                reply = await llm_batcher.call(_build_completion_kwargs(**call_kwargs))
+            else:
+                reply = LLMReply(*await asyncio.to_thread(_call_llm, **call_kwargs))
+            content, p_tok, c_tok, price_factor = reply
         except Exception as exc:
             last_error = f"llm_call_failed: {exc}"
             log.warning(
@@ -569,7 +716,7 @@ async def generate_thesis(
             )
             continue
 
-        attempt_cost = _estimate_cost_usd(p_tok, c_tok, thesis_cfg.model)
+        attempt_cost = _estimate_cost_usd(p_tok, c_tok, thesis_cfg.model) * price_factor
         cost_charged += attempt_cost
         if cost_charged > max_usd_remaining:
             log.warning(
@@ -608,6 +755,7 @@ async def generate_thesis(
             completion_tokens=c_tok,
             cost_usd=attempt_cost,
             session_name=session_name,
+            reuse_basis=reuse_basis,
         )
         return ThesisOutcome(thesis, cost_charged, record_id)
 
@@ -629,6 +777,7 @@ def _persist_thesis(
     completion_tokens: int,
     cost_usd: float,
     session_name: str,
+    reuse_basis: dict[str, Any] | None = None,
 ) -> int | None:
     """Insert one LLMAnalysisRecord row; return its id, or None on conflict.
 
@@ -643,6 +792,10 @@ def _persist_thesis(
     # Stamp the thinking budget so Tier-1 can refuse to reuse a thesis that was
     # generated with a different amount of reasoning after the budget is retuned.
     payload["_thinking_budget_tokens"] = int(settings.llm_thesis.thinking_budget_tokens)
+    # What the thesis was based on, so a later session can reuse it when the
+    # evidence is materially unchanged (_reuse_prior_session_thesis).
+    if reuse_basis is not None:
+        payload["_reuse_basis"] = reuse_basis
     with get_session() as session:
         rec = LLMAnalysisRecord(
             llm_provider="anthropic",
@@ -789,27 +942,25 @@ async def _compute_theses_async(
     # to top-N candidates, so dict size is trivial.
     chart_ids_by_symbol: dict[str, int] = {}
 
-    for idx, candidate in enumerate(candidates):
-        if cost_used >= max_usd:
-            log.warning(
-                "thesis_budget_exhausted_skipping_remaining symbol=%s cost_used=%.4f",
-                candidate.symbol,
-                cost_used,
-            )
-            for skipped in candidates[idx:]:
-                failures[skipped.symbol] = (
-                    f"skipped: scan budget ${max_usd:.2f} exhausted"
-                )
-            break
+    reused_from: dict[str, str] = {}
+    outcomes: dict[str, ThesisOutcome] = {}
+    to_generate: list[StockCandidate] = []
+    for candidate in candidates:
+        reused = _reuse_prior_session_thesis(
+            candidate, scan_date=scan_date, session_name=session_name, settings=settings
+        )
+        if reused is None:
+            to_generate.append(candidate)
+        else:
+            reused_from[candidate.symbol], outcomes[candidate.symbol] = reused
 
+    def _thesis_job(
+        candidate: StockCandidate,
+        max_usd_remaining: float,
+        llm_batcher: ThesisLLMBatcher | None = None,
+    ):
         symbol = candidate.symbol
 
-        # PR1 carry-over P2 #1: Build the evidence provider as a deferred
-        # closure. We DO NOT pre-resolve evidence here — generate_thesis runs
-        # the Tier-1 cache lookup first and only invokes this provider on
-        # cache miss. Without this deferral every "free rerun" still pays for
-        # chart export + signal compute + (possibly) yfinance, defeating the
-        # idempotency promise.
         df = ohlcv_by_symbol.get(symbol)
         pattern = _candidate_to_pattern_signal(candidate)
 
@@ -852,21 +1003,61 @@ async def _compute_theses_async(
             # let the per-ticker try/except below handle them.
             return asyncio.run(_async_provider())
 
-        try:
-            thesis, cost_charged, record_id, error = await generate_thesis(
-                symbol=symbol,
-                scan_date=scan_date,
-                session_name=session_name,
-                evidence_provider=_sync_provider,
-                settings=settings,
-                max_usd_remaining=max_usd - cost_used,
-            )
-        except Exception as exc:
-            log.exception("thesis_unexpected_failure symbol=%s error=%s", symbol, exc)
-            failures[symbol] = f"unexpected: {exc}"
-            continue
+        return generate_thesis(
+            symbol=symbol,
+            scan_date=scan_date,
+            session_name=session_name,
+            evidence_provider=_sync_provider,
+            settings=settings,
+            max_usd_remaining=max_usd_remaining,
+            reuse_basis=thesis_reuse_basis(candidate),
+            llm_batcher=llm_batcher,
+        )
 
-        cost_used += cost_charged
+    batcher = _thesis_batcher(settings, session_name) if to_generate else None
+    if batcher is not None:
+        # Concurrent tasks share the remaining budget evenly so the kill switch
+        # still holds when every batched call lands at once.
+        share = (max_usd - cost_used) / len(to_generate)
+        results = await batcher.run_all([_thesis_job(c, share, batcher) for c in to_generate])
+        for candidate, result in zip(to_generate, results):
+            if isinstance(result, BaseException):
+                log.error(
+                    "thesis_unexpected_failure symbol=%s error=%s", candidate.symbol, result
+                )
+                failures[candidate.symbol] = f"unexpected: {result}"
+                continue
+            cost_used += result.cost_usd
+            outcomes[candidate.symbol] = result
+    else:
+        for idx, candidate in enumerate(to_generate):
+            if cost_used >= max_usd:
+                log.warning(
+                    "thesis_budget_exhausted_skipping_remaining symbol=%s cost_used=%.4f",
+                    candidate.symbol,
+                    cost_used,
+                )
+                for skipped in to_generate[idx:]:
+                    failures[skipped.symbol] = (
+                        f"skipped: scan budget ${max_usd:.2f} exhausted"
+                    )
+                break
+            try:
+                outcome = await _thesis_job(candidate, max_usd - cost_used)
+            except Exception as exc:
+                log.exception(
+                    "thesis_unexpected_failure symbol=%s error=%s", candidate.symbol, exc
+                )
+                failures[candidate.symbol] = f"unexpected: {exc}"
+                continue
+            cost_used += outcome.cost_usd
+            outcomes[candidate.symbol] = outcome
+
+    for candidate in candidates:
+        symbol = candidate.symbol
+        if symbol not in outcomes:
+            continue
+        thesis, _cost, record_id, error = outcomes[symbol]
         if thesis is None:
             failures[symbol] = error or "unknown error"
             continue
@@ -883,6 +1074,8 @@ async def _compute_theses_async(
         reason = (selection_reasons or {}).get(symbol)
         if reason:
             thesis_dict["_selection_reason"] = reason
+        if symbol in reused_from:
+            thesis_dict["_reused_from_session"] = reused_from[symbol]
         out[symbol] = thesis_dict
         ranked.append((candidate, thesis_dict))
 
