@@ -734,7 +734,9 @@ def format_thesis_embed(
     if selection_reason:
         fields.append({
             "name": "PICKED BY LLM",
-            "value": _truncate_at_word(str(selection_reason), _EMBED_FIELD_VALUE_MAX),
+            "value": _truncate_at_word(
+                _scrub_discord_text(str(selection_reason)), _EMBED_FIELD_VALUE_MAX
+            ),
             "inline": False,
         })
 
