@@ -336,12 +336,17 @@ class LLMThesisConfig(BaseModel):
         default_factory=lambda: ["afternoon", "close"]
     )
     fallback_to_anthropic_sdk: bool = False
-    # How many names get a full thesis per scan.
+    # How many names get a thesis embed per scan (and, before_thesis, a thesis).
     top_n: int = Field(5, ge=1)
     # When on, one cheap text-only LLM call picks the top_n from the screener's
     # top selection_pool_size (llm_thesis/selection.py); off = composite top_n.
     llm_selection_enabled: bool = True
     selection_pool_size: int = Field(50, ge=1)
+    # before_thesis: the LLM picks top_n of the pool, only those get a thesis.
+    # after_thesis: every pool candidate gets a thesis, then the LLM ranks the
+    # finished theses and the top_n post to Discord (all theses still persist
+    # and feed paper trading). The ranking call runs after the kill switch.
+    selection_stage: Literal["before_thesis", "after_thesis"] = "before_thesis"
     # Cross-session reuse: a session listed here (key) reuses the same-day thesis
     # from the mapped earlier session (value) instead of a new LLM call when the
     # evidence is materially unchanged (service._evidence_unchanged).
