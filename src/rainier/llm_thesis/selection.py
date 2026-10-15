@@ -239,6 +239,25 @@ def select_thesis_targets(
     return _llm_pick(pool, n, settings, SELECTION_SYSTEM_PROMPT)
 
 
+# Rough per-row prompt size of the ranking table: screener row (~80 tokens)
+# plus the thesis summary with its <=400-char radar paragraph (~120 tokens).
+_RANKING_TOKENS_PER_ROW = 200
+_RANKING_PROMPT_OVERHEAD_TOKENS = 400
+
+
+def ranking_reserve_usd(pool_size: int, settings: Settings, *, top_n: int | None = None) -> float:
+    """Upper-bound cost of the ``rank_theses`` call over ``pool_size`` theses, so
+    the thesis kill switch can leave it room under ``max_usd_per_scan``."""
+    cfg = settings.llm_thesis
+    n = _validated_top_n(settings, top_n)
+    if not cfg.llm_selection_enabled or pool_size <= n:
+        return 0.0
+    prompt_tokens = _RANKING_PROMPT_OVERHEAD_TOKENS + _RANKING_TOKENS_PER_ROW * pool_size
+    return _estimate_cost_usd(
+        prompt_tokens, _SELECTION_MAX_TOKENS, cfg.selection_model or cfg.model
+    )
+
+
 def rank_theses(
     candidates: list[StockCandidate],
     theses: dict[str, dict],

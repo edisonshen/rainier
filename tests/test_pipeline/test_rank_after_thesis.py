@@ -157,3 +157,24 @@ def test_close_scan_runs_no_llm():
     assert run["api"].submitted == [] and run["llm"].call_count == 0
     assert run["embeds"] == [] and run["paper"].call_count == 0
     run["summary_post"].assert_called()
+
+
+def test_thesis_budget_leaves_room_for_the_ranking_call():
+    from rainier.llm_thesis.selection import ranking_reserve_usd
+    from rainier.llm_thesis.service import ThesisBatch
+    from rainier.pipeline.post_scrape import pick_and_thesis
+
+    settings = _settings()
+    candidates = _candidates(N_CANDIDATES)
+    with (
+        patch("rainier.pipeline.post_scrape.compute_theses_and_persist",
+              return_value=ThesisBatch({}, {})) as compute,
+        patch("rainier.pipeline.post_scrape.rank_theses") as rank,
+    ):
+        pick_and_thesis(candidates, {}, scan_date=SCAN_DATE, session_name="afternoon",
+                        settings=settings)
+
+    reserve = compute.call_args.kwargs["already_spent_usd"]
+    assert reserve == ranking_reserve_usd(N_CANDIDATES, settings) > 0
+    assert reserve < settings.llm_thesis.max_usd_per_scan / 10
+    rank.assert_called_once()
