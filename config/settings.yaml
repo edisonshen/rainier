@@ -168,9 +168,11 @@ llm_thesis:
   enabled: true
   model: "claude-opus-5-5"
   # xhigh extended thinking: thinking tokens bill as OUTPUT ($20/M on Opus 5.5),
-  # so a 5-ticker scan runs ~$1.3-2.5. Cap raised 2.5 -> 3.5 for Opus 5.5 so the
-  # per-scan kill switch doesn't trip mid-scan and drop tickers.
-  max_usd_per_scan: 3.5
+  # Measured Opus 5.5 (effort high): ~$0.045/thesis sync, half that batched.
+  # The afternoon scan theses the whole "Long in" pool (~35-50 names, up to 100);
+  # the batched kill switch splits the cap evenly per thesis, so 6.0 leaves
+  # ~$0.06 each even at 100 names: enough for the full-price sync fallback.
+  max_usd_per_scan: 6.0
   # "xhigh" extended-thinking budget (tokens) for the thesis LLM call. Passed
   # explicitly as thinking={"type": "enabled", "budget_tokens": ...}. Must be a
   # positive int; service._call_llm sets max_tokens = budget + 2000 headroom and
@@ -184,16 +186,20 @@ llm_thesis:
   # runtime value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION)
   # — keep it == the module constant.
   prompt_version: "v4"
+  # Budget: one LLM scan a day (12:45 PT afternoon); close posts only the
+  # rule-based top-20.
   enabled_sessions:
     - afternoon
-    - close
   fallback_to_anthropic_sdk: false
-  # Claude picks which top_n names get a thesis from the screener's top
-  # selection_pool_size (one cheap text-only call, ~$0.02-0.05/scan); falls back
-  # to the composite top_n on any selector failure. selection_model null = model.
-  top_n: 5
+  # after_thesis: every screened candidate (up to selection_pool_size) gets a
+  # thesis, then one text-only Claude call ranks the finished theses and the
+  # top_n post to Discord (all theses persist and feed paper trading). Falls
+  # back to composite order on any selector failure. before_thesis = Claude
+  # picks top_n first and only those get a thesis. selection_model null = model.
+  selection_stage: after_thesis
+  top_n: 10
   llm_selection_enabled: true
-  selection_pool_size: 50
+  selection_pool_size: 100
   selection_model: null
   # Close reuses the afternoon thesis (no LLM call) when pattern type/status and
   # entry/stop/target are unchanged, price moved <= reuse_max_price_move_pct and
@@ -202,10 +208,11 @@ llm_thesis:
     close: afternoon
   reuse_max_price_move_pct: 2.0
   reuse_max_rank_move: 10
-  # Close-scan theses go through Anthropic's Message Batches API (50% price).
-  # A batch still running after batch_timeout_minutes is cancelled and the
-  # remaining calls run synchronously at full price, so the close post lands.
+  # Thesis calls for these sessions go through Anthropic's Message Batches API
+  # (50% price). A batch still running after batch_timeout_minutes is cancelled
+  # and the remaining calls run synchronously at full price, so the post lands.
   batch_sessions:
+    - afternoon
     - close
   batch_timeout_minutes: 45
   batch_poll_seconds: 30

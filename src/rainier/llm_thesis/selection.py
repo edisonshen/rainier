@@ -6,8 +6,12 @@ screener's top-``selection_pool_size`` candidates and asks it to pick the
 ``top_n`` most promising long setups. The expensive per-ticker thesis then runs
 on those picks.
 
+With ``selection_stage: after_thesis`` the same pick runs after the theses
+instead (``rank_theses``): every pool candidate gets a thesis and the LLM ranks
+the finished theses to choose which ``top_n`` post to Discord.
+
 Any selector failure (provider error, bad JSON, unknown symbols) falls back to
-the screener's own top-N, so a scan never loses its thesis set because of this
+the screener's own order, so a scan never loses its thesis set because of this
 step. When the LLM returns fewer valid picks than requested, the remainder is
 filled in screener order.
 """
@@ -39,6 +43,21 @@ an actionable long setup over the next 5-10 trading days. Weigh money-flow stren
 momentum, capital-flow direction, pattern quality and status, reward/risk, distance to entry \
 (prefer names near a clean entry over extended ones), and sector diversification. You may pick \
 names the composite ranks lower when the evidence justifies it.
+
+Respond with JSON only, no prose, exactly this shape:
+{{"picks": [{{"symbol": "TICKER", "reason": "one short sentence, max 200 chars"}}]}}
+Return exactly {top_n} picks, best first, using only symbols from the table."""
+
+
+RANKING_SYSTEM_PROMPT = """You are a swing-trading analyst choosing which finished trade theses to \
+publish today.
+
+You get long-side ("Long in") candidates from a QU100 money-flow screener, in the screener's \
+rule-based composite order, each with the verdict, setup quality, confidence and radar summary \
+of a deep chart review already done on it. Pick the {top_n} names offering the best actionable \
+long setup over the next 5-10 trading days. Prefer setup_long over watch over no_setup, then \
+higher setup quality and confidence; weigh reward/risk, distance to entry, money-flow strength \
+and sector diversification. You may pick names the composite ranks lower.
 
 Respond with JSON only, no prose, exactly this shape:
 {{"picks": [{{"symbol": "TICKER", "reason": "one short sentence, max 200 chars"}}]}}
@@ -86,8 +105,20 @@ def _candidate_row(position: int, c: StockCandidate) -> str:
     )
 
 
-def build_selection_prompt(pool: list[StockCandidate], top_n: int) -> str:
-    rows = "\n".join(_candidate_row(i, c) for i, c in enumerate(pool, start=1))
+def _thesis_summary(thesis: dict) -> str:
+    return (
+        f" | thesis {thesis.get('verdict')} quality {thesis.get('setup_quality')}/10"
+        f" conf {thesis.get('llm_confidence')}/10 | radar: {thesis.get('paragraph_radar', '')}"
+    )
+
+
+def build_selection_prompt(
+    pool: list[StockCandidate], top_n: int, theses: dict[str, dict] | None = None
+) -> str:
+    rows = "\n".join(
+        _candidate_row(i, c) + (_thesis_summary(theses[c.symbol]) if theses else "")
+        for i, c in enumerate(pool, start=1)
+    )
     return (
         f"Screener candidates ({len(pool)}), composite order:\n{rows}\n\n"
         f"Pick {top_n}."
@@ -147,22 +178,16 @@ def _resolve_picks(
     return targets, reasons
 
 
-def select_thesis_targets(
-    candidates: list[StockCandidate], settings: Settings, *, top_n: int | None = None
+def _llm_pick(
+    pool: list[StockCandidate],
+    n: int,
+    settings: Settings,
+    system_prompt: str,
+    theses: dict[str, dict] | None = None,
 ) -> ThesisSelection:
-    """Pick which screened candidates get a full LLM thesis.
-
-    ``candidates`` is the screener output in composite order; the LLM sees the
-    first ``llm_thesis.selection_pool_size`` of them. ``top_n`` defaults to
-    ``llm_thesis.top_n``.
-    """
+    """One selector call picking ``n`` of ``pool``; screener order on any failure."""
     cfg = settings.llm_thesis
-    n = cfg.top_n if top_n is None else top_n
-    if n < 1:
-        raise ValueError(f"top_n must be >= 1, got {n}")
-    pool = candidates[: max(cfg.selection_pool_size, n)]
     screener_pick = pool[:n]
-
     if not cfg.llm_selection_enabled or len(pool) <= n:
         return ThesisSelection(screener_pick, {}, "screener", 0.0)
 
@@ -171,8 +196,8 @@ def select_thesis_targets(
     try:
         raw, prompt_tokens, completion_tokens = _call_selector(
             model,
-            SELECTION_SYSTEM_PROMPT.format(top_n=n),
-            build_selection_prompt(pool, n),
+            system_prompt.format(top_n=n),
+            build_selection_prompt(pool, n, theses),
         )
         cost = _estimate_cost_usd(prompt_tokens, completion_tokens, model)
         parsed = _parse_selection(raw)
@@ -191,3 +216,41 @@ def select_thesis_targets(
         [c.symbol for c in targets], len(pool), cost,
     )
     return ThesisSelection(targets, reasons, "llm", cost)
+
+
+def _validated_top_n(settings: Settings, top_n: int | None) -> int:
+    n = settings.llm_thesis.top_n if top_n is None else top_n
+    if n < 1:
+        raise ValueError(f"top_n must be >= 1, got {n}")
+    return n
+
+
+def select_thesis_targets(
+    candidates: list[StockCandidate], settings: Settings, *, top_n: int | None = None
+) -> ThesisSelection:
+    """Pick which screened candidates get a full LLM thesis.
+
+    ``candidates`` is the screener output in composite order; the LLM sees the
+    first ``llm_thesis.selection_pool_size`` of them. ``top_n`` defaults to
+    ``llm_thesis.top_n``.
+    """
+    n = _validated_top_n(settings, top_n)
+    pool = candidates[: max(settings.llm_thesis.selection_pool_size, n)]
+    return _llm_pick(pool, n, settings, SELECTION_SYSTEM_PROMPT)
+
+
+def rank_theses(
+    candidates: list[StockCandidate],
+    theses: dict[str, dict],
+    settings: Settings,
+    *,
+    top_n: int | None = None,
+) -> ThesisSelection:
+    """Pick which finished theses post to Discord, best first.
+
+    Only ``candidates`` with a thesis are eligible; the LLM sees each one's
+    screener row plus its thesis summary.
+    """
+    n = _validated_top_n(settings, top_n)
+    pool = [c for c in candidates if c.symbol in theses]
+    return _llm_pick(pool, n, settings, RANKING_SYSTEM_PROMPT, theses)

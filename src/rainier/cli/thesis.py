@@ -29,7 +29,7 @@ def thesis():
     "--top-n",
     default=None,
     type=click.IntRange(min=1),
-    help="How many candidates the LLM picks to thesis (default: llm_thesis.top_n).",
+    help="How many thesis embeds the LLM picks to post (default: llm_thesis.top_n).",
 )
 @click.option("--discord/--no-discord", default=False, help="Post results to Discord.")
 @click.option("--dry-run", is_flag=True, help="Skip Discord, print theses to stdout.")
@@ -49,8 +49,7 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
     from rainier.analysis.stock_screener import screen_stocks
     from rainier.core.config import load_settings_fresh
     from rainier.llm_thesis.persistence import persist_screened_stocks
-    from rainier.llm_thesis.selection import select_thesis_targets
-    from rainier.llm_thesis.service import compute_theses_and_persist
+    from rainier.pipeline.post_scrape import pick_and_thesis, scan_window
 
     settings = load_settings_fresh(_settings_path(ctx))
     # Override the kill switch only when explicitly passed; otherwise inherit the
@@ -61,44 +60,42 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
 
     click.echo(f"Running screener for session={session_name}...")
     all_candidates, ohlcv_by_symbol = screen_stocks(settings)
-    # PR2 carry-over P2 #3: persist top-50 for unbiased shadow validation;
-    # display set capped at top-20; the LLM picks top-N of the top-50 to thesis.
-    scan_candidates = all_candidates[:50]
+    # PR2 carry-over P2 #3: persist top-50 (or the LLM pool) for unbiased shadow
+    # validation; display set capped at top-20.
     candidates = all_candidates[:20]
     if not candidates:
         click.echo("No candidates from screener.")
         return
+    scan_candidates = scan_window(all_candidates, settings)
 
     scan_date = _date.today()
     persist_screened_stocks(
         scan_candidates, scan_date=scan_date, session_name=session_name
     )
 
-    selection = select_thesis_targets(scan_candidates, settings, top_n=top_n)
+    click.echo(
+        f"Running LLM thesis ({settings.llm_thesis.selection_stage}, "
+        f"max_usd={effective_max_usd:.2f})..."
+    )
+    scan = pick_and_thesis(
+        scan_candidates,
+        ohlcv_by_symbol,
+        scan_date=scan_date,
+        session_name=session_name,
+        settings=settings,
+        top_n=top_n,
+    )
+    selection = scan.selection
     click.echo(
         f"Thesis picks ({selection.source}, ${selection.cost_usd:.4f}): "
-        + ", ".join(c.symbol for c in selection.targets)
+        + ", ".join(c.symbol for c in scan.posted)
     )
     if selection.error:
         click.echo(f"  selector fell back to screener order: {selection.error}", err=True)
     for sym, reason in selection.reasons.items():
         click.echo(f"  {sym}: {reason}")
-
-    click.echo(
-        f"Running LLM thesis on {len(selection.targets)} picks "
-        f"(max_usd={effective_max_usd:.2f})..."
-    )
-    batch = compute_theses_and_persist(
-        selection.targets,
-        ohlcv_by_symbol,
-        scan_date=scan_date,
-        session_name=session_name,
-        settings=settings,
-        already_spent_usd=selection.cost_usd,
-        selection_reasons=selection.reasons,
-    )
-    theses = batch.theses
-    for sym, reason in batch.failures.items():
+    theses = scan.theses
+    for sym, reason in scan.failures.items():
         click.echo(f"  {sym}: no thesis — {reason}", err=True)
 
     if dry_run or not discord:
@@ -118,9 +115,9 @@ def thesis_daily(ctx, session_name, top_n, discord, dry_run, max_usd):
         # `— Morning/Midday/Afternoon/Close` suffix when multiple scans
         # land in the same channel on the same day.
         session=session_name,
-        thesis_candidates=selection.targets,
+        thesis_candidates=scan.posted,
     )
-    click.echo(f"Sent {len(theses)} theses + summary to Discord.")
+    click.echo(f"Sent {len(scan.posted)} of {len(theses)} theses + summary to Discord.")
 
 
 @thesis.command("ticker")
