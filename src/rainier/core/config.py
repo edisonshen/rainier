@@ -345,7 +345,8 @@ class LLMThesisConfig(BaseModel):
     # before_thesis: the LLM picks top_n of the pool, only those get a thesis.
     # after_thesis: every pool candidate gets a thesis, then the LLM ranks the
     # finished theses and the top_n post to Discord (all theses still persist
-    # and feed paper trading). The ranking call runs after the kill switch.
+    # and feed paper trading). The ranking call's estimated cost is reserved from
+    # max_usd_per_scan before the theses run.
     selection_stage: Literal["before_thesis", "after_thesis"] = "before_thesis"
     # Cross-session reuse: a session listed here (key) reuses the same-day thesis
     # from the mapped earlier session (value) instead of a new LLM call when the

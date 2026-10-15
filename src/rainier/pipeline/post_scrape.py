@@ -35,7 +35,12 @@ from rainier.analysis.stock_screener import screen_stocks
 from rainier.core.config import Settings
 from rainier.core.types import StockCandidate
 from rainier.llm_thesis.persistence import persist_screened_stocks
-from rainier.llm_thesis.selection import ThesisSelection, rank_theses, select_thesis_targets
+from rainier.llm_thesis.selection import (
+    ThesisSelection,
+    rank_theses,
+    ranking_reserve_usd,
+    select_thesis_targets,
+)
 from rainier.llm_thesis.service import ThesisBatch, compute_theses_and_persist
 
 log = structlog.get_logger()
@@ -102,7 +107,13 @@ def pick_and_thesis(
 
     if cfg.selection_stage == "after_thesis":
         targets = scan_candidates[: cfg.selection_pool_size]
-        batch = _compute_or_fail(targets, ohlcv_by_symbol, **compute_kwargs)
+        # Reserve the ranking call's budget up front so it stays under the cap.
+        batch = _compute_or_fail(
+            targets,
+            ohlcv_by_symbol,
+            **compute_kwargs,
+            already_spent_usd=ranking_reserve_usd(len(targets), settings, top_n=n),
+        )
         try:
             ranking = rank_theses(targets, batch.theses, settings, top_n=n)
         except Exception as exc:
