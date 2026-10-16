@@ -4,7 +4,8 @@ Scenario: the afternoon scan already wrote theses. At close, a name whose
 pattern, levels, price (<=2%) and QU rank (<=10) are unchanged reuses the
 afternoon thesis with no LLM call; every other name is analyzed through
 Anthropic's Message Batches API at half price. A batch that outlasts its
-timeout is cancelled and the calls run synchronously so the close post lands.
+timeout is cancelled; the replies it already finished (and billed) are kept
+and only the cancelled calls run synchronously, so the close post lands.
 """
 
 from __future__ import annotations
@@ -68,9 +69,11 @@ class FakeAnthropicBatches:
     """Message Batches API double: records submissions, answers from `reply`."""
 
     def __init__(self, reply=_thesis_json, *, ends: bool = True, poll_fails: bool = False,
-                 results_failures: int = 0):
+                 results_failures: int = 0, finished_before_cancel: set[str] | None = None):
         self.reply = reply
         self.ends = ends
+        # When set, a cancel ends the batch: these symbols succeeded, the rest are canceled.
+        self.finished_before_cancel = finished_before_cancel
         self.poll_fails = poll_fails
         self.results_failures = results_failures
         self.submitted: list[list[dict]] = []
@@ -95,7 +98,8 @@ class FakeAnthropicBatches:
         if not url.endswith("/results"):
             if self.poll_fails:
                 raise RuntimeError("503 from batch status endpoint")
-            status = "ended" if self.ends else "in_progress"
+            cancel_landed = self.cancelled and self.finished_before_cancel is not None
+            status = "ended" if self.ends or cancel_landed else "in_progress"
             return self._resp({"id": batch_id, "processing_status": status,
                                "results_url": f"https://x/batches/{batch_id}/results"})
         if self.results_failures:
@@ -105,6 +109,10 @@ class FakeAnthropicBatches:
         lines = []
         for req in requests:
             symbol = req["params"]["messages"][0]["content"][0]["text"].split()[0]
+            if self.cancelled and symbol not in (self.finished_before_cancel or set()):
+                lines.append(json_dumps({"custom_id": req["custom_id"],
+                                         "result": {"type": "canceled"}}))
+                continue
             lines.append(json_dumps({
                 "custom_id": req["custom_id"],
                 "result": {"type": "succeeded", "message": {
@@ -238,12 +246,29 @@ def test_invalid_batch_reply_is_retried_in_a_second_batch_round():
     sync_llm.assert_not_called()
 
 
-def test_batch_timeout_cancels_and_falls_back_to_full_price_sync_calls():
-    api = FakeAnthropicBatches(ends=False)
+def test_batch_timeout_keeps_finished_replies_and_syncs_only_the_cancelled():
+    # A 45-name batch outlasted the timeout with 39 already done; those were billed
+    # at batch price, then all 45 were paid again at full price via sync.
+    api = FakeAnthropicBatches(ends=False, finished_before_cancel={"AAA", "BBB"})
     batch, persisted, api, sync_llm = _run_close_scan(
-        [_candidate("AAA"), _candidate("BBB")],
+        [_candidate("AAA"), _candidate("BBB"), _candidate("CCC")],
         settings=_settings(batch_timeout_minutes=0.0001), batch_api=api,
     )
+    assert set(batch.theses) == {"AAA", "BBB", "CCC"} and not batch.failures
+    assert len(api.cancelled) == 1
+    assert sync_llm.call_count == 1
+    assert sorted(p["cost_usd"] for p in persisted) == pytest.approx(
+        [_full_cost() / 2, _full_cost() / 2, _full_cost()]
+    )
+
+
+def test_batch_whose_cancel_never_lands_falls_back_to_full_price_sync_calls():
+    api = FakeAnthropicBatches(ends=False)
+    with patch("rainier.llm_thesis.batch.CANCEL_DRAIN_TIMEOUT_S", 0):
+        batch, persisted, api, sync_llm = _run_close_scan(
+            [_candidate("AAA"), _candidate("BBB")],
+            settings=_settings(batch_timeout_minutes=0.0001), batch_api=api,
+        )
     assert set(batch.theses) == {"AAA", "BBB"} and not batch.failures
     assert len(api.cancelled) == 1
     assert sync_llm.call_count == 2

@@ -209,8 +209,9 @@ llm_thesis:
   reuse_max_price_move_pct: 2.0
   reuse_max_rank_move: 10
   # Thesis calls for these sessions go through Anthropic's Message Batches API
-  # (50% price). A batch still running after batch_timeout_minutes is cancelled
-  # and the remaining calls run synchronously at full price, so the post lands.
+  # (50% price). A batch still running after batch_timeout_minutes is cancelled;
+  # requests it already finished are kept and only the cancelled ones run
+  # synchronously at full price, so the post lands.
   batch_sessions:
     - afternoon
     - close
