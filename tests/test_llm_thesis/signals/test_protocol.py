@@ -6,12 +6,13 @@ from rainier.llm_thesis.signals import REGISTRY
 from rainier.llm_thesis.signals.base import ThesisSignal
 
 
-def test_registry_has_four_signals():
+def test_registry_has_expected_signals():
     assert set(REGISTRY) == {
         "rank_trajectory",
         "capital_flow_streak",
         "sector_momentum",
         "fundamentals",
+        "openstock_feed",
     }
 
 
