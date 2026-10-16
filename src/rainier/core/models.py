@@ -840,6 +840,79 @@ class PaperCalibration(Base):
     )
 
 
+class SelectionReward(Base):
+    """Per-decision reward ledger for the QU100-LLM selection loop (R1).
+
+    One row per (thesis, reward_name): the R-multiple (and sleeve $P&L) of the
+    plan the decision committed to, scored against what the market did.
+    `decision` is the honest denominator — every thesis is classified
+    (filled / skipped / confidence-gated / watch / no_setup), and declined
+    decisions with a valid long plan are scored COUNTERFACTUALLY through the
+    same pure `evaluate_exit` the live book uses (`counterfactual=true`).
+
+    `provisional=true` rows are mark-to-market (position still open at
+    `as_of_date`) and are re-upserted in place daily until the path resolves;
+    a matured row (`provisional=false`) is final and never overwritten unless
+    `reward_version` changes. `value IS NULL` rows record WHY a decision could
+    not be scored (`reason`: invalid_levels / no_plan / missing_prices /
+    gap_invalidated / basis_mismatch) so the denominator stays honest.
+
+    `lever_context` snapshots the lever values live at decision time
+    (prompt_version, model, confidence + gate, session, pattern, signal set,
+    time stop) so every later group-by is a plain SQL aggregation.
+
+    Plain Postgres on the LEGACY local engine (joins analysis_results /
+    paper_trade / stock_prices). NOT a hypertable.
+    """
+
+    __tablename__ = "selection_reward"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    thesis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_results.id"), nullable=False, index=True
+    )
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    scan_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    session_name: Mapped[str] = mapped_column(String(20), nullable=False)
+    decision: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    lever_context: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    reward_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    reward_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    value: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str | None] = mapped_column(String(40))
+    provisional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    counterfactual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    outcome_date: Mapped[date | None] = mapped_column(Date)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "thesis_id", "reward_name", name="uq_selection_reward_thesis_reward"
+        ),
+        CheckConstraint(
+            "decision IN ('setup_long_filled','setup_long_pending',"
+            "'setup_long_expired','setup_long_skipped','setup_long_gated',"
+            "'watch','no_setup','gap_invalidated')",
+            name="ck_selection_reward_decision",
+        ),
+        CheckConstraint(
+            "value IS NOT NULL OR reason IS NOT NULL",
+            name="ck_selection_reward_value_or_reason",
+        ),
+        CheckConstraint(
+            "reason IS NULL OR reason IN ('invalid_levels','no_plan',"
+            "'missing_prices','gap_invalidated','basis_mismatch')",
+            name="ck_selection_reward_reason",
+        ),
+    )
+
+
 class QU100DailyFeatures(Base):
     """R-E — one JSONB feature row per QU100 member per day (design Appendix B).
 

@@ -253,6 +253,15 @@ async def run_daily_eval(eval_date_iso: str | None = None) -> None:
     except Exception as exc:
         log.error("daily_paper_calibration_failed", error=str(exc))
 
+    # Step (vii): R1 selection reward ledger — score every decision (filled,
+    # skipped, gated, declined) against its committed plan as of today and
+    # upsert selection_reward. Runs LAST: it reads the exits booked in step
+    # (iii) and only ever writes its own table. Non-fatal.
+    try:
+        await asyncio.to_thread(run_paper_rewards, eval_date)
+    except Exception as exc:
+        log.error("daily_paper_rewards_failed", error=str(exc))
+
 
 def run_paper_daily_steps(eval_date) -> None:
     """Paper steps (i)-(iii): ingest (SPY ∪ active ∪ screened ∪ cohort) → R-E
@@ -420,6 +429,17 @@ def run_paper_calibration(eval_date) -> None:
 
     payload = compute_calibration_payload(eval_date)
     persist_calibration(eval_date, payload)
+
+
+def run_paper_rewards(eval_date) -> None:
+    """Paper step (vii): compute + upsert the selection reward ledger (R1).
+
+    Realized R for closed trades, mark-to-market R for open ones, counterfactual
+    R for declined decisions with a valid long plan. Idempotent per as-of date.
+    """
+    from rainier.paper.rewards import compute_rewards
+
+    compute_rewards(as_of=eval_date)
 
 
 async def run_research_job(eval_date_iso: str | None = None) -> None:

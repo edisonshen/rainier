@@ -79,6 +79,9 @@ MIGRATION_0013_UP = REPO_ROOT / "migrations" / "0013_paper_trade_shadow.sql"
 MIGRATION_0013_DOWN = (
     REPO_ROOT / "migrations" / "0013_paper_trade_shadow_downgrade.sql"
 )
+# R1: selection_reward ledger (paper/rewards.py compute/upsert tests).
+MIGRATION_0015_UP = REPO_ROOT / "migrations" / "0015_selection_reward.sql"
+MIGRATION_0015_DOWN = REPO_ROOT / "migrations" / "0015_selection_reward_downgrade.sql"
 
 # Minimal DDL for the FK-target tables the paper migration references. The real
 # schema lives in migrations/0001-0004; for an isolated paper-tracker test DB we
@@ -95,6 +98,7 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     confidence      DOUBLE PRECISION,
     reasoning       TEXT,
     structured_output JSONB,
+    signals_used    VARCHAR(50)[],
     session_name    VARCHAR(20)
 );
 
@@ -351,6 +355,7 @@ def pg_legacy_engine(request):
         _apply_sql(engine, MIGRATION_0011_UP)  # R-E qu100_daily_features
         _apply_sql(engine, MIGRATION_0012_UP)  # WS B reclaim queue + column
         _apply_sql(engine, MIGRATION_0013_UP)  # WS A paper_trade.shadow
+        _apply_sql(engine, MIGRATION_0015_UP)  # R1 selection_reward
 
         from rainier.core import config, database
 
