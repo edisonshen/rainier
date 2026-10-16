@@ -719,10 +719,9 @@ def _fetch_stock_data(
     result: dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            if len(symbols) == 1:
-                df = raw.copy()
-            else:
-                df = raw[sym].copy()
+            # group_by="ticker" yields (ticker, field) columns even for one symbol.
+            multi = isinstance(raw.columns, pd.MultiIndex)
+            df = (raw[sym] if multi else raw).copy()
             df = df.dropna(subset=["Close"])
             window_bars = len(pattern_window(df, as_of=_today(df)))
             if window_bars < min_bars:
