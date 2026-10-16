@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import asdict
 from pathlib import Path
 
 import click
@@ -164,6 +166,86 @@ def thesis_ticker(ctx, symbol, session_name, max_usd):
     click.echo(_json.dumps(batch.theses, indent=2, default=str))
     for sym, reason in batch.failures.items():
         click.echo(f"{sym}: no thesis — {reason}", err=True)
+
+
+@thesis.command("collect")
+@click.argument("symbol")
+@click.option(
+    "--out",
+    "out_dir",
+    default=None,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Output folder (default: data/thesis_packs/<SYMBOL>-<date>).",
+)
+@click.option(
+    "--cdp",
+    default="http://127.0.0.1:9222",
+    show_default=True,
+    help="Logged-in Chrome for the QU capitalflow fetch.",
+)
+@click.option("--no-qu", is_flag=True, help="Skip the QU capitalflow fetch.")
+@click.option(
+    "--session", "session_name", default="afternoon",
+    type=click.Choice(["morning", "midday", "afternoon", "close"]),
+)
+@click.pass_context
+def thesis_collect(ctx, symbol, out_dir, cdp, no_qu, session_name):
+    """Collect one ticker's thesis evidence + chart for an agent to analyze.
+
+    Works for any ticker (not only today's screener picks). Makes no LLM call
+    and writes nothing to the DB or Discord.
+    """
+    from datetime import date as _date
+
+    from rainier.analysis.stock_screener import screen_ticker
+    from rainier.core.config import load_settings_fresh
+    from rainier.llm_thesis.ticker_pack import build_ticker_pack, write_ticker_pack
+
+    symbol = symbol.upper()
+    scan_date = _date.today()
+    settings = load_settings_fresh(_settings_path(ctx))
+
+    click.echo(f"Screening {symbol}...")
+    candidate, df = screen_ticker(symbol, settings)
+    if candidate is None:
+        raise click.ClickException(f"{symbol}: not enough yfinance history to analyze.")
+
+    sections: list[str] = []
+    extra_evidence: dict = {}
+    if not no_qu:
+        click.echo("Fetching QU capitalflow...")
+        try:
+            flow = asyncio.run(_fetch_ticker_flow(symbol, scan_date, cdp))
+            sections.append(flow.prompt_section())
+            extra_evidence["qu_capital_flow"] = asdict(flow)
+        except Exception as exc:
+            click.echo(f"  QU capitalflow fetch failed, continuing without it: {exc}", err=True)
+
+    pack = build_ticker_pack(
+        candidate,
+        df,
+        scan_date=scan_date,
+        session_name=session_name,
+        settings=settings,
+        extra_sections=sections,
+        extra_evidence=extra_evidence,
+    )
+    out_dir = out_dir or Path("data/thesis_packs") / f"{symbol}-{scan_date.isoformat()}"
+    for path in write_ticker_pack(pack, out_dir):
+        click.echo(f"wrote {path}")
+
+
+async def _fetch_ticker_flow(symbol, as_of, cdp):
+    from rainier.scrapers.browser import BrowserManager
+    from rainier.scrapers.qu.scraper import QUScraper
+
+    async with BrowserManager(headless=True, cdp_url=cdp) as browser:
+        scraper = QUScraper(browser)
+        await scraper.setup()
+        try:
+            return await scraper.fetch_ticker_flow(symbol, as_of)
+        finally:
+            await scraper.teardown()
 
 
 @thesis.command("log")

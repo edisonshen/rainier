@@ -76,6 +76,15 @@ def screen_stocks(
         signals = _apply_sector_boost(signals, sector_trends)
         log.info("Layer 2 complete: sector boost applied")
 
+    return _detect_and_score(signals, sector_trends, config)
+
+
+def _detect_and_score(
+    signals: list[MoneyFlowSignal],
+    sector_trends: list[SectorTrend],
+    config: StockScreenerConfig,
+) -> tuple[list[StockCandidate], dict[str, pd.DataFrame]]:
+    """Layer 3 + composite scoring for already money-flow/sector-scored signals."""
     # Layer 3 — pattern detection (outside DB session, uses yfinance)
     symbols = [s.symbol for s in signals]
     history = _fetch_stock_data(symbols, config.min_daily_bars)
@@ -181,6 +190,54 @@ def screen_stocks(
         sum(1 for r in results if r.recommendation == "watch"),
     )
     return candidates, history
+
+
+def screen_ticker(
+    symbol: str,
+    settings: Settings | None = None,
+) -> tuple[StockCandidate | None, pd.DataFrame | None]:
+    """Run the same 3 layers on ONE arbitrary ticker (on-demand thesis pack).
+
+    A ticker in the latest QU100 'Long in' set gets its real money-flow signal;
+    any other ticker is scored with a neutral one (rank 0, "Not in QU100") so
+    the sector and pattern layers still run. Returns ``(None, None)`` when
+    yfinance has too little history for pattern detection.
+    """
+    if settings is None:
+        settings = get_settings()
+    symbol = symbol.upper()
+    with get_session() as session:
+        signal = next(
+            (s for s in _screen_money_flow(session) if s.symbol == symbol), None
+        ) or _unranked_signal(session, symbol)
+        sector_trends = analyze_sectors(session)
+        signals = _apply_sector_boost([signal], sector_trends)
+    candidates, history = _detect_and_score(signals, sector_trends, settings.stock_screener)
+    if symbol not in history:
+        return None, None
+    return candidates[0], history[symbol]
+
+
+def _unranked_signal(session: Session, symbol: str) -> MoneyFlowSignal:
+    """Neutral money-flow signal for a ticker outside the QU100 'Long in' set;
+    sector/industry come from its newest snapshot row, if QU ever listed it."""
+    row = (
+        session.query(MoneyFlowSnapshot.sector, MoneyFlowSnapshot.industry)
+        .filter(MoneyFlowSnapshot.symbol == symbol)
+        .order_by(MoneyFlowSnapshot.captured_at.desc())
+        .first()
+    )
+    return MoneyFlowSignal(
+        symbol=symbol,
+        rank=0,
+        rank_change=0,
+        long_short="Not in QU100",
+        capital_flow_direction="N",
+        days_in_top100=0,
+        sector=(row.sector if row and row.sector else "Unknown"),
+        industry=(row.industry if row and row.industry else "Unknown"),
+        signal_strength=0.0,
+    )
 
 
 # ---------------------------------------------------------------------------

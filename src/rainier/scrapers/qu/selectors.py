@@ -53,6 +53,13 @@ UPDATE_TIME = ".update-time"
 # rendered page (page.evaluate(fetch(...))). See SPIKE-qu-json-api.md.
 QU100_API_URL = "/api/v3/mf100"
 
+# Single-ticker capitalflow page (/products#capitalflow), same in-page fetch:
+#   mfsummary?ticker=&date=            -> last 5 daily + 5 weekly rank rows
+#   mfplot?ticker=&frequency=&date=    -> near-term/total flow bars (daily|weekly)
+# An unknown ticker returns empty lists, not an error.
+TICKER_SUMMARY_API_URL = "/api/v3/mfsummary"
+TICKER_PLOT_API_URL = "/api/v3/mfplot"
+
 # ---------------------------------------------------------------------------
 # Detail page (QU Stock Capital Flow) — TODO: needs separate HTML inspection
 # ---------------------------------------------------------------------------
