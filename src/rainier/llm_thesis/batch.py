@@ -76,12 +76,16 @@ def _native_content(content: Any) -> Any:
     return parts
 
 
-def _cancel_batch(batch_id: str, headers: dict[str, str]) -> None:
-    try:
-        httpx.post(f"{ANTHROPIC_API_BASE}/messages/batches/{batch_id}/cancel",
-                   headers=headers, timeout=30)
-    except Exception:
-        log.warning("thesis_batch_cancel_failed batch_id=%s", batch_id, exc_info=True)
+def _cancel_batch(batch_id: str, headers: dict[str, str], attempts: int = 2) -> None:
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = httpx.post(f"{ANTHROPIC_API_BASE}/messages/batches/{batch_id}/cancel",
+                              headers=headers, timeout=30)
+            resp.raise_for_status()
+            return
+        except Exception:
+            log.warning("thesis_batch_cancel_failed batch_id=%s attempt=%d", batch_id,
+                        attempt, exc_info=True)
 
 
 def _fetch_results(
@@ -138,6 +142,7 @@ def run_message_batch(
         batch = _poll_until_ended(
             {"id": batch_id, "processing_status": "canceling"},
             headers, timeout_s=CANCEL_DRAIN_TIMEOUT_S, poll_s=poll_s,
+            tolerate_errors=True,
         )
     except Exception:
         # The caller falls back to sync calls; cancel so the batch can't also bill.
@@ -171,16 +176,30 @@ def run_message_batch(
 
 
 def _poll_until_ended(
-    batch: dict[str, Any], headers: dict[str, str], *, timeout_s: float, poll_s: float
+    batch: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    timeout_s: float,
+    poll_s: float,
+    tolerate_errors: bool = False,
 ) -> dict[str, Any]:
+    """Poll until ``ended``. With ``tolerate_errors``, a failed status GET is
+    retried until the deadline instead of raising (used while draining a
+    cancel, where giving up would re-pay replies the batch already billed)."""
     deadline = time.monotonic() + timeout_s
     while batch["processing_status"] != "ended":
         if time.monotonic() >= deadline:
             raise BatchTimeoutError(f"batch {batch['id']} not done after {timeout_s:.0f}s")
         time.sleep(poll_s)
-        resp = httpx.get(f"{ANTHROPIC_API_BASE}/messages/batches/{batch['id']}",
-                         headers=headers, timeout=30)
-        resp.raise_for_status()
+        try:
+            resp = httpx.get(f"{ANTHROPIC_API_BASE}/messages/batches/{batch['id']}",
+                             headers=headers, timeout=30)
+            resp.raise_for_status()
+        except Exception:
+            if not tolerate_errors:
+                raise
+            log.warning("thesis_batch_poll_retry batch_id=%s", batch["id"], exc_info=True)
+            continue
         batch = resp.json()
     return batch
 
