@@ -188,7 +188,7 @@ def test_screen_ticker_scores_a_ticker_outside_qu100():
     df = _ohlcv()
     with (
         patch.object(ss, "get_session"),
-        patch.object(ss, "_screen_money_flow", return_value=[]),
+        patch.object(ss, "_screen_money_flow_as_of", return_value=[]),
         patch.object(ss, "_unranked_signal", return_value=neutral),
         patch.object(ss, "analyze_sectors", return_value=[]),
         patch.object(ss, "_fetch_stock_data", return_value={"ZZZ": df}) as fetch,
@@ -199,3 +199,60 @@ def test_screen_ticker_scores_a_ticker_outside_qu100():
     assert fetch.call_args.args[0] == ["ZZZ"]
     assert candidate.symbol == "ZZZ" and candidate.long_short == "Not in QU100"
     assert history is df
+
+
+def test_screen_ticker_returns_none_when_pattern_detection_fails():
+    from rainier.analysis import stock_screener as ss
+
+    with (
+        patch.object(ss, "get_session"),
+        patch.object(ss, "_screen_money_flow_as_of", return_value=[]),
+        patch.object(ss, "_unranked_signal", return_value=MoneyFlowSignal(
+            symbol="ZZZ", rank=0, rank_change=0, long_short="Not in QU100",
+            capital_flow_direction="N", days_in_top100=0, sector="Unknown",
+            industry="Unknown", signal_strength=0.0)),
+        patch.object(ss, "analyze_sectors", return_value=[]),
+        patch.object(ss, "_fetch_stock_data", return_value={"ZZZ": _ohlcv()}),
+        patch.object(ss, "detect_patterns", side_effect=ValueError("bad pivots")),
+    ):
+        assert ss.screen_ticker("ZZZ") == (None, None)
+
+
+def test_weekly_only_flow_is_still_rendered():
+    flow = TickerFlow("NEWCO", "x", [], [], [], parse_ticker_bars(WEEKLY_PLOT["data"]))
+    assert not flow.empty
+    assert "+1.54 / +100.00" in flow.prompt_section()
+
+
+def test_failed_qu_setup_still_closes_the_tab():
+    from rainier.cli.thesis import _fetch_ticker_flow
+
+    class _Browser:
+        def __init__(self, *_a, **_k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    teardowns = []
+
+    class _Scraper:
+        def __init__(self, _browser):
+            pass
+
+        async def setup(self):
+            raise RuntimeError("cloudflare stuck")
+
+        async def teardown(self):
+            teardowns.append(True)
+
+    with (
+        patch("rainier.scrapers.browser.BrowserManager", _Browser),
+        patch("rainier.scrapers.qu.scraper.QUScraper", _Scraper),
+        pytest.raises(RuntimeError, match="cloudflare"),
+    ):
+        asyncio.run(_fetch_ticker_flow("NVDA", date(2026, 10, 16), "http://x"))
+    assert teardowns == [True]

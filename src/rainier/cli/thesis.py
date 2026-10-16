@@ -208,7 +208,7 @@ def thesis_collect(ctx, symbol, out_dir, cdp, no_qu, session_name):
     click.echo(f"Screening {symbol}...")
     candidate, df = screen_ticker(symbol, settings)
     if candidate is None:
-        raise click.ClickException(f"{symbol}: not enough yfinance history to analyze.")
+        raise click.ClickException(f"{symbol}: no usable yfinance history (or pattern detection failed; see log).")
 
     sections: list[str] = []
     extra_evidence: dict = {}
@@ -241,8 +241,8 @@ async def _fetch_ticker_flow(symbol, as_of, cdp):
 
     async with BrowserManager(headless=True, cdp_url=cdp) as browser:
         scraper = QUScraper(browser)
-        await scraper.setup()
         try:
+            await scraper.setup()
             return await scraper.fetch_ticker_flow(symbol, as_of)
         finally:
             await scraper.teardown()

@@ -205,7 +205,9 @@ class TickerFlow:
 
     @property
     def empty(self) -> bool:
-        return not (self.daily_ranks or self.weekly_ranks or self.daily_bars)
+        return not (
+            self.daily_ranks or self.weekly_ranks or self.daily_bars or self.weekly_bars
+        )
 
     def prompt_section(self) -> str:
         """Render as a thesis-prompt section (newest rows first, as QU shows them)."""
