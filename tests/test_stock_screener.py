@@ -134,3 +134,16 @@ def test_stale_series_is_not_shifted_back_into_a_full_window():
         return_value=_daily_frame(252, end=stale_end),
     ):
         assert _fetch_stock_data(["HALTED"], min_bars=60) == {}
+
+
+def test_fetch_single_symbol_handles_yfinance_ticker_grouped_columns():
+    """yfinance with group_by="ticker" returns (ticker, field) columns even for one
+    symbol; the on-demand single-ticker screen must still get its history."""
+    from rainier.analysis.stock_screener import _fetch_stock_data
+
+    grouped = pd.concat({"NVDA": _daily_frame(252)}, axis=1)
+    with patch("rainier.analysis.stock_screener.yf.download", return_value=grouped):
+        data = _fetch_stock_data(["NVDA"], min_bars=60)
+
+    assert list(data) == ["NVDA"]
+    assert "close" in data["NVDA"].columns and len(data["NVDA"]) == 252
