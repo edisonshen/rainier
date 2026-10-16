@@ -69,13 +69,16 @@ class FakeAnthropicBatches:
     """Message Batches API double: records submissions, answers from `reply`."""
 
     def __init__(self, reply=_thesis_json, *, ends: bool = True, poll_fails: bool = False,
-                 results_failures: int = 0, finished_before_cancel: set[str] | None = None):
+                 results_failures: int = 0, finished_before_cancel: set[str] | None = None,
+                 drain_poll_failures: int = 0, cancel_rejections: int = 0):
         self.reply = reply
         self.ends = ends
         # When set, a cancel ends the batch: these symbols succeeded, the rest are canceled.
         self.finished_before_cancel = finished_before_cancel
         self.poll_fails = poll_fails
         self.results_failures = results_failures
+        self.drain_poll_failures = drain_poll_failures
+        self.cancel_rejections = cancel_rejections
         self.submitted: list[list[dict]] = []
         self.cancelled: list[str] = []
 
@@ -88,6 +91,9 @@ class FakeAnthropicBatches:
 
     def post(self, url, headers=None, json=None, timeout=None):
         if url.endswith("/cancel"):
+            if self.cancel_rejections:
+                self.cancel_rejections -= 1
+                raise RuntimeError("500 from cancel endpoint")
             self.cancelled.append(url)
             return self._resp({})
         self.submitted.append(json["requests"])
@@ -97,6 +103,9 @@ class FakeAnthropicBatches:
         batch_id = url.rsplit("/", 2)[-2] if url.endswith("/results") else url.rsplit("/", 1)[-1]
         if not url.endswith("/results"):
             if self.poll_fails:
+                raise RuntimeError("503 from batch status endpoint")
+            if self.cancelled and self.drain_poll_failures:
+                self.drain_poll_failures -= 1
                 raise RuntimeError("503 from batch status endpoint")
             cancel_landed = self.cancelled and self.finished_before_cancel is not None
             status = "ended" if self.ends or cancel_landed else "in_progress"
@@ -260,6 +269,18 @@ def test_batch_timeout_keeps_finished_replies_and_syncs_only_the_cancelled():
     assert sorted(p["cost_usd"] for p in persisted) == pytest.approx(
         [_full_cost() / 2, _full_cost() / 2, _full_cost()]
     )
+
+
+@pytest.mark.parametrize("fault", ["drain_poll_failures", "cancel_rejections"])
+def test_batch_timeout_survives_a_transient_cancel_or_drain_error(fault):
+    api = FakeAnthropicBatches(ends=False, finished_before_cancel={"AAA", "BBB"},
+                               **{fault: 1})
+    batch, persisted, api, sync_llm = _run_close_scan(
+        [_candidate("AAA"), _candidate("BBB"), _candidate("CCC")],
+        settings=_settings(batch_timeout_minutes=0.0001), batch_api=api,
+    )
+    assert set(batch.theses) == {"AAA", "BBB", "CCC"} and not batch.failures
+    assert sync_llm.call_count == 1  # only the cancelled CCC is paid again
 
 
 def test_batch_whose_cancel_never_lands_falls_back_to_full_price_sync_calls():
