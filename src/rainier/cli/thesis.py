@@ -208,7 +208,9 @@ def thesis_collect(ctx, symbol, out_dir, cdp, no_qu, session_name):
     click.echo(f"Screening {symbol}...")
     candidate, df = screen_ticker(symbol, settings)
     if candidate is None:
-        raise click.ClickException(f"{symbol}: no usable yfinance history (or pattern detection failed; see log).")
+        raise click.ClickException(
+            f"{symbol}: no usable yfinance history (or pattern detection failed; see log)."
+        )
 
     sections: list[str] = []
     extra_evidence: dict = {}
