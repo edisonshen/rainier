@@ -358,7 +358,7 @@ class LLMThesisConfig(BaseModel):
     reuse_max_rank_move: int = Field(10, ge=0)
     # Sessions whose thesis calls go through Anthropic's Message Batches API
     # (50% price, async). Past batch_timeout_minutes the batch is cancelled and
-    # the remaining calls run synchronously at full price.
+    # the calls it had not finished run synchronously at full price.
     batch_sessions: list[str] = Field(default_factory=lambda: ["close"])
     batch_timeout_minutes: float = Field(45.0, gt=0)
     batch_poll_seconds: float = Field(30.0, ge=0)
