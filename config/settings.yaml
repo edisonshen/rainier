@@ -182,10 +182,11 @@ llm_thesis:
   # take effort instead; thinking_budget_tokens then only sizes max_tokens.
   thinking_effort: "high"
   # v2: D7a calibration block. v3: R-A last-K reflections block. v4: switch to
-  # xhigh extended thinking (behavioral change busts the Tier-1 cache). This
+  # xhigh extended thinking (behavioral change busts the Tier-1 cache). v5: 200-bar
+  # 1024x640 chart (was 60 bars at 1280x800). This
   # runtime value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION)
   # — keep it == the module constant.
-  prompt_version: "v4"
+  prompt_version: "v5"
   # Budget: one LLM scan a day (12:45 PT afternoon); close posts only the
   # rule-based top-20.
   enabled_sessions:

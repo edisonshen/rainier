@@ -78,7 +78,8 @@ def screen_stocks(
 
     # Layer 3 — pattern detection (outside DB session, uses yfinance)
     symbols = [s.symbol for s in signals]
-    stock_data = _fetch_stock_data(symbols, config.min_daily_bars)
+    history = _fetch_stock_data(symbols, config.min_daily_bars)
+    stock_data = {sym: pattern_window(df) for sym, df in history.items()}
     log.info(
         "Layer 3: fetched data for %d/%d symbols", len(stock_data), len(symbols)
     )
@@ -177,7 +178,7 @@ def screen_stocks(
         sum(1 for r in results if r.recommendation == "buy"),
         sum(1 for r in results if r.recommendation == "watch"),
     )
-    return candidates, stock_data
+    return candidates, history
 
 
 # ---------------------------------------------------------------------------
@@ -598,17 +599,46 @@ def _apply_sector_boost(
 # ---------------------------------------------------------------------------
 
 
+PATTERN_LOOKBACK_MONTHS = 6
+# Bar-count fallback for frames without a DatetimeIndex (synthetic fixtures).
+PATTERN_LOOKBACK_BARS = 126
+# Longer than the pattern window so the LLM thesis chart can show ~200 bars.
+HISTORY_PERIOD = "1y"
+
+
+def pattern_window(
+    df: pd.DataFrame,
+    lookback_months: int = PATTERN_LOOKBACK_MONTHS,
+    lookback_bars: int = PATTERN_LOOKBACK_BARS,
+) -> pd.DataFrame:
+    """The trailing calendar-month slice that pattern detection runs on.
+
+    Mirrors the original yfinance ``period="6mo"`` fetch: bars strictly after
+    (last bar - 6 months). Index-less frames fall back to the last 126 rows.
+    """
+    if df.empty:
+        return df
+    if isinstance(df.index, pd.DatetimeIndex):
+        cutoff = df.index[-1] - pd.DateOffset(months=lookback_months)
+        return df[df.index > cutoff]
+    return df.iloc[-lookback_bars:]
+
+
 def _fetch_stock_data(
     symbols: list[str], min_bars: int
 ) -> dict[str, pd.DataFrame]:
-    """Batch fetch 6mo daily data for all symbols via yfinance."""
+    """Batch fetch 1y daily data for all symbols via yfinance.
+
+    ``min_bars`` applies to the pattern window, so the candidate set is the
+    same as a 6mo fetch; the extra history only feeds the thesis chart.
+    """
     if not symbols:
         return {}
 
     try:
         raw = yf.download(
             symbols,
-            period="6mo",
+            period=HISTORY_PERIOD,
             interval="1d",
             group_by="ticker",
             progress=False,
@@ -625,10 +655,11 @@ def _fetch_stock_data(
             else:
                 df = raw[sym].copy()
             df = df.dropna(subset=["Close"])
-            if len(df) < min_bars:
+            window_bars = len(pattern_window(df))
+            if window_bars < min_bars:
                 log.debug(
                     "Skipping %s: only %d bars (need %d)",
-                    sym, len(df), min_bars,
+                    sym, window_bars, min_bars,
                 )
                 continue
             # Normalize column names to lowercase
