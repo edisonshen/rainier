@@ -198,22 +198,25 @@ def screen_ticker(
 ) -> tuple[StockCandidate | None, pd.DataFrame | None]:
     """Run the same 3 layers on ONE arbitrary ticker (on-demand thesis pack).
 
-    A ticker in the latest QU100 'Long in' set gets its real money-flow signal;
-    any other ticker is scored with a neutral one (rank 0, "Not in QU100") so
-    the sector and pattern layers still run. Returns ``(None, None)`` when
-    yfinance has too little history for pattern detection.
+    A ticker in the latest QU100 'Long in' set gets its real money-flow signal
+    (no 24h staleness guard, so a weekend run still sees Friday's rank); any
+    other ticker is scored with a neutral one (rank 0, "Not in QU100") so the
+    sector and pattern layers still run. Returns ``(None, None)`` when yfinance
+    has too little history or pattern detection fails.
     """
     if settings is None:
         settings = get_settings()
     symbol = symbol.upper()
+    today = datetime.now(timezone.utc).astimezone(_MARKET_TZ).date()
     with get_session() as session:
         signal = next(
-            (s for s in _screen_money_flow(session) if s.symbol == symbol), None
+            (s for s in _screen_money_flow_as_of(session, today) if s.symbol == symbol),
+            None,
         ) or _unranked_signal(session, symbol)
         sector_trends = analyze_sectors(session)
         signals = _apply_sector_boost([signal], sector_trends)
     candidates, history = _detect_and_score(signals, sector_trends, settings.stock_screener)
-    if symbol not in history:
+    if symbol not in history or not candidates:
         return None, None
     return candidates[0], history[symbol]
 
