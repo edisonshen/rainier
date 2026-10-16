@@ -79,7 +79,9 @@ def screen_stocks(
     # Layer 3 — pattern detection (outside DB session, uses yfinance)
     symbols = [s.symbol for s in signals]
     history = _fetch_stock_data(symbols, config.min_daily_bars)
-    stock_data = {sym: pattern_window(df) for sym, df in history.items()}
+    stock_data = {
+        sym: pattern_window(df, as_of=_today(df)) for sym, df in history.items()
+    }
     log.info(
         "Layer 3: fetched data for %d/%d symbols", len(stock_data), len(symbols)
     )
@@ -610,18 +612,28 @@ def pattern_window(
     df: pd.DataFrame,
     lookback_months: int = PATTERN_LOOKBACK_MONTHS,
     lookback_bars: int = PATTERN_LOOKBACK_BARS,
+    as_of: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
     """The trailing calendar-month slice that pattern detection runs on.
 
     Mirrors the original yfinance ``period="6mo"`` fetch: bars strictly after
-    (last bar - 6 months). Index-less frames fall back to the last 126 rows.
+    (``as_of`` - 6 months), ``as_of`` defaulting to the last bar. The live
+    screen passes today so a stale (halted/delisted) series is not shifted
+    back into a full window. Index-less frames fall back to the last 126 rows.
     """
     if df.empty:
         return df
     if isinstance(df.index, pd.DatetimeIndex):
-        cutoff = df.index[-1] - pd.DateOffset(months=lookback_months)
+        anchor = df.index[-1] if as_of is None else as_of
+        cutoff = anchor - pd.DateOffset(months=lookback_months)
         return df[df.index > cutoff]
     return df.iloc[-lookback_bars:]
+
+
+def _today(df: pd.DataFrame) -> pd.Timestamp | None:
+    if not isinstance(df.index, pd.DatetimeIndex):
+        return None
+    return pd.Timestamp.now(tz=df.index.tz).normalize()
 
 
 def _fetch_stock_data(
@@ -655,7 +667,7 @@ def _fetch_stock_data(
             else:
                 df = raw[sym].copy()
             df = df.dropna(subset=["Close"])
-            window_bars = len(pattern_window(df))
+            window_bars = len(pattern_window(df, as_of=_today(df)))
             if window_bars < min_bars:
                 log.debug(
                     "Skipping %s: only %d bars (need %d)",
