@@ -192,6 +192,10 @@ def _detect_and_score(
     return candidates, history
 
 
+# A long weekend + holiday is 4 calendar days; older QU100 ranks are not current.
+TICKER_RANK_MAX_AGE_DAYS = 4
+
+
 def screen_ticker(
     symbol: str,
     settings: Settings | None = None,
@@ -199,7 +203,8 @@ def screen_ticker(
     """Run the same 3 layers on ONE arbitrary ticker (on-demand thesis pack).
 
     A ticker in the latest QU100 'Long in' set gets its real money-flow signal
-    (no 24h staleness guard, so a weekend run still sees Friday's rank); any
+    (up to TICKER_RANK_MAX_AGE_DAYS old, so a weekend run still sees Friday's
+    rank, but a long scrape outage does not pass off old ranks as current); any
     other ticker is scored with a neutral one (rank 0, "Not in QU100") so the
     sector and pattern layers still run. Returns ``(None, None)`` when yfinance
     has too little history or pattern detection fails.
@@ -209,10 +214,12 @@ def screen_ticker(
     symbol = symbol.upper()
     today = datetime.now(timezone.utc).astimezone(_MARKET_TZ).date()
     with get_session() as session:
-        signal = next(
-            (s for s in _screen_money_flow_as_of(session, today) if s.symbol == symbol),
-            None,
-        ) or _unranked_signal(session, symbol)
+        generation = _resolve_top100_generation(session, today)
+        fresh = generation is not None and (today - generation[0]).days <= TICKER_RANK_MAX_AGE_DAYS
+        ranked = _screen_money_flow_as_of(session, today, _generation=generation) if fresh else []
+        signal = next((s for s in ranked if s.symbol == symbol), None) or _unranked_signal(
+            session, symbol
+        )
         sector_trends = analyze_sectors(session)
         signals = _apply_sector_boost([signal], sector_trends)
     candidates, history = _detect_and_score(signals, sector_trends, settings.stock_screener)

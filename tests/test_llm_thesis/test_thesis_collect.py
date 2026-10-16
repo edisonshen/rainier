@@ -188,6 +188,7 @@ def test_screen_ticker_scores_a_ticker_outside_qu100():
     df = _ohlcv()
     with (
         patch.object(ss, "get_session"),
+        patch.object(ss, "_resolve_top100_generation", return_value=None),
         patch.object(ss, "_screen_money_flow_as_of", return_value=[]),
         patch.object(ss, "_unranked_signal", return_value=neutral),
         patch.object(ss, "analyze_sectors", return_value=[]),
@@ -206,6 +207,7 @@ def test_screen_ticker_returns_none_when_pattern_detection_fails():
 
     with (
         patch.object(ss, "get_session"),
+        patch.object(ss, "_resolve_top100_generation", return_value=None),
         patch.object(ss, "_screen_money_flow_as_of", return_value=[]),
         patch.object(ss, "_unranked_signal", return_value=MoneyFlowSignal(
             symbol="ZZZ", rank=0, rank_change=0, long_short="Not in QU100",
@@ -256,3 +258,36 @@ def test_failed_qu_setup_still_closes_the_tab():
     ):
         asyncio.run(_fetch_ticker_flow("NVDA", date(2026, 10, 16), "http://x"))
     assert teardowns == [True]
+
+
+@pytest.mark.parametrize(("age_days", "expect_rank"), [(3, 3), (5, 0)])
+def test_screen_ticker_uses_qu100_rank_only_while_fresh(age_days, expect_rank):
+    """Weekend runs keep Friday's rank; a long scrape outage must not pass old ranks off
+    as current money flow."""
+    from datetime import datetime, timedelta, timezone
+
+    from rainier.analysis import stock_screener as ss
+
+    today = datetime.now(timezone.utc).astimezone(ss._MARKET_TZ).date()
+    ranked = MoneyFlowSignal(
+        symbol="MCHP", rank=3, rank_change=1, long_short="Long in",
+        capital_flow_direction="+", days_in_top100=2, sector="Technology",
+        industry="Semis", signal_strength=0.8,
+    )
+    neutral = MoneyFlowSignal(
+        symbol="MCHP", rank=0, rank_change=0, long_short="Not in QU100",
+        capital_flow_direction="N", days_in_top100=0, sector="Technology",
+        industry="Semis", signal_strength=0.0,
+    )
+    with (
+        patch.object(ss, "get_session"),
+        patch.object(ss, "_resolve_top100_generation",
+                     return_value=(today - timedelta(days=age_days), datetime.now())),
+        patch.object(ss, "_screen_money_flow_as_of", return_value=[ranked]),
+        patch.object(ss, "_unranked_signal", return_value=neutral),
+        patch.object(ss, "analyze_sectors", return_value=[]),
+        patch.object(ss, "_fetch_stock_data", return_value={"MCHP": _ohlcv()}),
+    ):
+        candidate, _ = ss.screen_ticker("MCHP")
+
+    assert candidate.rank == expect_rank
