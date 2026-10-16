@@ -103,6 +103,7 @@ def build_user_message(
     candidate_summary: str,
     signal_renders: list[str],
     calibration_section: str = "",
+    extra_sections: list[str] | None = None,
 ) -> str:
     """Stitch the per-call evidence into the user-side prompt.
 
@@ -130,5 +131,7 @@ def build_user_message(
         body += "(no signals produced non-None values)"
     if calibration_section:
         body += f"\n\n{calibration_section}"
+    for section in extra_sections or []:
+        body += f"\n\n{section}"
     body += "\n\nProduce the JSON object now."
     return body

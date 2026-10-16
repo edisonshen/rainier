@@ -570,6 +570,74 @@ class ThesisBatch(NamedTuple):
     failures: dict[str, str]
 
 
+def build_thesis_user_prompt(
+    pack: EvidencePack,
+    renders: list[str],
+    *,
+    scan_date: date,
+    extra_sections: list[str] | None = None,
+) -> str:
+    """The thesis user message: evidence + calibration + reflections.
+
+    Shared by the API thesis call and the on-demand ``thesis collect`` pack so
+    both send the model the same evidence. ``extra_sections`` are appended
+    before the closing instruction (the daily run passes none).
+    """
+    candidate_summary = json.dumps(pack.candidate, sort_keys=True, default=str)
+    # D7a: inject the calibration section (how prior theses graded out). Loaded
+    # best-effort from the latest persisted PaperCalibration row; a failure or a
+    # missing row (Phase-0 / fresh DB) yields no section. This text is invisible
+    # to compute_input_hash, so PROMPT_VERSION ("v2") is what busts the Tier-1
+    # cache — see prompt.py.
+    calibration_section = ""
+    try:
+        from rainier.paper.calibration import (
+            load_latest_calibration,
+            render_calibration_section,
+        )
+
+        # strict_before: a scan on day D must only see calibration from a PRIOR
+        # day. Day D's own paper_calibration row is written end-of-day D (after
+        # that day's eval/paper outcomes), so a same-day rerun / replay must not
+        # inject it — that would leak same-day hindsight (codex iter-3 [P2]).
+        calibration_section = render_calibration_section(
+            load_latest_calibration(scan_date, strict_before=True)
+        )
+    except Exception:
+        log.warning("thesis_calibration_load_failed symbol=%s", pack.symbol, exc_info=True)
+
+    # R-A: append the rolling last-K post-exit reflections to the calibration
+    # section. Same strictly-before discipline (a reflection for a trade exited
+    # on day D is written end-of-day D — a day-D scan must not see it) and the
+    # same best-effort isolation: a load failure costs the block, not the
+    # thesis. Like the calibration text this is invisible to compute_input_hash,
+    # so PROMPT_VERSION busts the Tier-1 cache instead.
+    try:
+        from rainier.paper.reflection import reflection_prompt_section
+
+        reflections_block = reflection_prompt_section(scan_date)
+        if reflections_block:
+            calibration_section = (
+                f"{calibration_section}\n\n{reflections_block}"
+                if calibration_section
+                else reflections_block
+            )
+    except Exception:
+        log.warning("thesis_reflections_load_failed symbol=%s", pack.symbol, exc_info=True)
+
+    user_prompt = build_user_message(
+        symbol=pack.symbol,
+        scan_date=pack.scan_date,
+        session_name=pack.session_name,
+        candidate_summary=candidate_summary,
+        signal_renders=renders,
+        calibration_section=calibration_section,
+        extra_sections=extra_sections,
+    )
+    return user_prompt
+
+
+
 async def generate_thesis(
     *,
     symbol: str,
@@ -635,56 +703,7 @@ async def generate_thesis(
         pack, image_bytes, thinking_budget_tokens=thesis_cfg.thinking_budget_tokens
     )
 
-    candidate_summary = json.dumps(pack.candidate, sort_keys=True, default=str)
-    # D7a: inject the calibration section (how prior theses graded out). Loaded
-    # best-effort from the latest persisted PaperCalibration row; a failure or a
-    # missing row (Phase-0 / fresh DB) yields no section. This text is invisible
-    # to compute_input_hash, so PROMPT_VERSION ("v2") is what busts the Tier-1
-    # cache — see prompt.py.
-    calibration_section = ""
-    try:
-        from rainier.paper.calibration import (
-            load_latest_calibration,
-            render_calibration_section,
-        )
-
-        # strict_before: a scan on day D must only see calibration from a PRIOR
-        # day. Day D's own paper_calibration row is written end-of-day D (after
-        # that day's eval/paper outcomes), so a same-day rerun / replay must not
-        # inject it — that would leak same-day hindsight (codex iter-3 [P2]).
-        calibration_section = render_calibration_section(
-            load_latest_calibration(scan_date, strict_before=True)
-        )
-    except Exception:
-        log.warning("thesis_calibration_load_failed symbol=%s", symbol, exc_info=True)
-
-    # R-A: append the rolling last-K post-exit reflections to the calibration
-    # section. Same strictly-before discipline (a reflection for a trade exited
-    # on day D is written end-of-day D — a day-D scan must not see it) and the
-    # same best-effort isolation: a load failure costs the block, not the
-    # thesis. Like the calibration text this is invisible to compute_input_hash,
-    # so PROMPT_VERSION busts the Tier-1 cache instead.
-    try:
-        from rainier.paper.reflection import reflection_prompt_section
-
-        reflections_block = reflection_prompt_section(scan_date)
-        if reflections_block:
-            calibration_section = (
-                f"{calibration_section}\n\n{reflections_block}"
-                if calibration_section
-                else reflections_block
-            )
-    except Exception:
-        log.warning("thesis_reflections_load_failed symbol=%s", symbol, exc_info=True)
-
-    user_prompt = build_user_message(
-        symbol=symbol,
-        scan_date=pack.scan_date,
-        session_name=session_name,
-        candidate_summary=candidate_summary,
-        signal_renders=renders,
-        calibration_section=calibration_section,
-    )
+    user_prompt = build_thesis_user_prompt(pack, renders, scan_date=scan_date)
 
     last_error: str | None = None
     cost_charged = 0.0

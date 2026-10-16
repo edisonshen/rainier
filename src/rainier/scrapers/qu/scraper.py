@@ -21,8 +21,11 @@ from rainier.scrapers.qu import selectors as sel
 from rainier.scrapers.qu.auth import ensure_authenticated, get_session_path, is_session_valid, login
 from rainier.scrapers.qu.parsers import (
     QU100Row,
+    TickerFlow,
     _api_rows_to_qu100_rows,
     parse_capital_flow_rows,
+    parse_ticker_bars,
+    parse_ticker_ranks,
 )
 
 # In-page fetch JS (DESIGN D-3/D-7). Defined at module scope so it's easy
@@ -133,6 +136,15 @@ def market_date(timestamp: datetime) -> date_type:
     ``datetime.now(timezone.utc)``, so naive inputs are not expected.
     """
     return timestamp.astimezone(MARKET_TZ).date()
+
+
+def _auth_rejected(result: dict) -> bool:
+    """QU rejects a stale session with 401/403, or with a 2xx whose body is
+    ``{"message": "Not logged in"}`` (seen on the mfsummary/mfplot endpoints)."""
+    if result["status"] in (401, 403):
+        return True
+    body = result.get("body")
+    return isinstance(body, dict) and body.get("message") == "Not logged in"
 
 
 class QUScraper(BaseScraper):
@@ -452,7 +464,7 @@ class QUScraper(BaseScraper):
           - status 200 with a non-JSON body
         """
         result = await page.evaluate(QU100_FETCH_JS, {"url": url})
-        if result["status"] in (401, 403):
+        if _auth_rejected(result):
             self.log.warning(
                 "qu_api_auth_failure",
                 status=result["status"],
@@ -461,7 +473,7 @@ class QUScraper(BaseScraper):
             )
             await self._reauth()
             result = await page.evaluate(QU100_FETCH_JS, {"url": url})
-            if result["status"] in (401, 403):
+            if _auth_rejected(result):
                 raise RuntimeError(
                     f"qu api {result['status']} after re-auth: "
                     f"{result['text_excerpt']}"
@@ -475,6 +487,30 @@ class QUScraper(BaseScraper):
                 f"qu api {result['status']} non-JSON: {result['text_excerpt']}"
             )
         return result["body"]
+
+    async def fetch_ticker_flow(self, symbol: str, as_of: date_type) -> TickerFlow:
+        """One ticker's capitalflow page data: rank summary + daily/weekly flow bars.
+
+        Call after ``setup()``; uses the same in-page fetch as the QU100 scrape.
+        """
+        page = self._page
+        query = f"ticker={symbol}&date={as_of.isoformat()}"
+        summary = await self._fetch_qu_api(page, f"{sel.TICKER_SUMMARY_API_URL}?{query}")
+        daily = await self._fetch_qu_api(
+            page, f"{sel.TICKER_PLOT_API_URL}?{query}&frequency=daily"
+        )
+        weekly = await self._fetch_qu_api(
+            page, f"{sel.TICKER_PLOT_API_URL}?{query}&frequency=weekly"
+        )
+        data = summary.get("data") or {}
+        return TickerFlow(
+            symbol=symbol,
+            updated=str(summary.get("message", "")),
+            daily_ranks=parse_ticker_ranks(data.get("daily")),
+            weekly_ranks=parse_ticker_ranks(data.get("weekly")),
+            daily_bars=parse_ticker_bars(daily.get("data")),
+            weekly_bars=parse_ticker_bars(weekly.get("data")),
+        )
 
     async def _reauth(self) -> None:
         """Force a fresh login to recover from server-side session rejection.
