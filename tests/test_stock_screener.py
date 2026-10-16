@@ -86,7 +86,8 @@ def test_full_pipeline_yields_dict_keyed_by_symbol():
     assert any(c.symbol == "NVDA" for c in candidates)
 
 
-def _daily_frame(n: int, end: str = "2026-10-15") -> pd.DataFrame:
+def _daily_frame(n: int, end: str | None = None) -> pd.DataFrame:
+    end = end or pd.Timestamp.today().strftime("%Y-%m-%d")
     idx = pd.bdate_range(end=end, periods=n)
     return pd.DataFrame(
         {"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1},
@@ -120,3 +121,16 @@ def test_min_bars_applies_to_the_pattern_window_not_the_year():
         "rainier.analysis.stock_screener.yf.download", return_value=_daily_frame(50)
     ):
         assert _fetch_stock_data(["NEWCO"], min_bars=60) == {}
+
+
+def test_stale_series_is_not_shifted_back_into_a_full_window():
+    """A symbol whose bars stopped 4 months ago keeps only ~2 months in the
+    today-anchored 6mo window, so it is skipped exactly as the old fetch did."""
+    from rainier.analysis.stock_screener import _fetch_stock_data
+
+    stale_end = (pd.Timestamp.today() - pd.DateOffset(months=4)).strftime("%Y-%m-%d")
+    with patch(
+        "rainier.analysis.stock_screener.yf.download",
+        return_value=_daily_frame(252, end=stale_end),
+    ):
+        assert _fetch_stock_data(["HALTED"], min_bars=60) == {}
