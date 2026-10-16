@@ -331,7 +331,7 @@ class LLMThesisConfig(BaseModel):
     # prompt.PROMPT_VERSION — the module constant alone never busts the cache.
     # Keep the two (plus settings.yaml) in lockstep
     # (test_prompt_version_config_tracks_module guards the invariant).
-    prompt_version: str = "v4"
+    prompt_version: str = "v5"
     enabled_sessions: list[str] = Field(
         default_factory=lambda: ["afternoon", "close"]
     )

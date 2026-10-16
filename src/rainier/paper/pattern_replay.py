@@ -50,7 +50,12 @@ from sqlalchemy.orm import Session
 
 from rainier.analysis.sector_analyzer import get_sector_boost
 from rainier.analysis.stock_patterns import detect_patterns
-from rainier.analysis.stock_screener import _filter_actionable
+from rainier.analysis.stock_screener import (
+    PATTERN_LOOKBACK_BARS,
+    PATTERN_LOOKBACK_MONTHS,
+    _filter_actionable,
+    pattern_window,
+)
 from rainier.core.config import StockScreenerConfig
 from rainier.core.models import StockPrice
 from rainier.core.types import PatternSignal, SectorTrend
@@ -62,11 +67,11 @@ from rainier.core.types import PatternSignal, SectorTrend
 # holiday-heavy stretches where 6 calendar months != 126 sessions, and swing
 # detection / `max_pattern_bars=120` are boundary-sensitive. Kept here (not in
 # StockScreenerConfig) because it mirrors a yfinance fetch param, not a knob.
-LIVE_LOOKBACK_MONTHS = 6
+LIVE_LOOKBACK_MONTHS = PATTERN_LOOKBACK_MONTHS
 # Bar-count fallback for frames WITHOUT a datetime index (e.g. synthetic test
 # fixtures): ~126 trading sessions ≈ 6 months. The production path uses the
 # calendar window above; this only governs index-less frames.
-LIVE_LOOKBACK_BARS = 126
+LIVE_LOOKBACK_BARS = PATTERN_LOOKBACK_BARS
 
 # Columns the detector + filter expect (lowercase), in canonical order.
 _OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
@@ -184,14 +189,11 @@ def window_as_of(
     """
     if t_idx < 0 or t_idx >= len(df):
         raise IndexError(f"t_idx {t_idx} out of range for {len(df)} bars")
-    upto = df.iloc[: t_idx + 1]
-    if isinstance(df.index, pd.DatetimeIndex):
-        t_ts = df.index[t_idx]
-        # period="6mo" = bars strictly after (t - 6 months), inclusive of t.
-        cutoff = t_ts - pd.DateOffset(months=lookback_months)
-        return upto[upto.index > cutoff]
-    start = max(0, t_idx + 1 - lookback_bars)
-    return upto.iloc[start:]
+    return pattern_window(
+        df.iloc[: t_idx + 1],
+        lookback_months=lookback_months,
+        lookback_bars=lookback_bars,
+    )
 
 
 # ---------------------------------------------------------------------------

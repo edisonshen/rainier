@@ -930,7 +930,12 @@ async def _compute_theses_async(
     already_spent_usd: float = 0.0,
     selection_reasons: dict[str, str] | None = None,
 ) -> ThesisBatch:
-    from .chart_export import render_chart_png
+    from .chart_export import (
+        THESIS_CHART_BARS,
+        THESIS_CHART_HEIGHT,
+        THESIS_CHART_WIDTH,
+        render_chart_png,
+    )
     from .chart_persistence import attach_chart_id_to_thesis, persist_chart_image
 
     thesis_cfg = settings.llm_thesis
@@ -989,6 +994,9 @@ async def _compute_theses_async(
                         scan_date=scan_date,
                         image_bytes=image_bytes,
                         sha256=digest,
+                        width=THESIS_CHART_WIDTH,
+                        height=THESIS_CHART_HEIGHT,
+                        timeframe_days=THESIS_CHART_BARS,
                     )
                     if chart_id is not None:
                         chart_ids_by_symbol[s] = chart_id

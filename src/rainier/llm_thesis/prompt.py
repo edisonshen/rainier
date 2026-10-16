@@ -22,7 +22,8 @@ from __future__ import annotations
 # no-thinking thesis; likewise when thinking_budget_tokens is retuned.
 # A model switch (e.g. Sonnet 4.6 -> Opus 5.5) needs no bump: the Tier-1 key
 # already includes llm_model.
-PROMPT_VERSION = "v4"
+# v5: the chart grew from 60 to 200 daily bars on a 1024x640 canvas.
+PROMPT_VERSION = "v5"
 
 OUTPUT_SCHEMA = """{
   "verdict": "setup_long" | "watch" | "no_setup",

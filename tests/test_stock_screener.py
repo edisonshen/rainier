@@ -84,3 +84,39 @@ def test_full_pipeline_yields_dict_keyed_by_symbol():
     assert "NVDA" in ohlcv
     assert isinstance(ohlcv["NVDA"], pd.DataFrame)
     assert any(c.symbol == "NVDA" for c in candidates)
+
+
+def _daily_frame(n: int, end: str = "2026-10-15") -> pd.DataFrame:
+    idx = pd.bdate_range(end=end, periods=n)
+    return pd.DataFrame(
+        {"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1},
+        index=idx,
+    )
+
+
+def test_fetch_keeps_a_year_but_patterns_see_only_six_months():
+    from rainier.analysis.stock_screener import _fetch_stock_data, pattern_window
+
+    with patch(
+        "rainier.analysis.stock_screener.yf.download", return_value=_daily_frame(252)
+    ) as dl:
+        data = _fetch_stock_data(["NVDA"], min_bars=60)
+
+    assert dl.call_args.kwargs["period"] == "1y"
+    history = data["NVDA"]
+    assert len(history) == 252  # enough for the 200-bar thesis chart
+    window = pattern_window(history)
+    cutoff = history.index[-1] - pd.DateOffset(months=6)
+    assert window.index.min() > cutoff
+    assert len(window) == (history.index > cutoff).sum()
+    assert 120 <= len(window) <= 135
+
+
+def test_min_bars_applies_to_the_pattern_window_not_the_year():
+    from rainier.analysis.stock_screener import _fetch_stock_data
+
+    # A recent IPO with 50 bars is still skipped, as with the old 6mo fetch.
+    with patch(
+        "rainier.analysis.stock_screener.yf.download", return_value=_daily_frame(50)
+    ):
+        assert _fetch_stock_data(["NEWCO"], min_bars=60) == {}

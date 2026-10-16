@@ -144,9 +144,9 @@ def test_render_passes_explicit_scale_and_engine():
     assert kwargs.get("engine") == "kaleido", f"engine not pinned: {kwargs}"
     assert kwargs.get("scale") == 1, f"scale not pinned: {kwargs}"
     assert kwargs.get("format") == "png"
-    # Width/height come from the call defaults — confirm they are 1280x800.
-    assert kwargs.get("width") == 1280
-    assert kwargs.get("height") == 800
+    # Width/height come from the call defaults — the small thesis canvas.
+    assert kwargs.get("width") == 1024
+    assert kwargs.get("height") == 640
 
 
 def test_static_stock_chart_pins_font_family():
@@ -213,3 +213,26 @@ def test_static_stock_chart_uses_no_wallclock():
                     f"{module.__name__} references {node.value.id}.{node.attr} "
                     f"— wall-clock leak forbidden in render path"
                 )
+
+
+def test_thesis_chart_draws_200_bars_on_the_small_canvas():
+    """The LLM sees ~10 months of daily candles, not just the last 60."""
+    from rainier.viz.charts import create_static_stock_chart
+
+    base = datetime(2025, 1, 1)
+    df = pd.DataFrame(
+        {"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 1},
+        index=[base + timedelta(days=i) for i in range(260)],
+    )
+    real = create_static_stock_chart
+    seen = {}
+
+    def _spy(*args, **kwargs):
+        fig = real(*args, **kwargs)
+        seen["candles"] = len(fig.data[0].x)
+        fig.to_image = MagicMock(return_value=b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+        return fig
+
+    with patch("rainier.llm_thesis.chart_export.create_static_stock_chart", _spy):
+        render_chart_png("AAPL", df)
+    assert seen["candles"] == 200
