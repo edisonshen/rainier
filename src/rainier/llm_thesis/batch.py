@@ -3,8 +3,10 @@
 ``ThesisLLMBatcher`` lets concurrently running ``generate_thesis`` tasks submit
 their LLM calls as one batch: each call parks on a future, and once every live
 task is either parked or finished the parked calls go out together. Retries
-form the next round. A batch that fails or outlasts its timeout is cancelled
-and its calls fall back to the synchronous path at full price.
+form the next round. A batch that fails is cancelled and its calls fall back
+to the synchronous path at full price. A batch that outlasts its timeout is
+cancelled too, but the requests it already finished are billed, so their
+results are kept and only the cancelled ones fall back.
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ log = logging.getLogger(__name__)
 ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
 ANTHROPIC_VERSION = "2023-06-01"
 BATCH_PRICE_FACTOR = 0.5
+# How long to wait for a timed-out batch's cancel to land (one took ~6 min).
+CANCEL_DRAIN_TIMEOUT_S = 15 * 60
 
 _NATIVE_PARAM_KEYS = ("max_tokens", "thinking", "output_config", "temperature")
 
@@ -106,8 +110,10 @@ def run_message_batch(
 ) -> dict[int, LLMReply | str]:
     """Submit one batch, wait for it, return ``{request_index: reply | error}``.
 
-    Raises ``BatchTimeoutError`` (after cancelling) when the batch has not ended
-    within ``timeout_s``.
+    A batch still running after ``timeout_s`` is cancelled; the requests it had
+    finished keep their replies and the cancelled ones come back as errors.
+    Raises ``BatchTimeoutError`` when the cancel has not landed within
+    ``CANCEL_DRAIN_TIMEOUT_S``.
     """
     headers = {
         "x-api-key": api_key,
@@ -123,15 +129,16 @@ def run_message_batch(
 
     batch_id = batch["id"]
     try:
-        deadline = time.monotonic() + timeout_s
-        while batch["processing_status"] != "ended":
-            if time.monotonic() >= deadline:
-                raise BatchTimeoutError(f"batch {batch_id} not done after {timeout_s:.0f}s")
-            time.sleep(poll_s)
-            resp = httpx.get(f"{ANTHROPIC_API_BASE}/messages/batches/{batch_id}",
-                             headers=headers, timeout=30)
-            resp.raise_for_status()
-            batch = resp.json()
+        batch = _poll_until_ended(batch, headers, timeout_s=timeout_s, poll_s=poll_s)
+    except BatchTimeoutError:
+        _cancel_batch(batch_id, headers)
+        log.warning("thesis_batch_timeout_cancelled batch_id=%s", batch_id)
+        # Requests finished before the cancel are billed: wait for the cancel to
+        # land and keep them, so only the cancelled ones are paid again via sync.
+        batch = _poll_until_ended(
+            {"id": batch_id, "processing_status": "canceling"},
+            headers, timeout_s=CANCEL_DRAIN_TIMEOUT_S, poll_s=poll_s,
+        )
     except Exception:
         # The caller falls back to sync calls; cancel so the batch can't also bill.
         _cancel_batch(batch_id, headers)
@@ -161,6 +168,21 @@ def run_message_batch(
         )
     log.info("thesis_batch_done batch_id=%s counts=%s", batch["id"], batch.get("request_counts"))
     return results
+
+
+def _poll_until_ended(
+    batch: dict[str, Any], headers: dict[str, str], *, timeout_s: float, poll_s: float
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_s
+    while batch["processing_status"] != "ended":
+        if time.monotonic() >= deadline:
+            raise BatchTimeoutError(f"batch {batch['id']} not done after {timeout_s:.0f}s")
+        time.sleep(poll_s)
+        resp = httpx.get(f"{ANTHROPIC_API_BASE}/messages/batches/{batch['id']}",
+                         headers=headers, timeout=30)
+        resp.raise_for_status()
+        batch = resp.json()
+    return batch
 
 
 class ThesisLLMBatcher:
