@@ -1,0 +1,747 @@
+{
+  "unit_id": "u15c",
+  "model": "devin-cloud",
+  "pages_read": [
+    192,
+    193,
+    194,
+    195,
+    196,
+    197,
+    198,
+    199,
+    200,
+    201
+  ],
+  "summary": "The continuation of 光磊 and the 宏碁, 台达电, 神达, 友讯 and opening 鸿准 cases illustrate measured upside swings, high-level false breakouts, M tops, and repeated bearish measured moves on weekly and daily charts (PDF pp192–201). 宏碁 and 神达 add a distribution warning: falling price, rising margin financing, shrinking main-player holdings and, at 宏碁's earlier high plateau, weak volume; the author's operational lesson is to stop when supposed neckline support fails rather than keep averaging down (pp193–194, 197). 友讯 shows conditional progression through three downside waves before a volume-backed W-bottom neckline break reverses the long bear phase, while the text's trading examples quote concrete entries, stops and returns with some printed contradictions preserved here, notably 神达's short stop at 19 (pp198–200).",
+  "patterns": [
+    {
+      "name_zh": "底部颈线突破与两波段涨幅满足",
+      "name_en": "Bottom-neckline breakout with two upside measured waves",
+      "direction": "long",
+      "structure": "The 光磊 continuation describes an already established bottom-neckline breakout and two upside targets; the original base chart/height construction is on the preceding unit's page. p192 prints the first target 26.62 and repeated distance 11.12, then describes topping after the second target is reached.",
+      "entry": "2006-04-15 volume-backed neckline break, buy around 16 (p192).",
+      "stop": "Below the neckline near 14.8, approximately 8% risk (p192).",
+      "target": {
+        "formula": "T2 = T1 + the original measured height; p192 gives the arithmetic but does not independently restate the original height construction.",
+        "worked_example": "26.62 + 11.12 = 37.74; the quoted gains near the two targets are approximately 65%–135% (p192).",
+        "pages": [
+          192
+        ]
+      },
+      "confirmation": [
+        "Volume-backed neckline break is the buy signal (p192).",
+        "After reaching the second target region in late July 2007, the stock begins topping; this is not a claim that the target is an exact turning price (p192)."
+      ],
+      "invalidation": [
+        "Break approximately 14.8 neckline support and stop the long (p192).",
+        "The long bearish neckline break on 2007-11-03 confirms a head-and-shoulders top and supplies the reverse short signal (p192)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        192
+      ]
+    },
+    {
+      "name_zh": "头肩顶颈线跌破",
+      "name_en": "Head-and-shoulders neckline breakdown",
+      "direction": "short",
+      "structure": "光磊 tops after the second upside target; its weekly long bearish neckline break on November 3 confirms the head-and-shoulders top. The measuring height is from the 43.42 head to a 29.1 neckline value, while the actual breakdown is near 31 (p192).",
+      "entry": "Short after the 2007-11-03 long bearish neckline break, approximately 30.5 (p192).",
+      "stop": "Approximately 32 on a regain of the neckline, approximately 5% risk (p192).",
+      "target": {
+        "formula": "T = neckline at breakdown - (head - neckline at the measuring location).",
+        "worked_example": "43.42 - 29.1 = 14.32; 31 - 14.32 = 16.68 (p192).",
+        "pages": [
+          192
+        ]
+      },
+      "confirmation": [
+        "The weekly long bearish candle confirms the break (p192).",
+        "The text reports decline into the target region and stabilization/rebound in mid-February of the following year (p192)."
+      ],
+      "invalidation": [
+        "Regain the specified neckline/32 stop and exit the short (p192)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        192
+      ]
+    },
+    {
+      "name_zh": "高档压低出货",
+      "name_en": "High-level distribution through selling into declining prices",
+      "direction": "short",
+      "structure": "宏碁 rises from 2008-11-21 low 31.77 to a high-area plateau, with large players' earlier accumulation cost inferred near 26 or lower. During 2009–2010 it trades roughly 65 to over 90 with weak high-level volume; after the late-2010 high 92.16 it drifts down near the M-top neckline for about a month, then makes only a brief three-day rebound before a gap collapse. Margin financing rises while main-player holdings shrink, followed by heavy-volume selling below the neckline (pp193–194). 神达 shows the related price-down/margin-up/holdings-down bear structure after its false breakout (p197).",
+      "entry": "The 宏碁 discussion warns against buying presumed neckline support without a strict failure stop; it does not supply an exact short entry. The neckline break and subsequent volume-backed distribution are the bearish evidence (p194). 神达's specific reversal short is covered separately (pp197–198).",
+      "stop": "If buying a supposed neckline support, strictly stop when support fails; being wrong with a stop has limited loss, while refusing to stop can be catastrophic. 宏碁 supplies no numeric stop level (p194).",
+      "target": {
+        "formula": "No numerical measured-move target or formula is supplied for 宏碁's distribution case in these pages.",
+        "worked_example": "Chart records highs 94.13 and 92.16, a neckline-area pivot 63.70, and later lows 27.30 and 22.30, but the author does not calculate a target from them (p193).",
+        "pages": [
+          193,
+          194
+        ]
+      },
+      "confirmation": [
+        "High-level weak volume during the 65-to-90-plus plateau (p194).",
+        "Falling price accompanied by expanding margin financing and declining main-player holdings (pp193–194, 197).",
+        "Heavy-volume selling after neckline failure, with retail investors repeatedly catching the decline (p194)."
+      ],
+      "invalidation": [
+        "No explicit numerical invalidation of the distribution thesis is specified. The actionable invalidation discussed is failure of the retail buyer's support thesis, which requires a stop (p194)."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        193,
+        194,
+        197
+      ]
+    },
+    {
+      "name_zh": "高档假突破、带量假突破",
+      "name_en": "High-level false breakout, including volume-backed failure",
+      "direction": "short",
+      "structure": "A high-area breakout fails back below the neckline. 台达电 tops around the 118.07 upside target region with a high 126.73; the volume-backed long bearish weekly candle on 2011-02-12 establishes the reversal sell signal (pp195–196). 神达 reaches 39.41 on 2007-10-01 near its 40.37 target, then on October 2 falls back below the neckline with volume (pp197–198).",
+      "entry": "台达电 short around 118 after the 2011-02-12 confirming weekly candle (p196). 神达 closes its long and reverses short on October 2 around 36.8 (p198).",
+      "stop": "台达电: regain the neckline near 125, approximately 6% risk (p196). 神达: text literally prints a stop near 19 on regaining the neckline while also quoting approximately 6% risk; this conflicts with a short entry at 36.8 and must not be silently implemented as a plausible short stop (p198).",
+      "target": {
+        "formula": "After the initial sell signal, a later break of the rebound low permits the bearish swing projection T = rebound_high - (original_high - intervening_low).",
+        "worked_example": "台达电: 126.73 - 87.87 = 38.86; 98.81 - 38.86 = 59.95 (pp195–196). 神达: 39.41 - 27.61 = 11.8; 31.38 - 11.8 = 19.58 (pp197–198).",
+        "pages": [
+          195,
+          196,
+          197,
+          198
+        ]
+      },
+      "confirmation": [
+        "台达电 uses a volume-backed long bearish weekly candle to confirm the false breakout (pp195–196).",
+        "神达 uses a volume-backed fall below the neckline the day after its 39.41 high, then falling price/rising margin financing/shrinking main-player holdings (p197).",
+        "Target calculation waits for a later break of the rebound low: 台达电 on 2011-08-07, 神达 on 2007-12-13 (pp195, 197)."
+      ],
+      "invalidation": [
+        "Regain the specified neckline and stop; 台达电 uses 125, while 神达's numeric stop is internally inconsistent (pp196, 198).",
+        "台达电's long bullish reclaim on 2011-12-24 confirms a bottom and ends the roughly one-year bearish correction (p196)."
+      ],
+      "timeframes": [
+        "weekly (台达电)",
+        "daily (神达)"
+      ],
+      "pages": [
+        195,
+        196,
+        197,
+        198
+      ]
+    },
+    {
+      "name_zh": "大波段等幅涨幅满足",
+      "name_en": "Large-swing upside equal-distance continuation",
+      "direction": "long",
+      "structure": "An initial advance is followed by a correction; a subsequent break of the preceding high authorizes projecting that advance from the correction low. 台达电 breaks 95.33 on 2010-07-10; 神达 clears its preceding high after correction on 2007-05-28 (pp195, 197).",
+      "entry": "The prior-high break confirms the target calculation, not necessarily the earliest entry. 神达's actual long entry is the earlier 2006-06-26 bottom reclaim near 19.5; 台达电's large-swing long entry is not supplied in these pages (pp195, 197–198).",
+      "stop": "神达's earlier reclaim long stops below 18, risk approximately 8%; 台达电's bullish swing discussion supplies no numeric long stop (pp195, 198).",
+      "target": {
+        "formula": "T = correction_low + (first_high - originating_low), available after the prior high is exceeded.",
+        "worked_example": "台达电: 95.33 - 17.55 = 77.78; 40.29 + 77.78 = 118.07 (p195). 神达: 31.75 - 16.53 = 15.22; 25.15 + 15.22 = 40.37 (p197).",
+        "pages": [
+          195,
+          197
+        ]
+      },
+      "confirmation": [
+        "A long bullish weekly candle breaks the preceding 95.33 high for 台达电 (p195).",
+        "神达's 2007-05-28 break of the post-correction preceding high permits computing the large-swing target (p197)."
+      ],
+      "invalidation": [
+        "神达's later volume-backed false breakout is the explicit exit/reversal signal (pp197–198).",
+        "台达电's later high-level false breakout ends its two-year bull phase (pp195–196)."
+      ],
+      "timeframes": [
+        "weekly (台达电)",
+        "daily (神达)"
+      ],
+      "pages": [
+        195,
+        196,
+        197,
+        198
+      ]
+    },
+    {
+      "name_zh": "M头与三波段跌幅满足",
+      "name_en": "M top with conditional repeated downside measured moves",
+      "direction": "short",
+      "structure": "A double-high M top is confirmed by a bearish neckline break. 友讯's two-high central mean is 68.45, measuring neckline 54 and breakdown neckline 56.9; heavy-volume selling continues for the next two weeks. 鸿准 uses the central connecting-high value approximately 212.5, measuring neckline approximately 150 and actual break approximately 159.5 (pp199, 201).",
+      "entry": "友讯: short near 56 after the volume-backed weekly M-neckline break on 2007-11-03; a later short near 32 follows the 2008-06-21 consolidation-line break (p200). 鸿准: 2007-12-15 volume-backed neckline break confirms the M top, but this unit provides no numerical trade entry (p201).",
+      "stop": "友讯 first short: near 58 on regaining the neckline, risk about 4%; later short: regain 34.2, risk about 7% (p200). No numeric 鸿准 stop appears on p201.",
+      "target": {
+        "formula": "H = central mean/reference of the two highs - measuring neckline; T1 = breakdown neckline - H; subsequent explicitly justified waves repeat H below the preceding target.",
+        "worked_example": "友讯: 68.45 - 54 = 14.45; 56.9 - 14.45 = 42.45; 42.45 - 14.45 = 28; 28 - 14.45 = 13.55 (pp199–200). 鸿准: 212.5 - 150 = 62.5; 159.5 - 62.5 = 97 (p201). Its chart also marks 34.5 lower down, but the text's second-wave arithmetic continues outside this unit.",
+        "pages": [
+          199,
+          200,
+          201
+        ]
+      },
+      "confirmation": [
+        "友讯's large bearish weekly candle and next two weeks' heavy-volume selling support the high-level distribution/bear interpretation (p199).",
+        "友讯 reaches the first target region on 2007-12-22, rebounds about two weeks; reaches the second near 2008-02-23, consolidates about four months; 2008-06-21 line break and next week's prior-low break permit the third wave (pp199–200).",
+        "鸿准 reaches the first target region, low 86.08, then forms a rising flag; breaking it permits a second-wave calculation (p201)."
+      ],
+      "invalidation": [
+        "Regain the relevant neckline/stop and exit the 友讯 short (p200).",
+        "友讯's later volume-backed W-bottom neckline breakout confirms a bullish reversal after the third wave (p200)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        199,
+        200,
+        201
+      ]
+    },
+    {
+      "name_zh": "W双底带量突破颈线",
+      "name_en": "Volume-backed W-bottom neckline breakout after a long bear phase",
+      "direction": "long",
+      "structure": "After 友讯's third downside target region, the stock stabilizes in November 2008 at a low of 11.46 and builds an approximately five-month W double bottom. A long bullish candle with volume breaks the neckline on 2009-03-28 (pp199–200).",
+      "entry": "The 2009-03-28 volume-backed long bullish neckline break confirms the double bottom and bullish reversal; no entry price is supplied (p200).",
+      "stop": "No numerical stop is supplied for this W-bottom trade in the assigned pages (pp199–200).",
+      "target": {
+        "formula": "No W-bottom target calculation is given in these pages; do not substitute the earlier M-top height.",
+        "worked_example": "The chart labels the first bottom 11.46 and intervening high 17.95; the text only confirms the five-month W bottom and trend reversal, not a target (pp199–200).",
+        "pages": [
+          199,
+          200
+        ]
+      },
+      "confirmation": [
+        "Long bullish candle and volume on the neckline break (p200).",
+        "Approximately five months of double-bottom formation ends roughly one and a half years of bearish structure (p200)."
+      ],
+      "invalidation": [
+        "No explicit post-breakout invalidation is supplied for this individual W-bottom example (pp199–200)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        199,
+        200
+      ]
+    },
+    {
+      "name_zh": "上飘旗形破线",
+      "name_en": "Rising-flag breakdown in a bearish swing",
+      "direction": "short",
+      "structure": "鸿准 rebounds after reaching the M-top first downside target region, low 86.08, forming a rising flag. The flag's line breaks downward (p201).",
+      "entry": "The flag breakdown permits the second bearish-wave calculation; this unit gives no numerical flag-entry trade (p201).",
+      "stop": "No flag-specific stop is stated on p201.",
+      "target": {
+        "formula": "The page says the flag breakdown permits a second downside-wave target, but does not print its arithmetic before the unit ends.",
+        "worked_example": "Chart annotations include 97.66, 73.94 and 34.5. Their labels are transcribed rather than assigned an unprinted arithmetic rule; the prior M target is 97 (p201).",
+        "pages": [
+          201
+        ]
+      },
+      "confirmation": [
+        "A rebound first forms the rising flag, then its line breaks (p201)."
+      ],
+      "invalidation": [
+        "No flag-specific invalidation is stated in the assigned portion of this case (p201)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        201
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "光磊's second upside target adds the original 11.12 distance to the first target 26.62.",
+      "kind": "target",
+      "quote_zh": "第一波涨幅满足26.62元＋11.12元＝等幅计算的第二波涨幅满足37.74元。",
+      "pages": [
+        192
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "A long bearish neckline break confirms 光磊's head-and-shoulders top and then permits computing a downside target.",
+      "kind": "entry",
+      "quote_zh": "11月3日当周长黑跌破颈线，头肩顶确立，便可计算跌幅满足。",
+      "pages": [
+        192
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "光磊's neckline-breakout long uses an approximately 14.8 neckline-failure stop, about 8% risk; its later neckline-break short uses a neckline-regain stop near 32, about 5% risk.",
+      "kind": "stop",
+      "quote_zh": "跌破颈线约14.8元停损，风险约8%",
+      "pages": [
+        192
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "The book rejects the objective of buying the exact low and selling the exact high.",
+      "kind": "psychology",
+      "quote_zh": "别想买到最低、卖到最高。",
+      "pages": [
+        192
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "宏碁's low-volume high plateau, falling prices, rising margin financing and declining large-player holdings are interpreted as high-level distribution, not automatically a bargain.",
+      "kind": "filter",
+      "quote_zh": "很明显出现价跌资增、主力库存减的高档压低出货结构",
+      "pages": [
+        193,
+        194
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Neckline support can be a distribution trap: 宏碁 weakly consolidates above the neckline for about a month, makes a brief three-day rebound, then gaps down in a collapse.",
+      "kind": "risk",
+      "quote_zh": "只做短暂3天反弹便跳空崩跌",
+      "pages": [
+        194
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Buying presumed support and being wrong is not the central danger; failing to stop after support breaks is. The limited loss from a stop is contrasted with the roughly halving then halving again under 宏碁's year-long large M top.",
+      "kind": "stop",
+      "quote_zh": "其实因误判而在颈线支撑买进并不可怕，可怕的是跌破支撑不知严格执行停损，因为停损后的损失有限",
+      "pages": [
+        194
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Correct mistakes promptly rather than keep a wrong position; doing so permits small losses and large gains.",
+      "kind": "psychology",
+      "quote_zh": "操作上宁可做错也不要留错，做错还能小赔大赚，留错则翻身困难。",
+      "pages": [
+        194
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "台达电's long bullish prior-high breakout authorizes the large-swing upside projection.",
+      "kind": "target",
+      "quote_zh": "台达电周线2010年7月10日当周长红，突破前高95.33元后，便可计算大波段涨幅满足。",
+      "pages": [
+        195
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "台达电's volume-backed long bearish false-breakout confirmation ends the two-year bull phase; short near 118 with a stop on regaining the neckline near 125.",
+      "kind": "entry",
+      "quote_zh": "2011年2月12日当周带量长黑，跌破颈线，假突破确立，放空，约可空在118元附近，停损设125元站回颈线时，风险约6%",
+      "pages": [
+        195,
+        196
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "台达电's bearish target repeats the 126.73-to-87.87 decline from the subsequent rebound high 98.81.",
+      "kind": "target",
+      "quote_zh": "自98.81元高点－38.86元＝等幅计算的跌幅满足59.95元。",
+      "pages": [
+        196
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "Recognizing a mistake is insufficient if it is not corrected; the page quotes this as a trading-psychology maxim.",
+      "kind": "psychology",
+      "quote_zh": "犯错并没有什么好羞耻的，只有知错不改才是耻辱。",
+      "pages": [
+        196
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "神达's volume-backed fall back below the neckline after the high confirms a long-term sell signal, with price-down/margin-up/holdings-down corroboration.",
+      "kind": "volume",
+      "quote_zh": "隔日带量跌回线下假突破确立长线卖出信号，结束多头行情进入价跌资增、主力库存减的长空结构",
+      "pages": [
+        197
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "神达's reclaim long enters near 19.5 and stops below 18; take profit especially after the October 2 volume-backed false breakout near the target.",
+      "kind": "stop",
+      "quote_zh": "约可买在19.5元附近，跌破18元停损，风险约8%",
+      "pages": [
+        198
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "神达's printed reversal short is near 36.8, but its printed stop is 19 and risk approximately 6%; faithfully retain this contradictory instruction rather than silently replace its number.",
+      "kind": "risk",
+      "quote_zh": "约可空在36.8元附近，停损设在19元附近站回颈线时，风险约6%",
+      "pages": [
+        198
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "The page quotes Buffett's capital-preservation maxim; treat it as a principle, not a guarantee of loss-free trading.",
+      "kind": "risk",
+      "quote_zh": "投资法则只有两条：第一条是绝对不要赔钱，第二条是绝对不要忘了第一条。",
+      "pages": [
+        198
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "友讯's weekly neckline break confirms the M top; two subsequent heavy-volume bearish weeks strengthen the distribution/bear interpretation.",
+      "kind": "volume",
+      "quote_zh": "而破线后连续两周爆量长黑，极为明显为高档压低出货结构",
+      "pages": [
+        199
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "友讯's repeated measured downside waves use the same 14.45 height: first 42.45, second 28, third 13.55.",
+      "kind": "target",
+      "quote_zh": "第二波跌幅满足28元－14.45元＝等幅计算的第三波跌幅满足13.55元。",
+      "pages": [
+        199,
+        200
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "After the second downside target, a four-month weak consolidation is not a bull reversal: its June 21 line break and following week's prior-low break permit the third downside wave.",
+      "kind": "filter",
+      "quote_zh": "直到同年6月21日当周破线结束整理，转弱确立，隔周跌破前低，便能计算第三波跌幅满足。",
+      "pages": [
+        200
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "友讯's approximately five-month W bottom requires a volume-backed long bullish neckline break to establish the reversal of its approximately one-and-a-half-year bear phase.",
+      "kind": "entry",
+      "quote_zh": "带量长红，突破颈线，约五个月的W双底确立，结束了长达约一年半的长空型态，正式翻为多头。",
+      "pages": [
+        200
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "友讯's later breakdown short uses the newly broken line as its own stop, rather than retaining the initial M-top stop.",
+      "kind": "stop",
+      "quote_zh": "约可空在32元附近，突破34.2元站回颈线时停损，风险约7%",
+      "pages": [
+        200
+      ]
+    },
+    {
+      "id": "R22",
+      "rule": "鸿准's M-top height uses the central value along the connecting highs, not simply the maximum high.",
+      "kind": "target",
+      "quote_zh": "双头高点连接的中间均值约在212.5元，至颈线约在150元，距离约62.5元。",
+      "pages": [
+        201
+      ]
+    },
+    {
+      "id": "R23",
+      "rule": "After 鸿准's first downside target, a rebound forms a rising flag; its line break authorizes calculation of the next downside wave.",
+      "kind": "target",
+      "quote_zh": "形成上飘旗形破线后，便可计算第二波跌幅满足。",
+      "pages": [
+        201
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "光磊 (continuation; ticker not printed on p192)",
+      "timeframe": "weekly",
+      "period": "2006-04..2008-02",
+      "pattern": "Bottom-neckline breakout → second upside wave → head-and-shoulders top",
+      "levels": {
+        "long_entry": 16,
+        "long_stop": 14.8,
+        "long_risk_pct": 8,
+        "up_target_1": 26.62,
+        "repeated_up_height": 11.12,
+        "up_target_2": 37.74,
+        "head": 43.42,
+        "head_measuring_neckline": 29.1,
+        "down_height": 14.32,
+        "down_breakdown_neckline": 31,
+        "down_target": 16.68,
+        "short_entry": 30.5,
+        "short_stop": 32,
+        "short_risk_pct": 5
+      },
+      "outcome": "Buy on the 2006-04-15 volume-backed neckline break; quoted gains near the two upside targets approximately 65%–135%. Reaches the second target region in late July 2007 and starts topping. 2007-11-03 long bearish neckline break confirms the short; reaches downside target region and stabilizes/rebounds by mid-February of the following year. Quoted short profit approximately 45%. p192's arithmetic and operations are complete even though the originating base chart is in the preceding unit.",
+      "pages": [
+        192
+      ]
+    },
+    {
+      "instrument": "宏碁 (2353)",
+      "timeframe": "daily",
+      "period": "2003..2013 chart, distribution focused on 2009..2011 onward",
+      "pattern": "Accumulation → high-level low-volume M-top distribution → price-down/margin-up",
+      "levels": {
+        "early_base_area_prose": 14,
+        "inferred_main_player_cost_at_or_below": 26,
+        "2008_11_21_low": 31.77,
+        "high_plateau_lower_prose": 65,
+        "high_plateau_upper_prose": "over 90",
+        "late_2010_high": 92.16,
+        "other_chart_high": 94.13,
+        "neckline_area_chart_pivot": 63.7,
+        "later_chart_low_1": 27.3,
+        "later_chart_low_2": 22.3,
+        "other_chart_pivots": [
+          11.12,
+          28.87,
+          21.64,
+          55.92,
+          29.43,
+          51.08,
+          61.83,
+          37.52,
+          58.04,
+          46.15
+        ]
+      },
+      "outcome": "Around-14 base in early 2003, then accumulation and a volume-backed bullish neckline break on 2005-05-07. Stock rises about 200% from 2008-11-21 low 31.77, then forms a broad high-area top. The 2009–2010 high plateau is low-volume; a late-2010 descent from 92.16 accompanies rising margin financing and declining main-player holdings, then neckline failure and heavier distribution. The author warns that low-balling the neckline without stopping leads to repeated large losses; no precise entry, stop or target is specified. The iPad's impact on Acer's tablet/NB business is the author's contextual explanation, not an independently verified financial finding here.",
+      "pages": [
+        193,
+        194
+      ]
+    },
+    {
+      "instrument": "台达电 (2308)",
+      "timeframe": "weekly",
+      "period": "2004..2011-02 within a 2004–2012 chart",
+      "pattern": "Large-swing upside equal-distance target → high-level false breakout",
+      "levels": {
+        "originating_low": 17.55,
+        "first_high": 95.33,
+        "rise_distance": 77.78,
+        "correction_low": 40.29,
+        "up_target": 118.07,
+        "actual_high": 126.73,
+        "other_chart_pivots": [
+          29.66,
+          52.59,
+          72.07
+        ]
+      },
+      "outcome": "2010-07-10 long bullish weekly candle clears the prior 95.33 high and authorizes 118.07. Reaches the target region by year-end, high 126.73, then consolidates. 2011-02-12 volume-backed long bearish candle confirms false-breakout failure, ending the two-year bull swing. No numerical long entry or long stop is given.",
+      "pages": [
+        195,
+        196
+      ]
+    },
+    {
+      "instrument": "台达电 (2308)",
+      "timeframe": "weekly",
+      "period": "2011-02..2011-12",
+      "pattern": "False-breakout short → bearish swing target → 破底翻 reversal",
+      "levels": {
+        "short_entry": 118,
+        "short_stop": 125,
+        "risk_pct": 6,
+        "initial_high": 126.73,
+        "intervening_low": 87.87,
+        "decline_distance": 38.86,
+        "rebound_high": 98.81,
+        "down_target": 59.95,
+        "actual_low": 58.45
+      },
+      "outcome": "Short after the 2011-02-12 confirming false-breakout candle. A break of the 87.87 rebound low on 2011-08-07 permits the 59.95 target calculation. Reaches target region in November, low 58.45, and builds a bottom. 2011-12-24 long bullish reclaim establishes a bottom and ends the roughly one-year bearish correction. Quoted short gain approximately 49%.",
+      "pages": [
+        195,
+        196
+      ]
+    },
+    {
+      "instrument": "神达 (2315)",
+      "timeframe": "daily",
+      "period": "2006-06..2007-10",
+      "pattern": "破底翻 → large-swing upside projection → volume-backed false breakout",
+      "levels": {
+        "originating_low": 16.53,
+        "first_high": 31.75,
+        "rise_distance": 15.22,
+        "correction_low": 25.15,
+        "up_target": 40.37,
+        "long_entry": 19.5,
+        "long_stop": 18,
+        "long_risk_pct": 8,
+        "preceding_top_line_chart": 37.56,
+        "high": 39.41
+      },
+      "outcome": "2006-06-26 reclaim confirms a bottom and a prolonged bull phase. 2007-05-28 break of the preceding high after correction authorizes 40.37. 2007-10-01 high 39.41 is described as near target rather than exact target attainment. October 2 volume-backed false breakout prompts long profit-taking, quoted approximately 88%.",
+      "pages": [
+        197,
+        198
+      ]
+    },
+    {
+      "instrument": "神达 (2315)",
+      "timeframe": "daily",
+      "period": "2007-10..2008-01",
+      "pattern": "Volume-backed false-breakout reversal short with distribution → bearish swing projection",
+      "levels": {
+        "short_entry": 36.8,
+        "short_stop_as_printed": 19,
+        "quoted_short_risk_pct": 6,
+        "initial_high": 39.41,
+        "intervening_low": 27.61,
+        "decline_distance": 11.8,
+        "rebound_high": 31.38,
+        "down_target": 19.58,
+        "actual_low_chart": 18.65
+      },
+      "outcome": "Reverse long to short on 2007-10-02 after the volume-backed fall below the neckline. Falling price/rising margin financing/declining main-player holdings confirm the bearish distribution description. 2007-12-13 break of the rebound low permits the 19.58 target; reaches target vicinity in late January 2008 before a short-lived bottom rebound. Quoted short profit approximately 46%. Stop 19 is the readable printed text, not an inferred valid stop above a 36.8 short entry.",
+      "pages": [
+        197,
+        198
+      ]
+    },
+    {
+      "instrument": "友讯 (2332)",
+      "timeframe": "weekly",
+      "period": "2007-11..2008-11",
+      "pattern": "M top → three downside measured waves",
+      "levels": {
+        "chart_high": 69.22,
+        "two_highs_central_mean": 68.45,
+        "measuring_neckline": 54,
+        "breakdown_neckline": 56.9,
+        "height": 14.45,
+        "down_target_1": 42.45,
+        "down_target_2": 28,
+        "down_target_3": 13.55,
+        "first_short_entry": 56,
+        "first_short_stop": 58,
+        "first_short_risk_pct": 4,
+        "later_short_entry": 32,
+        "later_short_stop": 34.2,
+        "later_short_risk_pct": 7,
+        "eventual_low": 11.46,
+        "other_chart_pivots": [
+          29.38,
+          21.11,
+          51.57,
+          28.09,
+          37.34,
+          25.46
+        ]
+      },
+      "outcome": "2007-11-03 high-volume long bearish weekly neckline break establishes the M top; next two weeks also have heavy-volume bearish candles. First-target region on 2007-12-22, then about a two-week bounce. Second-target region on 2008-02-23, followed by a weak rebound and about four months of consolidation. 2008-06-21 line break and following week's prior-low break permit the third wave; November low 11.46 stabilizes near the third-target region. The initial short's quoted profit approximately 45% implies multi-wave holding, not taking profit at the first 42.45 target; later short's quoted profit near the third target approximately 57%.",
+      "pages": [
+        199,
+        200
+      ]
+    },
+    {
+      "instrument": "友讯 (2332)",
+      "timeframe": "weekly",
+      "period": "2008-11..2009-03",
+      "pattern": "Five-month W double bottom",
+      "levels": {
+        "first_bottom": 11.46,
+        "intervening_high_chart": 17.95,
+        "second_bottom_chart": 12.57
+      },
+      "outcome": "After the third bearish-wave target region, roughly five months of W-bottom formation. On 2009-03-28 a volume-backed long bullish candle breaks the neckline and confirms the double bottom, ending roughly one and a half years of bearish structure. No W-specific entry, numeric stop, target or later achieved return is given. The small second-bottom label 12.57 was checked with a magnified visual crop.",
+      "pages": [
+        199,
+        200
+      ]
+    },
+    {
+      "instrument": "鸿准 (2354; case begins here and continues beyond this unit)",
+      "timeframe": "weekly",
+      "period": "2007-12..2008 within the displayed longer chart",
+      "pattern": "M neckline breakdown → rising-flag rebound and breakdown",
+      "levels": {
+        "first_high_chart": 207.25,
+        "second_high_chart": 218.5,
+        "two_highs_connecting_central_value": 212.5,
+        "measuring_neckline": 150,
+        "height": 62.5,
+        "breakdown_neckline": 159.5,
+        "down_target_1": 97,
+        "first_target_region_low": 86.08,
+        "flag_rebound_high_chart": 132.98,
+        "additional_chart_annotation_1": 97.66,
+        "additional_chart_annotation_2": 73.94,
+        "lower_projection_chart_label": 34.5,
+        "later_low_chart": 34.59,
+        "other_chart_pivots": [
+          15.01,
+          109.32,
+          134.79,
+          152.84,
+          68.87
+        ]
+      },
+      "outcome": "2007-12-15 volume-backed neckline break confirms M top. Reaches first-target region with an actual low 86.08, then rebounds into a rising flag. A flag-line break permits computing the second downside wave. The assigned page ends before the second-wave formula and operation details; chart numbers are retained without inferring undisclosed entries, stops or the exact role of all later annotations.",
+      "pages": [
+        201
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Separate the head-to-neckline measuring value from the actual breakdown value when the neckline slopes: 光磊 H = 43.42 - 29.1, projected from 31; 友讯 H = 68.45 - 54, projected from 56.9; 鸿准 H = 212.5 - 150, projected from 159.5 (pp192, 199, 201).",
+    "Upside swing projection after a prior-high breakout: T = correction_low + prior_high - originating_low. Exact test vectors: 台达电 40.29 + 95.33 - 17.55 = 118.07; 神达 25.15 + 31.75 - 16.53 = 40.37 (pp195, 197).",
+    "Bearish swing projection after a subsequent prior-low breakdown: T = rebound_high - (originating_high - intervening_low). Test vectors: 台达电 98.81 - (126.73 - 87.87) = 59.95; 神达 31.38 - (39.41 - 27.61) = 19.58 (pp195–198).",
+    "Candidate distribution feature combination: price declines while margin financing rises and main-player inventory falls; optionally combine with weak high-plateau volume and later breakdown-volume expansion. These are operational features derived from the examples, not fully defined indicators in the text (pp193–194, 197).",
+    "Represent 友讯's repeated targets as Tn = 56.9 - n*14.45 for n=1,2,3, but gate later-wave activation on the described post-target consolidation and renewed breakdown, rather than assume all three targets at entry (pp199–200).",
+    "Record confirming timeframe separately from execution price: weekly long bearish confirmation for 台达电 and 友讯, daily volume-backed failure for 神达. The pages do not define closing-versus-intrabar detection (pp195–200).",
+    "Store numerical entry, stop, quoted risk percentage and quoted return as distinct fields; reject internally impossible stop orientation for automated short execution rather than repair it silently. 神达's 36.8 entry/19 printed stop/6% claimed risk is a direct consistency-test failure (p198).",
+    "Candidate W-bottom state after 友讯's third bearish wave: two lows over roughly five months followed by a volume-backed long bullish neckline break. Exact acceptable symmetry, pivot spacing, volume multiple and neckline slope are unspecified (pp199–200).",
+    "Candidate risk exit for a support-based long: if the support/neckline being bought fails, exit instead of accumulating a larger losing position; 宏碁 offers the principle but no numerical execution threshold (p194).",
+    "Candidate flag-continuation gate: after a bearish measured move reaches target vicinity, require an upward-sloping rebound range then a downward boundary break before enabling a further downside target; 鸿准 provides no complete second-target formula within this unit (p201)."
+  ],
+  "ambiguities": [
+    "光磊 is a continuation: p192 gives 26.62 + 11.12 = 37.74 and full trading/short arithmetic, but the original bottom chart and initial height derivation are on the preceding unit's page. No unseen chart values are imported into the p192-only example (p192).",
+    "宏碁's chart is called daily although it spans 2003–2013; the page gives no bar aggregation details. Its main-player cost near 26 or below is the author's inference, not a directly demonstrated accounting cost (pp193–194).",
+    "宏碁's claimed distribution pattern combines margin financing and main-player inventory, but neither underlying indicator's construction, lookback, units nor source is defined here. It is not enough to substitute rainier capital flow blindly (pp193–194).",
+    "宏碁's account of money printing/QE, post-2008 capital-driven rallies and iPad competition is authorial context, not a detector rule or an independently checked causal result. The referenced 2011-03-23 blog post is not included in the assigned pages (pp193–194).",
+    "神达's short stop is clearly printed 19, while entry is 36.8, stop action is regaining the neckline, and claimed risk is 6%. A protective short stop ordinarily lies above entry, so these statements conflict. No substitute stop number is asserted (p198).",
+    "神达's target 40.37 is described as reached nearby at a 39.41 high: it is not exact target attainment. Similarly many other cases describe target vicinity rather than exact touches, without a numerical tolerance (pp192, 195–198, 200–201).",
+    "友讯 initial short 56 with reported profit about 45% cannot mean an exit at first target 42.45 (about 24.2%); it is approximately consistent with second target 28 (50%) but the operations paragraph says only near the second-wave target, so no exact exit is supplied (p200).",
+    "友讯 uses a central two-high value 68.45 rather than the chart's labeled high 69.22; 鸿准 uses approximately 212.5 between chart highs 207.25 and 218.50, whereas their arithmetic average is 212.875. The text uses graphical/approximate central connecting values and does not specify a universal averaging algorithm (pp199, 201).",
+    "The bullish W-bottom portion of 友讯 supplies a confirmation date and duration but no numerical trade stop or measured upside target. Do not carry the preceding M-top 14.45 height into a new W target without additional source evidence (pp199–200).",
+    "鸿准's page ends just after announcing a second-wave calculation. The chart labels 97.66, 73.94 and 34.5, but this page's prose does not derive them or fully explain their roles; the flag-specific arithmetic and operation details continue beyond the assignment (p201).",
+    "Printed timing uses weekly case dates and target regions rather than a precise execution protocol. Terms such as long candle, volume-backed, explosive volume, regain neckline and weak consolidation lack thresholds and close-versus-intrabar requirements (pp192–201).",
+    "The capital-preservation and error-correction quotations are psychology principles; interpreting 'absolutely do not lose money' as a zero-loss trading-system promise would conflict with the repeated explicit stop-loss examples (pp192, 194, 196, 198)."
+  ],
+  "illegible": []
+}

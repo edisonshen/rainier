@@ -1,0 +1,64 @@
+{
+  "unit_id": "u03",
+  "model": "devin-cloud",
+  "pages_read": [21, 22, 23, 24, 25, 26, 27, 28],
+  "summary": "Combines 破底翻 with the W bottom: the second leg of a W breaks below its small range and reclaims it, giving an earlier, lower-risk entry than the classic neckline breakout; the neckline breakout is then an add-on signal and the W measured move gives the targets. Three Taiwan daily-chart case studies (矽统 2001, 爱之味 2008-09, 新光金 2008-09) show the arithmetic, staged entries, stops of ~5-7%, and profits of 60%-123%; the 新光金 case also introduces volume (带量突破, 爆量压力区) as confirmation and resistance.",
+  "patterns": [
+    {
+      "name_zh": "破底翻（W底）",
+      "name_en": "Break-bottom reversal on the second leg of a W bottom",
+      "direction": "long",
+      "structure": "A W bottom whose second leg consolidates in a small range (schematic 30-32); price breaks below the range low 30 to 28.5, then reclaims 30 (站回30颈线之上). The W's main neckline is 45. Especially confirmed when price then breaks the prior high of the range (32) from which the break started.",
+      "entry": "Buy on the reclaim of the second-leg range low (破底翻止稳确立买点); the 破底翻 is confirmed when price breaks the prior high 32. Add on the breakout above the W neckline 45 (突破颈线加码信号).",
+      "stop": "Support after the 破底翻 is the range low 30 (the lower edge of the main player's cost zone), not the extreme low 28.5. If entry is near 30 and the low 28.5 is close, stop on a break of 28.5; if the break-low is far, stop on a break of 30. If the stop is very close, use ~7% instead to avoid being shaken out. After the 45 breakout, the neckline becomes support: a pullback below it is the exit (take profit on the low 破底翻 position, stop the add-on).",
+      "target": {
+        "formula": "W-bottom measured move from the neckline breakout (same as u01): target_1 = breakout + (neckline_mid - bottoms_mid); target_2 = target_1 + same distance",
+        "worked_example": "矽统: 59.5 - 36.7 = 22.8; 59 + 22.8 = 81.8; 81.8 + 22.8 = 104.6 (high reached 104.01). 爱之味: 7.6 - 4.65 = 2.95; 7.3 + 2.95 = 10.25; 10.25 + 2.95 = 13.2 (highs 10.65, then 13.9).",
+        "pages": [23, 24, 25, 26]
+      },
+      "confirmation": [
+        "Breaking the range's prior high (32) after the reclaim confirms the 破底翻.",
+        "Neckline breakout on a long red (bullish) candle or a gap (跳空涨停) confirms the W.",
+        "Volume: a breakout with volume (带量突破颈线) is a 量先价行 signal; a prior heavy-volume zone (爆量区) acts as resistance."
+      ],
+      "invalidation": [
+        "Falling back below the range low (30) after the reclaim.",
+        "After the neckline breakout, a pullback below the neckline."
+      ],
+      "timeframes": ["daily"],
+      "pages": [21, 22, 23, 24, 25, 26, 27, 28]
+    }
+  ],
+  "rules": [
+    {"id": "R1", "rule": "破底翻 on the W's second leg lets you buy the relative low of a bottom and position for a swing long.", "kind": "entry", "quote_zh": "这是另一种底部型态的破底翻——W底，可藉由破底翻的结构，掌握底部的相对低点，介入布局波段多单。", "pages": [21]},
+    {"id": "R2", "rule": "After a 破底翻, support is the range low (30), not the lowest low (28.5), because 30 is the lower edge of the main player's cost zone.", "kind": "stop", "quote_zh": "当破底翻出现后，支撑仍是颈线30附近而非最低28.5，这是因为30才是主力成本区的下缘。", "pages": [21]},
+    {"id": "R3", "rule": "Stop placement: if entry near 30 is close to the low 28.5 (limited risk), stop on a break of 28.5; if the break-low is far, stop on a break of 30; if that stop is too close, use about 7% to avoid being washed out.", "kind": "stop", "quote_zh": "若买进的成本在30附近距最低点28.5风险有限，可将停损设在破28.5时；若破底的距离太远（非图示的28.5），便可将停损设在跌破30时（停损点太近则设在约7%的距离，避免被洗掉）", "pages": [21, 22]},
+    {"id": "R4", "rule": "Breaking the neckline (45) is the add-on signal; the broken neckline becomes support, and a pullback below it is the exit (take profit on the low 破底翻 long, stop the add-on). If the neckline holds, look to the W measured-move target.", "kind": "entry", "quote_zh": "技术面当突破颈线45时，为波段加码信号，颈线突破变支撑，表示压回跌破颈线为停损利点（破底翻低档买进的多单获利了结，突破颈线加码的多单停损），颈线不破，看W底等幅计算的涨幅满足附近。", "pages": [22]},
+    {"id": "R5", "rule": "Most technical analysis buys at the neckline breakout; 破底翻 is a more advanced, safer bottom-positioning method that usually requires waiting longer but offers more profit room.", "kind": "psychology", "quote_zh": "一般技术分析大多在突破颈线时，确立多头攻击信号为买进最佳时机，破底翻则是更进阶更安全的底部布局方式，通常等待的时间较长，相对获利的空间更大。", "pages": [22]},
+    {"id": "R6", "rule": "The breakout is confirmed when price clears the prior high on the neckline (矽统: buy 59.8 as it crossed the prior high 59.72).", "kind": "entry", "quote_zh": "约可买在59.8元（越过前高59.72元确定突破时）", "pages": [24]},
+    {"id": "R7", "rule": "Reaching the second-wave target, especially with a false-breakout sell signal, is where to take profit.", "kind": "target", "quote_zh": "达两波段涨幅满足，尤其是出现假突破卖出信号时，多单获利了结约60%。", "pages": [24]},
+    {"id": "R8", "rule": "Bottom size implies move duration: a ~half-year base usually doesn't end after less than a month of rally, so a pullback that holds the high-volume low supports looking for the second-wave target.", "kind": "time", "quote_zh": "以当时爱之味约半年的底部规模来看，通常不会只涨不到一个月，便一波结束，因此拉回不破4月1日大量低点8.01元支撑，续看第二波涨幅满足。", "pages": [26]},
+    {"id": "R9", "rule": "Adding on a limit-up gap breakout is usually not recommended (hard to fill, high risk); keep holding the 破底翻 position instead while the neckline holds.", "kind": "risk", "quote_zh": "通常不建议加码，续抱破底翻时买入的多单即可，颈线不破，看两波段涨幅满足附近", "pages": [26]},
+    {"id": "R10", "rule": "Volume-price structure is the main basis of judgement: a volume breakout of the neckline is 量先价行; prior heavy-volume zones are trapped-supply resistance; after heavy volume there is usually still a higher high.", "kind": "volume", "quote_zh": "量价结构所产生的型态是主要观察与判断的依据……便是技术面所谓的量先价行……到达2008年9月19日的爆量套牢压力区，以及大量后大多还有高点等等。", "pages": [28]},
+    {"id": "R11", "rule": "A heavy-volume spike near the target usually still makes a higher high, then tops out.", "kind": "volume", "quote_zh": "新光金5月20日爆量进入涨幅满足附近（技术面爆量还会有高点）后盘头而下", "pages": [28]}
+  ],
+  "worked_examples": [
+    {"instrument": "矽统 (2363)", "timeframe": "daily", "period": "2001-07..2002-01", "pattern": "W底 → 下飘旗形 → 假突破", "levels": {"bottoms_mid": 36.7, "neckline_mid": 59.5, "distance": 22.8, "breakout": 59, "entry": 59.8, "prior_high": 59.72, "stop": 57, "risk_pct": 4.7, "target_1": 81.8, "first_wave_high": 79.18, "target_2": 104.6, "high": 104.01}, "outcome": "W confirmed 2001-10-25 by a long red candle; reached both targets; false breakout near 104 gave the sell signal; long profit ≈60%", "pages": [23, 24]},
+    {"instrument": "爱之味 (1217)", "timeframe": "daily", "period": "2008-09..2009-06", "pattern": "破底翻W底", "levels": {"neckline_mid": 7.6, "bottoms_line": 4.65, "distance": 2.95, "breakout": 7.3, "target_1": 10.25, "first_wave_high": 10.65, "support_heavy_volume_low": 8.01, "target_2": 13.2, "high": 13.9, "entry": 5.9, "stop": 5.6, "risk_pct": 5, "gap_addon_stop": 7.49, "gap_addon_risk_pct": 7}, "outcome": "破底翻 2009-03-05 (long red reclaiming the neckline of the small range), gap-up limit-up neckline breakout 2009-03-30; hit both targets; profit ≈123%", "pages": [25, 26]},
+    {"instrument": "新光金 (2888)", "timeframe": "daily", "period": "2008-07..2009-06", "pattern": "破底翻 + 带量突破颈线", "levels": {"range_low_entry": 7.7, "stop": 7.15, "risk_pct": 7.2, "addon_entry": 9.2, "addon_stop": 8.8, "addon_risk_pct": 5, "resistance_zone": "2008-09-19 heavy-volume day high 12.3 / low 11.3", "prior_high": 12.15, "swing_low": 6.35, "swing": 5.8, "pullback_low": 9.9, "target": 15.7, "high": 17.0}, "outcome": "破底翻 2009-03-13, volume breakout 2009-03-25, ~1 month consolidation under the 2008-09-19 heavy-volume zone, broke 12.15 on 2009-05-05, heavy volume near target 2009-05-20 then topped; profit ≈70%-104%", "pages": [27, 28]}
+  ],
+  "quantifiable": [
+    "破底翻W底: W bottom whose second low is formed by a close below a small range low R and a subsequent close back above R → long; confirmation = close above the range's prior high.",
+    "Stop for the 破底翻 entry = close below R, or below the breakdown low if (entry - low)/entry is small; if the stop distance is tiny, widen to ~7%.",
+    "Add-on = close above the W neckline; exit all on a close back below the neckline after the breakout.",
+    "Targets as in u01 (neckline_mid - bottoms_mid projected from the breakout, two waves).",
+    "Volume filter: neckline breakout volume > recent average (带量突破) strengthens the signal; prior heavy-volume bars mark resistance zones."
+  ],
+  "ambiguities": [
+    "爱之味 measures the distance to the line connecting the two bottoms (双底连线, 4.65), whereas 矽统 uses the bottoms' average (均值 36.7) — the 'bottom' reference differs between examples.",
+    "新光金 uses a different target method (swing-low-to-high 6.35→12.15 = 5.8, projected from the pullback low 9.9 → 15.7) and refers to the 波段满足 method on p28 of the book's numbering (chapter 4, 下飘旗形), not the W measured move.",
+    "The 矽统 risk '约4.7%' is computed as (59.8-57)/59.8 = 4.7%.",
+    "爱之味 notes the gap-up add-on had ~7% risk if filled; whether to ever add on limit-up gaps is left as 'usually not recommended'."
+  ],
+  "illegible": [{"page": 27, "what": "The 5/20 peak label reads ≈17.00; small chart labels (e.g. 7.01/7.36 lows) are low-resolution."}]
+}

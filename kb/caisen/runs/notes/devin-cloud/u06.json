@@ -1,0 +1,385 @@
+{
+  "unit_id": "u06",
+  "model": "devin-cloud",
+  "pages_read": [
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54
+  ],
+  "summary": "An M top is the bearish inverse of a W bottom: only a neckline breakdown confirms the top, and the head-to-neckline height is projected downward from the breakdown location (PDF pp.47–48). Four weekly-chart cases demonstrate sloping versus horizontal necklines, initial and second measured-move targets, and small-risk short entries with stops on a neckline reclaim (pp.49–54). The number of target waves is contextual rather than automatic: compare formation duration, decline duration, subsequent structure, and whether another target would imply an unreasonable valuation; draw lines through the greatest number of useful points rather than mechanically preferring every wick (pp.52,54).",
+  "patterns": [
+    {
+      "name_zh": "M头（双头）",
+      "name_en": "M top (double top), neckline breakdown and bearish measured move",
+      "direction": "short",
+      "structure": "Two major highs separated by a pullback, with a neckline beneath the formation. The schematic has highs 100 and 110, approximate head middle 105, and a horizontal neckline 80; actual examples also use rising necklines. Measure vertically from the approximate middle of the head/high-connecting line to the neckline at that location, rather than substituting the neckline's later breakdown value (pp.47–51,53).",
+      "entry": "Short when price breaks below the neckline and the M top is confirmed. The schematic entry is near 79.5 after breaking 80; weekly examples enter near 20.5, 17.5, 28, and 24. No universal closing-price or number-of-bars confirmation is stated (pp.47–54).",
+      "stop": "Cover if price rebounds back above the neckline (站回颈线). The schematic pairs this with a 5%–7% stop; case-specific stops are 21.5, 18.5, 29.94 (the daily high of a high-volume long black breakdown bar), and 25.5. If resistance cannot be reclaimed, keep the short toward the applicable target (pp.47–50,52,54).",
+      "target": {
+        "formula": "D = approximate head-middle value H_mid − neckline value N_mid at the measurement location; target_1 = neckline value B at breakdown − D; target_2 = target_1 − D, if a second wave is contextually appropriate.",
+        "worked_example": "Schematic: H_mid 105 − N_mid 80 = D 25; B 80 − 25 = target_1 55; 55 − 25 = target_2 30 (p.48). 华纸: 29 − 18.1 = 10.9, then 20.9 − 10.9 = 10 (p.49). 仁宝: 26.5 − 18.1 = 8.4, then 18.1 − 8.4 = 9.7 (p.50). 中钢: 33.9 − 26.2 = 7.7; 29 − 7.7 = 21.3; 21.3 − 7.7 = 13.6 (pp.51–52). 永光: 29.9 − 19.9 = 10; 24.4 − 10 = 14.4 (p.53). These are the author's approximate measurement values, not silently recalculated averages of exact chart peaks.",
+        "pages": [
+          48,
+          49,
+          50,
+          51,
+          52,
+          53
+        ]
+      },
+      "confirmation": [
+        "Neckline breakdown confirms the M; the broken neckline must remain resistance, rather than being reclaimed (pp.47–48).",
+        "华纸 and 中钢 are confirmed by a weekly long black candle breaking the neckline; 中钢's selected stop is the daily high-volume breakdown candle high (pp.49,51–52).",
+        "One versus two targets depends on head size/duration and how quickly the first target is reached, then the consolidation structure and reasonable price level; 中钢's roughly year-long formation reached its first target in about one and a half months (p.52).",
+        "For line drawing, prefer the straight line connecting more points. Wick highs or body upper edges can be used; lows are treated the same way. This changes target size somewhat without changing the overall structure (p.54)."
+      ],
+      "invalidation": [
+        "A rebound above the neckline triggers the short stop (pp.47–50,52,54).",
+        "Do not mechanically extrapolate indefinitely: a third downside target for otherwise stable, good-quality 中钢 is described as an unreasonable price (p.52)."
+      ],
+      "timeframes": [
+        "Generic schematic (pp.47–48)",
+        "Weekly case-study formations (pp.49–53)",
+        "Daily candle high used for 中钢 stop placement (p.52)"
+      ],
+      "pages": [
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "An M top is the reverse of a W bottom and uses the same measured-move logic; neckline breakdown is needed to confirm it.",
+      "kind": "entry",
+      "quote_zh": "M头为W底的反向，计算的方式是相同的。",
+      "pages": [
+        47
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Short on the confirmed neckline breakdown; stop on a rebound back above the neckline, otherwise seek the downside target.",
+      "kind": "stop",
+      "quote_zh": "因此跌破颈线空单进场，停损设在站回颈线时，反之，颈线站不回，看跌幅满足附近。",
+      "pages": [
+        47
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Project the head-to-neckline vertical distance downward from the neckline breakdown; measure the head middle, not necessarily the highest peak.",
+      "kind": "target",
+      "quote_zh": "头部至颈线的距离＝跌破颈线后的等幅距离。",
+      "pages": [
+        48
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "In the schematic, head middle 105 minus horizontal neckline 80 gives 25; breakdown 80 minus 25 gives the first target 55.",
+      "kind": "target",
+      "quote_zh": "头部的中间值约105，颈线假设为平行线80，105-80＝距离25。",
+      "pages": [
+        48
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "The second downside target subtracts the same measured distance from the first target.",
+      "kind": "target",
+      "quote_zh": "第二波的跌幅满足直接从第一波跌幅满足再减等幅距离。",
+      "pages": [
+        48
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "The schematic entry near 79.5 uses a 5%–7% stop associated with regaining the neckline and takes profit around the applicable one/two-wave targets; the author quotes approximately 30%–62%.",
+      "kind": "risk",
+      "quote_zh": "如空在79.5附近，设5%～7%停损，也是站回颈线之时",
+      "pages": [
+        48
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "A rising neckline must be measured at separate positions: 华纸 uses 18.1 under the head middle but 20.9 at breakdown; subtracting distance 10.9 from the breakdown level gives target 10.",
+      "kind": "target",
+      "quote_zh": "跌破颈线的位置约20.9元-10.9元＝等幅计算的跌幅满足10元。",
+      "pages": [
+        49
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "中钢 remained weak even at the first target during the financial crisis; its second target was 13.6 and it stabilized at an actual low of 13.7.",
+      "kind": "filter",
+      "quote_zh": "当年受2008年金融海啸影响，中钢达第一波跌幅满足仍无企稳迹象，直接掼杀两波。",
+      "pages": [
+        51,
+        52
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "中钢's entry near 28 uses a specific daily breakdown-candle high 29.94 as the stop, about 7% risk; resistance not regained implies holding toward the two-wave target, for approximately 50% short profit in this case.",
+      "kind": "stop",
+      "quote_zh": "停损设在日线带量长黑破线高点反压29.94元，也是站回颈线反压之时",
+      "pages": [
+        52
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Choose one or two target waves by comparing formation scale/duration with the duration of the move and observing the subsequent consolidation structure; a large formation reaching its first target rapidly need not end there.",
+      "kind": "time",
+      "quote_zh": "涨跌幅满足看一波或两波，看头部或底部的规模及进行的时间做对比，也可做判断",
+      "pages": [
+        52
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Do not extrapolate a third target when the resulting valuation is unreasonable for a financially stable, good-quality company.",
+      "kind": "filter",
+      "quote_zh": "若要再算第三波对稳健绩优的中钢而言，价位已属不合理，这些都是考量的因素。",
+      "pages": [
+        52
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "永光's short entry near 24 has a stop near 25.5 on a neckline reclaim, about 6% risk; cover around the measured target for approximately 40%.",
+      "kind": "risk",
+      "quote_zh": "停损可设在25.5元附近风险约6%，空头看反压，反压站不回看满足",
+      "pages": [
+        54
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "For deciding whether to include wicks, draw the straight line that connects the greater number of points: more connections increase precision and structural completeness.",
+      "kind": "filter",
+      "quote_zh": "记住一个观念点多为主，越多点所连起来的一直线，精准度越高，结构也越完整。",
+      "pages": [
+        54
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Wicks and body boundaries are both legitimate line anchors; small resulting target differences do not change the structure. Apply the same point-count principle to lower wicks.",
+      "kind": "target",
+      "quote_zh": "如永光周线，M头的两个高点，取上影线，也可取实体线上缘，一样是两个点，虽然影响到一些满足点的幅度，但不影响整个结构。",
+      "pages": [
+        54
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "Schematic (not a historical instrument)",
+      "timeframe": "not specified",
+      "period": "n.a.",
+      "pattern": "M头",
+      "levels": {
+        "high_1": 100,
+        "high_2": 110,
+        "head_middle": 105,
+        "neckline": 80,
+        "distance": 25,
+        "entry": 79.5,
+        "stop_risk_pct": "5–7 (author)",
+        "target_1": 55,
+        "target_2": 30,
+        "author_short_profit_pct": "30–62"
+      },
+      "outcome": "Illustrative breakdown, rebound after the first target, and continuation toward the second; not an observed backtest (pp.47–48).",
+      "pages": [
+        47,
+        48
+      ]
+    },
+    {
+      "instrument": "华纸 (1905)",
+      "timeframe": "weekly",
+      "period": "1993–1996; neckline breakdown marked 7/22 in the 1995 discussion; target vicinity February 1996",
+      "pattern": "M头 with rising neckline",
+      "levels": {
+        "chart_high_1": 25.5,
+        "chart_high_2": 32.91,
+        "head_middle_author": 29,
+        "neckline_measurement": 18.1,
+        "distance": 10.9,
+        "neckline_breakdown": 20.9,
+        "entry": 20.5,
+        "stop": 21.5,
+        "author_stop_risk_pct": 5,
+        "target_1": 10,
+        "actual_low": 9.73,
+        "author_short_profit_pct": 50,
+        "other_chart_pivots": [
+          7.51,
+          6.21,
+          5.98,
+          16.69,
+          11.36,
+          19.89,
+          16.64,
+          23.64,
+          19.84,
+          14.6,
+          13.49,
+          11.4
+        ]
+      },
+      "outcome": "A weekly long black neckline break confirms the M in 1995; reached target vicinity at 9.73 in February of the following year, then based and recovered. Author proposes covering for about 50%.",
+      "pages": [
+        49
+      ]
+    },
+    {
+      "instrument": "仁宝 (2324)",
+      "timeframe": "weekly",
+      "period": "1998–2000; breakdown 2000-08-05; stabilization mid-October 2000",
+      "pattern": "M头 with horizontal neckline",
+      "levels": {
+        "chart_high_1": 26.85,
+        "chart_high_2": 26.37,
+        "head_middle_author": 26.5,
+        "neckline": 18.1,
+        "distance": 8.4,
+        "target_1": 9.7,
+        "actual_low": 10.17,
+        "entry": 17.5,
+        "stop": 18.5,
+        "author_stop_risk_pct": 6,
+        "author_short_profit_pct": 40,
+        "other_chart_pivots": [
+          17.15,
+          17.92,
+          16.8,
+          11.93,
+          12.28,
+          10.88,
+          18.23,
+          18.04,
+          19.12,
+          17.43,
+          16.38,
+          11.46
+        ]
+      },
+      "outcome": "M confirmed on 2000-08-05; actual low 10.17 was near (not exactly at/below) the calculated 9.7 target, then a stabilization rebound. Earlier 破底翻 is also labeled on the chart, but this page's trade instruction is the later M-top short.",
+      "pages": [
+        50
+      ]
+    },
+    {
+      "instrument": "中钢 (2002)",
+      "timeframe": "weekly formation; daily bar for stop",
+      "period": "2006–2009; neckline breakdown 2008-08-09",
+      "pattern": "M头 with rising neckline; two downside waves",
+      "levels": {
+        "chart_high_1": 33.2,
+        "chart_high_2": 34.73,
+        "head_middle_author": 33.9,
+        "neckline_measurement": 26.2,
+        "chart_intervening_low": 25.54,
+        "distance": 7.7,
+        "neckline_breakdown": 29,
+        "target_1": 21.3,
+        "target_2": 13.6,
+        "actual_low": 13.7,
+        "entry": 28,
+        "stop_daily_high": 29.94,
+        "author_stop_risk_pct": 7,
+        "author_short_profit_pct": 50,
+        "other_chart_pivots": [
+          11.31,
+          16.13,
+          14.56,
+          31.41,
+          14.99
+        ]
+      },
+      "outcome": "A roughly year-long top is confirmed by a long black weekly candle. The first target was reached about one and a half months after breakdown without stabilization during the 2008 financial crisis; decline continued to 13.7 near the second target before forming a bottom and rising.",
+      "pages": [
+        51,
+        52
+      ]
+    },
+    {
+      "instrument": "永光 (1711)",
+      "timeframe": "weekly",
+      "period": "2009–2011; neckline breakdown 2011-02-19; entered target vicinity in early September 2011",
+      "pattern": "M头 with rising neckline",
+      "levels": {
+        "chart_high_1": 27.68,
+        "chart_high_2": 32.31,
+        "head_middle_author": 29.9,
+        "neckline_measurement": 19.9,
+        "distance": 10,
+        "neckline_breakdown": 24.4,
+        "target_1": 14.4,
+        "entry": 24,
+        "stop": 25.5,
+        "author_stop_risk_pct": 6,
+        "author_short_profit_pct": 40,
+        "chart_later_bottoms": [
+          13.13,
+          11.93
+        ],
+        "other_chart_pivots": [
+          10.87,
+          5.97,
+          6.27,
+          15.71,
+          11.34,
+          17.98,
+          26.04,
+          19.66,
+          27.87,
+          20.1,
+          21.79,
+          17.31,
+          20.15
+        ]
+      },
+      "outcome": "Reached the 14.4 target vicinity in early September 2011, then formed a double bottom and recovered. The chart labels subsequent lows 13.13 and 11.93; the prose recommends covering near target rather than waiting for the ultimate low.",
+      "pages": [
+        53,
+        54
+      ]
+    }
+  ],
+  "quantifiable": [
+    "[pp.47–48] Candidate M detector: two major swing highs separated by a pullback, neckline beneath the head; a downward crossing of that neckline confirms a short. Swing selection and whether confirmation requires a close must be explicit implementation choices, not claimed as specified by the book.",
+    "[pp.48–51,53] Store neckline N(t) as a line. Measure D = H_mid − N(t_mid), then target_1 = N(t_break) − D; target_2 = target_1 − D. Do not replace N(t_mid) by N(t_break) for rising necklines.",
+    "[pp.47–50,52,54] After entry, test for a neckline reclaim as the structural stop; preserve case-specific price stops and the stated approximate risk percentages separately.",
+    "[p.52] Record formation duration and elapsed time to first target as inputs to a discretionary second-wave assessment. The example ratio is about one year of formation versus one and a half months to first target, not a prescribed numerical threshold.",
+    "[p.54] A possible implementation of 点多为主 is to score candidate wick/body lines by number of touches within a defined tolerance; the touch tolerance and tie-breaker are developer choices."
+  ],
+  "ambiguities": [
+    "[pp.47–48] '跌破' and '站回' are not universally specified as intrabar events, closes, or sustained closes. Do not assert an exact close-only confirmation rule.",
+    "[pp.48–54] The generic 5%–7% stop and the neckline reclaim criterion are both stated, but no priority is given when percentage and structural stops disagree; several case studies use specific nearby resistance prices.",
+    "[pp.49–51,53–54] 'Head middle' is approximate and may be read from a connecting line: exact chart peaks (25.50/32.91; 26.85/26.37; 33.20/34.73; 27.68/32.31) do not always average exactly to the author's 29, 26.5, 33.9, and 29.9. Preserve the author's measured values instead of imposing an exact arithmetic average.",
+    "[pp.52,54] Duration, structure, company quality, and reasonable valuation guide the number of waves, but there are no quantitative thresholds. Wick/body choice is similarly contextual; a point-count tolerance and tie-break rule are unstated.",
+    "[pp.49–50,53] Target satisfaction is described as '附近', with no distance tolerance. 仁宝's low 10.17 is above its target 9.7; 永光 continues below its target before completing a double bottom. Target vicinity does not mean exact touch or the final low.",
+    "[p.48] Author-quoted short profits are approximate: using 79.5 as entry gives about 30.82% to 55 and 62.26% to 30, rather than treating the printed 30%–62% as an exact accounting result.",
+    "[pp.49,51,53] Weekly labels such as 7/22, 8/9 and 2/19 are retained as printed; this unit does not specify a trading-calendar normalization or adjusted-price data protocol."
+  ],
+  "illegible": []
+}
