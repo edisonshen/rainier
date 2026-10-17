@@ -221,11 +221,17 @@ def _extract_fundamentals(value: dict[str, Any]) -> float | None:
     return float(pe)
 
 
+def _extract_fear_greed(value: dict[str, Any]) -> float | None:
+    score = value.get("score")
+    return float(score) if isinstance(score, (int, float)) else None
+
+
 SIGNAL_VALUE_EXTRACTORS: dict[str, Any] = {
     "rank_trajectory": _extract_rank_trajectory,
     "capital_flow_streak": _extract_capital_flow_streak,
     "sector_momentum": _extract_sector_momentum,
     "fundamentals": _extract_fundamentals,
+    "fear_greed": _extract_fear_greed,
 }
 
 
