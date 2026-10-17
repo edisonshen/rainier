@@ -3,7 +3,7 @@
 Two lightweight, deterministic (no live DB) checks, separate from the
 core-use-case ingest tests:
   1. fear_greed_index is a PLAIN table, not a hypertable.
-  2. the daily cron slot is defined but NOT armed (`enabled: false`).
+  2. the daily cron slot is armed with an explicit `enabled: true`.
 """
 
 from __future__ import annotations
@@ -28,12 +28,11 @@ def test_fear_greed_is_a_plain_table_not_a_hypertable():
     assert "create_hypertable" not in sql
 
 
-def test_fear_greed_cron_slot_defined_but_disabled():
-    """CONTRACT: the daily F&G slot exists but is `enabled: false` — present, not
-    missing (a missing key defaults True in scheduler/jobs.py and would auto-arm
-    on the next `jobs sync`). The operator arms it deliberately."""
+def test_fear_greed_cron_slot_armed_explicitly():
+    """CONTRACT: the daily F&G slot is armed with an explicit `enabled: true`, so
+    the point-in-time `daily` series keeps accruing after the backfill."""
     data = yaml.safe_load((ROOT / "config" / "cron.yaml").read_text())
     slot = {job["name"]: job for job in data["jobs"]}["fear-greed-daily"]
     assert "enabled" in slot  # explicit, not defaulted
-    assert slot["enabled"] is False
+    assert slot["enabled"] is True
     assert "fear-greed fetch" in slot["command"]

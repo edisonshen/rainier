@@ -256,12 +256,11 @@ jobs:
   # CNN Fear & Greed Index — daily point-in-time capture (append-on-change).
   # DESIGN-fear-greed-signal.md Phase 1 / TASK-PLAN-fng-data-ingest-efb8.md.
   #
-  # DEFINED BUT NOT ARMED: `enabled: false` is DELIBERATE and MUST stay
-  # present-and-false. A missing `enabled` key defaults to True in
-  # scheduler/jobs.py, so dropping the flag would auto-install this into the
-  # live crontab on the next `rainier jobs sync`. The operator arms it
-  # explicitly once the change is pulled onto the prod checkout (Phase 1
-  # collects nothing until then — project_prod_checkout_staleness).
+  # ARMED: `enabled` stays explicit (a missing key defaults to True in
+  # scheduler/jobs.py). History up to 2026-10-16 came from `fear-greed backfill`
+  # (source_version=backfill, CNN-revised values); rows from this job are the
+  # true point-in-time `daily` series. Run `rainier jobs sync` on the mini after
+  # pulling to install it.
   #
   # 15:10 PT runs after the US cash close so the day's composite is settled.
   # `fetch` appends today's observation only if the value changed since the
@@ -273,4 +272,4 @@ jobs:
     command: "uv run rainier fear-greed fetch"
     log: "data/fear-greed.log"
     discord_on_failure: true
-    enabled: false
+    enabled: true
