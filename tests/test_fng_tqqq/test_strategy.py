@@ -78,6 +78,7 @@ def test_fixture_replay_matches_original_backtest(
     days = evaluate(scores, history["qqq_close"], cfg)
     trades, final_equity = replay(days, history["tqqq_close"])
 
+    assert all(not day.armed for day in days if not day.holding)
     assert round(final_equity) == final
     assert len(trades) == trade_count
     assert [

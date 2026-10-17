@@ -220,6 +220,50 @@ def test_stale_fear_greed_raises_and_cli_exits_nonzero(
     assert "F&G is stale" in result.output
 
 
+def test_cli_discord_disabled_fails_after_persisting_signal(
+    sqlite_db, history, monkeypatch
+):
+    from click.testing import CliRunner
+
+    import rainier.cli as cli_module
+    import rainier.cli.strategy as cli_strategy
+    from rainier.cli import cli
+    from rainier.core import database
+    from rainier.core.config import load_settings
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return TODAY
+
+    settings = load_settings(ROOT / "config" / "settings.yaml")
+    settings.alerts.discord.enabled = False
+    monkeypatch.setattr(cli_module, "load_settings", lambda path: settings)
+    monkeypatch.setattr(
+        cli_strategy, "_legacy_db_for_config", lambda ctx: nullcontext()
+    )
+    monkeypatch.setattr(cli_strategy, "date", FixedDate)
+    monkeypatch.setattr(cli_strategy.xcals, "get_calendar", lambda _: FakeCalendar())
+    monkeypatch.setattr(
+        cli_strategy, "load_daily_close", _price_loader(history, TODAY)
+    )
+    monkeypatch.setattr(database, "get_session", sqlite_db)
+    _insert_fixture_scores(sqlite_db, history, TODAY)
+
+    result = CliRunner().invoke(cli, ["strategy", "fng-tqqq", "signal"])
+
+    assert result.exit_code != 0
+    assert (
+        "Discord strategy webhook not configured/enabled; "
+        "signal BUY for 2021-01-27 was persisted but not posted"
+    ) in result.output
+    with sqlite_db() as session:
+        row = session.scalar(select(StrategySignal))
+        assert row is not None
+        assert row.action == "BUY"
+        assert row.signal_date == TODAY
+
+
 def test_discord_failed_post_raises(monkeypatch):
     import rainier.alerts.discord as discord
 

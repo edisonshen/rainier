@@ -43,12 +43,18 @@ def signal(ctx, dry_run: bool, no_discord: bool) -> None:
 
     def poster(day, strategy_cfg, next_session):
         if not no_discord:
-            send_strategy_signal(
+            posted = send_strategy_signal(
                 day,
                 strategy_cfg,
                 next_session,
                 settings.alerts.discord,
             )
+            if not posted:
+                raise click.ClickException(
+                    "Discord strategy webhook not configured/enabled; "
+                    f"signal {day.action} for {day.date.isoformat()} was persisted "
+                    "but not posted"
+                )
 
     try:
         with _legacy_db_for_config(ctx):

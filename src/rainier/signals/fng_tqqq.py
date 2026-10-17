@@ -52,6 +52,7 @@ def evaluate(
             armed = False
         elif pending == "SELL":
             holding = False
+            armed = False
 
         if not holding:
             action = "BUY" if row.fg < cfg.buy_below else "WAIT"
