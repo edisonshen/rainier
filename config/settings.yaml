@@ -77,6 +77,8 @@ strategies:
   fng_tqqq:
     buy_below: 30.0
     sma_window: 38
+    regime_sma_window: 180
+    stop_loss_pct: 0.10
     start: "2021-01-22"
 
 # --- Stock scraping (QuantUnicorn) ---

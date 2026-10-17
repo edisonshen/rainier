@@ -79,6 +79,8 @@ class SignalConfig(BaseModel):
 class FngTqqqConfig(BaseModel):
     buy_below: float = 30.0
     sma_window: int = 38
+    regime_sma_window: int | None = 180
+    stop_loss_pct: float | None = 0.10
     start: date = date(2021, 1, 22)
 
 
