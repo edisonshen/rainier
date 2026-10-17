@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 
@@ -296,3 +296,23 @@ class AnalysisResult:
     inside_bars: list[InsideBar] = field(default_factory=list)
     bias: Direction | None = None
     signals: list[Signal] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyDay:
+    date: date
+    fg: float
+    qqq_close: float
+    qqq_sma: float
+    holding: bool
+    armed: bool
+    action: str
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyTrade:
+    entry_date: date
+    exit_date: date | None
+    entry_px: float
+    exit_px: float | None
+    ret: float

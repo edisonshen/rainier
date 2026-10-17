@@ -68,7 +68,16 @@ alerts:
     webhook_url: ""              # Set via DISCORD_WEBHOOK_URL in .env
     stock_webhook_url: ""        # Set via DISCORD_STOCK_WEBHOOK_URL in .env (falls back to webhook_url)
     llm_webhook_url: ""          # Set via DISCORD_LLM_WEBHOOK_URL in .env; dedicated channel for per-ticker LLM thesis embeds (falls back to stock_webhook_url)
+    strategy_webhook_url: ""     # Set via DISCORD_STRATEGY_WEBHOOK_URL in .env; strategy signals fall back to webhook_url
     enabled: true
+
+# --- ETF strategies ---
+
+strategies:
+  fng_tqqq:
+    buy_below: 30.0
+    sma_window: 38
+    start: "2021-01-22"
 
 # --- Stock scraping (QuantUnicorn) ---
 

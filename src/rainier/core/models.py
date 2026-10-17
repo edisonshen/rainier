@@ -983,6 +983,36 @@ class FearGreedIndex(Base):
     )
 
 
+class StrategySignal(Base):
+    """Daily persisted signal and state for a named strategy."""
+
+    __tablename__ = "strategy_signals"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    strategy: Mapped[str] = mapped_column(Text, nullable=False)
+    signal_date: Mapped[date] = mapped_column(Date, nullable=False)
+    fg: Mapped[float | None] = mapped_column(Float)
+    qqq_close: Mapped[float | None] = mapped_column(Float)
+    qqq_sma: Mapped[float | None] = mapped_column(Float)
+    holding: Mapped[bool | None] = mapped_column(Boolean)
+    armed: Mapped[bool | None] = mapped_column(Boolean)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    params: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("strategy", "signal_date", name="uq_strategy_signal_date"),
+    )
+
+
 # Tables to convert to TimescaleDB hypertables
 HYPERTABLES = {
     "money_flow_snapshots": "captured_at",

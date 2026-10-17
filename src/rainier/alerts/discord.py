@@ -12,8 +12,8 @@ from typing import Any
 import httpx
 import structlog
 
-from rainier.core.config import DiscordConfig
-from rainier.core.types import Direction, Signal, StockCandidate
+from rainier.core.config import DiscordConfig, FngTqqqConfig
+from rainier.core.types import Direction, Signal, StockCandidate, StrategyDay
 
 # structlog (NOT stdlib logging) so every Discord operation lands in the same
 # structured stream as the scraper + pipeline (``data/qu-scrape.log``). The
@@ -34,6 +34,63 @@ def _http_status(exc: Exception) -> int | None:
     """
     resp = getattr(exc, "response", None)
     return getattr(resp, "status_code", None) if resp is not None else None
+
+
+_STRATEGY_ACTION_COLORS = {"BUY": 0x2ECC71, "SELL": 0xE74C3C}
+
+
+def send_strategy_signal(
+    day: StrategyDay,
+    cfg: FngTqqqConfig,
+    next_session: date_cls,
+    config: DiscordConfig,
+) -> bool:
+    """Post one daily strategy embed; return False only when posting is disabled."""
+    webhook_url = config.strategy_webhook_url or config.webhook_url
+    if not config.enabled or not webhook_url:
+        log.warning("discord_strategy_signal_skipped", enabled=config.enabled)
+        return False
+
+    if day.action in {"BUY", "SELL"}:
+        title = (
+            f"FNG-TQQQ: {day.action} TQQQ at close on "
+            f"{next_session.isoformat()} (MOC)"
+        )
+    elif day.action == "HOLD":
+        title = "FNG-TQQQ: HOLD TQQQ"
+    else:
+        title = "FNG-TQQQ: WAIT (cash)"
+
+    embed = {
+        "title": title,
+        "color": _STRATEGY_ACTION_COLORS.get(day.action, 0x3498DB),
+        "fields": [
+            {
+                "name": "Fear & Greed",
+                "value": f"{day.fg:.2f} (buy below {cfg.buy_below:g})",
+                "inline": True,
+            },
+            {
+                "name": f"QQQ vs SMA{cfg.sma_window}",
+                "value": f"{day.qqq_close:.2f} vs {day.qqq_sma:.2f}",
+                "inline": True,
+            },
+            {"name": "Holding", "value": str(day.holding), "inline": True},
+            {"name": "Exit armed", "value": str(day.armed), "inline": True},
+        ],
+    }
+    response = httpx.post(
+        webhook_url,
+        json={"embeds": [embed]},
+        timeout=10,
+    )
+    response.raise_for_status()
+    log.info(
+        "discord_strategy_signal_sent",
+        date=day.date.isoformat(),
+        action=day.action,
+    )
+    return True
 
 
 @dataclass(frozen=True)
