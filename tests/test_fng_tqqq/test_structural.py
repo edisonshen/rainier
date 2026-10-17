@@ -31,8 +31,13 @@ def test_strategy_signals_migration_and_model_contract():
         "fg",
         "qqq_close",
         "qqq_sma",
+        "entry_price",
+        "stop_price",
+        "regime_sma",
         "holding",
         "armed",
+        "bear",
+        "locked",
         "action",
         "params",
         "created_at",
@@ -56,6 +61,16 @@ def test_fng_tqqq_cron_runs_after_fear_greed_capture():
     assert job["log"] == "data/fng-tqqq.log"
     assert job["discord_on_failure"] is True
     assert names.index("fear-greed-daily") < names.index("fng-tqqq-signal")
+    for name, schedule in (
+        ("fng-tqqq-stop-check", "58 12 * * 1-5"),
+        ("fng-tqqq-stop-check-halfday", "58 9 * * 1-5"),
+    ):
+        stop_job = {job["name"]: job for job in jobs}[name]
+        assert stop_job["enabled"] is True
+        assert stop_job["schedule"] == schedule
+        assert stop_job["command"] == "uv run rainier strategy fng-tqqq stop-check"
+        assert stop_job["log"] == "data/fng-tqqq.log"
+        assert stop_job["discord_on_failure"] is True
 
 
 def test_strategy_config_and_discord_webhook_environment_wiring(monkeypatch):
@@ -68,6 +83,8 @@ def test_strategy_config_and_discord_webhook_environment_wiring(monkeypatch):
 
     assert settings.strategies.fng_tqqq.buy_below == 30.0
     assert settings.strategies.fng_tqqq.sma_window == 38
+    assert settings.strategies.fng_tqqq.regime_sma_window == 180
+    assert settings.strategies.fng_tqqq.stop_loss_pct == 0.10
     assert settings.strategies.fng_tqqq.start.isoformat() == "2021-01-22"
     assert (
         settings.alerts.discord.strategy_webhook_url

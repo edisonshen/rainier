@@ -284,3 +284,21 @@ jobs:
     log: "data/fng-tqqq.log"
     discord_on_failure: true
     enabled: true
+
+  # Run both regular-session and half-day slots; the command checks the
+  # exchange close window and safely no-ops when a slot does not apply.
+  - name: fng-tqqq-stop-check
+    description: "Check the live FNG-TQQQ stop five minutes before the regular close"
+    schedule: "58 12 * * 1-5"
+    command: "uv run rainier strategy fng-tqqq stop-check"
+    log: "data/fng-tqqq.log"
+    discord_on_failure: true
+    enabled: true
+
+  - name: fng-tqqq-stop-check-halfday
+    description: "Check the live FNG-TQQQ stop five minutes before a half-day close"
+    schedule: "58 9 * * 1-5"
+    command: "uv run rainier strategy fng-tqqq stop-check"
+    log: "data/fng-tqqq.log"
+    discord_on_failure: true
+    enabled: true

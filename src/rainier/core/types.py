@@ -307,6 +307,12 @@ class StrategyDay:
     holding: bool
     armed: bool
     action: str
+    entry_price: float | None = None
+    stop_price: float | None = None
+    regime_sma: float | None = None
+    bear: bool = False
+    locked: bool = False
+    tqqq_close: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -36,7 +36,7 @@ def _http_status(exc: Exception) -> int | None:
     return getattr(resp, "status_code", None) if resp is not None else None
 
 
-_STRATEGY_ACTION_COLORS = {"BUY": 0x2ECC71, "SELL": 0xE74C3C}
+_STRATEGY_ACTION_COLORS = {"BUY": 0x2ECC71, "SELL": 0xE74C3C, "STOP": 0xE74C3C}
 
 
 def send_strategy_signal(
@@ -51,34 +51,101 @@ def send_strategy_signal(
         log.warning("discord_strategy_signal_skipped", enabled=config.enabled)
         return False
 
+    description = None
     if day.action in {"BUY", "SELL"}:
         title = (
             f"FNG-TQQQ: {day.action} TQQQ at close on "
             f"{next_session.isoformat()} (MOC)"
+        )
+    elif day.action == "STOP":
+        title = "FNG-TQQQ: STOP hit at today's close"
+        close_text = (
+            f"{day.tqqq_close:.2f}" if day.tqqq_close is not None else "unknown"
+        )
+        stop_text = f"{day.stop_price:.2f}" if day.stop_price is not None else "unknown"
+        description = (
+            f"Stop hit at today's close (close {close_text} ≤ stop {stop_text}); "
+            "the 12:58 PT check should already have alerted, and if it wasn't "
+            "sold, sell at the next session."
         )
     elif day.action == "HOLD":
         title = "FNG-TQQQ: HOLD TQQQ"
     else:
         title = "FNG-TQQQ: WAIT (cash)"
 
+    fields = [
+        {
+            "name": "Fear & Greed",
+            "value": f"{day.fg:.2f} (buy below {cfg.buy_below:g})",
+            "inline": True,
+        },
+        {
+            "name": f"QQQ vs SMA{cfg.sma_window}",
+            "value": f"{day.qqq_close:.2f} vs {day.qqq_sma:.2f}",
+            "inline": True,
+        },
+        {"name": "Holding", "value": str(day.holding), "inline": True},
+        {"name": "Exit armed", "value": str(day.armed), "inline": True},
+    ]
+    if day.action == "HOLD":
+        fields.extend(
+            [
+                {
+                    "name": "Entry price",
+                    "value": f"{day.entry_price:.2f}" if day.entry_price is not None else "unknown",
+                    "inline": True,
+                },
+                {
+                    "name": "Stop price",
+                    "value": f"{day.stop_price:.2f}" if day.stop_price is not None else "disabled",
+                    "inline": True,
+                },
+            ]
+        )
+    if day.action == "WAIT":
+        blocked_reasons = []
+        if day.bear:
+            blocked_reasons.append(
+                f"QQQ below SMA{cfg.regime_sma_window} (bear filter)"
+            )
+        if day.locked:
+            blocked_reasons.append(
+                "locked after stop until QQQ closes above SMA38"
+            )
+        fields.append(
+            {
+                "name": "Buy status",
+                "value": (
+                    "\n".join(blocked_reasons)
+                    if blocked_reasons
+                    else "F&G is not below the buy threshold"
+                ),
+                "inline": False,
+            }
+        )
+    if day.action == "STOP":
+        fields.extend(
+            [
+                {
+                    "name": "Entry price",
+                    "value": f"{day.entry_price:.2f}" if day.entry_price is not None else "unknown",
+                    "inline": True,
+                },
+                {
+                    "name": "Stop price",
+                    "value": f"{day.stop_price:.2f}" if day.stop_price is not None else "unknown",
+                    "inline": True,
+                },
+            ]
+        )
+
     embed = {
         "title": title,
         "color": _STRATEGY_ACTION_COLORS.get(day.action, 0x3498DB),
-        "fields": [
-            {
-                "name": "Fear & Greed",
-                "value": f"{day.fg:.2f} (buy below {cfg.buy_below:g})",
-                "inline": True,
-            },
-            {
-                "name": f"QQQ vs SMA{cfg.sma_window}",
-                "value": f"{day.qqq_close:.2f} vs {day.qqq_sma:.2f}",
-                "inline": True,
-            },
-            {"name": "Holding", "value": str(day.holding), "inline": True},
-            {"name": "Exit armed", "value": str(day.armed), "inline": True},
-        ],
+        "fields": fields,
     }
+    if description:
+        embed["description"] = description
     response = httpx.post(
         webhook_url,
         json={"embeds": [embed]},
@@ -89,6 +156,51 @@ def send_strategy_signal(
         "discord_strategy_signal_sent",
         date=day.date.isoformat(),
         action=day.action,
+    )
+    return True
+
+
+def send_strategy_stop_alert(
+    day: StrategyDay,
+    price: float,
+    price_time: datetime,
+    config: DiscordConfig,
+) -> bool:
+    """Post an urgent same-day TQQQ stop alert."""
+    webhook_url = config.strategy_webhook_url or config.webhook_url
+    if not config.enabled or not webhook_url:
+        log.warning("discord_strategy_stop_skipped", enabled=config.enabled)
+        return False
+
+    embed = {
+        "title": "FNG-TQQQ: STOP — sell TQQQ now before the close",
+        "color": _STRATEGY_ACTION_COLORS["STOP"],
+        "fields": [
+            {"name": "Live TQQQ price", "value": f"{price:.2f}", "inline": True},
+            {
+                "name": "Stop price",
+                "value": f"{day.stop_price:.2f}" if day.stop_price is not None else "unknown",
+                "inline": True,
+            },
+            {
+                "name": "Entry price",
+                "value": f"{day.entry_price:.2f}" if day.entry_price is not None else "unknown",
+                "inline": True,
+            },
+            {"name": "Price timestamp", "value": price_time.isoformat(), "inline": False},
+        ],
+    }
+    response = httpx.post(
+        webhook_url,
+        json={"embeds": [embed]},
+        timeout=10,
+    )
+    response.raise_for_status()
+    log.warning(
+        "discord_strategy_stop_sent",
+        date=day.date.isoformat(),
+        price=price,
+        stop_price=day.stop_price,
     )
     return True
 

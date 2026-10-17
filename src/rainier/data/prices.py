@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from math import ceil
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
 
 
-def warmup_start(start: date) -> date:
-    """Fetch well over 120 trading sessions before the strategy's replay start."""
-    return start - timedelta(days=260)
+def warmup_start(start: date, sessions: int) -> date:
+    """Fetch enough calendar days to warm up the longest rolling window."""
+    return start - timedelta(days=ceil(sessions * 1.5) + 30)
 
 
 def load_daily_close(symbol: str, start: date) -> pd.Series:
@@ -27,3 +29,15 @@ def load_daily_close(symbol: str, start: date) -> pd.Series:
     close = close[~close.index.duplicated(keep="last")]
     close.name = symbol
     return close
+
+
+def load_last_price(symbol: str) -> tuple[float, datetime]:
+    """Load the most recent one-minute close with a timezone-aware timestamp."""
+    history = yf.Ticker(symbol).history(period="1d", interval="1m")
+    if history.empty:
+        raise ValueError(f"No intraday price available for {symbol}")
+
+    timestamp = pd.Timestamp(history.index[-1])
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize(ZoneInfo("America/New_York"))
+    return float(history["Close"].iloc[-1]), timestamp.to_pydatetime()

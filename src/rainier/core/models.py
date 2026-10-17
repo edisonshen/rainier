@@ -998,8 +998,13 @@ class StrategySignal(Base):
     fg: Mapped[float | None] = mapped_column(Float)
     qqq_close: Mapped[float | None] = mapped_column(Float)
     qqq_sma: Mapped[float | None] = mapped_column(Float)
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    stop_price: Mapped[float | None] = mapped_column(Float)
+    regime_sma: Mapped[float | None] = mapped_column(Float)
     holding: Mapped[bool | None] = mapped_column(Boolean)
     armed: Mapped[bool | None] = mapped_column(Boolean)
+    bear: Mapped[bool | None] = mapped_column(Boolean)
+    locked: Mapped[bool | None] = mapped_column(Boolean)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     params: Mapped[dict] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=False
