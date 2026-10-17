@@ -273,3 +273,14 @@ jobs:
     log: "data/fear-greed.log"
     discord_on_failure: true
     enabled: true
+
+  # FNG-TQQQ daily strategy signal — uses today's close inputs and posts the
+  # decision for execution at the next session's close (MOC). Runs after the
+  # daily CNN Fear & Greed capture; stale inputs fail loudly for cron alerting.
+  - name: fng-tqqq-signal
+    description: "Evaluate, persist, and post the daily FNG-TQQQ signal"
+    schedule: "20 15 * * 1-5"   # 15:20 PST, after fear-greed-daily
+    command: "uv run rainier strategy fng-tqqq signal"
+    log: "data/fng-tqqq.log"
+    discord_on_failure: true
+    enabled: true

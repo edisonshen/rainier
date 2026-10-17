@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -75,6 +76,16 @@ class SignalConfig(BaseModel):
     min_rr_ratio: float = 1.5
 
 
+class FngTqqqConfig(BaseModel):
+    buy_below: float = 30.0
+    sma_window: int = 38
+    start: date = date(2021, 1, 22)
+
+
+class StrategiesConfig(BaseModel):
+    fng_tqqq: FngTqqqConfig = FngTqqqConfig()
+
+
 class BacktestConfig(BaseModel):
     initial_capital: float = 100_000.0
     sr_recompute_interval: int = 50
@@ -135,6 +146,7 @@ class DiscordConfig(BaseModel):
     webhook_url: str = ""
     stock_webhook_url: str = ""  # Separate channel for stock alerts; falls back to webhook_url
     llm_webhook_url: str = ""  # Separate channel for per-ticker LLM thesis embeds; falls back to stock_webhook_url
+    strategy_webhook_url: str = ""  # Dedicated strategy alerts; falls back to webhook_url
     enabled: bool = False
 
 
@@ -458,6 +470,7 @@ class Settings(BaseSettings):
     discord_webhook_url: str = ""
     discord_stock_webhook_url: str = ""
     discord_llm_webhook_url: str = ""
+    discord_strategy_webhook_url: str = ""
     discord_backtest_webhook_url: str = ""
     notify_urls: str = ""  # Apprise URL(s), comma-separated
     x_api_bearer_token: str = ""  # X/Twitter API v2 bearer token
@@ -469,6 +482,7 @@ class Settings(BaseSettings):
     # Price action analysis (futures)
     analysis: AnalysisConfig = AnalysisConfig()
     signal: SignalConfig = SignalConfig()
+    strategies: StrategiesConfig = StrategiesConfig()
     risk: RiskConfig = RiskConfig()
     alerts: AlertsConfig = AlertsConfig()
     symbols: list[str] = ["NQ", "ES", "GC"]
@@ -537,6 +551,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         kwargs["analysis"] = AnalysisConfig(**yaml_config["analysis"])
     if "signal" in yaml_config:
         kwargs["signal"] = SignalConfig(**yaml_config["signal"])
+    if "strategies" in yaml_config:
+        kwargs["strategies"] = StrategiesConfig(**yaml_config["strategies"])
     if "risk" in yaml_config:
         kwargs["risk"] = RiskConfig(**yaml_config["risk"])
     if "alerts" in yaml_config:
@@ -610,6 +626,13 @@ def load_settings(config_path: Path | None = None) -> Settings:
         settings.alerts.discord.stock_webhook_url = settings.discord_stock_webhook_url
     if settings.discord_llm_webhook_url and not settings.alerts.discord.llm_webhook_url:
         settings.alerts.discord.llm_webhook_url = settings.discord_llm_webhook_url
+    if (
+        settings.discord_strategy_webhook_url
+        and not settings.alerts.discord.strategy_webhook_url
+    ):
+        settings.alerts.discord.strategy_webhook_url = (
+            settings.discord_strategy_webhook_url
+        )
 
     return settings
 

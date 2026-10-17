@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
+import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -298,3 +299,24 @@ def fetch(
     observations = parse_observations(payload)
     with session_factory() as session:
         return persist_observations(session, observations, source_version="daily")
+
+
+def load_daily_scores(
+    session_factory: SessionFactory = get_session,
+) -> pd.Series:
+    """Return the latest stored F&G observation for each date."""
+    rows_by_date = {}
+    statement = select(FearGreedIndex).order_by(
+        FearGreedIndex.date,
+        FearGreedIndex.observed_at.desc(),
+        FearGreedIndex.id.desc(),
+    )
+    with session_factory() as session:
+        for row in session.scalars(statement):
+            rows_by_date.setdefault(row.date, float(row.score))
+    return pd.Series(
+        list(rows_by_date.values()),
+        index=pd.DatetimeIndex(list(rows_by_date.keys())),
+        dtype=float,
+        name="fg",
+    )
