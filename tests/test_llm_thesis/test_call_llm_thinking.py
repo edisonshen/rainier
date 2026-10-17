@@ -21,6 +21,9 @@ from rainier.llm_thesis.service import (
     _parse_thesis,
 )
 
+# Pre-4.6 Claude: no adaptive thinking in litellm's catalog -> manual budget path.
+_MANUAL_THINKING_MODEL = "claude-sonnet-4-5"
+
 
 def _valid_thesis_json() -> str:
     return json.dumps(
@@ -68,12 +71,12 @@ def test_committed_model_actually_engages_thinking_path():
     assert litellm.supports_reasoning(model=model) is True
 
 
-def test_call_llm_enables_thinking_with_budget_and_temp_one():
+def test_call_llm_manual_thinking_model_uses_budget_and_temp_one():
     budget = 24000
     with patch("litellm.supports_reasoning", return_value=True), \
             patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
         _call_llm(
-            model="claude-sonnet-4-6",
+            model=_MANUAL_THINKING_MODEL,
             system_prompt="sys",
             user_prompt="user",
             image_bytes=None,
@@ -95,7 +98,7 @@ def test_call_llm_budget_scales_max_tokens():
     with patch("litellm.supports_reasoning", return_value=True), \
             patch("litellm.completion", return_value=_mock_resp("{}")) as mock_comp:
         _call_llm(
-            model="claude-sonnet-4-6",
+            model=_MANUAL_THINKING_MODEL,
             system_prompt="sys",
             user_prompt="user",
             image_bytes=None,
@@ -111,7 +114,7 @@ def test_call_llm_returns_content_and_token_counts():
     with patch("litellm.supports_reasoning", return_value=True), \
             patch("litellm.completion", return_value=resp):
         text, p_tok, c_tok = _call_llm(
-            model="claude-sonnet-4-6",
+            model=_MANUAL_THINKING_MODEL,
             system_prompt="sys",
             user_prompt="user",
             image_bytes=None,
@@ -131,7 +134,7 @@ def test_thinking_text_does_not_leak_into_parsed_thesis():
     with patch("litellm.supports_reasoning", return_value=True), \
             patch("litellm.completion", return_value=resp):
         text, _, _ = _call_llm(
-            model="claude-sonnet-4-6",
+            model=_MANUAL_THINKING_MODEL,
             system_prompt="sys",
             user_prompt="user",
             image_bytes=None,
@@ -179,12 +182,90 @@ def test_call_llm_raises_for_non_anthropic_reasoning_model():
     mock_comp.assert_not_called()
 
 
+def _capture_anthropic_request_body(**call_kwargs) -> dict:
+    """Run _call_llm through litellm's real anthropic request builder and return
+    the JSON body it would POST (HTTP layer intercepted; no network/API key)."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    captured: dict = {}
+
+    def _fake_post(*_a, **kw):
+        body = kw.get("data") or kw.get("json")
+        captured["body"] = json.loads(body) if isinstance(body, (str, bytes)) else body
+        raise RuntimeError("request captured")
+
+    with patch.object(HTTPHandler, "post", side_effect=_fake_post), \
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+        with pytest.raises(Exception, match="request captured"):
+            _call_llm(
+                system_prompt="sys",
+                user_prompt="user",
+                image_bytes=b"png",
+                **call_kwargs,
+            )
+    return captured["body"]
+
+
+def test_committed_opus_config_sends_adaptive_thinking_request():
+    """Regression for the Oct 2026 QU100-LLM outage: Opus 5.5 rejects manual
+    thinking={"type": "enabled", "budget_tokens": N} and sampling params. The
+    request litellm actually builds from the committed config must use adaptive
+    thinking + effort, carry no temperature, and keep the max_tokens cap."""
+    from rainier.core.config import LLMThesisConfig
+
+    cfg = LLMThesisConfig()
+    body = _capture_anthropic_request_body(
+        model=cfg.model,
+        thinking_budget_tokens=cfg.thinking_budget_tokens,
+        thinking_effort=cfg.thinking_effort,
+    )
+    assert body["model"] == cfg.model
+    assert body["thinking"] == {"type": "adaptive"}
+    assert body["output_config"] == {"effort": cfg.thinking_effort}
+    assert "temperature" not in body
+    assert "budget_tokens" not in body["thinking"]
+    assert body["max_tokens"] == cfg.thinking_budget_tokens + _FINAL_ANSWER_HEADROOM_TOKENS
+
+
+def test_settings_yaml_effort_is_accepted_by_litellm_for_thesis_model():
+    """The deployed settings.yaml (not just the pydantic default) must yield a
+    request litellm will build — it validates effort client-side."""
+    from rainier.core.config import load_settings
+
+    cfg = load_settings().llm_thesis
+    body = _capture_anthropic_request_body(
+        model=cfg.model,
+        thinking_budget_tokens=cfg.thinking_budget_tokens,
+        thinking_effort=cfg.thinking_effort,
+    )
+    assert body["output_config"] == {"effort": cfg.thinking_effort}
+
+
+def test_manual_thinking_model_request_body_keeps_budget_form():
+    body = _capture_anthropic_request_body(
+        model=_MANUAL_THINKING_MODEL, thinking_budget_tokens=8000,
+    )
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    assert body["temperature"] == 1.0
+    assert "output_config" not in body
+
+
 def test_cost_estimate_bills_thinking_tokens_as_output():
     """A large completion-token count (thinking folded into output) must be
-    billed at the $15/M output rate."""
+    billed at the model's output rate (Opus 5.5: $20/M)."""
     # 2800 input, 13500 output (incl. ~11k thinking).
-    cost = _estimate_cost_usd(2800, 13500)
-    expected = 2800 / 1_000_000 * 3.0 + 13500 / 1_000_000 * 15.0
-    assert cost == expected
-    # Sanity: a single xhigh ticker lands in the measured ~$0.15-0.40 range.
-    assert 0.15 <= cost <= 0.40
+    cost = _estimate_cost_usd(2800, 13500, "claude-opus-5-5")
+    expected = 2800 / 1_000_000 * 4.0 + 13500 / 1_000_000 * 20.0
+    assert cost == pytest.approx(expected)
+    # Sanity: a single xhigh ticker lands in the ~$0.20-0.55 range.
+    assert 0.20 <= cost <= 0.55
+
+
+def test_cost_estimate_uses_catalog_rates_per_model():
+    sonnet = _estimate_cost_usd(1_000_000, 1_000_000, "claude-sonnet-4-6")
+    assert sonnet == pytest.approx(3.0 + 15.0)
+
+
+def test_cost_estimate_unknown_model_falls_back_to_default_rates():
+    cost = _estimate_cost_usd(1_000_000, 1_000_000, "not-a-real-model")
+    assert cost == pytest.approx(4.0 + 20.0)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -301,12 +301,12 @@ class LLMThesisConfig(BaseModel):
     """
 
     enabled: bool = True
-    model: str = "claude-sonnet-4-6"
-    # Raised 1.0 -> 2.5 when the thesis call switched to xhigh extended thinking
-    # (thinking_budget_tokens below). At the xhigh budget a 5-ticker scan bills
-    # ~$1.0-1.9 (thinking tokens are billed as OUTPUT at $15/M); the old $1.00
-    # cap would trip the per-scan kill switch mid-scan and silently drop tickers.
-    max_usd_per_scan: float = 2.5
+    model: str = "claude-opus-5-5"
+    # Raised 1.0 -> 2.5 for xhigh extended thinking, then 2.5 -> 3.5 for Opus 5.5
+    # ($4/$20 per M vs Sonnet 4.6's $3/$15). At the xhigh budget a 5-ticker scan
+    # bills ~$1.3-2.5 (thinking tokens are billed as OUTPUT); a tighter cap would
+    # trip the per-scan kill switch mid-scan and silently drop tickers.
+    max_usd_per_scan: float = 3.5
     # Extended-thinking budget for the daily thesis call ("xhigh" tier = 24000).
     # Passed to litellm.completion as thinking={"type": "enabled",
     # "budget_tokens": <this>} (deterministic form — litellm's reasoning_effort
@@ -317,6 +317,13 @@ class LLMThesisConfig(BaseModel):
     # value loads fine but the provider rejects every thesis call, so we fail
     # fast at config load instead.
     thinking_budget_tokens: int = Field(24000, ge=1024)
+    # Models with adaptive thinking (Claude Opus 5.5 / 4.7+) reject the manual
+    # type="enabled" form above. For them service._call_llm sends
+    # thinking={"type": "adaptive"} + output_config={"effort": <this>}, no
+    # temperature, and keeps max_tokens = thinking_budget_tokens + headroom as
+    # the output (cost) cap. litellm 1.82 validates effort client-side and only
+    # passes low/medium/high for non-Opus-4.6 models.
+    thinking_effort: Literal["low", "medium", "high"] = "high"
     # Bumped v1->v2 with the D7a calibration block, v2->v3 with the R-A
     # reflections block, v3->v4 with the switch to xhigh extended thinking. The
     # Tier-1 cache key is built from THIS runtime value (service.generate_thesis
@@ -324,11 +331,39 @@ class LLMThesisConfig(BaseModel):
     # prompt.PROMPT_VERSION — the module constant alone never busts the cache.
     # Keep the two (plus settings.yaml) in lockstep
     # (test_prompt_version_config_tracks_module guards the invariant).
-    prompt_version: str = "v4"
+    prompt_version: str = "v5"
     enabled_sessions: list[str] = Field(
         default_factory=lambda: ["afternoon", "close"]
     )
     fallback_to_anthropic_sdk: bool = False
+    # How many names get a thesis embed per scan (and, before_thesis, a thesis).
+    top_n: int = Field(5, ge=1)
+    # When on, one cheap text-only LLM call picks the top_n from the screener's
+    # top selection_pool_size (llm_thesis/selection.py); off = composite top_n.
+    llm_selection_enabled: bool = True
+    selection_pool_size: int = Field(50, ge=1)
+    # before_thesis: the LLM picks top_n of the pool, only those get a thesis.
+    # after_thesis: every pool candidate gets a thesis, then the LLM ranks the
+    # finished theses and the top_n post to Discord (all theses still persist
+    # and feed paper trading). The ranking call's estimated cost is reserved from
+    # max_usd_per_scan before the theses run.
+    selection_stage: Literal["before_thesis", "after_thesis"] = "before_thesis"
+    # Cross-session reuse: a session listed here (key) reuses the same-day thesis
+    # from the mapped earlier session (value) instead of a new LLM call when the
+    # evidence is materially unchanged (service._evidence_unchanged).
+    reuse_prior_session: dict[str, str] = Field(
+        default_factory=lambda: {"close": "afternoon"}
+    )
+    reuse_max_price_move_pct: float = Field(2.0, ge=0)
+    reuse_max_rank_move: int = Field(10, ge=0)
+    # Sessions whose thesis calls go through Anthropic's Message Batches API
+    # (50% price, async). Past batch_timeout_minutes the batch is cancelled and
+    # the calls it had not finished run synchronously at full price.
+    batch_sessions: list[str] = Field(default_factory=lambda: ["close"])
+    batch_timeout_minutes: float = Field(45.0, gt=0)
+    batch_poll_seconds: float = Field(30.0, ge=0)
+    # None = use `model`.
+    selection_model: str | None = None
     signals: dict[str, ThesisSignalConfig] = Field(
         default_factory=_default_thesis_signals
     )

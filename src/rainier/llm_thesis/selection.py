@@ -1,0 +1,275 @@
+"""LLM pick step: Claude chooses which screened names get a full thesis.
+
+The screener ranks QU100 by a rule-based composite score. Instead of blindly
+thesis-ing the composite top-N, one cheap text-only call shows the LLM the
+screener's top-``selection_pool_size`` candidates and asks it to pick the
+``top_n`` most promising long setups. The expensive per-ticker thesis then runs
+on those picks.
+
+With ``selection_stage: after_thesis`` the same pick runs after the theses
+instead (``rank_theses``): every pool candidate gets a thesis and the LLM ranks
+the finished theses to choose which ``top_n`` post to Discord.
+
+Any selector failure (provider error, bad JSON, unknown symbols) falls back to
+the screener's own order, so a scan never loses its thesis set because of this
+step. When the LLM returns fewer valid picks than requested, the remainder is
+filled in screener order.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Literal, NamedTuple
+
+from pydantic import BaseModel, Field
+
+from rainier.core.config import Settings
+from rainier.core.types import StockCandidate
+
+from .service import _estimate_cost_usd
+
+log = logging.getLogger(__name__)
+
+_SELECTION_MAX_TOKENS = 1500
+_REASON_MAX_CHARS = 200
+
+SELECTION_SYSTEM_PROMPT = """You are a swing-trading analyst picking which stocks deserve a deep \
+chart review today.
+
+You get a table of long-side ("Long in") candidates from a QU100 money-flow screener, already \
+ranked by the screener's rule-based composite score. Pick the {top_n} names most likely to offer \
+an actionable long setup over the next 5-10 trading days. Weigh money-flow strength and rank \
+momentum, capital-flow direction, pattern quality and status, reward/risk, distance to entry \
+(prefer names near a clean entry over extended ones), and sector diversification. You may pick \
+names the composite ranks lower when the evidence justifies it.
+
+Respond with JSON only, no prose, exactly this shape:
+{{"picks": [{{"symbol": "TICKER", "reason": "one short sentence, max 200 chars"}}]}}
+Return exactly {top_n} picks, best first, using only symbols from the table."""
+
+
+RANKING_SYSTEM_PROMPT = """You are a swing-trading analyst choosing which finished trade theses to \
+publish today.
+
+You get long-side ("Long in") candidates from a QU100 money-flow screener, in the screener's \
+rule-based composite order, each with the verdict, setup quality, confidence and radar summary \
+of a deep chart review already done on it. Pick the {top_n} names offering the best actionable \
+long setup over the next 5-10 trading days. Prefer setup_long over watch over no_setup, then \
+higher setup quality and confidence; weigh reward/risk, distance to entry, money-flow strength \
+and sector diversification. You may pick names the composite ranks lower.
+
+Respond with JSON only, no prose, exactly this shape:
+{{"picks": [{{"symbol": "TICKER", "reason": "one short sentence, max 200 chars"}}]}}
+Return exactly {top_n} picks, best first, using only symbols from the table."""
+
+
+class SelectionPick(BaseModel):
+    symbol: str = Field(min_length=1)
+    reason: str = ""
+
+
+class SelectionOutput(BaseModel):
+    picks: list[SelectionPick]
+
+
+class ThesisSelection(NamedTuple):
+    """Which candidates get a thesis, and why."""
+
+    targets: list[StockCandidate]
+    # {symbol: one-line LLM reason}; empty for screener-filled targets.
+    reasons: dict[str, str]
+    source: Literal["llm", "screener"]
+    cost_usd: float
+    error: str | None = None
+
+
+def _fmt(value: float | None, spec: str) -> str:
+    return "-" if value is None else format(value, spec)
+
+
+def _candidate_row(position: int, c: StockCandidate) -> str:
+    pattern = "none"
+    if c.pattern_type:
+        pattern = (
+            f"{c.pattern_type} {c.pattern_status or '?'} conf {_fmt(c.pattern_confidence, '.2f')}"
+            f" entry {_fmt(c.entry_price, '.2f')} SL {_fmt(c.stop_loss, '.2f')}"
+            f" tgt {_fmt(c.target_price, '.2f')} R:R {_fmt(c.rr_ratio, '.1f')}"
+            f" vol_confirmed {'yes' if c.volume_confirmed else 'no'}"
+        )
+    return (
+        f"{position}. {c.symbol} | QU rank {c.rank} ({c.rank_change:+d}) | flow "
+        f"{c.capital_flow_direction} | {c.sector} | composite {c.signal_strength:.3f} | "
+        f"price {_fmt(c.current_price, '.2f')} | to-entry {_fmt(c.distance_to_entry_pct, '+.1f')}{'' if c.distance_to_entry_pct is None else '%'} "
+        f"| pattern {pattern}"
+    )
+
+
+def _thesis_summary(thesis: dict) -> str:
+    return (
+        f" | thesis {thesis.get('verdict')} quality {thesis.get('setup_quality')}/10"
+        f" conf {thesis.get('llm_confidence')}/10 | radar: {thesis.get('paragraph_radar', '')}"
+    )
+
+
+def build_selection_prompt(
+    pool: list[StockCandidate], top_n: int, theses: dict[str, dict] | None = None
+) -> str:
+    rows = "\n".join(
+        _candidate_row(i, c) + (_thesis_summary(theses[c.symbol]) if theses else "")
+        for i, c in enumerate(pool, start=1)
+    )
+    return (
+        f"Screener candidates ({len(pool)}), composite order:\n{rows}\n\n"
+        f"Pick {top_n}."
+    )
+
+
+def _parse_selection(raw: str) -> SelectionOutput:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+    return SelectionOutput.model_validate(json.loads(text.strip()))
+
+
+def _call_selector(model: str, system_prompt: str, user_prompt: str) -> tuple[str, int, int]:
+    import litellm  # local import — tests mock this
+
+    resp = litellm.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=_SELECTION_MAX_TOKENS,
+    )
+    usage = resp.get("usage") or {}
+    return (
+        resp["choices"][0]["message"]["content"],
+        int(usage.get("prompt_tokens", 0)),
+        int(usage.get("completion_tokens", 0)),
+    )
+
+
+def _resolve_picks(
+    picks: list[SelectionPick], pool: list[StockCandidate], top_n: int
+) -> tuple[list[StockCandidate], dict[str, str]]:
+    """Map LLM picks onto pool candidates (unknown/duplicate symbols dropped),
+    then fill any shortfall in screener order."""
+    by_symbol = {c.symbol: c for c in pool}
+    targets: list[StockCandidate] = []
+    reasons: dict[str, str] = {}
+    for pick in picks:
+        symbol = pick.symbol.strip().upper()
+        candidate = by_symbol.get(symbol)
+        if candidate is None or symbol in reasons:
+            continue
+        targets.append(candidate)
+        reasons[symbol] = pick.reason.strip()[:_REASON_MAX_CHARS]
+        if len(targets) >= top_n:
+            break
+    for candidate in pool:
+        if len(targets) >= top_n:
+            break
+        if candidate.symbol not in reasons:
+            targets.append(candidate)
+    return targets, reasons
+
+
+def _llm_pick(
+    pool: list[StockCandidate],
+    n: int,
+    settings: Settings,
+    system_prompt: str,
+    theses: dict[str, dict] | None = None,
+) -> ThesisSelection:
+    """One selector call picking ``n`` of ``pool``; screener order on any failure."""
+    cfg = settings.llm_thesis
+    screener_pick = pool[:n]
+    if not cfg.llm_selection_enabled or len(pool) <= n:
+        return ThesisSelection(screener_pick, {}, "screener", 0.0)
+
+    model = cfg.selection_model or cfg.model
+    cost = 0.0
+    try:
+        raw, prompt_tokens, completion_tokens = _call_selector(
+            model,
+            system_prompt.format(top_n=n),
+            build_selection_prompt(pool, n, theses),
+        )
+        cost = _estimate_cost_usd(prompt_tokens, completion_tokens, model)
+        parsed = _parse_selection(raw)
+    except Exception as exc:
+        log.warning("thesis_selection_failed_using_screener_top_n error=%s", exc)
+        return ThesisSelection(screener_pick, {}, "screener", cost, str(exc))
+
+    targets, reasons = _resolve_picks(parsed.picks, pool, n)
+    if not reasons:
+        error = "LLM returned no symbols from the candidate pool"
+        log.warning("thesis_selection_empty_using_screener_top_n raw=%s", raw[:500])
+        return ThesisSelection(screener_pick, {}, "screener", cost, error)
+
+    log.info(
+        "thesis_selection_done picks=%s pool=%d cost_usd=%.4f",
+        [c.symbol for c in targets], len(pool), cost,
+    )
+    return ThesisSelection(targets, reasons, "llm", cost)
+
+
+def _validated_top_n(settings: Settings, top_n: int | None) -> int:
+    n = settings.llm_thesis.top_n if top_n is None else top_n
+    if n < 1:
+        raise ValueError(f"top_n must be >= 1, got {n}")
+    return n
+
+
+def select_thesis_targets(
+    candidates: list[StockCandidate], settings: Settings, *, top_n: int | None = None
+) -> ThesisSelection:
+    """Pick which screened candidates get a full LLM thesis.
+
+    ``candidates`` is the screener output in composite order; the LLM sees the
+    first ``llm_thesis.selection_pool_size`` of them. ``top_n`` defaults to
+    ``llm_thesis.top_n``.
+    """
+    n = _validated_top_n(settings, top_n)
+    pool = candidates[: max(settings.llm_thesis.selection_pool_size, n)]
+    return _llm_pick(pool, n, settings, SELECTION_SYSTEM_PROMPT)
+
+
+# Rough per-row prompt size of the ranking table: screener row (~80 tokens)
+# plus the thesis summary with its <=400-char radar paragraph (~120 tokens).
+_RANKING_TOKENS_PER_ROW = 200
+_RANKING_PROMPT_OVERHEAD_TOKENS = 400
+
+
+def ranking_reserve_usd(pool_size: int, settings: Settings, *, top_n: int | None = None) -> float:
+    """Upper-bound cost of the ``rank_theses`` call over ``pool_size`` theses, so
+    the thesis kill switch can leave it room under ``max_usd_per_scan``."""
+    cfg = settings.llm_thesis
+    n = _validated_top_n(settings, top_n)
+    if not cfg.llm_selection_enabled or pool_size <= n:
+        return 0.0
+    prompt_tokens = _RANKING_PROMPT_OVERHEAD_TOKENS + _RANKING_TOKENS_PER_ROW * pool_size
+    return _estimate_cost_usd(
+        prompt_tokens, _SELECTION_MAX_TOKENS, cfg.selection_model or cfg.model
+    )
+
+
+def rank_theses(
+    candidates: list[StockCandidate],
+    theses: dict[str, dict],
+    settings: Settings,
+    *,
+    top_n: int | None = None,
+) -> ThesisSelection:
+    """Pick which finished theses post to Discord, best first.
+
+    Only ``candidates`` with a thesis are eligible; the LLM sees each one's
+    screener row plus its thesis summary.
+    """
+    n = _validated_top_n(settings, top_n)
+    pool = [c for c in candidates if c.symbol in theses]
+    return _llm_pick(pool, n, settings, RANKING_SYSTEM_PROMPT, theses)

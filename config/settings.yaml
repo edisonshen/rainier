@@ -166,25 +166,58 @@ llm:
 
 llm_thesis:
   enabled: true
-  model: "claude-sonnet-4-6"
-  # xhigh extended thinking: thinking tokens bill as OUTPUT ($15/M), so a
-  # 5-ticker scan runs ~$1.0-1.9. Cap raised 1.0 -> 2.5 so the per-scan kill
-  # switch doesn't trip mid-scan and drop tickers.
-  max_usd_per_scan: 2.5
+  model: "claude-opus-5-5"
+  # xhigh extended thinking: thinking tokens bill as OUTPUT ($20/M on Opus 5.5),
+  # Measured Opus 5.5 (effort high): ~$0.045/thesis sync, half that batched.
+  # The afternoon scan theses the whole "Long in" pool (~35-50 names, up to 100);
+  # the batched kill switch splits the cap evenly per thesis, so 6.0 leaves
+  # ~$0.06 each even at 100 names: enough for the full-price sync fallback.
+  max_usd_per_scan: 6.0
   # "xhigh" extended-thinking budget (tokens) for the thesis LLM call. Passed
   # explicitly as thinking={"type": "enabled", "budget_tokens": ...}. Must be a
   # positive int; service._call_llm sets max_tokens = budget + 2000 headroom and
   # forces temperature=1.0 (anthropic rejects temperature!=1 with thinking on).
   thinking_budget_tokens: 24000
+  # Adaptive-thinking models (claude-opus-5-5) reject the manual budget form and
+  # take effort instead; thinking_budget_tokens then only sizes max_tokens.
+  thinking_effort: "high"
   # v2: D7a calibration block. v3: R-A last-K reflections block. v4: switch to
-  # xhigh extended thinking (behavioral change busts the Tier-1 cache). This
+  # xhigh extended thinking (behavioral change busts the Tier-1 cache). v5: 200-bar
+  # 1024x640 chart (was 60 bars at 1280x800). This
   # runtime value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION)
   # — keep it == the module constant.
-  prompt_version: "v4"
+  prompt_version: "v5"
+  # Budget: one LLM scan a day (12:45 PT afternoon); close posts only the
+  # rule-based top-20.
   enabled_sessions:
     - afternoon
-    - close
   fallback_to_anthropic_sdk: false
+  # after_thesis: every screened candidate (up to selection_pool_size) gets a
+  # thesis, then one text-only Claude call ranks the finished theses and the
+  # top_n post to Discord (all theses persist and feed paper trading). Falls
+  # back to composite order on any selector failure. before_thesis = Claude
+  # picks top_n first and only those get a thesis. selection_model null = model.
+  selection_stage: after_thesis
+  top_n: 10
+  llm_selection_enabled: true
+  selection_pool_size: 100
+  selection_model: null
+  # Close reuses the afternoon thesis (no LLM call) when pattern type/status and
+  # entry/stop/target are unchanged, price moved <= reuse_max_price_move_pct and
+  # QU rank moved <= reuse_max_rank_move.
+  reuse_prior_session:
+    close: afternoon
+  reuse_max_price_move_pct: 2.0
+  reuse_max_rank_move: 10
+  # Thesis calls for these sessions go through Anthropic's Message Batches API
+  # (50% price). A batch still running after batch_timeout_minutes is cancelled;
+  # requests it already finished are kept and only the cancelled ones run
+  # synchronously at full price, so the post lands.
+  batch_sessions:
+    - afternoon
+    - close
+  batch_timeout_minutes: 45
+  batch_poll_seconds: 30
   # PR5: when set, the Discord per-ticker embed gets a clickable link to the
   # dashboard pre-filtered to this thesis. Leave as ``null`` to render no
   # link (graceful degradation when the dashboard isn't running). Override

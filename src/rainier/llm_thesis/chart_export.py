@@ -49,6 +49,11 @@ log = logging.getLogger(__name__)
 # canvas and the PNG bytes.
 RENDER_WIDTH = 1280
 RENDER_HEIGHT = 800
+# The LLM thesis chart: ~10 months of daily bars on a smaller canvas
+# (~870 image tokens vs ~1,365 at 1280x800). The archive keeps RENDER_*.
+THESIS_CHART_BARS = 200
+THESIS_CHART_WIDTH = 1024
+THESIS_CHART_HEIGHT = 640
 RENDER_SCALE = 1
 
 # Non-critical PNG chunks whose payload can leak wall-clock / build metadata.
@@ -109,8 +114,8 @@ def render_chart_png(
     symbol: str,
     df: pd.DataFrame,
     pattern: PatternSignal | None = None,
-    width: int = RENDER_WIDTH,
-    height: int = RENDER_HEIGHT,
+    width: int = THESIS_CHART_WIDTH,
+    height: int = THESIS_CHART_HEIGHT,
 ) -> tuple[bytes, str]:
     """Render the static stock chart to PNG bytes + sha256 digest.
 
@@ -120,7 +125,7 @@ def render_chart_png(
 
     Args:
         symbol: ticker label drawn in the chart title and watermark.
-        df: OHLCV dataframe; the renderer tails the last 60 bars.
+        df: OHLCV dataframe; the renderer tails the last THESIS_CHART_BARS.
         pattern: optional Caisen pattern signal; draws entry / SL / target
             horizontal lines when present.
         width, height: pinned canvas dimensions. Overriding these breaks the
@@ -132,7 +137,9 @@ def render_chart_png(
         metadata-scrubbed bytes, which is what callers should hash into
         their input-hash for cache lookups.
     """
-    fig = create_static_stock_chart(symbol, df, pattern=pattern)
+    fig = create_static_stock_chart(
+        symbol, df, pattern=pattern, bars=THESIS_CHART_BARS
+    )
     raw_png = fig.to_image(
         format="png",
         width=width,
@@ -145,4 +152,10 @@ def render_chart_png(
     return png, digest
 
 
-__all__ = ["render_chart_png", "CHART_RENDER_VERSION"]
+__all__ = [
+    "render_chart_png",
+    "CHART_RENDER_VERSION",
+    "THESIS_CHART_BARS",
+    "THESIS_CHART_HEIGHT",
+    "THESIS_CHART_WIDTH",
+]

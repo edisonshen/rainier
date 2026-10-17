@@ -170,3 +170,91 @@ def parse_capital_flow_rows(
             )
         )
     return results
+
+
+@dataclass(frozen=True)
+class TickerRankRow:
+    """One daily/weekly row of the capitalflow page's rank summary (mfsummary)."""
+
+    label: str  # "2026-10-16" or "2026-10-12 to 2026-10-16"
+    long_short: str
+    rank: int
+    total: int  # how many tickers QU ranked that period
+    sentiment: str  # "+", "-", "N"
+
+
+@dataclass(frozen=True)
+class TickerFlowBar:
+    """One near-term/total money-flow bar from the capitalflow chart (mfplot)."""
+
+    label: str
+    near: float
+    total: float
+
+
+@dataclass(frozen=True)
+class TickerFlow:
+    """Everything the QU capitalflow page shows for one ticker."""
+
+    symbol: str
+    updated: str  # QU's "Last updated on ..." stamp
+    daily_ranks: list[TickerRankRow]
+    weekly_ranks: list[TickerRankRow]
+    daily_bars: list[TickerFlowBar]
+    weekly_bars: list[TickerFlowBar]
+
+    @property
+    def empty(self) -> bool:
+        return not (
+            self.daily_ranks or self.weekly_ranks or self.daily_bars or self.weekly_bars
+        )
+
+    def prompt_section(self) -> str:
+        """Render as a thesis-prompt section (newest rows first, as QU shows them)."""
+        lines = [f"--- QU capital flow ({self.updated}) ---"]
+        if self.empty:
+            lines.append("(QU has no capital-flow data for this ticker)")
+            return "\n".join(lines)
+        for title, rows in (("Daily", self.daily_ranks), ("Weekly", self.weekly_ranks)):
+            lines.append(f"{title} rank (rank / tickers ranked, long/short, sentiment):")
+            lines += [
+                f"- {r.label}: {r.rank}/{r.total}, {r.long_short}, {r.sentiment}" for r in rows
+            ]
+        for title, bars in (("Daily", self.daily_bars), ("Weekly", self.weekly_bars)):
+            lines.append(f"{title} money flow (near-term / total):")
+            lines += [f"- {b.label}: {b.near:+.2f} / {b.total:+.2f}" for b in bars]
+        return "\n".join(lines)
+
+
+def _int_or_zero(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_ticker_ranks(rows: list[dict] | None) -> list[TickerRankRow]:
+    """Parse one ``mfsummary`` list (``data.daily`` or ``data.weekly``)."""
+    return [
+        TickerRankRow(
+            label=str(r.get("label", "")),
+            long_short=str(r.get("long_short") or ""),
+            rank=_int_or_zero(r.get("rank")),
+            total=_int_or_zero(r.get("total")),
+            sentiment=str(r.get("sentiment") or "N"),
+        )
+        for r in rows or []
+    ]
+
+
+def parse_ticker_bars(rows: list[dict] | None) -> list[TickerFlowBar]:
+    """Parse an ``mfplot`` ``data`` list; rows missing a number are dropped."""
+    bars: list[TickerFlowBar] = []
+    for r in rows or []:
+        near, total = r.get("near"), r.get("total")
+        if near is None or total is None:
+            continue
+        bars.append(
+            TickerFlowBar(label=str(r.get("xlabel", "")), near=float(near), total=float(total))
+        )
+    return bars

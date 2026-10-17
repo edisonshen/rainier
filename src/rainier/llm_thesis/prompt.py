@@ -20,7 +20,10 @@ from __future__ import annotations
 # hashes only the EvidencePack + image). Bumping busts Tier-1 so same-day
 # reruns after the switch regenerate with thinking instead of serving a stale
 # no-thinking thesis; likewise when thinking_budget_tokens is retuned.
-PROMPT_VERSION = "v4"
+# A model switch (e.g. Sonnet 4.6 -> Opus 5.5) needs no bump: the Tier-1 key
+# already includes llm_model.
+# v5: the chart grew from 60 to 200 daily bars on a 1024x640 canvas.
+PROMPT_VERSION = "v5"
 
 OUTPUT_SCHEMA = """{
   "verdict": "setup_long" | "watch" | "no_setup",
@@ -100,6 +103,7 @@ def build_user_message(
     candidate_summary: str,
     signal_renders: list[str],
     calibration_section: str = "",
+    extra_sections: list[str] | None = None,
 ) -> str:
     """Stitch the per-call evidence into the user-side prompt.
 
@@ -127,5 +131,7 @@ def build_user_message(
         body += "(no signals produced non-None values)"
     if calibration_section:
         body += f"\n\n{calibration_section}"
+    for section in extra_sections or []:
+        body += f"\n\n{section}"
     body += "\n\nProduce the JSON object now."
     return body

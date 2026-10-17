@@ -84,3 +84,66 @@ def test_full_pipeline_yields_dict_keyed_by_symbol():
     assert "NVDA" in ohlcv
     assert isinstance(ohlcv["NVDA"], pd.DataFrame)
     assert any(c.symbol == "NVDA" for c in candidates)
+
+
+def _daily_frame(n: int, end: str | None = None) -> pd.DataFrame:
+    end = end or pd.Timestamp.today().strftime("%Y-%m-%d")
+    idx = pd.bdate_range(end=end, periods=n)
+    return pd.DataFrame(
+        {"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1},
+        index=idx,
+    )
+
+
+def test_fetch_keeps_a_year_but_patterns_see_only_six_months():
+    from rainier.analysis.stock_screener import _fetch_stock_data, pattern_window
+
+    with patch(
+        "rainier.analysis.stock_screener.yf.download", return_value=_daily_frame(252)
+    ) as dl:
+        data = _fetch_stock_data(["NVDA"], min_bars=60)
+
+    assert dl.call_args.kwargs["period"] == "1y"
+    history = data["NVDA"]
+    assert len(history) == 252  # enough for the 200-bar thesis chart
+    window = pattern_window(history)
+    cutoff = history.index[-1] - pd.DateOffset(months=6)
+    assert window.index.min() > cutoff
+    assert len(window) == (history.index > cutoff).sum()
+    assert 120 <= len(window) <= 135
+
+
+def test_min_bars_applies_to_the_pattern_window_not_the_year():
+    from rainier.analysis.stock_screener import _fetch_stock_data
+
+    # A recent IPO with 50 bars is still skipped, as with the old 6mo fetch.
+    with patch(
+        "rainier.analysis.stock_screener.yf.download", return_value=_daily_frame(50)
+    ):
+        assert _fetch_stock_data(["NEWCO"], min_bars=60) == {}
+
+
+def test_stale_series_is_not_shifted_back_into_a_full_window():
+    """A symbol whose bars stopped 4 months ago keeps only ~2 months in the
+    today-anchored 6mo window, so it is skipped exactly as the old fetch did."""
+    from rainier.analysis.stock_screener import _fetch_stock_data
+
+    stale_end = (pd.Timestamp.today() - pd.DateOffset(months=4)).strftime("%Y-%m-%d")
+    with patch(
+        "rainier.analysis.stock_screener.yf.download",
+        return_value=_daily_frame(252, end=stale_end),
+    ):
+        assert _fetch_stock_data(["HALTED"], min_bars=60) == {}
+
+
+def test_fetch_single_symbol_handles_yfinance_ticker_grouped_columns():
+    """yfinance with group_by="ticker" returns (ticker, field) columns even for one
+    symbol; the on-demand single-ticker screen must still get its history."""
+    from rainier.analysis.stock_screener import _fetch_stock_data
+
+    grouped = pd.concat({"NVDA": _daily_frame(252)}, axis=1)
+    with patch("rainier.analysis.stock_screener.yf.download", return_value=grouped):
+        data = _fetch_stock_data(["NVDA"], min_bars=60)
+
+    assert list(data) == ["NVDA"]
+    assert "close" in data["NVDA"].columns and len(data["NVDA"]) == 252

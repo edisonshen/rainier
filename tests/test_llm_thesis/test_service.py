@@ -11,7 +11,11 @@ import pytest
 
 from rainier.core.config import LLMThesisConfig, Settings
 from rainier.llm_thesis.schemas import EvidencePack, TradeThesis
-from rainier.llm_thesis.service import _tier1_lookup, generate_thesis
+from rainier.llm_thesis.service import (
+    ThesisOutcome,
+    _tier1_lookup,
+    generate_thesis,
+)
 
 
 def _settings(model: str = "test-model", prompt_v: str = "v1") -> Settings:
@@ -59,7 +63,7 @@ async def test_tier1_cache_hit_skips_llm_and_provider():
     ), patch(
         "rainier.llm_thesis.service._call_llm"
     ) as mock_llm:
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
             evidence_provider=provider_called, settings=_settings(),
             max_usd_remaining=1.0,
@@ -82,7 +86,7 @@ async def test_tier2_miss_calls_llm_persists_returns_thesis():
     ), patch(
         "rainier.llm_thesis.service._persist_thesis", return_value=99,
     ):
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
             evidence_provider=_provider(), settings=_settings(),
             max_usd_remaining=1.0,
@@ -104,7 +108,7 @@ async def test_three_validation_failures_returns_none():
     ) as mock_llm, patch(
         "rainier.llm_thesis.service._persist_thesis", return_value=None
     ):
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
             evidence_provider=_provider(), settings=_settings(),
             max_usd_remaining=1.0,
@@ -121,7 +125,7 @@ async def test_max_usd_kill_switch_aborts_before_llm():
     ), patch(
         "rainier.llm_thesis.service._call_llm"
     ) as mock_llm:
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
             evidence_provider=_provider(), settings=_settings(),
             max_usd_remaining=0.0,
@@ -145,7 +149,7 @@ async def test_cost_overrun_after_call_aborts_with_charge():
     ), patch(
         "rainier.llm_thesis.service._persist_thesis", return_value=None
     ):
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
             evidence_provider=_provider(), settings=_settings(),
             max_usd_remaining=0.10,
@@ -287,7 +291,7 @@ async def test_compute_theses_async_passes_pattern_signal_to_chart():
         # match production by offloading to a worker thread here too.
         provider = kwargs["evidence_provider"]
         await asyncio.to_thread(provider)
-        return TradeThesis.model_validate(_valid_thesis_dict()), 0.05, 99
+        return ThesisOutcome(TradeThesis.model_validate(_valid_thesis_dict()), 0.05, 99)
 
     with (
         patch(
@@ -611,7 +615,7 @@ async def test_generate_thesis_close_session_misses_afternoon_cache():
         "rainier.llm_thesis.service._persist_thesis", return_value=99,
     ) as mock_persist:
         # Close scan: lookup returns None → LLM called → persist called with session.
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA",
             scan_date=date(2026, 5, 7),
             session_name="close",
@@ -653,7 +657,7 @@ async def test_generate_thesis_same_session_hits_cache_no_llm_call():
     ) as mock_llm, patch(
         "rainier.llm_thesis.service._persist_thesis"
     ) as mock_persist:
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA",
             scan_date=date(2026, 5, 7),
             session_name="afternoon",
@@ -704,7 +708,7 @@ async def test_compute_theses_async_cache_hit_skips_chart_and_assembly():
     async def _fake_generate(**kwargs):
         # Simulate the Tier-1 hit — generate_thesis returns the cached thesis
         # without ever calling its evidence_provider.
-        return TradeThesis.model_validate(cached_thesis_dict), 0.0, 42
+        return ThesisOutcome(TradeThesis.model_validate(cached_thesis_dict), 0.0, 42)
 
     with (
         patch(
@@ -726,7 +730,7 @@ async def test_compute_theses_async_cache_hit_skips_chart_and_assembly():
             settings=_settings(),
         )
 
-    assert "NVDA" in result
+    assert "NVDA" in result.theses
     # The cache-hit path must NOT have asked for the chart or run any signal.
     chart_mock.assert_not_called()
     assemble_mock.assert_not_called()
@@ -744,7 +748,7 @@ async def test_retry_recovers_on_second_attempt():
     ) as mock_llm, patch(
         "rainier.llm_thesis.service._persist_thesis", return_value=77
     ):
-        thesis, cost, rec_id = await generate_thesis(
+        thesis, cost, rec_id, _ = await generate_thesis(
             symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
             evidence_provider=_provider(), settings=_settings(),
             max_usd_remaining=1.0,
@@ -752,3 +756,66 @@ async def test_retry_recovers_on_second_attempt():
     assert thesis is not None
     assert rec_id == 77
     assert mock_llm.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_error_is_returned_as_failure_reason():
+    """Oct 2026 outage shape: every LLM call raises. generate_thesis must hand
+    the provider's message back so the pipeline can alert with it."""
+    with patch(
+        "rainier.llm_thesis.service._tier1_lookup", return_value=None
+    ), patch(
+        "rainier.llm_thesis.service._call_llm",
+        side_effect=RuntimeError("AnthropicException - credit balance is too low"),
+    ) as mock_llm, patch(
+        "rainier.llm_thesis.service._persist_thesis"
+    ) as mock_persist:
+        outcome = await generate_thesis(
+            symbol="NVDA", scan_date=date(2026, 5, 7), session_name="afternoon",
+            evidence_provider=_provider(), settings=_settings(),
+            max_usd_remaining=1.0,
+        )
+    assert outcome.thesis is None
+    assert mock_llm.call_count == 3
+    mock_persist.assert_not_called()
+    assert "credit balance is too low" in outcome.error
+
+
+@pytest.mark.asyncio
+async def test_compute_theses_async_reports_failed_and_budget_skipped_tickers():
+    from datetime import date as _date
+
+    from rainier.core.types import StockCandidate
+    from rainier.llm_thesis.service import _compute_theses_async
+
+    cands = [
+        StockCandidate(
+            symbol=sym, rank=i + 1, rank_change=0, long_short="Long in",
+            capital_flow_direction="+", sector="Technology", signal_strength=0.8,
+        )
+        for i, sym in enumerate(["AAA", "BBB", "CCC"])
+    ]
+    outcomes = {
+        "AAA": ThesisOutcome(TradeThesis.model_validate(_valid_thesis_dict()), 0.4, 1),
+        # BBB burns the rest of the $1.00 scan budget and fails.
+        "BBB": ThesisOutcome(None, 0.6, None, "llm_call_failed: 400 bad thinking"),
+    }
+
+    async def _fake_generate(**kwargs):
+        return outcomes[kwargs["symbol"]]
+
+    with (
+        patch("rainier.llm_thesis.service.generate_thesis", side_effect=_fake_generate),
+        patch("rainier.llm_thesis.service.update_with_thesis"),
+        patch("rainier.llm_thesis.service.get_session"),
+        patch("rainier.paper.positions.create_positions_for_theses"),
+        patch("rainier.paper.positions.create_shadow_positions_for_theses"),
+    ):
+        batch = await _compute_theses_async(
+            cands, {}, scan_date=_date(2026, 5, 7), session_name="afternoon",
+            settings=_settings(),
+        )
+
+    assert set(batch.theses) == {"AAA"}
+    assert batch.failures["BBB"] == "llm_call_failed: 400 bad thinking"
+    assert "budget" in batch.failures["CCC"]

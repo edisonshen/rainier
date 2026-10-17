@@ -76,9 +76,21 @@ def screen_stocks(
         signals = _apply_sector_boost(signals, sector_trends)
         log.info("Layer 2 complete: sector boost applied")
 
+    return _detect_and_score(signals, sector_trends, config)
+
+
+def _detect_and_score(
+    signals: list[MoneyFlowSignal],
+    sector_trends: list[SectorTrend],
+    config: StockScreenerConfig,
+) -> tuple[list[StockCandidate], dict[str, pd.DataFrame]]:
+    """Layer 3 + composite scoring for already money-flow/sector-scored signals."""
     # Layer 3 — pattern detection (outside DB session, uses yfinance)
     symbols = [s.symbol for s in signals]
-    stock_data = _fetch_stock_data(symbols, config.min_daily_bars)
+    history = _fetch_stock_data(symbols, config.min_daily_bars)
+    stock_data = {
+        sym: pattern_window(df, as_of=_today(df)) for sym, df in history.items()
+    }
     log.info(
         "Layer 3: fetched data for %d/%d symbols", len(stock_data), len(symbols)
     )
@@ -177,7 +189,65 @@ def screen_stocks(
         sum(1 for r in results if r.recommendation == "buy"),
         sum(1 for r in results if r.recommendation == "watch"),
     )
-    return candidates, stock_data
+    return candidates, history
+
+
+# A long weekend + holiday is 4 calendar days; older QU100 ranks are not current.
+TICKER_RANK_MAX_AGE_DAYS = 4
+
+
+def screen_ticker(
+    symbol: str,
+    settings: Settings | None = None,
+) -> tuple[StockCandidate | None, pd.DataFrame | None]:
+    """Run the same 3 layers on ONE arbitrary ticker (on-demand thesis pack).
+
+    A ticker in the latest QU100 'Long in' set gets its real money-flow signal
+    (up to TICKER_RANK_MAX_AGE_DAYS old, so a weekend run still sees Friday's
+    rank, but a long scrape outage does not pass off old ranks as current); any
+    other ticker is scored with a neutral one (rank 0, "Not in QU100") so the
+    sector and pattern layers still run. Returns ``(None, None)`` when yfinance
+    has too little history or pattern detection fails.
+    """
+    if settings is None:
+        settings = get_settings()
+    symbol = symbol.upper()
+    today = datetime.now(timezone.utc).astimezone(_MARKET_TZ).date()
+    with get_session() as session:
+        generation = _resolve_top100_generation(session, today)
+        fresh = generation is not None and (today - generation[0]).days <= TICKER_RANK_MAX_AGE_DAYS
+        ranked = _screen_money_flow_as_of(session, today, _generation=generation) if fresh else []
+        signal = next((s for s in ranked if s.symbol == symbol), None) or _unranked_signal(
+            session, symbol
+        )
+        sector_trends = analyze_sectors(session)
+        signals = _apply_sector_boost([signal], sector_trends)
+    candidates, history = _detect_and_score(signals, sector_trends, settings.stock_screener)
+    if symbol not in history or not candidates:
+        return None, None
+    return candidates[0], history[symbol]
+
+
+def _unranked_signal(session: Session, symbol: str) -> MoneyFlowSignal:
+    """Neutral money-flow signal for a ticker outside the QU100 'Long in' set;
+    sector/industry come from its newest snapshot row, if QU ever listed it."""
+    row = (
+        session.query(MoneyFlowSnapshot.sector, MoneyFlowSnapshot.industry)
+        .filter(MoneyFlowSnapshot.symbol == symbol)
+        .order_by(MoneyFlowSnapshot.captured_at.desc())
+        .first()
+    )
+    return MoneyFlowSignal(
+        symbol=symbol,
+        rank=0,
+        rank_change=0,
+        long_short="Not in QU100",
+        capital_flow_direction="N",
+        days_in_top100=0,
+        sector=(row.sector if row and row.sector else "Unknown"),
+        industry=(row.industry if row and row.industry else "Unknown"),
+        signal_strength=0.0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -598,17 +668,56 @@ def _apply_sector_boost(
 # ---------------------------------------------------------------------------
 
 
+PATTERN_LOOKBACK_MONTHS = 6
+# Bar-count fallback for frames without a DatetimeIndex (synthetic fixtures).
+PATTERN_LOOKBACK_BARS = 126
+# Longer than the pattern window so the LLM thesis chart can show ~200 bars.
+HISTORY_PERIOD = "1y"
+
+
+def pattern_window(
+    df: pd.DataFrame,
+    lookback_months: int = PATTERN_LOOKBACK_MONTHS,
+    lookback_bars: int = PATTERN_LOOKBACK_BARS,
+    as_of: pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """The trailing calendar-month slice that pattern detection runs on.
+
+    Mirrors the original yfinance ``period="6mo"`` fetch: bars strictly after
+    (``as_of`` - 6 months), ``as_of`` defaulting to the last bar. The live
+    screen passes today so a stale (halted/delisted) series is not shifted
+    back into a full window. Index-less frames fall back to the last 126 rows.
+    """
+    if df.empty:
+        return df
+    if isinstance(df.index, pd.DatetimeIndex):
+        anchor = df.index[-1] if as_of is None else as_of
+        cutoff = anchor - pd.DateOffset(months=lookback_months)
+        return df[df.index > cutoff]
+    return df.iloc[-lookback_bars:]
+
+
+def _today(df: pd.DataFrame) -> pd.Timestamp | None:
+    if not isinstance(df.index, pd.DatetimeIndex):
+        return None
+    return pd.Timestamp.now(tz=df.index.tz).normalize()
+
+
 def _fetch_stock_data(
     symbols: list[str], min_bars: int
 ) -> dict[str, pd.DataFrame]:
-    """Batch fetch 6mo daily data for all symbols via yfinance."""
+    """Batch fetch 1y daily data for all symbols via yfinance.
+
+    ``min_bars`` applies to the pattern window, so the candidate set is the
+    same as a 6mo fetch; the extra history only feeds the thesis chart.
+    """
     if not symbols:
         return {}
 
     try:
         raw = yf.download(
             symbols,
-            period="6mo",
+            period=HISTORY_PERIOD,
             interval="1d",
             group_by="ticker",
             progress=False,
@@ -620,15 +729,15 @@ def _fetch_stock_data(
     result: dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            if len(symbols) == 1:
-                df = raw.copy()
-            else:
-                df = raw[sym].copy()
+            # group_by="ticker" yields (ticker, field) columns even for one symbol.
+            multi = isinstance(raw.columns, pd.MultiIndex)
+            df = (raw[sym] if multi else raw).copy()
             df = df.dropna(subset=["Close"])
-            if len(df) < min_bars:
+            window_bars = len(pattern_window(df, as_of=_today(df)))
+            if window_bars < min_bars:
                 log.debug(
                     "Skipping %s: only %d bars (need %d)",
-                    sym, len(df), min_bars,
+                    sym, window_bars, min_bars,
                 )
                 continue
             # Normalize column names to lowercase

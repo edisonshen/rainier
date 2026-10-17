@@ -19,8 +19,8 @@ def test_thinking_budget_and_cap_defaults():
     cfg = LLMThesisConfig()
     # "xhigh" tier.
     assert cfg.thinking_budget_tokens == 24000
-    # Cap raised 1.0 -> 2.5 so a 5-ticker xhigh scan doesn't trip the kill switch.
-    assert cfg.max_usd_per_scan == 2.5
+    # Cap raised 1.0 -> 2.5 (xhigh thinking) -> 3.5 (Opus 5.5 pricing).
+    assert cfg.max_usd_per_scan == 3.5
 
 
 # 0/-1 are non-positive; 500/1023 are positive but below Anthropic's 1024
@@ -52,10 +52,16 @@ def test_yaml_block_reaches_thesis_config(monkeypatch, tmp_path):
     assert s.llm_thesis.max_usd_per_scan == 2.5
 
 
-def test_committed_settings_yaml_uses_xhigh_budget_and_raised_cap():
-    """The real config must ship the xhigh budget + raised cap (yaml/model
-    lockstep) so the live cron actually runs the intended spend profile."""
+def test_committed_settings_yaml_ships_the_afternoon_batch_spend_profile():
+    """The real config must ship the intended spend profile so the live cron runs
+    it: one batched afternoon scan that theses the whole pool and posts the
+    ranked top 10, with a cap that fits a full-price fallback per thesis."""
     repo_root = Path(__file__).resolve().parents[2]
     s = load_settings(config_path=repo_root / "config" / "settings.yaml")
-    assert s.llm_thesis.thinking_budget_tokens == 24000
-    assert s.llm_thesis.max_usd_per_scan == 2.5
+    cfg = s.llm_thesis
+    assert cfg.thinking_budget_tokens == 24000
+    assert cfg.enabled_sessions == ["afternoon"]
+    assert "afternoon" in cfg.batch_sessions
+    assert cfg.selection_stage == "after_thesis"
+    assert (cfg.top_n, cfg.selection_pool_size) == (10, 100)
+    assert cfg.max_usd_per_scan / cfg.selection_pool_size > 0.051  # max sync thesis seen

@@ -27,6 +27,7 @@ from rainier.core.config import (
     Settings,
 )
 from rainier.core.types import StockCandidate
+from rainier.llm_thesis.service import ThesisBatch
 
 
 def _make_settings(
@@ -34,6 +35,7 @@ def _make_settings(
     llm_enabled: bool = True,
     enabled_sessions: tuple[str, ...] = ("afternoon", "close"),
     dashboard_base_url: str | None = "https://dash.example.com",
+    llm_selection_enabled: bool = False,
 ) -> Settings:
     """Build a Settings object exercising the LLM thesis fields the pipeline
     inspects.
@@ -58,6 +60,7 @@ def _make_settings(
             max_usd_per_scan=1.0,
             enabled_sessions=list(enabled_sessions),
             dashboard_base_url=dashboard_base_url,
+            llm_selection_enabled=llm_selection_enabled,
         ),
     )
 
@@ -159,7 +162,7 @@ class TestSessionGating:
                 patch("rainier.pipeline.post_scrape.persist_screened_stocks"),
                 patch(
                     "rainier.pipeline.post_scrape.compute_theses_and_persist",
-                    return_value={},
+                    return_value=ThesisBatch({}, {}),
                 ),
                 patch(
                     "rainier.pipeline.post_scrape.send_stock_candidates"
@@ -188,7 +191,7 @@ class TestSessionGating:
             patch("rainier.pipeline.post_scrape.persist_screened_stocks"),
             patch(
                 "rainier.pipeline.post_scrape.compute_theses_and_persist",
-                return_value={"S000": {"verdict": "setup_long"}},
+                return_value=ThesisBatch({"S000": {"verdict": "setup_long"}}, {}),
             ) as mock_llm,
             patch(
                 "rainier.pipeline.post_scrape.send_stock_candidates"
@@ -225,7 +228,7 @@ class TestSessionGating:
             patch("rainier.pipeline.post_scrape.persist_screened_stocks"),
             patch(
                 "rainier.pipeline.post_scrape.compute_theses_and_persist",
-                return_value={},
+                return_value=ThesisBatch({}, {}),
             ) as mock_llm,
             patch("rainier.pipeline.post_scrape.send_stock_candidates"),
         ):
@@ -313,7 +316,7 @@ class TestSlicing:
             ) as mock_persist,
             patch(
                 "rainier.pipeline.post_scrape.compute_theses_and_persist",
-                return_value={},
+                return_value=ThesisBatch({}, {}),
             ) as mock_llm,
             patch(
                 "rainier.pipeline.post_scrape.send_stock_candidates"
@@ -348,7 +351,7 @@ class TestSlicing:
             ) as mock_persist,
             patch(
                 "rainier.pipeline.post_scrape.compute_theses_and_persist",
-                return_value={},
+                return_value=ThesisBatch({}, {}),
             ) as mock_llm,
             patch("rainier.pipeline.post_scrape.send_stock_candidates"),
         ):
@@ -371,7 +374,7 @@ class TestSlicing:
             patch("rainier.pipeline.post_scrape.persist_screened_stocks"),
             patch(
                 "rainier.pipeline.post_scrape.compute_theses_and_persist",
-                return_value={},
+                return_value=ThesisBatch({}, {}),
             ) as mock_llm,
             patch("rainier.pipeline.post_scrape.send_stock_candidates"),
         ):
@@ -403,7 +406,7 @@ class TestErrorTolerance:
             ),
             patch(
                 "rainier.pipeline.post_scrape.compute_theses_and_persist",
-                return_value={},
+                return_value=ThesisBatch({}, {}),
             ),
             patch(
                 "rainier.pipeline.post_scrape.send_stock_candidates"
@@ -433,6 +436,9 @@ class TestErrorTolerance:
             patch(
                 "rainier.pipeline.post_scrape.send_stock_candidates"
             ) as mock_discord,
+            patch(
+                "rainier.pipeline.post_scrape.send_thesis_failure_alert"
+            ) as mock_alert,
         ):
             from rainier.pipeline.post_scrape import run_post_scrape_pipeline
 
@@ -443,6 +449,11 @@ class TestErrorTolerance:
         # Discord renderer takes the regular top-20-only path. ``theses or
         # None`` covers both the empty-dict and the missing-dict case.
         assert mock_discord.call_args.kwargs.get("theses") is None
+        # A crashed thesis stage must still page the LLM channel with the cause.
+        mock_alert.assert_called_once()
+        failures = mock_alert.call_args.kwargs["failures"]
+        assert set(failures) == {c.symbol for c in cands[:5]}
+        assert all("LLM 500" in reason for reason in failures.values())
 
 
 # ---------------------------------------------------------------------------
@@ -748,3 +759,50 @@ class TestCliDelegation:
         assert not any("Scrape FAILED" in t and "Post-Scrape" not in t for t in titles), (
             f"unexpected red Scrape FAILED alert fired: {titles}"
         )
+
+
+class TestThesisFailureAlert:
+    """Scrape succeeds (exit 0) but theses fail -> cron-wrapper is silent, so
+    the pipeline itself must alert. This is the Oct 2026 outage scenario."""
+
+    def _run(self, batch: ThesisBatch):
+        cands = _candidates(10)
+        with (
+            patch(
+                "rainier.pipeline.post_scrape.screen_stocks",
+                return_value=(cands, {}),
+            ),
+            patch("rainier.pipeline.post_scrape.persist_screened_stocks"),
+            patch(
+                "rainier.pipeline.post_scrape.compute_theses_and_persist",
+                return_value=batch,
+            ),
+            patch("rainier.pipeline.post_scrape.send_stock_candidates"),
+            patch("rainier.alerts.discord.httpx.post") as mock_post,
+        ):
+            from rainier.pipeline.post_scrape import run_post_scrape_pipeline
+
+            run_post_scrape_pipeline(_make_settings(), "afternoon")
+        return mock_post
+
+    def test_partial_failure_posts_alert_with_provider_error(self):
+        mock_post = self._run(
+            ThesisBatch(
+                {"S000": {}, "S001": {}, "S002": {}},
+                {
+                    "S003": "llm_call_failed: credit balance is too low",
+                    "S004": "llm_call_failed: credit balance is too low",
+                },
+            )
+        )
+        mock_post.assert_called_once()
+        content = mock_post.call_args.kwargs["json"]["content"]
+        assert "3/5 theses generated" in content
+        assert "S003" in content and "S004" in content
+        assert "credit balance is too low" in content
+
+    def test_full_success_posts_no_alert(self):
+        mock_post = self._run(
+            ThesisBatch({f"S00{i}": {} for i in range(5)}, {})
+        )
+        mock_post.assert_not_called()

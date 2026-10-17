@@ -730,6 +730,24 @@ def format_thesis_embed(
 
     fields: list[dict[str, Any]] = []
 
+    selection_reason = thesis.get("_selection_reason")
+    if selection_reason:
+        fields.append({
+            "name": "PICKED BY LLM",
+            "value": _truncate_at_word(
+                _scrub_discord_text(str(selection_reason)), _EMBED_FIELD_VALUE_MAX
+            ),
+            "inline": False,
+        })
+
+    reused_from = thesis.get("_reused_from_session")
+    if reused_from:
+        fields.append({
+            "name": "REUSED",
+            "value": f"{reused_from} thesis: evidence unchanged, no new LLM call",
+            "inline": False,
+        })
+
     why_bullets = _why_bullets(thesis)
     if why_bullets:
         why_value = "\n".join(f"• {b}" for b in why_bullets)
@@ -871,6 +889,7 @@ def send_stock_candidates(
     *,
     dashboard_base_url: str | None = None,
     session: str | None = None,
+    thesis_candidates: list[StockCandidate] | None = None,
 ) -> DiscordSendResult:
     """Send QU100 stock candidate alerts to Discord.
 
@@ -891,6 +910,9 @@ def send_stock_candidates(
             Morning/Midday/Afternoon/Close` suffix so operators can tell
             multiple same-day scans apart in the stock channel. ``None``
             preserves the legacy session-less title.
+        thesis_candidates: The candidates the theses were generated for, in
+            render order (the LLM picks may sit outside ``candidates``).
+            ``None`` falls back to the first 5 of ``candidates``.
     """
     reported = len(candidates)
     if not candidates:
@@ -959,10 +981,12 @@ def send_stock_candidates(
             reported, payloads_ok, payloads_failed, 0, 0, summary_ok=summary_ok,
         )
 
-    # Per-ticker rich thesis embeds — top 5 only, in candidate order.
+    # Per-ticker rich thesis embeds, in thesis-target order.
     thesis_ok = 0
     thesis_failed = 0
-    for candidate in candidates[:5]:
+    if thesis_candidates is None:
+        thesis_candidates = candidates[:5]
+    for candidate in thesis_candidates:
         thesis = theses.get(candidate.symbol)
         if not thesis:
             continue
@@ -1128,6 +1152,57 @@ def send_eval_report(
             "discord_eval_send_failed",
             status=_http_status(exc), error_type=type(exc).__name__,
         )
+
+
+def _format_thesis_failure_message(
+    *, session: str, requested: int, failures: dict[str, str]
+) -> str:
+    ok = requested - len(failures)
+    label = SESSION_LABELS.get(session, session)
+    lines = [
+        f"**QU100-LLM thesis failure — {label}**: {ok}/{requested} theses generated."
+    ]
+    for symbol, reason in failures.items():
+        lines.append(f"- `{symbol}`: {_truncate(_scrub_discord_text(reason), 300)}")
+    return _truncate("\n".join(lines), 1900)
+
+
+def send_thesis_failure_alert(
+    config: DiscordConfig,
+    *,
+    session: str,
+    requested: int,
+    failures: dict[str, str],
+) -> bool:
+    """Post an ops alert to the LLM channel when a scan's theses failed.
+
+    The scrape itself exits 0 in this case, so cron-wrapper never alerts;
+    without this a provider outage (bad key, no credit, rejected params) shows
+    up only as an empty channel. Returns True when the alert landed.
+    """
+    if not failures:
+        return False
+    if not config.enabled:
+        log.debug("discord_alerts_disabled")
+        return False
+    webhook_url = _resolve_llm_webhook_url(config)
+    if not webhook_url:
+        log.warning("discord_no_webhook_url_thesis_failure")
+        return False
+    message = _format_thesis_failure_message(
+        session=session, requested=requested, failures=failures
+    )
+    try:
+        response = httpx.post(webhook_url, json={"content": message}, timeout=10)
+        response.raise_for_status()
+        log.info("discord_thesis_failure_alert_ok", status=response.status_code)
+        return True
+    except Exception as exc:
+        log.error(
+            "discord_thesis_failure_alert_failed",
+            status=_http_status(exc), error_type=type(exc).__name__,
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------
