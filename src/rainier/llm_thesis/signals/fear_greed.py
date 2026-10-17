@@ -36,7 +36,11 @@ class FearGreedSignal:
                         FearGreedIndex.date < ctx.scan_date,
                         FearGreedIndex.date >= ctx.scan_date - timedelta(days=lookback),
                     )
-                    .order_by(FearGreedIndex.date.desc(), FearGreedIndex.observed_at.desc())
+                    .order_by(
+                        FearGreedIndex.date.desc(),
+                        FearGreedIndex.observed_at.desc(),
+                        FearGreedIndex.id.desc(),  # same tie-break as the ingest
+                    )
                     .all()
                 )
                 series = _newest_per_date([_Point(r.date, r.score, r.rating) for r in rows])
