@@ -31,7 +31,8 @@ def test_persisted_thesis_carries_signal_values_for_the_dashboard():
         yield fake
 
     signals = {"rank_trajectory": {"delta_10d": 18, "trend": "rising"},
-               "sector_momentum": {"delta": -0.03}}
+               "sector_momentum": {"delta": -0.03},
+               "fundamentals": {"pe_trailing": float("inf"), "growth": [1.0, float("nan")]}}
     with patch.object(service, "get_session", _session):
         service._persist_thesis(
             symbol="CRWV", thesis=_thesis(), settings=Settings(), input_hash="h",
@@ -40,6 +41,8 @@ def test_persisted_thesis_carries_signal_values_for_the_dashboard():
         )
 
     blob = added[0].structured_output["signals"]
-    assert blob == signals
+    assert blob["rank_trajectory"] == signals["rank_trajectory"]
+    # yfinance can hand back inf/NaN, which Postgres JSONB rejects; they persist as null.
+    assert blob["fundamentals"] == {"pe_trailing": None, "growth": [1.0, None]}
     assert ddata.SIGNAL_VALUE_EXTRACTORS["rank_trajectory"](blob["rank_trajectory"]) == 18.0
     assert TradeThesis.model_validate(added[0].structured_output).verdict == "watch"
