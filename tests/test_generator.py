@@ -118,3 +118,104 @@ class TestGenerateSignals:
         if long_signals:
             # Nearest S/R above entry (100.0) is sr_support_htf at 104.3
             assert long_signals[0].take_profit == 104.3
+
+    def test_rr_exactly_at_min_passes_just_below_filtered(self):
+        """Boundary: rr == min_rr_ratio must pass (filter is strict <)."""
+        import math
+
+        result, df = _make_analysis_with_pin_bar()
+        pb = result.pin_bars[0]
+        entry = 100.0
+        sl = pb.candle.low - pb.candle.range * 0.1
+        rr = (104.3 - entry) / (entry - sl)  # TP = next S/R at 104.3
+
+        config = SignalConfig(min_rr_ratio=rr)
+        config.scorer.min_confidence = 0.0
+        signals = generate_signals(result, df, config)
+        assert len(signals) == 1
+
+        config_above = SignalConfig(min_rr_ratio=math.nextafter(rr, math.inf))
+        config_above.scorer.min_confidence = 0.0
+        assert generate_signals(result, df, config_above) == []
+
+
+def _pin_bar(direction, sr_price, o, h, low, c):
+    sr = SRLevel(
+        price=sr_price, sr_type=SRType.HORIZONTAL,
+        role=SRRole.SUPPORT if direction == Direction.LONG else SRRole.RESISTANCE,
+        strength=0.9, touches=4,
+    )
+    candle = Candle(
+        timestamp=datetime(2025, 1, 1, 10), open=o, high=h, low=low, close=c,
+        volume=1000.0, symbol="NQ", timeframe=Timeframe.H1,
+    )
+    return PinBar(candle=candle, index=10, direction=direction,
+                  wick_ratio=3.0, nearest_sr=sr)
+
+
+class TestComputeLevels:
+    def test_long_levels_hand_computed(self):
+        from pytest import approx
+
+        from rainier.signals.generator import _compute_levels
+
+        pb = _pin_bar(Direction.LONG, sr_price=100.0, o=104.0, h=105.0, low=99.5, c=104.5)
+        entry, sl, tp = _compute_levels(pb, [], SignalConfig(default_rr_target=2.0))
+        assert entry == 100.0
+        assert sl == approx(99.5 - 5.5 * 0.1)  # low - range*0.1
+        assert tp == approx(entry + (entry - sl) * 2.0)  # default R:R fallback
+
+    def test_long_tp_snaps_to_next_resistance(self):
+        from rainier.signals.generator import _compute_levels
+
+        pb = _pin_bar(Direction.LONG, sr_price=100.0, o=104.0, h=105.0, low=99.5, c=104.5)
+        res = SRLevel(price=103.0, sr_type=SRType.HORIZONTAL,
+                      role=SRRole.RESISTANCE, strength=0.8, touches=3)
+        far = SRLevel(price=108.0, sr_type=SRType.HORIZONTAL,
+                      role=SRRole.RESISTANCE, strength=0.9, touches=5)
+        _, _, tp = _compute_levels(pb, [far, res], SignalConfig())
+        assert tp == 103.0  # nearest above entry, not strongest
+
+    def test_short_levels_hand_computed(self):
+        from pytest import approx
+
+        from rainier.signals.generator import _compute_levels
+
+        pb = _pin_bar(Direction.SHORT, sr_price=105.0, o=101.0, h=105.5, low=100.5, c=100.8)
+        entry, sl, tp = _compute_levels(pb, [], SignalConfig(default_rr_target=2.0))
+        assert entry == 105.0
+        assert sl == approx(105.5 + 5.0 * 0.1)  # high + range*0.1
+        assert tp == approx(entry - (sl - entry) * 2.0)
+
+    def test_short_tp_snaps_to_next_support(self):
+        from rainier.signals.generator import _compute_levels
+
+        pb = _pin_bar(Direction.SHORT, sr_price=105.0, o=101.0, h=105.5, low=100.5, c=100.8)
+        sup = SRLevel(price=101.0, sr_type=SRType.HORIZONTAL,
+                      role=SRRole.SUPPORT, strength=0.8, touches=3)
+        _, _, tp = _compute_levels(pb, [sup], SignalConfig())
+        assert tp == 101.0
+
+    def test_no_nearest_sr_returns_none(self):
+        from rainier.signals.generator import _compute_levels
+
+        candle = Candle(
+            timestamp=datetime(2025, 1, 1, 10), open=104.0, high=105.0,
+            low=99.5, close=104.5, volume=1000.0, symbol="NQ", timeframe=Timeframe.H1,
+        )
+        pb = PinBar(candle=candle, index=10, direction=Direction.LONG, wick_ratio=3.0)
+        assert _compute_levels(pb, [], SignalConfig()) == (None, 0.0, 0.0)
+
+    def test_long_with_non_positive_risk_invalid(self):
+        from rainier.signals.generator import _compute_levels
+
+        # SL (low - range*0.1 = 99.4) sits above the S/R entry at 99.0 → invalid
+        pb = _pin_bar(Direction.LONG, sr_price=99.0, o=100.2, h=100.5, low=99.5, c=100.3)
+        assert _compute_levels(pb, [], SignalConfig()) == (None, 0.0, 0.0)
+
+    def test_short_with_non_positive_risk_invalid(self):
+        from rainier.signals.generator import _compute_levels
+
+        # SL (high + range*0.1 = 100.6) sits below the S/R entry at 101.0 → invalid
+        pb = _pin_bar(Direction.SHORT, sr_price=101.0, o=100.2, h=100.5, low=99.5, c=100.3)
+        assert _compute_levels(pb, [], SignalConfig()) == (None, 0.0, 0.0)
