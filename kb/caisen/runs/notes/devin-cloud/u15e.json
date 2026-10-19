@@ -1,0 +1,557 @@
+{
+  "unit_id": "u15e",
+  "model": "devin-cloud",
+  "pages_read": [
+    212,
+    213,
+    214,
+    215,
+    216,
+    217,
+    218,
+    219,
+    220,
+    221,
+    222
+  ],
+  "summary": "Last 个股 case studies (book pp.197-207). Finishes 元太 (main player distributing at a multi-year neckline support; short on the head confirmation, cross-checked with a H&S top count), then 裕日车 daily (two nested measured moves after prior-high breakouts), 宏达电 weekly (fundamental change shows up as 破底翻; V reversal + false breakout + 价跌资增 as the short; 威盛 monthly as a warning), 苹果 2010 daily (false-breakout sell, symmetric time-wave 'danger period', 破底翻 reversal = time correction) and 苹果 2012 daily (upside target, price-volume divergence, false breakout; a later false breakout with 价跌量增 = real bear).",
+  "patterns": [
+    {
+      "name_zh": "头肩顶 / 颈线支撑压低出货",
+      "name_en": "Head-and-shoulders top at the main player's distribution neckline",
+      "direction": "short",
+      "structure": "元太: three lows over ~2 years 4 months form a big neckline near 35; the main player distributes there for ~4 months. Short side: break of a half-month range low after the head (55.94). The same chart can be counted as a H&S top (left shoulder 56.58, head 66.68, right shoulder 65.31, neckline ~52.6 below the head, break ~57.5).",
+      "entry": "Short on 翻黑破线 head confirmation (2011-11-16), ~55.9, when the half-month range low 55.94 breaks.",
+      "stop": "59 (price back above the line), risk ~5.5%.",
+      "target": {
+        "formula": "Swing method: rebound_high - (high - first_low). H&S method: d = head - neckline_below_head; T1 = break - d; T2 = T1 - d.",
+        "worked_example": "Swing: 65.31-43.03=22.28; 52.3-22.28=30.02 (low 30.65). H&S: 66.68-52.6=14.08; 57.5-14.08=43.42 (low 43.03); 43.42-14.08=29.34.",
+        "pages": [
+          212,
+          213,
+          214
+        ]
+      },
+      "confirmation": [
+        "库存余额 falls continuously after the false breakout",
+        "Both counting methods give nearly the same target"
+      ],
+      "invalidation": [
+        "Close back above the line (59)",
+        "破底翻 at the target = cover"
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        211,
+        212,
+        213,
+        214
+      ]
+    },
+    {
+      "name_zh": "突破前高 涨幅满足（嵌套大波段）",
+      "name_en": "Prior-high breakout measured move, nested larger wave",
+      "direction": "long",
+      "structure": "裕日车: once price breaks the prior high, add the first swing (low→high) to the later higher low. After the target and a ~31% correction, a volume 破底翻 + volume neckline breakout + new high triggers a larger-wave count from the original low to the new high.",
+      "entry": "Volume long red breaking the neckline (2010-04-07) and the new high on 2010-04-08; hold while neckline support 74 holds.",
+      "stop": "Neckline support 74 (implied: hold while it is unbroken).",
+      "target": {
+        "formula": "higher_low + (swing_high - swing_low)",
+        "worked_example": "Wave A: 63-28.4=34.6; 45.4+34.6=80 (high 82.6). Wave B: 82.6-28.4=54.2; 56.5+54.2=110.7 (high 114).",
+        "pages": [
+          215,
+          216
+        ]
+      },
+      "confirmation": [
+        "Volume on the 破底翻 (2010-03-03) and breakout",
+        "Breaking the prior high 82.6 with volume"
+      ],
+      "invalidation": [
+        "Long black candle breaking the head neckline (2010-04-30) = weakness confirmed"
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        215,
+        216
+      ]
+    },
+    {
+      "name_zh": "V型反转 + 假突破 + 价跌资增",
+      "name_en": "V-reversal top after a false breakout, with falling price and rising margin",
+      "direction": "short",
+      "structure": "宏达电 weekly: a weekly volume black candle breaks both the neckline and the rising trendline after a false breakout; the decline retraces the whole rally (V reversal) and breaks the swing's starting low 207.08. Margin rises while price falls and inventory drops (筹码越跌越乱).",
+      "entry": "Short at the weekly confirmation (2011-06-18 week), ~900.",
+      "stop": "~940 (price back above the line), risk ~4.5%.",
+      "target": {
+        "formula": "n.a. — exit on the 破底翻 cover signal (2012-11-17 week, ~248)",
+        "worked_example": "n.a.",
+        "pages": [
+          217,
+          218
+        ]
+      },
+      "confirmation": [
+        "Volume on the break",
+        "价跌资增 and falling 库存 (inventory)",
+        "Break of the swing's starting low"
+      ],
+      "invalidation": [
+        "Volume reclaim of the line (破底翻)"
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        217,
+        218
+      ]
+    },
+    {
+      "name_zh": "假突破 → 对称时间波危险期 → 破底翻（以盘代跌）",
+      "name_en": "False-breakout sell, symmetric time-wave danger period, break-bottom reversal (time correction)",
+      "direction": "neutral",
+      "structure": "After a false-breakout sell signal, measure the consolidation time to the left of the high; the same span to the right is the danger period. A break below the range during the danger period is a short; a volume reclaim at the end of the danger period (破底翻) means the correction was taken in time rather than price, so flip long.",
+      "entry": "Short when price breaks the range low (苹果 ~239, 6 trading days before 9/1); flip long on the volume 破底翻 reclaim (9/1, ~252).",
+      "stop": "Short: 252 (back above the line), risk ~5.5%. Long: near the low (falling back below the line), risk ~6%.",
+      "target": {
+        "formula": "n.a. (resumed rise/盘涨)",
+        "worked_example": "n.a.",
+        "pages": [
+          219,
+          220
+        ]
+      },
+      "confirmation": [
+        "The break of the range is on light volume while the reclaim is on heavier volume = chips stably changed hands",
+        "Reclaim coincides with the end of the symmetric danger period"
+      ],
+      "invalidation": [
+        "Falling back below the line after the 破底翻"
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        219,
+        220
+      ]
+    },
+    {
+      "name_zh": "涨幅满足 + 量价背离 + 假突破；价跌量增空头",
+      "name_en": "Upside target with price-volume divergence and false breakout; falling price with rising volume = bear",
+      "direction": "short",
+      "structure": "苹果 2012: rally with rising volume, peak volume, then about a month of rising price on shrinking volume (divergence) into the measured-move target; a black-candle false breakout confirms the top. If the following pullback holds the neckline with shrinking volume through the symmetric danger period, it's a time correction (以盘代跌). A later false breakout followed by falling price on rising volume is a real bear move.",
+      "entry": "Long: 2011-12-20 long red candle breaking the neckline, ~396. Short after the 2012-09-25 false breakout, ~674.",
+      "stop": "Long: 387 (risk ~2.5%). Short: 695 (risk ~3.1%).",
+      "target": {
+        "formula": "T = second_wave_low + (first_wave_high - first_wave_low)",
+        "worked_example": "526.2-377.68=148.52; 486.63+148.52=635.15 (high 644). Short target 395 from a swing downside count (inputs not shown); actual low 385 on 2013-04-19.",
+        "pages": [
+          221,
+          222
+        ]
+      },
+      "confirmation": [
+        "①价涨量增 → ②价量背离 near the target → false breakout",
+        "③价跌量增 after the sell signal = 筹码渐乱 bear"
+      ],
+      "invalidation": [
+        "Holding the neckline on shrinking volume through the danger period = time correction, the uptrend resumes"
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        221,
+        222
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "A big multi-year neckline formed by several lows is where the main player distributes; for institutions, the neckline support zone is the biggest trap.",
+      "kind": "filter",
+      "quote_zh": "三个低点连接形成长达约两年四个月的大颈线，支撑约在35元附近，主力就在此处震荡出货达约四个月之久。",
+      "pages": [
+        212
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "The best short is at the head confirmation (翻黑破线), which is also where the main player's second wave of distribution starts.",
+      "kind": "entry",
+      "quote_zh": "最佳空点在翻黑破线头部确立时，也是主力第二波出货起始点。",
+      "pages": [
+        212
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "A rebound that fails and then breaks the rebound low lets you compute the swing downside target.",
+      "kind": "target",
+      "quote_zh": "当股价自43.03元反弹后，再跌破反弹低点43.03元，便可计算跌幅满足",
+      "pages": [
+        212
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Short entry is the break of the half-month-plus range low; stop on reclaiming the line; cover at the target or on a 破底翻.",
+      "kind": "entry",
+      "quote_zh": "通常跌破整理半个多月整理区的低点55.94元，确立翻空，约可空在55.9元附近，停损设59元也就是站回线上时，风险约5.5%。",
+      "pages": [
+        212
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "The same shape can also be counted as a H&S top with the same short point; both counts agreed.",
+      "kind": "target",
+      "quote_zh": "同样的图形也可以头肩顶作计算，空点相同。",
+      "pages": [
+        213
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Reaching the first-wave target typically triggers a sharp short-term escape rebound.",
+      "kind": "time",
+      "quote_zh": "元太达第一波跌幅满足附近（最低43.03元），便开始短线急弹，作逃命反弹。",
+      "pages": [
+        213
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "After a correction, a volume 破底翻 + neckline breakout + new high allows a bigger-wave target from the original low.",
+      "kind": "target",
+      "quote_zh": "隔日4月8日再度长红且带量突破新高（前高82.6元），此时便可计算涨幅满足。这次计算的是更大波段的涨幅满足。",
+      "pages": [
+        215
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "After the neckline breakout, while neckline support holds, look for the swing target.",
+      "kind": "target",
+      "quote_zh": "在突破颈线后，不破颈线支撑74元上看波段涨幅满足110.7元。",
+      "pages": [
+        216
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Fundamental change shows up in the technicals (e.g. 宏达电's switch to capacitive touch → 破底翻 buy).",
+      "kind": "filter",
+      "quote_zh": "自从产品改用电容式触控后，股价在技术面也出现破底翻的买进信号，所以基本面的改变会反应在技术面上。",
+      "pages": [
+        217
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "V reversals mostly occur in speculative stocks; when a leader V-reverses and breaks the swing's starting low it usually signals long-term decline — at best a long consolidation (trading time for space).",
+      "kind": "filter",
+      "quote_zh": "通常V型反转大多出现在投机股上……而且大波段起涨的低点207.08元也被跌破，这种情况通常都是公司长期衰退的征兆，最好的情况唯有长期整理，以时间换取空间。",
+      "pages": [
+        217,
+        218
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "价跌资增 with steadily falling inventory means chips get more chaotic as price falls — bearish.",
+      "kind": "volume",
+      "quote_zh": "筹码面明显价跌资增且库存持续大减，表示筹码越跌越乱",
+      "pages": [
+        218
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "One signal can flip a position: the false-breakout break both takes profit on longs and opens a short.",
+      "kind": "entry",
+      "quote_zh": "假突破翻空确立，多单获利了结，约可卖在900元，波段获利约226%，同时翻多为空，约可空在900元，停损设在940元附近也就是站回线上时，风险约4.5%。",
+      "pages": [
+        218
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "After a false-breakout sell signal the stock either consolidates or falls (非盘即跌); the danger period equals the consolidation time to the left of the high, mirrored to the right.",
+      "kind": "time",
+      "quote_zh": "苹果型态上假突破确立后高点往左边的整理时间约两个月（图示紫色虚线部分），此时便可以同样高点计算往右约两个月的对称时间为危险期。",
+      "pages": [
+        219
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "A low-volume break below the range followed by a higher-volume reclaim means chips changed hands stably — the weak structure is reversed.",
+      "kind": "volume",
+      "quote_zh": "这次的破底不带量，但翻回整理区的量较大，表示筹码经过整理后已稳定换手，扭转弱势结构。",
+      "pages": [
+        220
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "Sell signals are followed by a price correction (盘跌/fall) or a time correction (以盘代跌); only strong fundamentals allow a time correction and another leg up.",
+      "kind": "time",
+      "quote_zh": "当卖出信号出现后大多是非盘即跌，做空间或时间的修正，盘跌是空间的修正，以盘代跌则是时间的修正。有强劲的基本面，股价才能在涨多后经过一段整理期消化不安定的筹码，再攻一波。",
+      "pages": [
+        220
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "On a clear sell signal, exit (or reduce, for long-term holders); re-enter only on a stabilisation signal.",
+      "kind": "risk",
+      "quote_zh": "操作上出现明显卖出信号时，作必要性的退出才能避开风险（对长期操作者而言就是减码的依据），直到企稳信号出现时才做进场布局动作。",
+      "pages": [
+        220
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "When a 破底翻 fires against your short, stop out decisively and flip long.",
+      "kind": "stop",
+      "quote_zh": "空单需果决执行停损进而翻空为多",
+      "pages": [
+        220
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "Rising price on shrinking volume near the target (价量背离) precedes the false-breakout top.",
+      "kind": "volume",
+      "quote_zh": "随后便出现近1个月盘涨的价涨量缩量价背离（②）现象，股价盘涨至涨幅满足附近（最高644）",
+      "pages": [
+        221
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "A sell signal followed by falling price on rising volume is a bear trend with deteriorating chips; one followed by holding the neckline on shrinking volume is a time correction.",
+      "kind": "volume",
+      "quote_zh": "这次的卖出信号后价跌量增为筹码渐乱的空头走势（③），股价随后大跌。",
+      "pages": [
+        222
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "Tech stocks are driven by innovation; when innovation falters it shows in the technicals (Microsoft, Cisco precedents) — be careful with risk.",
+      "kind": "psychology",
+      "quote_zh": "科技股的股价动力来自于创新，一旦创新能力不足便会反应在技术面上，反之亦然，微软、思科等皆有前例可循，这说明股票市场要小心注意风险。",
+      "pages": [
+        222
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "Master quotes (Kostolany): profit only comes from carefully analysing failures; a speculator needs capital, patience, strong nerves, independent thinking, experience and sharp eyes.",
+      "kind": "psychology",
+      "quote_zh": "只有仔细分析失败，才能从中获利；只有惨败才会让人回到现实。／投机家的条件：资金、耐心、坚强的神经、独立思考、经验丰富与敏锐眼光。",
+      "pages": [
+        214,
+        222
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "元太 (8069)",
+      "timeframe": "daily",
+      "period": "2011-08..2012-02",
+      "pattern": "头肩顶 / 颈线支撑压低出货",
+      "levels": {
+        "big_neckline": 35,
+        "range_low": 55.94,
+        "entry_short": 55.9,
+        "stop": 59,
+        "risk_pct": 5.5,
+        "swing_high": 65.31,
+        "first_low": 43.03,
+        "swing": 22.28,
+        "rebound_high": 52.3,
+        "swing_target": 30.02,
+        "low": 30.65,
+        "head": 66.68,
+        "left_shoulder": 56.58,
+        "right_shoulder": 65.31,
+        "neckline_below_head": 52.6,
+        "hs_distance": 14.08,
+        "neckline_break": 57.5,
+        "hs_target_1": 43.42,
+        "hs_target_2": 29.34
+      },
+      "outcome": "Covered at the target / 破底翻 near 30.65; short profit >37%.",
+      "pages": [
+        212,
+        213,
+        214
+      ]
+    },
+    {
+      "instrument": "裕日车 (2227)",
+      "timeframe": "daily",
+      "period": "2009-03..2010-05",
+      "pattern": "突破前高涨幅满足 ×2",
+      "levels": {
+        "low": 28.4,
+        "prior_high": 63,
+        "swing_1": 34.6,
+        "higher_low_1": 45.4,
+        "target_1": 80,
+        "high_1": 82.6,
+        "pullback_pct": 31,
+        "higher_low_2": 56.5,
+        "swing_2": 54.2,
+        "target_2": 110.7,
+        "neckline_support": 74,
+        "high_2": 114
+      },
+      "outcome": "Both targets reached; topped and broke the head neckline with a long black candle on 2010-04-30.",
+      "pages": [
+        215,
+        216
+      ]
+    },
+    {
+      "instrument": "宏达电 (2498)",
+      "timeframe": "weekly",
+      "period": "2010-04..2012-11",
+      "pattern": "破底翻 → 假突破 + V型反转 → 破底翻",
+      "levels": {
+        "long_entry": 276,
+        "long_stop": 257,
+        "long_risk_pct": 7,
+        "high": 1067.21,
+        "exit_and_short": 900,
+        "long_profit_pct": 226,
+        "short_stop": 940,
+        "short_risk_pct": 4.5,
+        "swing_start_low": 207.08,
+        "cover": 248,
+        "short_profit_pct": 72
+      },
+      "outcome": "~400% rally to >1000, then V-shaped collapse; short covered on the 2012-11-17 volume 破底翻.",
+      "pages": [
+        217,
+        218
+      ]
+    },
+    {
+      "instrument": "威盛 (2388)",
+      "timeframe": "monthly",
+      "period": "2000..2014",
+      "pattern": "long-term decline (same chairman as 宏达电)",
+      "levels": {
+        "high": 629,
+        "low": 4.89
+      },
+      "outcome": "Long slide from 629 to 4.89 (not adjusted for capital reduction) — cited as a precedent for distrusting 宏达电.",
+      "pages": [
+        218
+      ]
+    },
+    {
+      "instrument": "苹果 Apple (AAPL)",
+      "timeframe": "daily",
+      "period": "2010-04..2010-10",
+      "pattern": "假突破 → 时间波危险期 → 破底翻",
+      "levels": {
+        "false_breakout_date": "2010-06-29",
+        "danger_period": "~2 months each side",
+        "range_break_date": "2010-08-24",
+        "short_entry": 239,
+        "short_stop": 252,
+        "short_risk_pct": 5.5,
+        "breakdown_bar": "6 trading days before 9/1",
+        "long_entry": 252,
+        "long_risk_pct": 6,
+        "pullback_pct": 15,
+        "apple_2008_drop_pct": 43
+      },
+      "outcome": "Flipped short-to-long on the 2010-09-01 volume 破底翻; the stock then climbed.",
+      "pages": [
+        219,
+        220
+      ]
+    },
+    {
+      "instrument": "苹果 Apple (AAPL)",
+      "timeframe": "daily",
+      "period": "2011-12..2013-04",
+      "pattern": "涨幅满足 + 量价背离 + 假突破; 价跌量增",
+      "levels": {
+        "wave1_low": 377.68,
+        "wave1_high": 526.2,
+        "swing": 148.52,
+        "wave2_low": 486.63,
+        "target": 635.15,
+        "high": 644,
+        "false_breakout_1": "2012-04-13",
+        "pullback_pct": 19,
+        "pullback_low": 522.18,
+        "long_entry": 396,
+        "long_stop": 387,
+        "long_risk_pct": 2.5,
+        "long_profit_pct": 55,
+        "high_2": 705,
+        "false_breakout_2": "2012-09-25",
+        "short_entry": 674,
+        "short_stop": 695,
+        "short_risk_pct": 3.1,
+        "short_target": 395,
+        "short_profit_pct": 41,
+        "low_2013_04_19": 385,
+        "total_drop_pct": 45
+      },
+      "outcome": "Long +55%; after the April false breakout the stock moved sideways (time correction) then made a new high 705; the September false breakout with 价跌量增 → fell 45% to 385.",
+      "pages": [
+        221,
+        222
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Danger period: t_left = bars from consolidation start to the false-breakout high; danger window = [high_bar, high_bar + t_left]. A 破底翻 at/after its end is a long.",
+    "Volume asymmetry for 破底翻: volume on the breakdown bar < volume on the reclaim bar.",
+    "Price-volume divergence: over ~20 bars, close trending up while volume (e.g. a 20-day mean) trends down, near a measured-move target.",
+    "After a sell signal: if the next N bars show falling close + rising volume → bear; if close stays >= neckline with falling volume through the danger window → time correction.",
+    "Swing downside target: rebound_high - (prior_high - first_low), triggered by a close below the first low after the rebound.",
+    "Short entry: close below the low of a >=10-bar consolidation after the head; stop = close back above the line.",
+    "V-reversal danger: decline breaks the starting low of the whole rally → treat as long-term decline.",
+    "Chip filter (Taiwan data): margin balance (融资) rising while price falls, plus main-player inventory falling → bearish."
+  ],
+  "ambiguities": [
+    "元太 swing count uses high 65.31 (right shoulder) rather than the head 66.68; the reason isn't explained.",
+    "宏达电 cover 248 vs chart low 191.00 — the 破底翻 reclaim level vs the extreme low; profit 72% is computed from 900→248.",
+    "苹果 2012 short target 395: inputs for the swing downside count are not shown on these pages.",
+    "Danger-period length is eyeballed ('约两个月'); the start of the left consolidation is not defined.",
+    "苹果 2010 pullback ~15% — no anchor prices given in the text.",
+    "裕日车 neckline support 74 is cited without the neckline being labelled on the chart."
+  ],
+  "illegible": [
+    {
+      "page": 219,
+      "what": "several small price labels on the 苹果 2010 chart (around 265, 242/243, 235, 215) are too small to read with confidence"
+    },
+    {
+      "page": 221,
+      "what": "small labels near the 2012 neckline (≈565/570) and right-side lows on the 苹果 2012 chart"
+    },
+    {
+      "page": 218,
+      "what": "some small mid-chart labels on the 威盛 monthly chart"
+    }
+  ]
+}

@@ -1,0 +1,757 @@
+{
+  "unit_id": "u15a",
+  "model": "devin-cloud",
+  "pages_read": [
+    172,
+    173,
+    174,
+    175,
+    176,
+    177,
+    178,
+    179,
+    180,
+    181
+  ],
+  "summary": "Opens the 个股 (individual stocks) section: trade stocks only after reading the index trend; in the first wave off a market bottom almost everything rises (deep-fallen low-priced turnaround stocks the most), while in a bear 覆巢之下无完卵; build a 3-5 stock basket, commit ≥50% with strict stops when the trend is clear, then add rotation stocks. Then three complete Taiwan case studies chaining the book's patterns with exact measured-move arithmetic and entry/stop/risk/profit: 华泰 1997-98 daily (头肩顶 → 两波跌幅满足 → 上飘旗形 → W底 → 两波涨幅满足 → M头), 联电 1997-98 daily (带量突破 → 涨幅满足 → 假突破 → 头肩顶 → 两波跌幅满足 → 破底翻), 友讯 1998-2001 weekly (头肩底 → 两波涨幅满足 → 头肩顶 → 跌幅满足 → 破底翻), and the start of 茂矽 1998-2001 weekly (收敛三角形底部 target 290+255=545, continued in the next unit). A 小叮咛 notes that H&S targets and plain swing (波段) targets usually land in about the same place.",
+  "patterns": [
+    {
+      "name_zh": "头肩顶（等幅跌幅满足，两波）",
+      "name_en": "Head-and-shoulders top, measured downside targets (two waves)",
+      "direction": "short",
+      "structure": "Three heads, the middle highest; neckline through the reaction lows (horizontal in 华泰, rising in 联电/友讯). Distance D = head high - neckline level (measured at the head). Confirmed when price breaks the neckline (华泰 9/1; 联电 9/2 gap long black; 友讯 7/1 week).",
+      "entry": "Short when price breaks the neckline (跌破颈线时空单进场): 华泰 ≈40, 联电 ≈33, 友讯 ≈28.3.",
+      "stop": "Reclaiming the neckline (站上颈线反压): 华泰 42 (5%), 联电 35 (6%), 友讯 30 (6%).",
+      "target": {
+        "formula": "target_1 = neckline_break_level - (head - neckline); target_2 = target_1 - same distance (after a rebound and a new low below the prior low)",
+        "worked_example": "华泰: 50.29 - 40.6 = 9.69; 40.6 - 9.69 = 30.91; 30.91 - 9.69 = 21.22. 联电: 40.19 - 31.3 = 8.89; 34 - 8.89 = 25.11; 25.11 - 8.89 = 16.22. 友讯: 44.24 - 26.3 = 17.94; 28.5 - 17.94 = 10.56.",
+        "pages": [
+          173,
+          174,
+          178,
+          180
+        ]
+      },
+      "confirmation": [
+        "Neckline break (long black / gap down candle).",
+        "A sharp bounce the day after the break that fails to reclaim the neckline is the technical 'escape line' (逃命线).",
+        "Second-wave target is computed only after the bounce fails and price breaks the prior low (再破前低)."
+      ],
+      "invalidation": [
+        "Close back above (站回) the neckline."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        173,
+        174,
+        175,
+        176,
+        177,
+        178,
+        179,
+        180
+      ]
+    },
+    {
+      "name_zh": "上飘旗形（空头中继）",
+      "name_en": "Up-sloping flag (bearish continuation)",
+      "direction": "short",
+      "structure": "After the first downside target is reached (华泰 low 30.81), a rising channel rebound (high 37.38).",
+      "entry": "A long black candle breaking the flag's lower line (10/17), and the next day a break of the prior low 30.81, triggers the next target computation.",
+      "stop": "Not stated separately (the original short's neckline stop applies).",
+      "target": {
+        "formula": "first-wave target - H&S distance",
+        "worked_example": "30.91 - 9.69 = 21.22 (low 21.7)",
+        "pages": [
+          173,
+          174
+        ]
+      },
+      "confirmation": [
+        "长黑破线 (long black candle through the flag line) and a new low below the prior low."
+      ],
+      "invalidation": [],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        173,
+        174,
+        176
+      ]
+    },
+    {
+      "name_zh": "W底（双底）涨幅满足",
+      "name_en": "W (double) bottom measured upside targets",
+      "direction": "long",
+      "structure": "Two lows (华泰 21.70 and 22.02, midpoint ~21.85) under a horizontal neckline 29 (high 29.22); ~3-month base.",
+      "entry": "Breakout above the neckline (1998-01-20): buy ≈29.5.",
+      "stop": "≈28, i.e. a break of neckline support, which is also the low of that day's long red candle (risk ≈5%).",
+      "target": {
+        "formula": "target_1 = neckline + (neckline - bottoms_mid); target_2 = target_1 + same distance",
+        "worked_example": "29 - 21.85 = 7.15; 29 + 7.15 = 36.15; 36.15 + 7.15 = 43.3 (highs 42.59 / 45.76)",
+        "pages": [
+          174
+        ]
+      },
+      "confirmation": [
+        "Long red candle breakout.",
+        "Scale: when a ~3-month base reaches target_1 within ~1 week, compute target_2 directly."
+      ],
+      "invalidation": [
+        "Falling back below the neckline."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        173,
+        174,
+        175
+      ]
+    },
+    {
+      "name_zh": "M头（双头）跌幅满足",
+      "name_en": "M (double) top measured downside target",
+      "direction": "short",
+      "structure": "After reaching the second upside target, wide-range topping (华泰 highs 42.59 mid-Feb, 45.76 early Apr; midpoint ~44); rising neckline ~33.2 (low 32.62).",
+      "entry": "Break of the neckline (1998-04-28): short ≈34.",
+      "stop": "≈36, reclaiming the neckline (risk ≈6%).",
+      "target": {
+        "formula": "breakdown_level - (tops_mid - neckline)",
+        "worked_example": "44 - 33.2 = 10.8; 34.8 - 10.8 = 24 (reached June 1998)",
+        "pages": [
+          175
+        ]
+      },
+      "confirmation": [
+        "Neckline break."
+      ],
+      "invalidation": [
+        "Reclaiming the neckline."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        173,
+        174,
+        175
+      ]
+    },
+    {
+      "name_zh": "波段涨幅满足（低点至高点等幅）",
+      "name_en": "Swing measured-move upside target",
+      "direction": "long",
+      "structure": "First wave from a low to a high (联电 13.05 → 25.67, +12.62); pullback low 22.1; once price makes a new high, project the first wave from the pullback low.",
+      "entry": "Original entry: 1997-05-29 volume breakout of the neckline (带量突破颈线) ≈16.",
+      "stop": "15, i.e. falling back below the line (risk ≈6.2%).",
+      "target": {
+        "formula": "pullback_low + (wave1_high - wave1_low)",
+        "worked_example": "25.67 - 13.05 = 12.62; 22.1 + 12.62 = 34.72 (reached mid-July; profit ≈117% from 16)",
+        "pages": [
+          177,
+          178
+        ]
+      },
+      "confirmation": [
+        "Compute only after price makes a new high above the wave-1 high (再创新高).",
+        "Volume on the initial breakout."
+      ],
+      "invalidation": [
+        "Falling back below the breakout line."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        177,
+        178
+      ]
+    },
+    {
+      "name_zh": "假突破",
+      "name_en": "False breakout (long-term sell signal)",
+      "direction": "short",
+      "structure": "After the target and a big-range top, price makes a record high (联电 40.19 on 8/4) above the range high, and the next day falls back below the breakout line.",
+      "entry": "Sell longs / long-term sell signal on the day price falls back under the breakout neckline.",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "n.a. (the subsequent H&S gives the target)",
+        "worked_example": "8/4 high 40.19, H&S neckline 31.3, break 9/2",
+        "pages": [
+          177
+        ]
+      },
+      "confirmation": [
+        "Next-day fall back below the broken level."
+      ],
+      "invalidation": [],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        177
+      ]
+    },
+    {
+      "name_zh": "头肩底（大头肩底）涨幅满足",
+      "name_en": "Head-and-shoulders bottom measured upside targets",
+      "direction": "long",
+      "structure": "友讯 weekly: ~1.5-year bottom; head low 12.37, shoulder lows 16.00; declining neckline from 25.20 through 23.6/22.93 to ~21.4 at the breakout.",
+      "entry": "Weekly high-volume long red through the neckline (2000-01-08 week): buy ≈21.5.",
+      "stop": "20.5, falling back below the line (risk ≈5%).",
+      "target": {
+        "formula": "target_1 = breakout_level + (neckline_at_head - head_low); target_2 = target_1 + same distance",
+        "worked_example": "23.6 - 12.37 = 11.23; 21.4 + 11.23 = 32.63; 32.63 + 11.23 = 43.86 (high 44.24); profit ≈51%-104%",
+        "pages": [
+          179,
+          180
+        ]
+      },
+      "confirmation": [
+        "带量长红 breakout week.",
+        "Second target computed after crossing the prior high (越过前高)."
+      ],
+      "invalidation": [
+        "Falling back below the neckline."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        179,
+        180
+      ]
+    },
+    {
+      "name_zh": "破底翻（跌幅满足后）",
+      "name_en": "Break-bottom reversal at the downside target",
+      "direction": "long",
+      "structure": "After reaching the downside target, a base forms; price breaks below the base low and then reclaims it (联电 Feb 1998 after low 15.52; 友讯 Jan 2001 low 9.69; 茂矽 带量破底翻 after low ≈170.6).",
+      "entry": "Reclaim of the base (破底翻确立底部); details not given in this unit.",
+      "stop": "Not stated in this unit.",
+      "target": {
+        "formula": "n.a. in this unit",
+        "worked_example": "联电/友讯: 'big rebound' (大幅反弹)",
+        "pages": [
+          178,
+          180
+        ]
+      },
+      "confirmation": [
+        "Volume on the reclaim (茂矽 chart '带量破底翻', volume spike circled)."
+      ],
+      "invalidation": [],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        177,
+        178,
+        179,
+        180,
+        181
+      ]
+    },
+    {
+      "name_zh": "收敛三角形底部",
+      "name_en": "Converging-triangle bottom",
+      "direction": "long",
+      "structure": "茂矽 weekly (adjusted for capital reductions, 还原权值): >1.5-year triangle from high 420(.23) and low ~165 converging to a breakout at ~290.",
+      "entry": "1999-09-04 week high-volume breakout of the neckline (带量突破颈线).",
+      "stop": "Not given in this unit (continues in u15b).",
+      "target": {
+        "formula": "breakout_level + (triangle first high - triangle first low)",
+        "worked_example": "420 - 165 = 255; 290 + 255 = 545 (chart also shows second target 800 = 545 + 255)",
+        "pages": [
+          181
+        ]
+      },
+      "confirmation": [
+        "Volume spike on the breakout week (circled on the volume panel)."
+      ],
+      "invalidation": [],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        181
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Read the index trend before trading stocks; trading with the trend greatly raises the success rate, so trend-following stock selection matters.",
+      "kind": "filter",
+      "quote_zh": "先了解大盘的趋势，再介入个股操作，将会大幅提高成功率。因此随势选股非常重要。",
+      "pages": [
+        172
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "In the first wave off a market bottom nearly all stocks rise; deep-fallen low-priced turnaround stocks usually rise the most. From the second wave on, stock picking is harder and volume-price patterns help.",
+      "kind": "filter",
+      "quote_zh": "当大盘脱离底部进入大波段起涨时，尤其是第一波段，几乎是鸡犬升天、涨多涨少的问题而已。从经验上看，起涨第一波，跌深的低价转机股通常涨幅最为惊人。",
+      "pages": [
+        172
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "In a bear structure nearly every stock falls; tops usually complete when the market is least vigilant; volume-price structure lets you sell first or even reverse to short.",
+      "kind": "risk",
+      "quote_zh": "反之，进入空头的结构，状况大多是覆巢之下无完卵的。一般头部的完成，多半是在市场最无戒心的时候。",
+      "pages": [
+        172
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "All pattern variations are built on volume-price structure; the first-half 12 methods suffice to judge both index and stocks.",
+      "kind": "volume",
+      "quote_zh": "不过切记，无论型态如何变化都是建立在量价结构的基础上。",
+      "pages": [
+        172
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Position sizing: hold a 3-5 stock basket, never one stock; when the trend is fairly certain commit ≥50% of capital per risk tolerance with strict stops; add rotation stocks once profitable, so that even full exposure rides the swing trend.",
+      "kind": "risk",
+      "quote_zh": "个股的多方趋势或空方趋势操作，至少要建立三至五档组合，切忌单压个股，有较大把握的趋势成形时，按个人的风险承受能力，先投入五成以上资金并严设停损。趋势若如预期，个股扩大获利时，再加码轮动股即可",
+      "pages": [
+        172
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Paul Tudor Jones: focus on not losing money more than on making it; protect your gains.",
+      "kind": "psychology",
+      "quote_zh": "相对于赚钱，我比较注意赔钱。别光想赚钱，要专注于保护你的战果。",
+      "pages": [
+        172
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Neckline break of a three-head H&S top confirms it and allows computing the downside target.",
+      "kind": "entry",
+      "quote_zh": "华泰日线1997年9月1日跌破颈线，三尊头型态的头肩顶确立便可计算跌幅满足。",
+      "pages": [
+        173
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "After the first target, a long black breaking the up-flag and a next-day new low below the prior low allow computing the second target.",
+      "kind": "target",
+      "quote_zh": "同年10月17日长黑破线上飘旗形确立，隔日再破30.81元前低，便可再计算跌幅满足。",
+      "pages": [
+        173
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Scale rule: a ~3-month base that hits target_1 about one week after breakout justifies computing target_2 directly.",
+      "kind": "time",
+      "quote_zh": "华泰约三个月的底部突破约一周，便达涨幅满足附近，就规模而言，可直接计算第二波涨幅满足。",
+      "pages": [
+        174
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Short on the neckline break with stop on reclaiming the neckline; if the backtest fails, cover near the downside targets.",
+      "kind": "stop",
+      "quote_zh": "1997年9月1日跌破头肩顶颈线时，空单进场，约可空在40元附近，停损设在42元附近，也就是站上颈线反压，风险约5%，反压站不回，看跌幅满足附近，空单回补获利",
+      "pages": [
+        175
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Long on the W neckline breakout; stop at the break of neckline support, which is also the low of the breakout day's long red candle.",
+      "kind": "stop",
+      "quote_zh": "1998年1月20日突破W底颈线，多单进场，约可买在29.5元，停损设在28元附近，也就是跌破颈线支撑，也是当日长红低点风险约5%。",
+      "pages": [
+        175
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "Many patterns (e.g. H&S) can be targeted either with the pattern measured move or a plain swing measured move; they usually land in about the same place; when the H&S is complete (like 华泰), use the H&S computation as primary.",
+      "kind": "target",
+      "quote_zh": "有许多型态，如华泰的头肩顶型态，除了计算头肩顶型态的跌幅满足外，也可用波段跌幅满足做计算，大多会落在大约的位置上，只是如华泰有相当完整的头肩顶型态，便会以头肩顶为主计算跌幅满足。",
+      "pages": [
+        176
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Livermore: big money is in the big trend, not daily fluctuations; determine the trend.",
+      "kind": "psychology",
+      "quote_zh": "大钱不存在于股票的日常小波动，大钱只存在大势之内。因此你需要判定大势的走向。",
+      "pages": [
+        176
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Compute the swing target after price makes a new high above the first wave.",
+      "kind": "target",
+      "quote_zh": "联电日线1997年首波涨至6月下旬拉回，7月初再创新高时便可计算涨幅满足。",
+      "pages": [
+        177
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "A record high followed the next day by a fall back below the breakout neckline is a 假突破 — a long-term sell signal.",
+      "kind": "entry",
+      "quote_zh": "8月4日创40.19元历史新高，隔日便拉回突破的颈线以下，技术面假突破确立长线卖出信号。",
+      "pages": [
+        177
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "After a neckline break, a sharp next-day bounce that fails to clear the neckline is the technical escape line (last chance to exit).",
+      "kind": "stop",
+      "quote_zh": "（注意：破线隔日急弹未突破颈线为技术面的逃命线。）",
+      "pages": [
+        177,
+        178
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "Second downside wave: after a short bounce from target_1, a fall that breaks the prior low allows computing target_2 = target_1 - distance.",
+      "kind": "target",
+      "quote_zh": "联电9月15日达跌幅满足附近，短弹几日后回跌再破前低，便可计算第二波跌幅满足。",
+      "pages": [
+        178
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "Volume breakout of the neckline: long, stop on falling back below the line.",
+      "kind": "entry",
+      "quote_zh": "1997年5月29日带量突破颈线，多单进场，约可买在16元附近，停损设15元也就是跌落线下时，风险约6.2%，达涨幅满足获利约117%。",
+      "pages": [
+        178
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "A weekly high-volume long red through the neckline of a ~1.5-year H&S bottom confirms it.",
+      "kind": "volume",
+      "quote_zh": "2000年1月8日友讯周线当周带量长红，突破颈线，约一年半的大头肩底确立，便可计算涨幅满足。",
+      "pages": [
+        179
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "Speculative bubbles produce V-reversals at the second target: price falls as fast as it rose.",
+      "kind": "psychology",
+      "quote_zh": "V型反转，股价急转直下，反映当时友讯搭上网络泡沫的末班车后，随着泡沫戳破，股价怎么上去怎么下来的投机走势。",
+      "pages": [
+        180
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "Use adjusted (还原权值) prices for charts after capital reductions; levels are given in adjusted terms with the then-actual prices noted.",
+      "kind": "filter",
+      "quote_zh": "茂矽周线（图示为茂矽几次减资后的还原权值图）1999年9月4日带量突破颈线，逾一年半的底部确立便可计算涨幅满足。",
+      "pages": [
+        181
+      ]
+    },
+    {
+      "id": "R22",
+      "rule": "Triangle bottom target: triangle side length (first high to low) added to the breakout level.",
+      "kind": "target",
+      "quote_zh": "三角形边长的高点420元至低点约在165元，距离255元。突破颈线的位置约在290元+255元＝等幅计算的涨幅满足545元。",
+      "pages": [
+        181
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "华泰 (2329)",
+      "timeframe": "daily",
+      "period": "1997-06..1998-06",
+      "pattern": "头肩顶 → 两波跌幅满足 → 上飘旗形 → W底 → 两波涨幅满足 → M头 → 跌幅满足",
+      "levels": {
+        "hs_head": 50.29,
+        "hs_neckline": 40.6,
+        "hs_distance": 9.69,
+        "hs_break_date": "1997-09-01",
+        "down_target_1": 30.91,
+        "low_1": 30.81,
+        "flag_high": 37.38,
+        "flag_break_date": "1997-10-17",
+        "down_target_2": 21.22,
+        "low_2": 21.7,
+        "w_lows": [
+          21.7,
+          22.02
+        ],
+        "w_bottoms_mid": 21.85,
+        "w_neckline": 29,
+        "w_neckline_high": 29.22,
+        "w_distance": 7.15,
+        "w_break_date": "1998-01-20",
+        "up_target_1": 36.15,
+        "up_target_2": 43.3,
+        "m_tops": [
+          42.59,
+          45.76
+        ],
+        "m_tops_mid": 44,
+        "m_neckline": 33.2,
+        "m_neckline_low": 32.62,
+        "m_distance": 10.8,
+        "m_break_level": 34.8,
+        "m_break_date": "1998-04-28",
+        "down_target_m": 24,
+        "short1_entry": 40,
+        "short1_stop": 42,
+        "short1_risk_pct": 5,
+        "short1_profit_pct": [
+          22,
+          47
+        ],
+        "long_entry": 29.5,
+        "long_stop": 28,
+        "long_risk_pct": 5,
+        "long_profit_pct": [
+          22,
+          42
+        ],
+        "short2_entry": 34,
+        "short2_stop": 36,
+        "short2_risk_pct": 6,
+        "short2_profit_pct": 30,
+        "chart_other": [
+          25.98,
+          21.57,
+          31.71,
+          25.82
+        ]
+      },
+      "outcome": "Every target reached (30.81, 21.7, ~36, 42.59/45.76, ~24 in June 1998)",
+      "pages": [
+        173,
+        174,
+        175
+      ]
+    },
+    {
+      "instrument": "联电 (2303)",
+      "timeframe": "daily",
+      "period": "1997-05..1998-02",
+      "pattern": "带量突破 → 涨幅满足 → 假突破 → 头肩顶 → 两波跌幅满足 → 破底翻",
+      "levels": {
+        "breakout_date": "1997-05-29",
+        "base_highs": [
+          15.15,
+          15.99
+        ],
+        "base_lows": [
+          13.05,
+          13.26
+        ],
+        "wave1_low": 13.05,
+        "wave1_high": 25.67,
+        "wave1_rise": 12.62,
+        "pullback_low": 22.1,
+        "up_target": 34.72,
+        "false_breakout_high": 40.19,
+        "false_breakout_date": "1997-08-04",
+        "right_shoulder": 39.35,
+        "neckline": 31.3,
+        "neckline_low_label": 32.43,
+        "hs_distance": 8.89,
+        "hs_break_level": 34,
+        "hs_break_date": "1997-09-02",
+        "down_target_1": 25.11,
+        "down_target_1_date": "1997-09-15",
+        "down_target_2": 16.22,
+        "low": 15.94,
+        "low_date": "1997-10-30",
+        "later_lows": [
+          16.63,
+          17.18,
+          15.52
+        ],
+        "rebound_highs": [
+          21.34,
+          20.92,
+          20.92
+        ],
+        "long_entry": 16,
+        "long_stop": 15,
+        "long_risk_pct": 6.2,
+        "long_profit_pct": 117,
+        "short_entry": 33,
+        "short_stop": 35,
+        "short_risk_pct": 6,
+        "short_profit_pct": [
+          24,
+          52
+        ]
+      },
+      "outcome": "All targets reached; base from Oct 1997 to Feb 1998 ended with a 破底翻 and a big rebound",
+      "pages": [
+        177,
+        178
+      ]
+    },
+    {
+      "instrument": "友讯 (2332)",
+      "timeframe": "weekly",
+      "period": "1998-10..2001-01",
+      "pattern": "头肩底 → 两波涨幅满足 → 头肩顶 → 跌幅满足 → 破底翻",
+      "levels": {
+        "left_high": 25.2,
+        "head_low": 12.37,
+        "shoulder_lows": [
+          16.0,
+          16.0,
+          16.0
+        ],
+        "neckline_at_head": 23.6,
+        "neckline_highs": [
+          22.53,
+          22.93
+        ],
+        "breakout_level": 21.4,
+        "breakout_week": "2000-01-08",
+        "distance_up": 11.23,
+        "up_target_1": 32.63,
+        "up_target_2": 43.86,
+        "high": 44.24,
+        "high_week": "2000-04-08",
+        "right_shoulder": 33.52,
+        "hs_top_neckline": 26.3,
+        "neckline_low_labels": [
+          24.46,
+          23.6
+        ],
+        "hs_break_level": 28.5,
+        "hs_break_week": "2000-07-01",
+        "distance_down": 17.94,
+        "down_target": 10.56,
+        "low": 9.69,
+        "long_entry": 21.5,
+        "long_stop": 20.5,
+        "long_risk_pct": 5,
+        "long_profit_pct": [
+          51,
+          104
+        ],
+        "short_entry": 28.3,
+        "short_stop": 30,
+        "short_risk_pct": 6,
+        "short_profit_pct": 60
+      },
+      "outcome": "Both upside targets hit in the internet bubble (mid-Mar, 4/8 week), V reversal, downside target reached early Jan 2001 (9.69, overshoot), then 破底翻 big rebound",
+      "pages": [
+        179,
+        180
+      ]
+    },
+    {
+      "instrument": "茂矽 (2342)",
+      "timeframe": "weekly",
+      "period": "1998..2001-01",
+      "pattern": "收敛三角形底部 → 涨幅满足 → 复合式头肩顶 → 跌幅满足 → 带量破底翻 (partial; continues in u15b)",
+      "levels": {
+        "triangle_high": 420.23,
+        "triangle_low": 165,
+        "triangle_side": 255,
+        "other_pivots": [
+          258.72,
+          171.81,
+          345.46,
+          187.35,
+          375.62
+        ],
+        "breakout_level": 290,
+        "breakout_week": "1999-09-04",
+        "up_target_1": 545,
+        "up_target_2_chart": 800,
+        "head_high": 854.5,
+        "second_head": 848,
+        "neckline_chart": 506,
+        "hs_break_chart": 535,
+        "hs_break_week_chart": "9/9",
+        "down_target_chart": 193,
+        "low_chart": 170.54,
+        "post_low_high": 296.81,
+        "low_1999_08_07_adj": 187.35,
+        "low_1999_08_07_actual": 20.5,
+        "high_2000_04_08_adj": 854.5,
+        "high_2000_04_08_actual": 93.5,
+        "low_2001_01_06_adj": 170.64,
+        "low_2001_01_06_actual": 16.5
+      },
+      "outcome": "Only the first target computation is on this page; chart shows 545 and 800 targets, a 复合式头肩顶 and a downside target 193 reached (low ≈170.6), then 带量破底翻",
+      "pages": [
+        181
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Index-trend gate: only take long stock setups when the index is in a confirmed uptrend (e.g. after an index bottom breakout); in an index bear structure prefer exits/shorts.",
+    "Portfolio rule: 3-5 concurrent names per trend trade; initial exposure ≥50% only after trend confirmation; add rotation names only when open positions are in profit.",
+    "H&S top target: D = head_high - neckline_value_at_head; target_1 = neckline_break_price - D; if price bounces then closes below the target_1-area low, target_2 = target_1 - D.",
+    "W bottom target: D = neckline - mean(low1, low2); target_1 = neckline + D; target_2 = target_1 + D (compute target_2 immediately if target_1 is hit within ~1/12 of the base duration).",
+    "Swing target: after a new high above wave-1 high, target = pullback_low + (wave1_high - wave1_low).",
+    "Triangle-bottom target: target = breakout_price + (first_high - first_low) of the triangle.",
+    "False breakout: new N-bar/record high followed within 1 bar by a close back below the breakout level → exit-long signal.",
+    "Escape line: after a neckline breakdown, if the next bar(s) bounce but close below the neckline, treat as the last exit for longs.",
+    "Stops: long = close below the broken neckline / breakout-day long-red low; short = close back above the neckline; typical risk 5-6.2% in these examples.",
+    "Volume confirmation: breakout bar volume clearly above recent average (带量); weekly breakouts in particular.",
+    "Use split/capital-reduction-adjusted price series for pattern levels."
+  ],
+  "ambiguities": [
+    "华泰 long profits '22% / 42%' (p175): from 29.5, 36.15 is +22.5% but 43.3 is +46.8%, so '42%' does not match the stated target (maybe exit below target or typo).",
+    "联电 short second-wave profit '52%' (p178): (33 - 16.22) / 33 ≈ 50.8%; close but not exact.",
+    "友讯 short profit '约60%' (p180): (28.3 - 10.56) / 28.3 ≈ 62.7%.",
+    "Head-to-neckline distance is measured to the neckline at the head's position, but the projection starts from the actual break level (34 for 联电, 28.5 for 友讯) when the neckline slopes; for 华泰 the neckline is horizontal so both equal 40.6.",
+    "The 小叮咛 diagram legend (p176) says '实线=头肩顶两波段涨幅满足' although it is a downside projection — presumably 跌幅满足.",
+    "茂矽 2001 low: text says 170.64 (p181) while the chart label reads 170.54 (the right axis shows 170.64).",
+    "友讯 overshot its downside target (9.69 vs 10.56, ~8%) before the 破底翻; 'near the target' tolerance is not defined.",
+    "破底翻 entries/stops are not given for 联电/友讯 in this unit — only 'bottom confirmed, big rebound'.",
+    "The 'bear: 覆巢之下无完卵' and 'first-wave low-priced turnaround stocks rise most' statements are experience-based, without quantification."
+  ],
+  "illegible": [
+    {
+      "page": 173,
+      "what": "Chart OHLC header and the tiny dashed-line target labels at the two '跌幅满足' and the '跌幅满足' (M-top) markers."
+    },
+    {
+      "page": 177,
+      "what": "Chart OHLC header and the tiny dashed-line labels at the 34.72 and 25.11 target lines."
+    },
+    {
+      "page": 179,
+      "what": "Chart OHLC header; the neckline pivot label left of the 16.00 lows (reads ≈21.39 but blurred); tiny dashed-line labels at 32.63, 43.86 and the 跌幅满足 line."
+    },
+    {
+      "page": 181,
+      "what": "Chart OHLC header; the right-axis value above 770.17 is partly covered; tiny labels on the target lines."
+    }
+  ]
+}

@@ -1,0 +1,341 @@
+{
+  "unit_id": "u00b",
+  "model": "devin-cloud",
+  "pages_read": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "summary": "End of the 前言 (p9), the full table of contents (p10-15), and the Part 1 技术篇 divider page (p16). The 前言 conclusion stresses studying historical charts to recognise the main force's phases (accumulation / markup / distribution), starting live trading with small capital, and above all decisive execution of stops; it also states chart conventions (dividend-adjusted 填权息 charts, unrestricted tradability assumption, custom 4-colour K-line software). The TOC defines the book's 12 techniques (W底, 破底翻, 破底翻W底, 下飘旗形, 上飘旗形, M头, 假突破, 头肩顶, 假突破头肩顶, 头肩底, 收敛三角形头部, 收敛三角形底部) plus a 时间波 appendix, Part 2 进阶篇 (Taiwan index and individual stocks), appendices and afterword.",
+  "patterns": [],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Study historical charts: the main force's accumulation, markup and distribution always leave traces in pattern and volume-price structure; study them per period, ideally together with contemporaneous events.",
+      "kind": "psychology",
+      "quote_zh": "这是历史演进的活教材，主力盘底进货、拉抬作价、盘头出货凡走过必留下痕迹。",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Main-force cycle has three phases and corresponding actions: accumulation period (buy), markup period (add early, then ride/坐轿), distribution period (sell, or even flip to short).",
+      "kind": "filter",
+      "quote_zh": "进货期（买进）、拉抬期（初期加码后坐轿）、出货期（卖出甚至翻空操作）",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "After some study, begin with a small amount of capital to accumulate live experience.",
+      "kind": "risk",
+      "quote_zh": "建议一段时间的学习稍有把握后，开始以少量资金作实务上的操作累积经验",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Setting the stop precisely matters, but executing it strictly and decisively (严格果断) is a separate, harder requirement.",
+      "kind": "stop",
+      "quote_zh": "精确的设定停损固然重要，但是能够“严格果断”执行停损又是一回事。",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "After a first successful swing with an aggressively deployed plan, keep refining the same model; do not let one hesitation destroy long-term effort. Strict stops are the foundation of long-term success; money management and swing trading are its expression.",
+      "kind": "risk",
+      "quote_zh": "严设停损是长期成功的根本，资金控管及波段操作则是成功的体现。",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Chart convention: all individual-stock charts in the book are dividend/rights-adjusted (填权息图), so pattern price levels refer to adjusted prices.",
+      "kind": "filter",
+      "quote_zh": "本书的个股技术分析图均为填权息图。",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Analysis assumes any instrument can be traded without restriction (e.g. no margin/short-sale restrictions or forced short covering 融券强迫回补).",
+      "kind": "filter",
+      "quote_zh": "本技术分析皆假设任何商品可以交易，且不受任何影响的情况下（如无信用交易或融券强迫回补等）。",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "The book uses a self-made 4-colour K-line software; volume-price structure and patterns are identical to standard charts, so candle colours can be ignored.",
+      "kind": "filter",
+      "quote_zh": "本书使用的是自创的4色K线软件，但量价结构与型态完全相同，没有影响，读者不必在意颜色的不同。",
+      "pages": [
+        9
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Book taxonomy (TOC): long signals = W底涨幅满足, 破底翻, 破底翻(W底), 下飘旗形 波段涨幅满足, 头肩底涨幅满足, 收敛三角形底部涨幅满足; short signals = 上飘旗形 波段跌幅满足, M头跌幅满足, 假突破, 头肩顶跌幅满足, 假突破(头肩顶), 收敛三角形头部跌幅满足; plus 附注: 时间波 (time waves).",
+      "kind": "filter",
+      "quote_zh": "一、W底涨幅满足计算：多头买进信号 …… 十二、收敛三角形底部涨幅满足计算：多头买进信号",
+      "pages": [
+        10,
+        11,
+        12
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "unidentified chart on Part 1 divider (技术篇)",
+      "timeframe": "daily (inferred from date axis 1997/2 .. month ticks 4-8)",
+      "period": "1997-02..1997-08 (axis labels '1997/2', '1997/3/12 00:00', 4, 5, 6, 7, 8)",
+      "pattern": "rising trend with dashed trendlines; annotations 价涨量增 (price up, volume up) then 量价背离 (volume-price divergence) near the top; text '跌幅满…' cut off at right edge",
+      "levels": {
+        "low_label": 38.0,
+        "swing_high_1": 72.5,
+        "swing_high_2": 76.0,
+        "top_label": 112.0,
+        "neckline_mark": 109
+      },
+      "outcome": "n.a. (decorative excerpt; full chart and conclusion not shown)",
+      "pages": [
+        16
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Use dividend/rights-adjusted (forward-adjusted) OHLCV for all pattern levels to match the book's 填权息 charts (p9).",
+    "Map each of the 12 TOC patterns to direction: long = {W底, 破底翻, 破底翻W底, 下飘旗形, 头肩底, 收敛三角形底部}; short = {上飘旗形, M头, 假突破, 头肩顶, 假突破头肩顶, 收敛三角形头部} (p10-12).",
+    "Every pattern section is framed as a 涨幅满足/跌幅满足 (measured-move target) calculation, so each detector should output a target price, not just a signal (p10-12).",
+    "Volume-price divergence near a top (price new high, volume lower than during the 价涨量增 advance) is a warning flag (p16 annotation; rule detail must come from later units)."
+  ],
+  "ambiguities": [
+    "The p16 divider chart is an unlabelled excerpt; the instrument is not shown. 109 and 112.00 appear near an upward-sloping line, but whether 109 is a neckline value or a target cannot be confirmed from this page. (Inference only: a 1997 daily chart could be one of the Part 2 1997 examples, e.g. 华泰 1997-1998 日线 p158, but this is unverified.)",
+    "TOC page numbers are the book's printed page numbers, not PDF page numbers; the offset must be determined from the body units.",
+    "'坐轿' (ride the sedan) in the markup phase implies holding without adding further, but holding/adding rules are not specified here.",
+    "Assumption of unrestricted tradability (p9) means short signals in the book ignore real-world borrow constraints."
+  ],
+  "illegible": [
+    {
+      "page": 16,
+      "what": "small boxed label under 38.00 at lower-left (looks like '蔡森指标' but not certain) and the text after '跌幅满' cut off at the right edge"
+    },
+    {
+      "page": 16,
+      "what": "exact value labels on the dashed trendlines and the upper-right price axis are cut off / not shown"
+    }
+  ],
+  "toc": {
+    "note": "book printed page numbers",
+    "part1_技术篇": [
+      {
+        "no": "一",
+        "title": "W底涨幅满足计算：多头买进信号",
+        "page": 2
+      },
+      {
+        "no": "二",
+        "title": "破底翻：多头买进信号",
+        "page": 4
+      },
+      {
+        "no": "三",
+        "title": "破底翻（W底）：多头买进信号",
+        "page": 6,
+        "examples": [
+          "2001矽统日线 8",
+          "2008-2009爱之味日线 10",
+          "2008-2009新光金日线 12"
+        ]
+      },
+      {
+        "no": "四",
+        "title": "波段涨幅满足计算——下飘旗形：多头买进信号",
+        "page": 14,
+        "examples": [
+          "2001-2004中华（中华车）周线 16",
+          "2005-2006台股日线 18",
+          "2008-2011佳格周线 19",
+          "2006-2007机电类日线 20",
+          "2009运输类日线 22",
+          "2012广丰周线 23"
+        ]
+      },
+      {
+        "no": "五",
+        "title": "波段跌幅满足计算——上飘旗形：空单进场信号",
+        "page": 24,
+        "examples": [
+          "2000台苯日线 26",
+          "2000台达化日线 27",
+          "2008远东新周线 28",
+          "2011亚聚日线 29",
+          "2010-2011台股小时趋势线 30"
+        ]
+      },
+      {
+        "no": "六",
+        "title": "M头跌幅满足计算：空单进场信号",
+        "page": 32,
+        "examples": [
+          "1993-1996华纸周线 34",
+          "1998-2000仁宝周线 35",
+          "2006-2009中钢周线 36",
+          "2009-2011永光周线 38"
+        ]
+      },
+      {
+        "no": "七",
+        "title": "假突破：空单进场信号",
+        "page": 40,
+        "examples": [
+          "2007-2008中纤日线 42",
+          "2007-2008运输类指数周线 44",
+          "2007-2008苹果日线 46",
+          "1997日月光日线 48",
+          "2011正峰新日线 50",
+          "2011晟铭电日线 54",
+          "2010-2011晶电日线 56",
+          "1993-2011微软月线 58"
+        ]
+      },
+      {
+        "no": "八",
+        "title": "头肩顶跌幅满足计算：空单进场信号",
+        "page": 60,
+        "examples": [
+          "1996-1997日月光日线 62",
+          "2009-2011中釉周线 63",
+          "1995-1999营建类指数周线 64"
+        ]
+      },
+      {
+        "no": "九",
+        "title": "假突破（头肩顶）：空单进场信号",
+        "page": 66,
+        "examples": [
+          "2000-2001华邦电日线 68",
+          "2008大统益日线 70",
+          "2010-2011塑胶类日线 72"
+        ]
+      },
+      {
+        "no": "十",
+        "title": "头肩底涨幅满足计算：多头买进信号",
+        "page": 74,
+        "examples": [
+          "1998-2000东元日线 76",
+          "2008-2009蓝天日线 78",
+          "2010扬明光日线 80",
+          "2011-2012广宇日线 81"
+        ]
+      },
+      {
+        "no": "十一",
+        "title": "收敛三角形头部跌幅满足计算：空单进场信号",
+        "page": 82,
+        "examples": [
+          "2002仁宝日线 84",
+          "2007-2008台玻日线 85",
+          "2011扬明光日线 86",
+          "2009-2010所罗门日线 88",
+          "2011华硕日线 89"
+        ]
+      },
+      {
+        "no": "十二",
+        "title": "收敛三角形底部涨幅满足计算：多头买进信号",
+        "page": 90,
+        "examples": [
+          "1990-1994荣化周线 92",
+          "2008-2009联电日线 94",
+          "2009中航周线 96",
+          "2011-2012新兴日线 98"
+        ]
+      },
+      {
+        "no": "附注",
+        "title": "时间波",
+        "page": 100,
+        "examples": [
+          "2013华邦电日线 100",
+          "2011-2012大盘日线 102",
+          "2013法国日线 103",
+          "2011大盘周线 104",
+          "2011-2012耀华日线 105"
+        ]
+      }
+    ],
+    "part2_进阶篇": {
+      "一、大盘 108": [
+        "1997-1998台股日线 108",
+        "1997-1999台股周线 110",
+        "1998台股日线 112",
+        "1999台股日线 114",
+        "1999-2001台股周线 116",
+        "2001台股日线 118",
+        "2002台股日线 120",
+        "2002-2004台股周线 122",
+        "2004台股日线 124",
+        "2005台股日线 126",
+        "2005-2006台股日线 128",
+        "2006台股日线 130",
+        "2006-2007台股周线 132",
+        "2006-2007台股日线 134",
+        "2007台股日线❶ 136",
+        "2007台股日线❷ 138",
+        "2007-2008台股日线 140",
+        "2008台股日线 142",
+        "2008-2009台股日线 144",
+        "2007-2009台股周线 146",
+        "2009-2010台股日线 148",
+        "2009-2011台股周线 152",
+        "2011-2012台股周线 154"
+      ],
+      "二、个股 157": [
+        "1997-1998华泰日线 158",
+        "1997-1998联电日线 162",
+        "1998-2000友讯周线 164",
+        "1998-2001茂矽周线 166",
+        "1998-2003台积电周线 168",
+        "1999-2002金宝周线 172",
+        "2002-2004友达周线 174",
+        "2003-2008光磊周线 176",
+        "2003-2013宏碁日线 178",
+        "2004-2012台达电周线 180",
+        "2006-2008神达日线 182",
+        "2006-2009友讯周线 184",
+        "2007-2008鸿准周线 186",
+        "2007-2011台泥周线 188",
+        "2008-2009彩晶日线 190",
+        "2008-2011台化周线 194",
+        "2008-2012元太日线 196",
+        "2009裕日车日线 200",
+        "2009-2012宏达电周线 202",
+        "2010苹果日线 204",
+        "2012苹果日线 206"
+      ]
+    },
+    "附录": [
+      "一、认识投机股结构——2012普格日线 208",
+      "二、压低出货陷阱——1997-2001思科日线 210",
+      "三、崛起的大国——中国大陆股市 212 （上证月线 212、上证周线 213、上证日线 214）",
+      "四、关于A股的看法 216"
+    ],
+    "后记": 230
+  }
+}

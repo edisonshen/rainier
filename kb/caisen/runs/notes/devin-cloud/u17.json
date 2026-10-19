@@ -1,0 +1,153 @@
+{
+  "unit_id": "u17",
+  "model": "devin-cloud",
+  "pages_read": [
+    225,
+    226
+  ],
+  "summary": "Appendix case study of Cisco (思科) daily 1997-2001 illustrating two traps: a false breakout (假突破) to a new high that quickly falls back below the neckline as a long-term sell signal, and the 'push-down distribution trap' (压低出货陷阱) where the launch zone (起涨区), normally the main player's cost base and strongest support, becomes the final distribution zone once institutions turn long-term bearish. Volume structure distinguishes accumulation volume (heavy volume followed by a big rally) from distribution volume (heavy volume followed by a further breakdown).",
+  "patterns": [
+    {
+      "name_zh": "假突破",
+      "name_en": "False breakout above a high-level consolidation",
+      "direction": "short",
+      "structure": "After a long rally, price breaks out of a high-level consolidation (高档整理区) to a new high, then within about 2 weeks falls back below the neckline of that range.",
+      "entry": "Sell/exit when price falls back below the neckline after the new-high breakout (book: '便又跌回颈线下极为明显的假突破长线卖出信号').",
+      "stop": "Not stated in this unit.",
+      "target": {
+        "formula": "Not given (no measured move in this unit)",
+        "worked_example": "Cisco: high 82.00 on 2000/3/27, then fell to 50.00, bounced to 70.00, broke down; 2001 lows 13.19 and 11.04.",
+        "pages": [
+          225,
+          226
+        ]
+      },
+      "confirmation": [
+        "Fall back below the neckline within ~2 weeks of the new high (Cisco)."
+      ],
+      "invalidation": [
+        "Not stated."
+      ],
+      "timeframes": [
+        "daily",
+        "long-term"
+      ],
+      "pages": [
+        225
+      ]
+    },
+    {
+      "name_zh": "压低出货陷阱（颈线支撑区压低出货）",
+      "name_en": "Push-down distribution trap at the launch-zone support",
+      "direction": "short",
+      "structure": "After a long decline (股价长期盘跌腰斩) price returns to the launch zone (起涨区, the start of the main player's cost), stabilises and rebounds/consolidates ~2 months (Cisco: 倒货区 / dumping zone). Heavy volume appears in this zone; price then breaks the launch-zone support and keeps falling.",
+      "entry": "Book gives no explicit trigger; implied: treat the heavy volume at the launch-zone support as distribution once price breaks below that support and keeps making new lows (续破底大跌后便视为出货量).",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "Not given",
+        "worked_example": "Cisco: support zone ~33-44 USD after halving from 82; broke down to 13.19 and 11.04 in 2001.",
+        "pages": [
+          225,
+          226
+        ]
+      },
+      "confirmation": [
+        "Heavy-volume zone at the launch support followed by further breakdown = distribution volume."
+      ],
+      "invalidation": [
+        "Not stated."
+      ],
+      "timeframes": [
+        "daily",
+        "long-term"
+      ],
+      "pages": [
+        225,
+        226
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "A breakout of a high consolidation to a new high that falls back below the neckline within ~2 weeks is a very clear long-term sell signal (false breakout).",
+      "kind": "entry",
+      "quote_zh": "突破高档整理区创新高后约2周，便又跌回颈线下极为明显的假突破长线卖出信号。",
+      "pages": [
+        225
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "The launch zone is usually viewed as the start of the main player's cost and thus strong support; but once institutions are long-term bearish it is the biggest push-down distribution trap.",
+      "kind": "risk",
+      "quote_zh": "通常起涨区附近视为一波主力作价成本起点，因此为相当大的支撑区，不过一旦法人长线看空，便是最大的压低出货陷阱。",
+      "pages": [
+        225
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Classify heavy volume by what follows: heavy volume followed by a big rally = accumulation volume; heavy volume at the launch support followed by a further breakdown = distribution volume.",
+      "kind": "volume",
+      "quote_zh": "1997年4月前后期间的大量在股价大涨后便视为进货量，当时股价约在6美元上下，2000年高点长期盘跌至年底跌回起涨大支撑区的大量，在股价续破底大跌后便视为出货量。",
+      "pages": [
+        226
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "A stock that has halved is not necessarily cheap: institutions' long-held chips are still deeply profitable (sell anywhere and profit), so use volume-price structure (plus industry change) rather than 'bargain' reasoning.",
+      "kind": "psychology",
+      "quote_zh": "当时股价即使腰斩，也仍约在33美元至44美元区间，法人主力长期的筹码仍是随便卖随便赚，因此除了产业的变化外，需注意量价结构来配合判断，以免以为捡了便宜，却陷入更大的风险之中。",
+      "pages": [
+        226
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "思科 Cisco (CSCO)",
+      "timeframe": "daily",
+      "period": "1997-04..2001",
+      "pattern": "假突破 + 压低出货陷阱",
+      "levels": {
+        "low_1997_04_22": 5.03,
+        "accumulation_price_approx": 6,
+        "swing_low_1998_09": 10.28,
+        "swing_high_1998": 17.55,
+        "early_label": 7.58,
+        "high_2000_03_27": 82.0,
+        "high_pre_split": 146.75,
+        "pullback_low": 50.0,
+        "rebound_high": 70.0,
+        "halved_range_low": 33,
+        "halved_range_high": 44,
+        "low_2001_a": 13.19,
+        "low_2001_b": 11.04
+      },
+      "outcome": "~15x rise to 82; false breakout ~2 weeks after new high; halved, consolidated ~2 months at launch-zone support (倒货区), then broke down to 13.19 and 11.04 in 2001.",
+      "pages": [
+        225,
+        226
+      ]
+    }
+  ],
+  "quantifiable": [
+    "False breakout: close above the high-consolidation range high (new N-bar high), then within ~10 trading days a close back below the range neckline -> long-term sell.",
+    "Launch-zone trap: after a >=50% decline from the high, price revisits the original launch-zone support; heavy volume there followed by a close below the zone's low and new lows => tag the heavy volume as distribution, bearish.",
+    "Volume classification: label a high-volume cluster 'accumulation' if subsequent N-bar return is strongly positive, 'distribution' if price subsequently breaks the cluster's low."
+  ],
+  "ambiguities": [
+    "The chart's 起涨最大支撑 dashed line and the 倒货区 are drawn but no numeric support level is printed; text gives only the 33-44 USD range.",
+    "No entry/stop/target rules for shorting the trap are given; the lesson is mostly about avoiding a long at the launch support.",
+    "The '红色虚框' (red dashed boxes) referenced in the text appear only as circled volume areas in the grayscale scan.",
+    "Prices are split-adjusted (82 vs 146.75 pre-split); other chart labels (7.58, 17.55, 10.28) are not explained in the text."
+  ],
+  "illegible": [
+    {
+      "page": 225,
+      "what": "Chart header OHLC/indicator line at top of the Cisco chart is too small to read; the 2000/3/27 high appears labelled both 82.00 and a smaller overlapping number."
+    }
+  ]
+}

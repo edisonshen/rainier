@@ -1,0 +1,232 @@
+{
+  "unit_id": "u00a",
+  "model": "devin-cloud",
+  "pages_read": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "summary": "Front matter: cover (p1), title page (p2), CIP/colophon (p3), a recommendation preface by 萧明道 (p4-5), the author's own preface 自序 (p6-7) and the start of the 前言 (p8). It lays out Cai Sen's core philosophy: volume-price structure (量价结构) is the most leading of all indicators, patterns formed by volume-price reveal the main force's (主力) intent, and the trading method is swing trading with the trend, strict stops (5%-7% for longs), and taking profit at the computed measured-move target (涨跌幅满足) to achieve 'big wins, small losses' (大赚小赔). Short-term trading is rejected; trend is judged on daily/weekly charts of at least half a year, with 5-minute/hourly charts used only to time entry when a longer-term pattern is about to turn.",
+  "patterns": [],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Volume-price relationship is the most leading indicator; all other indicators (KD, RSI, MACD, DMI) derive from the K-line chart and lag. Volume is the cause, price the effect.",
+      "kind": "filter",
+      "quote_zh": "发现唯有量价关系才是所有指标的最先行指标。",
+      "pages": [
+        6,
+        4
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Price direction is decided by volume (real money); learning lagging indicators is a waste of time.",
+      "kind": "volume",
+      "quote_zh": "毕竟现实上钱（量）才能真正决定商品的价格（价），因此价格的方向是由量来决定的。",
+      "pages": [
+        6
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Main-force phases (bottom accumulation, attack/markup, top distribution, distribution by holding price down at high levels) can mostly be judged from the patterns produced by volume-price structure.",
+      "kind": "filter",
+      "quote_zh": "因此无论底部承接布局、攻击拉抬、盘头出货、高档压低出货等，大多可以从量价结构产生的型态来做判断",
+      "pages": [
+        6
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "The bullish trigger after the main force completes bottom accumulation is an attack volume (攻击量) that breaks out of the bottom consolidation zone; only after that do short/medium/long-term indicators turn bullish one after another.",
+      "kind": "volume",
+      "quote_zh": "例如主力进货盘底完成后，出现突破底部整理区的攻击量后，所有短中长期指标才会陆续出现翻多信号。",
+      "pages": [
+        6
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Core operating mode: trade with the trend and set stops; longs watch support, shorts watch resistance; strictly execute the stop to exit with a small loss; conversely, when the preset measured-move target (涨跌幅满足) is reached, take the swing profit.",
+      "kind": "risk",
+      "quote_zh": "随势操作善设停损，多头看支撑，空头看压力，严格执行停损才能小赔出场。反之，达设定的涨跌幅满足，则波段获利了结，以达大赚小赔的目的。",
+      "pages": [
+        6
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Long stop is set within about 5%-7% when a bottom has completed and issued a buy signal; the bottom pattern's support protects the long. Shorts on a completed top are the mirror image.",
+      "kind": "stop",
+      "quote_zh": "如一档股票底部完成出现买进信号时，多单进场停损设约在5%～7%以内，有底部的型态支撑保护多头",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Author's stated experience: stop-outs (breaking support) occur roughly 20%-30% of the time, wins roughly 70%-80%, and a swing typically yields at least ~20% (main force usually moves price at least 20% per wave). Small-probability small losses vs larger-probability big gains -> long-run 大赚小赔.",
+      "kind": "risk",
+      "quote_zh": "经验上跌破支撑停损的机率约在两至三成，相对的获利机率约有七至八成，而一个波段至少约20%或以上的获利机率（通常主力作价一波至少20%），反之，头部完成时的做空亦然",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Do not be impatient; opportunities must be waited for. One or two big long/short timing opportunities per year in the Taiwan index are enough. Wait and watch until the opportunity comes; be bold but careful when it does.",
+      "kind": "psychology",
+      "quote_zh": "操作不要急躁，行情是等来的，当机会来时胆大心细",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Take profit when the estimated swing target is reached; do not get greedy (most people fail through greed and give back gains).",
+      "kind": "target",
+      "quote_zh": "记得达预估的波段满足就好，莫再贪心才能持盈保泰，多数人都败在贪心，以致于前功尽弃。",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Avoid short-term trading: short-term profits are luck; long-run short-term trading fails; decades-long success comes from swing trading.",
+      "kind": "psychology",
+      "quote_zh": "我在任何场合都会强调“切忌短线操作”，短线操作能获利只是一时的运气，长期操作短线必败……要记得那句常见的标语“滚石不生苔，短线不聚财”。",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "Success rate improves with experience; study historical volume-price structures and how patterns developed afterwards (history is the best teacher) before trading.",
+      "kind": "psychology",
+      "quote_zh": "历史是学习最好的教材……多研究以往的量价结构产生的型态后的发展有绝对的帮助",
+      "pages": [
+        6
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "The author's long-held method: strict stops, money management, swing trading with the trend. Swings last from a few months up to several years and are based on the long-term chart.",
+      "kind": "risk",
+      "quote_zh": "长久以来，我坚守的操作方法是“严设停损，资金控管，波段随势操作”。波段操作是以长线为基础，时间短至数月，长至数年",
+      "pages": [
+        8
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Short-term horizon traps you in main-force set-ups ('earn small, lose big'); a longer view lets you see the main force and the trend, and with proper stops your errors stay small.",
+      "kind": "psychology",
+      "quote_zh": "短线的格局太短，会陷入主力设局的陷阱框框中，无法了解真正的趋势，当然容易任人宰割赚小钱赔大钱。",
+      "pages": [
+        8
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Judge the trend on daily or weekly charts covering at least half a year; only when the pattern structure is about to reach a turning point use 5-minute or hourly charts (themselves viewed over 2-3 months) to time an early entry.",
+      "kind": "time",
+      "quote_zh": "既然是波段操作，当然就是尽量使用半年以上的日线或周线来做趋势上的判断，当型态上的结构有机会到达转折时，小时线或五分钟线便是掌握先机的重要参考指标",
+      "pages": [
+        8
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "Lower-timeframe entry trigger: when price reaches the upper neckline with shrinking volume consolidating just before the barrier (量缩关前整理) and timing is judged ripe, enter actively as soon as the 5-minute or hourly chart breaks the neckline WITH volume (带量突破颈线), setting a stop at the same time.",
+      "kind": "entry",
+      "quote_zh": "当来到上缘颈线量缩关前整理判断时机已成熟时，一旦五分钟线或小时线带量突破颈线，便作积极介入同时设好停损即可，主要看的还是波段的大利润。",
+      "pages": [
+        8
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "generic stock (hypothetical, author's statistics)",
+      "timeframe": "swing (daily/weekly)",
+      "period": "n.a.",
+      "pattern": "completed bottom -> long; completed top -> short",
+      "levels": {
+        "stop_pct": "5%-7%",
+        "stop_out_probability": "20%-30%",
+        "win_probability": "70%-80%",
+        "typical_wave_gain": ">=20%"
+      },
+      "outcome": "n.a. (illustrative expectancy argument for 大赚小赔)",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "instrument": "台北股市 (Taiwan index)",
+      "timeframe": "n.a.",
+      "period": "n.a.",
+      "pattern": "big long-buy / big short timing",
+      "levels": {
+        "opportunities_per_year": "about 1"
+      },
+      "outcome": "n.a. - author says catching one or two such opportunities is enough to compound capital",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "instrument": "generic (hypothetical)",
+      "timeframe": "5-minute / hourly viewed over 2-3 months, within daily/weekly trend",
+      "period": "n.a.",
+      "pattern": "approx. 3-month bottom on K-line, volume-backed neckline break on lower timeframe",
+      "levels": {
+        "bottom_duration": "about 3 months"
+      },
+      "outcome": "n.a.",
+      "pages": [
+        8
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Initial long stop distance: entry_price * (1 - 0.05..0.07), placed under the bottom pattern's support (p7).",
+    "Trend timeframe filter: only evaluate patterns on daily or weekly bars with a lookback >= ~6 months (p8).",
+    "Lower-timeframe trigger: on 5m/1h bars with ~2-3 months of history, require volume contraction while price consolidates just below the neckline, then a breakout bar closing above the neckline with expanded volume (p8).",
+    "Bottom breakout confirmation: breakout out of the bottom consolidation range must be accompanied by attack volume (volume expansion vs prior consolidation average) (p6).",
+    "Exit at the pattern's measured-move target (涨跌幅满足) rather than trailing indefinitely (p6-7).",
+    "Expected swing size prior: >= 20% per main-force wave; a target < ~20% may be considered low-value (inference from p7)."
+  ],
+  "ambiguities": [
+    "'攻击量' and '带量' are not quantified here (no multiple of average volume given).",
+    "Stop is given both as a percent band (5%-7%, p7) and as 'below support' (跌破支撑); unclear which governs when they differ.",
+    "Win rate 70%-80% and >=20% wave gain are the author's experience claims, not backtested statistics.",
+    "'量缩关前整理' (low-volume consolidation before the barrier) has no defined duration or volume threshold.",
+    "Recommendation preface (p4-5) is by a third party (萧明道) and contains endorsements, not rules; its 量是因，价为果 statement is consistent with the author's 自序."
+  ],
+  "illegible": [
+    {
+      "page": 1,
+      "what": "publisher logo/small print at bottom of cover (南方出版传媒 / 广东经济出版社 calligraphy) only partially legible; not content-relevant"
+    },
+    {
+      "page": 2,
+      "what": "faint ghosted mirror text bleeding through from the reverse page; ignored"
+    }
+  ],
+  "front_matter": {
+    "cover_claims_pages": [
+      1
+    ],
+    "cover_quote_zh": "散户为何会赔钱？因为多空转折出现了却不会判断，进场比人晚，退场更晚，获利顶多小赚，亏损却是大赔！",
+    "cover_subtitle_zh": "蔡森12招投资稳定获利的「赢家秘技」；29年实战经验；12招判断多空转折的方法，让你聪明掌握进出场点时机！",
+    "publication": "广东经济出版社, 2016年9月第1版第1次印刷; ISBN 978-7-5454-4764-4; 定价 68.00元; 《跟大师 学投资》丛书 (p1-3)",
+    "recommendation_preface": "推荐序 by 知名专职投资人 萧明道, titled 精通量价观念 进出股市将如探囊取物 (p4-5); notes 蔡森 lived through three Taiwan 万点崩盘 bull-bear cycles and 20+ years of practice."
+  }
+}

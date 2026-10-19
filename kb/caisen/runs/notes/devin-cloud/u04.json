@@ -1,0 +1,441 @@
+{
+  "unit_id": "u04",
+  "model": "devin-cloud",
+  "pages_read": [
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38
+  ],
+  "summary": "Teaches the 波段涨幅满足 (swing measured-move target) for a 下飘旗形 (downward-drifting flag, a bullish continuation 中继站). The target can only be computed after price breaks the prior swing high, which fixes the flag's pullback low: target = pullback_low + (swing_high - swing_start_low). Entry is the breakout above the flag's upper-edge neckline, the broken neckline becomes support/stop, and other continuation shapes (rectangles, triangles, wedges) work the same. Six Taiwan cases (中华车 weekly, 台股 daily, 佳格 weekly, 机电类 daily, 运输类 daily, 广丰 weekly) show the arithmetic, 2%-10% risk and 10%-200% gains.",
+  "patterns": [
+    {
+      "name_zh": "下飘旗形（波段涨幅满足）",
+      "name_en": "Down-drifting bull flag with swing measured-move target",
+      "direction": "long",
+      "structure": "Up-leg from a swing low A (schematic 20) to a swing high B (35); then a pullback consolidation drifting downward between two parallel down-sloping lines (下飘旗形) to a low C (30). The flag's upper edge is the neckline. The book treats it as a mid-trend relay (中继站) of a bull swing; rectangles, converging/ascending/descending triangles and rising/falling wedges are equivalent relays (中华车 = 收敛三角形, 佳格 = 倾向下降楔形).",
+      "entry": "Buy when price breaks above the flag's upper-edge neckline (schematic: neckline 33, buy ≈33.5). In cases the entry is on the breakout bar/week (台股 3/31 at ≈6630, 佳格 3/19 week at ≈40.5, 广丰 7/28 week at ≈13.5, 机电类 3/20 add-on at 90). An earlier 破底翻 entry at the base is used where available (机电类, 运输类).",
+      "stop": "Close back below the broken neckline (跌落线下); the schematic says set a 5%-7% stop. Cases use the neckline-level or a nearby structural low: 台股 6504 (low of the volume up-move two days before), 佳格 38, 广丰 13, 机电类 add-on 88. 中华车: the structural stop 12.5 meant 10% risk, so the book uses 13.2 (≈5%) instead.",
+      "target": {
+        "formula": "target = C + (B - A), where A = swing start low, B = prior swing high, C = flag pullback low; valid only after price exceeds B (突破前高) which confirms C.",
+        "worked_example": "Schematic: 35 - 20 = 15; 30 + 15 = 45. 台股: 6797 - 5618 = 1179; 6344 + 1179 = 7523 (high 7476.07). 佳格: 46.92 - 6.26 = 40.66; 36.35 + 40.66 = 77.01 (high 78.99). 机电类: 93.06 - 69.92 = 23.14; 84.31 + 23.14 = 107.45 (high 109.71). 运输类: 76.72 - 58.84 = 17.88; 71.68 + 17.88 = 89.56 (high 89.37). 广丰: 15.25 - 8.3 = 6.95; 12.2 + 6.95 = 19.15 (high 19.90). 中华车: 29.37 - 10.39 = 18.98; 24.59 + 18.98 = 43.57.",
+        "pages": [
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          37,
+          38
+        ]
+      },
+      "confirmation": [
+        "Price must exceed the prior swing high B; only then is the pullback low C confirmed and the target computable (p29).",
+        "Neckline breakout with volume (带量突破: 中华车 12/25, 佳格 3/19) or a long red candle (佳格 4/30 长红突破前高).",
+        "A prior 破底翻 at the base of the swing (机电类 9/21, 运输类 3/4, 佳格 daily after the 6.26 low)."
+      ],
+      "invalidation": [
+        "After the neckline breakout, a close back below the neckline (颈线突破就不能再跌破).",
+        "At/near the target, a 假突破 (false breakout) is a profit-taking/sell signal (中华车 2004)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "The swing measured move is NOT computed from the start of the rise; it requires a completed up-wave, a pullback consolidation, and a break of the prior high, which fixes the pullback low.",
+      "kind": "target",
+      "quote_zh": "首先要了解波段涨幅满足不是从图示20开始起涨后就能计算，而是做对波段方向涨完一波回档整理后，再突破前高35，才能确定回档的低点是30，方能计算波段涨幅满足。",
+      "pages": [
+        29
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Target = pullback low + size of the first wave (low-to-high).",
+      "kind": "target",
+      "quote_zh": "❶自20低点涨至35高点，共涨15。❷自30低点+15＝等幅计算的涨幅满足45。",
+      "pages": [
+        30
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "A 下飘旗形 is usually a bull-swing relay; the breakout of its upper-edge neckline is the renewed bull attack signal, and the broken neckline must not be lost again.",
+      "kind": "entry",
+      "quote_zh": "通常下飘旗形为多头波段的中继站结构，当突破下飘旗形上缘颈线时，便可视为结束整理的多头再度攻击信号，当然颈线突破就不能再跌破。",
+      "pages": [
+        30
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Schematic trade: breakout at 33, buy ≈33.5 with a 5%-7% stop (close below the line); after the prior high 35 is cleared, 33 is support and the stop/take-profit point; hold while 33 holds and look for 45 (≈34% gain) — 'big wins, small losses'.",
+      "kind": "stop",
+      "quote_zh": "因此若照图示突破颈线上缘的位置是33，约可买在33.5，设5%～7%停损，也就是跌落线下时，……操作上就是支撑33不破，看涨幅满足45附近，获利约34%，这便是大赚小赔的操作方式。",
+      "pages": [
+        30
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Bull/bear relay consolidations also include rectangles and triangles (symmetric/inverted); flags are just the example.",
+      "kind": "filter",
+      "quote_zh": "多头波与空头波的整理中继站，还有矩形、三角形（正三角形、倒三角形）等，这里仅以上下飘旗形举例说明。",
+      "pages": [
+        30
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Up/down flags, rectangles, converging/ascending/descending triangles, rising/falling wedges are all relay consolidations; the measured move applies to them.",
+      "kind": "filter",
+      "quote_zh": "上下飘旗形、距形、收敛三角形、正三角形、倒三角形、上升楔形、下降楔形等等都是中继整理的一种，中华（中华车）周线为收敛三角形整理型态。",
+      "pages": [
+        32
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Bottom completion: a heavy-volume breakout above the neckline of a >1-year base is the buy; the stop is the start-low of the volume up-move (12.5); if that risk is too large (10%), use a nearer line stop (~5%).",
+      "kind": "risk",
+      "quote_zh": "12月25日带量突破颈线买进，约可买在13.9元附近，停损设12.5元，风险太高达10%，可设跌破13.2元停损也就是跌落线下时风险约5%",
+      "pages": [
+        31,
+        32
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Exit the long at the big-swing target or when a false breakout is confirmed.",
+      "kind": "target",
+      "quote_zh": "达大波段涨幅满足43.64元附近，或假突破确立，多单获利了结，获利约200%。",
+      "pages": [
+        32
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "After the target zone, a prolonged range followed by a breakout that fails (false breakout) is a long-term sell; breaking the volume long-red low turns the trend short.",
+      "kind": "stop",
+      "quote_zh": "直到2004年2月7日当周才带量突破整理区，6周后出现假突破的长线卖出信号，同年4月24日当周跌破带量长红低点41.2元，翻空确立。",
+      "pages": [
+        32
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Staged entries: 破底翻 at the base is the first long; the flag-neckline breakout is the add-on; each has its own tight stop (2.3% / 2.2%).",
+      "kind": "entry",
+      "quote_zh": "2007年3月20日突破颈线下飘旗形确立，多单加码，约可买在90点，停损设88点，也就是跌落线下时，风险约2.2%。",
+      "pages": [
+        36
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "In a strong bull run, the low of the last three trading days is the short-term strength gauge and a reference for scaling down at highs.",
+      "kind": "risk",
+      "quote_zh": "经验上当多头强势上涨时，可以三日低点做短线强弱的判断依据（目前交易日往前推三个交易日）做为高档减码的参考。",
+      "pages": [
+        36
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "After heavy volume there is usually still a higher high, but risk is already high, especially at the target.",
+      "kind": "volume",
+      "quote_zh": "大量后虽大多有高点，但也表示风险已高，尤其是到达满足的时候。",
+      "pages": [
+        36
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "History repeats in markets (Livermore quote), justifying pattern-based trading.",
+      "kind": "psychology",
+      "quote_zh": "我很早就发现华尔街没有什么新东西，也不可能有什么新东西，因为股票投机历史悠久，今天在股市发生的一切都在以前发生过，也将在未来不断地再发生。",
+      "pages": [
+        36
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Breakout stop can be the low of the volume up-move that started the breakout (前两日开始带量上涨的低点).",
+      "kind": "stop",
+      "quote_zh": "停损设在前两日开始带量上涨的低点6504点附近，也是跌落颈线下时，风险约2%",
+      "pages": [
+        33
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "中华（中华车, 2204）",
+      "timeframe": "weekly",
+      "period": "2001-07..2004-04",
+      "pattern": "底形 → 收敛三角形中继 → 涨幅满足 → 假突破",
+      "levels": {
+        "breakdown_long_black_high": 13.35,
+        "reclaim_red_high": 13.47,
+        "bottom_low": 10.39,
+        "volume_start_low_stop": 12.5,
+        "entry": 13.9,
+        "alt_stop": 13.2,
+        "risk_pct_structural": 10,
+        "risk_pct_alt": 5,
+        "first_wave_high": 29.37,
+        "first_wave": 18.98,
+        "triangle_low": 24.59,
+        "target": 43.57,
+        "target_as_written_in_operation": 43.64,
+        "highs_in_range": [
+          48.21,
+          47.89,
+          47.19
+        ],
+        "range_lows": [
+          37.04,
+          33.21,
+          38.17,
+          40.25
+        ],
+        "false_breakout_high": 51.7,
+        "long_red_low_breakdown": 41.2,
+        "last_label": 29.36
+      },
+      "outcome": "Bottom breakout 2001-12-25 (heavy volume after >1 year); hit target, ranged >1 year above it; 2004-02-07 week breakout then 假突破 6 weeks later; 2004-04-24 week broke 41.2 → short confirmed. Long profit ≈200%.",
+      "pages": [
+        31,
+        32
+      ]
+    },
+    {
+      "instrument": "台股加权指数 (0000 大盘)",
+      "timeframe": "daily",
+      "period": "2005-11..2006-06",
+      "pattern": "下飘旗形",
+      "levels": {
+        "swing_low": 5618.9,
+        "swing_high": 6797.2,
+        "first_wave": 1179,
+        "flag_highs": [
+          6747.43,
+          6594.18
+        ],
+        "flag_lows": [
+          6373.63,
+          6436.14,
+          6344.73
+        ],
+        "pullback_low": 6344.73,
+        "target": 7523,
+        "entry": 6630,
+        "stop": 6504,
+        "risk_pct": 2,
+        "high": 7476.07,
+        "prior_label": 6171.87,
+        "last_label": "6268.9x (cut off)"
+      },
+      "outcome": "Neckline breakout 2006-03-31, prior high 6797 broken 4/8 (text) / 4/7 (chart); peaked 7476.07 just below target 7523 then fell; long profit ≈10%.",
+      "pages": [
+        33
+      ]
+    },
+    {
+      "instrument": "佳格 (1227)",
+      "timeframe": "weekly",
+      "period": "2008-11..2011-06",
+      "pattern": "下飘旗形（倾向下降楔形）",
+      "levels": {
+        "swing_low": 6.26,
+        "swing_high": 46.92,
+        "first_wave": 40.66,
+        "flag_high": 44.35,
+        "pullback_low": 36.35,
+        "target": 77.01,
+        "entry": 40.5,
+        "stop": 38,
+        "risk_pct": 6,
+        "high": 78.99,
+        "earlier_labels": [
+          12.83,
+          9.95,
+          13.97,
+          11.71,
+          37.74
+        ],
+        "last_label": 53.76
+      },
+      "outcome": "Daily 破底翻 after the 2008-11 low; 2011-03-19 week volume breakout of the flag neckline; 2011-04-30 week long red cleared 46.92; reached target (high 78.99); profit ≈90%.",
+      "pages": [
+        34
+      ]
+    },
+    {
+      "instrument": "机电类指数 (1500)",
+      "timeframe": "daily",
+      "period": "2006-09..2007-08",
+      "pattern": "破底翻 + 下飘旗形",
+      "levels": {
+        "prior_high_label": 77.09,
+        "swing_low": 69.92,
+        "swing_high": 93.06,
+        "first_wave": 23.14,
+        "flag_lows": [
+          85.79,
+          86.66,
+          84.31
+        ],
+        "flag_high": 90.57,
+        "pullback_low": 84.31,
+        "target": 107.45,
+        "high": 109.71,
+        "post_labels": [
+          97.52,
+          89.39,
+          93.56,
+          92.25,
+          91.75
+        ],
+        "entry_1": 74,
+        "stop_1": 72.3,
+        "risk_1_pct": 2.3,
+        "entry_2": 90,
+        "stop_2": 88,
+        "risk_2_pct": 2.2
+      },
+      "outcome": "破底翻 2006-09-21; neckline breakout 2007-03-20 (add-on); prior high 93.06 cleared 4/2; topped at 109.71 near target then fell sharply. Profit ≈19% (add-on) to ≈45% (破底翻 buy).",
+      "pages": [
+        35,
+        36
+      ]
+    },
+    {
+      "instrument": "运输类指数",
+      "timeframe": "daily",
+      "period": "2009-01..2009-08",
+      "pattern": "破底翻 + 下飘旗形",
+      "levels": {
+        "base_highs": [
+          63.63,
+          63.69
+        ],
+        "base_lows": [
+          61.26,
+          61.09,
+          61.1
+        ],
+        "swing_low": 58.84,
+        "swing_high": 76.72,
+        "first_wave": 17.88,
+        "pullback_low": 71.68,
+        "target": 89.56,
+        "entry": 62,
+        "stop": 60.13,
+        "risk_pct": 3,
+        "high": 89.37,
+        "other_labels": [
+          89.27,
+          79.4,
+          85.35,
+          73.46
+        ]
+      },
+      "outcome": "破底翻 2009-03-04 (entry); neckline breakout + prior-high break 4/2 confirmed target 89.56; reached ≈89.37; profit ≈43%.",
+      "pages": [
+        37
+      ]
+    },
+    {
+      "instrument": "广丰 (1416)",
+      "timeframe": "weekly",
+      "period": "2011..2012-12",
+      "pattern": "下飘旗形",
+      "levels": {
+        "swing_low": 8.3,
+        "swing_high": 15.25,
+        "first_wave": 6.95,
+        "pullback_low": 12.2,
+        "target": 19.15,
+        "entry": 13.5,
+        "stop": 13,
+        "risk_pct": 4,
+        "high": 19.9,
+        "other_labels": [
+          13.5,
+          11.6,
+          9.82,
+          9.5,
+          14.3,
+          12.3,
+          15.6,
+          18.3,
+          16.85,
+          19.1,
+          18.0
+        ]
+      },
+      "outcome": "Neckline breakout 2012-07-28 week; prior high 15.25 broken 8/18; reached target (high 19.90); profit ≈42%.",
+      "pages": [
+        38
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Bull flag: swing low A, swing high B (B > A), then a pullback C with A < C < B formed by lower highs/lower lows (down-sloping channel). Long trigger = close above the line through the flag's lower highs (upper edge).",
+    "Target is only armed when close > B after C: target = C + (B - A). Optional second check: report target hit when high >= target * (1 - tol).",
+    "Stop = close back below the broken flag upper edge (neckline) at the breakout bar; cap initial risk 5%-7%; if structural stop gives >~7-10% risk, use a nearer line stop (~5%).",
+    "Relay set: rectangle, triangles, wedges treated identically (same C + (B - A) arithmetic).",
+    "Breakout quality features: volume on breakout bar vs recent average; long red body; preceding 破底翻 at A.",
+    "Trend-following trailing rule: in strong rallies, trail with the lowest low of the last 3 trading days for scaling down at highs.",
+    "Exit/alert at target zone or on 假突破 (break above a range high followed by a close back inside)."
+  ],
+  "ambiguities": [
+    "中华车 target computed as 24.59 + 18.98 = 43.57 (p32 观察) but the operation says 43.64 and a tiny chart label reads ≈43.69 — internal inconsistency in the book.",
+    "台股 example: text says the prior high 6797 was broken on 4月8日, chart label says 4/7.",
+    "p32 lists 距形, apparently a typo for 矩形 (rectangle).",
+    "Stop sizing is inconsistent: the schematic says set a 5%-7% stop, while cases use 2%-6% structural stops; whether the % cap or the neckline governs is not specified.",
+    "How the flag 'neckline' is drawn (line through which highs) is shown graphically only; for 佳格 the shape is called 倾向下降楔形 (closer to a falling wedge).",
+    "Reported profit percentages are measured to the target (e.g. 74→107.45 = 45%, 90→107.45 = 19%, 40.5→77.01 = 90%), not to the actual exit; 台股 'about 10%' is below 6630→7476 (12.8%).",
+    "中华车 starts the measured move from the bottom low 10.39, not from the neckline breakout — A is the swing's absolute low, consistent with the schematic but different from the W-bottom neckline method in u01/u03."
+  ],
+  "illegible": [
+    {
+      "page": 31,
+      "what": "Tiny dashed projection label near the top of the 中华车 chart, appears as '1.000 (43.69)' but too small to confirm."
+    },
+    {
+      "page": 34,
+      "what": "Small label at the 佳格 chart peak above 78.99 and the low-volume-side labels (e.g. under 6.26) are low-resolution; 78.99 taken from the boxed label."
+    },
+    {
+      "page": 33,
+      "what": "Final label at right edge of the 台股 chart is cut off ('6268.9…')."
+    }
+  ]
+}
