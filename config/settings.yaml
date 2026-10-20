@@ -45,6 +45,17 @@ analysis:
     wick_exceed_lookback: 5
     sr_proximity_pct: 0.005
   max_sr_levels: 10
+  # Higher-TF S/R for daytrade/analyze_multi_tf: "zones" (sr_zones.py) or "legacy" (pin bar + pivots)
+  mtf_sr_method: zones
+  sr_zones:
+    reference_tf: 1H
+    prom_atr_mult: 0.75      # reaction must move >= this x ATR away from the wick tip
+    bandwidth_atr_mult: 0.25  # KDE bandwidth
+    min_touches: 2
+    pin_weight: 1.5
+    tight_atr_mult: 0.25      # closer than this -> tune into one line
+    band_atr_mult: 0.75       # closer than this -> widen into one band
+    max_distance_atr_mult: 4.0
 
 signal:
   scorer:

@@ -111,6 +111,10 @@ class SRLevel:
     anchor_index: int = 0  # bar index where the line starts
     # Multi-TF source
     source_tf: Timeframe | None = None  # which timeframe this level was derived from
+    # Zone (band) around price, and every TF that confirmed it (sr_zones.py)
+    zone_low: float | None = None
+    zone_high: float | None = None
+    timeframes: tuple[Timeframe, ...] = ()
 
     def price_at(self, bar_index: int) -> float:
         """Get the price of this level at a given bar index (for diagonals)."""
