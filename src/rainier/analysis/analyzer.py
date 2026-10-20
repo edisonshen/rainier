@@ -5,6 +5,9 @@ Xiaojiang methodology flow:
 2. Derive "pin bar lines" from wick tip clusters on each TF
 3. Merge all lines — 1D lines are major, 1H lines are minor
 4. Apply all lines to the trading timeframe (5m) chart
+
+analyze_multi_tf draws higher-TF levels with ``config.mtf_sr_method``: "zones"
+(sr_zones.py touch/reaction zones, default) or "legacy" (steps 2-3 above).
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from .pinbar import derive_pin_bar_lines, detect_pin_bars_raw, match_pin_bars_to
 from .pivots import compute_atr, detect_pivots
 from .sr_diagonal import detect_diagonal_sr
 from .sr_horizontal import detect_horizontal_sr
+from .sr_zones import detect_mtf_zones, zones_to_levels
 
 
 def analyze(
@@ -142,7 +146,17 @@ def analyze_multi_tf(
     higher_tfs = [tf for tf in tf_order if tf in data and tf != trading_tf
                   and tf_order.index(tf) < tf_order.index(trading_tf)]
 
-    # Collect pin bar lines from all higher TFs
+    trading_df = data[trading_tf]
+    if config.mtf_sr_method == "zones":
+        price = float(trading_df["close"].iloc[-1])
+        zones = detect_mtf_zones({tf: data[tf] for tf in higher_tfs}, config.sr_zones, price)
+        return analyze(
+            trading_df, symbol, trading_tf, config,
+            higher_tf_levels=zones_to_levels(zones, price), min_touches=min_touches,
+            skip_own_levels=True,
+        )
+
+    # Legacy: pin bar lines + pivot S/R from all higher TFs
     all_higher_levels: list[SRLevel] = []
 
     for tf in higher_tfs:
@@ -174,7 +188,6 @@ def analyze_multi_tf(
     # absorb it — use the lower-TF price for precision (more data points),
     # keep the higher-TF label, boost strength with confluence.
     if all_higher_levels:
-        trading_df = data[trading_tf]
         trading_atr = float(compute_atr(trading_df).mean()) if len(trading_df) > 1 else 1.0
         all_higher_levels = _merge_multi_tf_levels(
             all_higher_levels, tf_order, trading_atr * 0.5,
@@ -183,7 +196,6 @@ def analyze_multi_tf(
     # Run analysis on the trading TF with higher TF levels injected.
     # skip_own_levels=True: trading TF only shows data, doesn't derive its own S/R.
     # Book: use higher TF for key levels, trading TF only for signals.
-    trading_df = data[trading_tf]
     return analyze(
         trading_df, symbol, trading_tf, config,
         higher_tf_levels=all_higher_levels, min_touches=min_touches,

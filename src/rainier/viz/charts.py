@@ -117,6 +117,14 @@ def _build_figure(df: pd.DataFrame, result: AnalysisResult, signals: list[Signal
         sr_hover = (f"{level.price:.2f} {tf_label} | touches={level.touches} "
                     f"str={level.strength:.2f} | {first}→{last}")
         sr_end = n - 8  # End line before the TF label
+        if level.zone_low is not None and level.zone_high is not None \
+                and level.zone_high > level.zone_low:
+            fig.add_shape(
+                type="rect", x0=vis_start, x1=sr_end, y0=level.zone_low, y1=level.zone_high,
+                fillcolor="#00BCD4", opacity=0.10, line_width=0, layer="below",
+            )
+        if level.timeframes:
+            tf_label = "+".join(t.value for t in level.timeframes)
         fig.add_trace(go.Scatter(
             x=[vis_start, sr_end], y=[level.price, level.price],
             mode="lines", line=dict(color="#00BCD4", width=width),
