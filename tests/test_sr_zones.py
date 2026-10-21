@@ -186,3 +186,14 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert max(dist) > SRZoneConfig().max_distance_atr_mult
     assert max(dist) <= ChartPublishConfig().max_distance_atr_mult
     assert {z["role"] for z in payload["zones"]} == {"support", "resistance"}
+    # VMA55 (the user's TradingView script): sum(hlc3*vol, 55)/sum(vol, 55), offset=2 bars.
+    vma = payload["vma"]
+    assert (vma["bars"], vma["offset"]) == (55, 2) and set(vma["series"]) == set(payload["candles"])
+    m5, line = mes[Timeframe.M5], vma["series"]["5m"]
+    w = m5.iloc[-55:]
+    expected = ((w.high + w.low + w.close) / 3 * w.volume).sum() / w.volume.sum()
+    step = t - payload["candles"]["5m"][-2][0]
+    assert line[-1][0] == t + 2 * step and line[-1][1] == pytest.approx(expected, abs=0.01)
+    assert line[-3][0] == t  # the value from 2 bars back sits on the last candle
+    # Bars before the chart window feed the first values, so the line spans the whole window.
+    assert line[0][0] == payload["candles"]["5m"][2][0] and len(line) == 2880
