@@ -121,3 +121,38 @@ def test_cli_sr_levels_json_and_pine(mes, tmp_path):
     assert r.exit_code == 0, r.output
     src = pine.read_text()
     assert src.startswith("//@version=5") and src.count("line.new(") == len(payload["zones"])
+
+
+def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch):
+    """fengshen.dev /trading/mes reads this KV value: candles per TF + zones."""
+    from rainier.cli import cli
+    from rainier.publish import cloudflare_kv
+
+    for tf, df in mes.items():
+        df.to_csv(tmp_path / f"MES_{tf.value}.csv", index=False)
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(cloudflare_kv.httpx, "put",
+                        lambda url, **kw: calls.append((url, kw)) or _Resp())
+    runner = CliRunner()
+    r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
+    assert r.exit_code != 0 and "CLOUDFLARE_API_TOKEN" in r.output and not calls
+
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "tok")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
+    assert r.exit_code == 0, r.output
+    (url, kw), = calls
+    assert url.endswith("/accounts/acct/storage/kv/namespaces/"
+                        "0d0281e0d0ff49b4868a42aa2a39f4ec/values/mes%3Asr")
+    assert kw["headers"]["Authorization"] == "Bearer tok"
+    payload = json.loads(kw["content"])
+    assert set(payload["candles"]) == {"5m", "1H", "4H", "1D"}
+    assert len(payload["candles"]["5m"]) == 864
+    t, o, h, lo, c = payload["candles"]["5m"][-1]
+    assert lo <= min(o, c) <= max(o, c) <= h and t > 1.7e9
+    assert payload["zones"] and payload["price"] == mes[Timeframe.M5].close.iloc[-1]

@@ -15,7 +15,7 @@ jobs:
   - name: fetch-mes
     description: "Fetch MES data from yfinance and regenerate daytrade chart"
     schedule: "*/5 * * * *"    # every 5 minutes
-    command: "uv run rainier fetch --symbol MES && uv run rainier daytrade --symbol MES --data-dir data/csv"
+    command: "uv run rainier fetch --symbol MES && uv run rainier daytrade --symbol MES --data-dir data/csv && uv run rainier sr-levels --symbol MES --format text --publish-kv"
     log: "data/fetch.log"
     enabled: true
 
