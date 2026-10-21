@@ -20,6 +20,12 @@ def load_config(path: Path = DEFAULT_CONFIG) -> list[dict]:
     return data.get("jobs", [])
 
 
+def schedules(job: dict) -> list[str]:
+    """``schedule`` is one cron expression or a list of them (one crontab line each)."""
+    s = job["schedule"]
+    return [s] if isinstance(s, str) else list(s)
+
+
 def _load_discord_on_failure(path: Path = DEFAULT_CONFIG) -> bool:
     """Check if discord_on_failure is enabled in cron.yaml."""
     with open(path) as f:
@@ -60,7 +66,9 @@ def sync(config_path: Path = DEFAULT_CONFIG, project_dir: Path | None = None) ->
         project_dir = Path.cwd()
 
     jobs = load_config(config_path)
-    active = {j["name"]: j for j in list_active()}
+    active: dict[str, list[dict[str, str]]] = {}
+    for j in list_active():
+        active.setdefault(j["name"], []).append(j)
     actions: dict[str, str] = {}
 
     # Check if we should use the wrapper with Discord alerts
@@ -103,18 +111,20 @@ def sync(config_path: Path = DEFAULT_CONFIG, project_dir: Path | None = None) ->
         else:
             command = f"cd {project_dir} && {cmd} >> {log_path} 2>&1"
 
-        cron_line = f"{job['schedule']} {command} {JOB_TAG} {name}"
+        crons = schedules(job)
+        cron_lines = "".join(f"{c} {command} {JOB_TAG} {name}\n" for c in crons)
 
-        existing_cmd = active[name]["command"] if name in active else ""
-        if name in active and active[name]["cron"] == job["schedule"] and command == existing_cmd:
+        existing = active.get(name, [])
+        if (sorted(e["cron"] for e in existing) == sorted(crons)
+                and all(e["command"] == command for e in existing)):
             actions[name] = "unchanged"
         else:
             _remove_job(name)
             crontab = _read_crontab()
             if crontab.strip():
-                crontab = crontab.rstrip("\n") + "\n" + cron_line + "\n"
+                crontab = crontab.rstrip("\n") + "\n" + cron_lines
             else:
-                crontab = cron_line + "\n"
+                crontab = cron_lines
             _write_crontab(crontab)
             actions[name] = "added" if name not in active else "updated"
 

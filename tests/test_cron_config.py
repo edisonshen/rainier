@@ -110,3 +110,61 @@ def test_mes_weekly_backfill_scheduled(jobs: dict[str, dict]) -> None:
     assert "rainier fetch --symbol MES" in job["command"]
     dow = job["schedule"].split()[4]
     assert dow != "*"
+
+
+def _fires(expr: str) -> set[tuple[int, int, int]]:
+    """(dow, hour, minute) slots a simple 5-field cron expression fires in (dom/month = *)."""
+    def field(f: str, lo: int, hi: int) -> set[int]:
+        out: set[int] = set()
+        for part in f.split(","):
+            rng, _, step = part.partition("/")
+            a, b = (lo, hi) if rng == "*" else map(int, (rng.split("-") * 2)[:2])
+            out |= set(range(a, b + 1, int(step or 1)))
+        return out
+
+    m, h, dom, mon, dow = expr.split()
+    assert dom == mon == "*"
+    return {(d, hh, mm) for d in field(dow, 0, 6) for hh in field(h, 0, 23)
+            for mm in field(m, 0, 59)}
+
+
+def test_fetch_mes_runs_only_while_mes_trades(jobs: dict[str, dict]) -> None:
+    """MES trades Sun 15:00 -> Fri 14:00 PT; the chart needs no pushes over the weekend
+    (user request), but must catch Friday's last bars, which arrive ~10-15 min late."""
+    from rainier.scheduler.jobs import schedules
+
+    slots = set().union(*(_fires(s) for s in schedules(jobs["fetch-mes"])))
+    sun, fri, sat = 0, 5, 6
+    assert not any(d == sat for d, _, _ in slots)
+    assert not any(d == fri and (h, m) > (14, 25) for d, h, m in slots)
+    assert not any(d == sun and h < 15 for d, h, _ in slots)
+    every_5 = {(h, m) for h in range(24) for m in range(0, 60, 5)}
+    for d in (1, 2, 3, 4):  # Mon-Thu all day; the halt hour is skipped by the KV no-op
+        assert {(h, m) for dd, h, m in slots if dd == d} == every_5
+    assert {(fri, 13, 55), (fri, 14, 25), (sun, 15, 0), (sun, 23, 55)} <= slots
+
+
+def test_sync_installs_one_crontab_line_per_schedule(tmp_path, monkeypatch) -> None:
+    from rainier.scheduler import jobs as jobs_mod
+
+    tab = {"text": "0 1 * * * echo keep # unrelated\n"}
+    monkeypatch.setattr(jobs_mod, "_read_crontab", lambda: tab["text"])
+    monkeypatch.setattr(jobs_mod, "_write_crontab", lambda t: tab.update(text=t))
+    cfg = tmp_path / "cron.yaml"
+
+    def write(schedule) -> None:
+        cfg.write_text(yaml.safe_dump({"jobs": [
+            {"name": "fetch-x", "schedule": schedule, "command": "echo hi"},
+            {"name": "single", "schedule": "0 9 * * 6", "command": "echo one"},
+        ]}))
+
+    write(["*/5 * * * 1-4", "*/5 15-23 * * 0"])
+    assert jobs_mod.sync(cfg, tmp_path) == {"fetch-x": "added", "single": "added"}
+    crons = sorted(j["cron"] for j in jobs_mod.list_active() if j["name"] == "fetch-x")
+    assert crons == ["*/5 * * * 1-4", "*/5 15-23 * * 0"] and "echo keep" in tab["text"]
+    assert jobs_mod.sync(cfg, tmp_path) == {"fetch-x": "unchanged", "single": "unchanged"}
+
+    write(["*/5 * * * 1-4"])
+    assert jobs_mod.sync(cfg, tmp_path)["fetch-x"] == "updated"
+    assert [j["cron"] for j in jobs_mod.list_active() if j["name"] == "fetch-x"] == [
+        "*/5 * * * 1-4"]
