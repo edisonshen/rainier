@@ -199,7 +199,8 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     settings = ctx.obj["settings"]
     pub = settings.chart_publish
     cfg = settings.analysis.sr_zones.model_copy(
-        update={"max_distance_atr_mult": pub.max_distance_atr_mult})
+        update={"max_distance_atr_mult": pub.max_distance_atr_mult,
+                "keep_nearest_each_side": pub.keep_nearest_each_side})
     if publish_kv and not (settings.cloudflare_api_token and settings.cloudflare_account_id):
         raise click.ClickException("--publish-kv needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID")
     data = _load_mtf_csvs(Path(data_dir), symbol)

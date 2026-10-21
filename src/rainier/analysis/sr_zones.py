@@ -164,9 +164,16 @@ def detect_mtf_zones(
         if ref_tf in cfg.timeframes else data[ref_tf]
     ref_atr = float(compute_atr(ref_df).iloc[-1])
     zones = consolidate_zones(zones_by_tf, ref_atr, cfg)
-    if current_price is not None:
-        zones = [z for z in zones if abs(z.price - current_price) <= cfg.max_distance_atr_mult * ref_atr]
-    return zones
+    if current_price is None:
+        return zones
+    keep = {id(z) for z in zones
+            if abs(z.price - current_price) <= cfg.max_distance_atr_mult * ref_atr}
+    if cfg.keep_nearest_each_side:
+        above = [z for z in zones if z.price > current_price]
+        below = [z for z in zones if z.price <= current_price]
+        keep |= {id(min(side, key=lambda z: abs(z.price - current_price)))
+                 for side in (above, below) if side}
+    return [z for z in zones if id(z) in keep]
 
 
 def zones_to_levels(zones: list[Zone], current_price: float) -> list[SRLevel]:

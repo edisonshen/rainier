@@ -75,6 +75,24 @@ def test_levels_have_role_bounds_and_timeframes(mes):
     assert any(len(set(lv.timeframes)) >= 2 for lv in levels)
 
 
+def test_chart_keeps_nearest_level_on_each_side_beyond_distance_window(mes):
+    """Chart config always shows a level above and below price; signal config does not."""
+    price = float(mes[Timeframe.M5].close.iloc[-1])
+    all_zones = detect_mtf_zones(_htf(mes), SRZoneConfig())
+    above = min((z.price for z in all_zones if z.price > price), key=lambda p: p - price)
+    below = max(z.price for z in all_zones if z.price <= price)
+
+    narrow = SRZoneConfig(max_distance_atr_mult=0.01)
+    assert not detect_mtf_zones(_htf(mes), narrow, price)
+    chart = narrow.model_copy(update={"keep_nearest_each_side": True})
+    assert sorted(z.price for z in detect_mtf_zones(_htf(mes), chart, price)) == [below, above]
+
+    # Price above every zone: only a support can be shown, and it is the closest one.
+    top = max(z.price for z in all_zones) + 500
+    (z,) = detect_mtf_zones(_htf(mes), chart, top)
+    assert z.price == max(z.price for z in all_zones)
+
+
 def test_analyze_multi_tf_uses_zones_by_default_and_legacy_on_request(mes):
     zones = analyze_multi_tf(mes, "MES", Timeframe.M5, AnalysisConfig())
     assert zones.sr_levels and all(lv.zone_low is not None for lv in zones.sr_levels)
@@ -162,3 +180,4 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     dist = [abs(z["price"] - payload["price"]) / atr for z in payload["zones"]]
     assert max(dist) > SRZoneConfig().max_distance_atr_mult
     assert max(dist) <= ChartPublishConfig().max_distance_atr_mult
+    assert {z["role"] for z in payload["zones"]} == {"support", "resistance"}
