@@ -105,12 +105,10 @@ def daytrade(ctx, symbol, data_dir, output_path):
     """Multi-TF day trading analysis: 1D + 1H pin bar lines applied to 5m chart."""
     from rainier.analysis.analyzer import analyze_multi_tf
     from rainier.core.config import load_watchlist
-    from rainier.data.csv_provider import CSVProvider
     from rainier.signals.generator import generate_signals
 
     settings = ctx.obj["settings"]
     data_path = Path(data_dir)
-    provider = CSVProvider(data_path)
 
     # Load per-symbol config from watchlist
     watchlist = load_watchlist()
@@ -118,21 +116,7 @@ def daytrade(ctx, symbol, data_dir, output_path):
     min_touches = instrument.min_touches if instrument else 3
     click.echo(f"  {symbol}: min_touches={min_touches}")
 
-    # Load all available timeframes
-    data: dict[Timeframe, pd.DataFrame] = {}
-    tf_files = {
-        Timeframe.D1: f"{symbol}_1D.csv",
-        Timeframe.H4: f"{symbol}_4H.csv",
-        Timeframe.H1: f"{symbol}_1H.csv",
-        Timeframe.M5: f"{symbol}_5m.csv",
-    }
-
-    for tf, filename in tf_files.items():
-        csv_file = data_path / filename
-        if csv_file.exists():
-            df = provider._read_csv(csv_file, None, None)
-            data[tf] = df
-            click.echo(f"  Loaded {tf.value}: {len(df)} candles")
+    data = _load_mtf_csvs(data_path, symbol)
 
     if Timeframe.M5 not in data:
         click.echo("Error: 5m CSV required for day trading analysis")
@@ -176,6 +160,100 @@ def daytrade(ctx, symbol, data_dir, output_path):
     out = Path(output_path) if output_path else Path(f"charts/{symbol}_daytrade.html")
     create_tabbed_chart(data, htf_results, Timeframe.M5, signals, out)
     click.echo(f"\nChart saved to {out}")
+
+
+MTF_TIMEFRAMES = (Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M5)
+
+
+def _load_mtf_csvs(data_path: Path, symbol: str) -> dict[Timeframe, pd.DataFrame]:
+    """Load {symbol}_{1D,4H,1H,5m}.csv from data_path (missing files are skipped)."""
+    from rainier.data.csv_provider import CSVProvider
+
+    provider = CSVProvider(data_path)
+    data: dict[Timeframe, pd.DataFrame] = {}
+    for tf in MTF_TIMEFRAMES:
+        csv_file = data_path / f"{symbol}_{tf.value}.csv"
+        if csv_file.exists():
+            data[tf] = provider._read_csv(csv_file, None, None)
+            click.echo(f"  Loaded {tf.value}: {len(data[tf])} candles")
+    return data
+
+
+@cli.command("sr-levels")
+@click.option("--symbol", default="MES")
+@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
+@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json", "pine"]))
+@click.option("--output", "output_path", default=None, help="Write to file instead of stdout")
+@click.option("--publish-kv", is_flag=True,
+              help="Also push the JSON chart payload to Workers KV (fengshen.dev /trading/mes)")
+@click.pass_context
+def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
+    """Current multi-TF S/R zones (1D -> 4H -> 1H, consolidated) as text, JSON or Pine v5."""
+    import json
+
+    from rainier.analysis.sr_zones import detect_mtf_zones, zones_to_levels
+    from rainier.publish.cloudflare_kv import put_kv
+    from rainier.viz.chart_payload import sr_chart_payload
+    from rainier.viz.pine import zones_to_pine
+
+    settings = ctx.obj["settings"]
+    cfg = settings.analysis.sr_zones
+    pub = settings.chart_publish
+    if publish_kv and not (settings.cloudflare_api_token and settings.cloudflare_account_id):
+        raise click.ClickException("--publish-kv needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID")
+    data = _load_mtf_csvs(Path(data_dir), symbol)
+    htf = {tf: df for tf, df in data.items() if tf in cfg.timeframes}
+    if not htf:
+        raise click.ClickException(f"no {symbol} 1D/4H/1H CSVs in {data_dir}")
+    latest = data.get(Timeframe.M5, data[next(iter(htf))])
+    price = float(latest["close"].iloc[-1])
+    asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
+    levels = zones_to_levels(detect_mtf_zones(htf, cfg, price), price)
+    levels.sort(key=lambda lv: -lv.price)
+    payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars)
+    if publish_kv:
+        key = pub.kv_key.format(symbol=symbol.lower())
+        put_kv(settings.cloudflare_account_id, pub.kv_namespace_id, key,
+               json.dumps(payload, separators=(",", ":")), settings.cloudflare_api_token)
+        click.echo(f"Published {len(levels)} zones to KV {key}")
+    if fmt == "pine":
+        out = zones_to_pine(symbol, levels, asof)
+    elif fmt == "json":
+        out = json.dumps(payload, separators=(",", ":"))
+    else:
+        out = "\n".join(
+            f"{lv.role.value[0].upper()} {lv.price:9.2f}  [{lv.zone_low:.2f}-{lv.zone_high:.2f}]"
+            f"  {'+'.join(t.value for t in lv.timeframes):10s} str={lv.strength:.2f}"
+            for lv in levels)
+    if output_path:
+        Path(output_path).write_text(out)
+        click.echo(f"Wrote {len(levels)} zones to {output_path}")
+    else:
+        click.echo(out)
+
+
+@cli.command("sr-validate")
+@click.option("--symbol", default="MES")
+@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
+@click.option("--holdout-start", required=True, help="First holdout date (YYYY-MM-DD), UTC")
+@click.option("--min-timeframes", default=2, show_default=True)
+@click.option("--step", default=48, show_default=True, help="5m bars between re-draws")
+@click.pass_context
+def sr_validate(ctx, symbol, data_dir, holdout_start, min_timeframes, step):
+    """Walk-forward 5m touch/reaction scorecard of S/R zones vs randomly shifted zones."""
+    from rainier.analysis.sr_eval import scorecard, walk_forward
+    from rainier.analysis.sr_zones import detect_mtf_zones
+
+    cfg = ctx.obj["settings"].analysis.sr_zones
+    data = _load_mtf_csvs(Path(data_dir), symbol)
+    if Timeframe.M5 not in data:
+        raise click.ClickException(f"{symbol}_5m.csv required")
+    htf = {tf: df for tf, df in data.items() if tf in cfg.timeframes}
+    outcomes = walk_forward(
+        htf, data[Timeframe.M5], lambda past, px: detect_mtf_zones(past, cfg, px),
+        pd.Timestamp(holdout_start, tz="UTC"), reference_tf=cfg.reference_tf, step=step,
+    )
+    click.echo(scorecard(outcomes, min_timeframes).round(3).to_string())
 
 
 @cli.command()

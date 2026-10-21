@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from rainier.core.types import Timeframe
+
 # ---------------------------------------------------------------------------
 # Price action analysis config (futures)
 # ---------------------------------------------------------------------------
@@ -47,6 +49,37 @@ class PinBarConfig(BaseModel):
     sr_proximity_pct: float = 0.005
 
 
+class SRZoneTimeframeConfig(BaseModel):
+    lookback: int  # bars of this TF used to draw zones
+    half_life: float  # bars; older reaction points decay with this half-life
+    weight: float  # score multiplier when consolidating across TFs
+    top: int = 8  # strongest zones kept per TF
+
+
+def _default_zone_timeframes() -> dict[Timeframe, SRZoneTimeframeConfig]:
+    return {
+        Timeframe.D1: SRZoneTimeframeConfig(lookback=250, half_life=120, weight=3.0),
+        Timeframe.H4: SRZoneTimeframeConfig(lookback=360, half_life=180, weight=2.0),
+        Timeframe.H1: SRZoneTimeframeConfig(lookback=500, half_life=250, weight=1.0),
+    }
+
+
+class SRZoneConfig(BaseModel):
+    """Touch-and-reaction S/R zones (analysis/sr_zones.py). ATR multiples are per-TF ATR(14)
+    except tight/band/max_distance, which use the reference TF's ATR."""
+
+    timeframes: dict[Timeframe, SRZoneTimeframeConfig] = Field(
+        default_factory=_default_zone_timeframes)
+    reference_tf: Timeframe = Timeframe.H1
+    prom_atr_mult: float = 0.75  # min reaction away from a wick tip
+    bandwidth_atr_mult: float = 0.25  # KDE bandwidth
+    min_touches: int = 2
+    pin_weight: float = 1.5
+    tight_atr_mult: float = 0.25  # closer than this -> tuned into one line
+    band_atr_mult: float = 0.75  # closer than this -> widened into a band
+    max_distance_atr_mult: float = 4.0  # drop zones farther than this from price
+
+
 class InsideBarConfig(BaseModel):
     max_consecutive: int = 5
 
@@ -57,6 +90,10 @@ class AnalysisConfig(BaseModel):
     sr_diagonal: SRDiagonalConfig = SRDiagonalConfig()
     pin_bar: PinBarConfig = PinBarConfig()
     inside_bar: InsideBarConfig = InsideBarConfig()
+    sr_zones: SRZoneConfig = SRZoneConfig()
+    # Multi-TF level source: "zones" (touch/reaction KDE zones) or "legacy"
+    # (pin-bar tip clusters + pivot S/R, pre-2026-10).
+    mtf_sr_method: Literal["zones", "legacy"] = "zones"
     max_sr_levels: int = 10
     max_diagonal_levels: int = 3
 
@@ -445,6 +482,18 @@ class DatabaseConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _default_chart_bars() -> dict[Timeframe, int]:
+    return {Timeframe.M5: 864, Timeframe.H1: 720, Timeframe.H4: 540, Timeframe.D1: 250}
+
+
+class ChartPublishConfig(BaseModel):
+    """S/R chart payload pushed to Workers KV for fengshen.dev /trading/mes."""
+
+    kv_namespace_id: str = "0d0281e0d0ff49b4868a42aa2a39f4ec"  # fengshen TRADING_KV
+    kv_key: str = "{symbol}:sr"  # formatted with the lower-cased symbol
+    bars: dict[Timeframe, int] = Field(default_factory=_default_chart_bars)
+
+
 class Settings(BaseSettings):
     """Root settings — .env provides secrets, YAML provides app config."""
 
@@ -476,6 +525,8 @@ class Settings(BaseSettings):
     discord_backtest_webhook_url: str = ""
     notify_urls: str = ""  # Apprise URL(s), comma-separated
     x_api_bearer_token: str = ""  # X/Twitter API v2 bearer token
+    cloudflare_api_token: str = ""  # Workers KV Storage: Edit (rainier sr-levels --publish-kv)
+    cloudflare_account_id: str = ""
 
     # App config from YAML
     app: AppConfig = AppConfig()
@@ -483,6 +534,7 @@ class Settings(BaseSettings):
 
     # Price action analysis (futures)
     analysis: AnalysisConfig = AnalysisConfig()
+    chart_publish: ChartPublishConfig = ChartPublishConfig()
     signal: SignalConfig = SignalConfig()
     strategies: StrategiesConfig = StrategiesConfig()
     risk: RiskConfig = RiskConfig()
