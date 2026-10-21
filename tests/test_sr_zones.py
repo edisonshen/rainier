@@ -14,9 +14,10 @@ import pytest
 from click.testing import CliRunner
 
 from rainier.analysis.analyzer import analyze_multi_tf
+from rainier.analysis.pivots import compute_atr
 from rainier.analysis.sr_eval import closed_bars, scorecard, walk_forward
 from rainier.analysis.sr_zones import Zone, consolidate_zones, detect_mtf_zones, zones_to_levels
-from rainier.core.config import AnalysisConfig, SRZoneConfig
+from rainier.core.config import AnalysisConfig, ChartPublishConfig, SRZoneConfig
 from rainier.core.types import SRRole, Timeframe
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mes_sr_small.parquet"
@@ -152,7 +153,12 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert kw["headers"]["Authorization"] == "Bearer tok"
     payload = json.loads(kw["content"])
     assert set(payload["candles"]) == {"5m", "1H", "4H", "1D"}
-    assert len(payload["candles"]["5m"]) == 864
+    assert len(payload["candles"]["5m"]) == 2880  # ~2 weeks of 23h sessions
     t, o, h, lo, c = payload["candles"]["5m"][-1]
     assert lo <= min(o, c) <= max(o, c) <= h and t > 1.7e9
     assert payload["zones"] and payload["price"] == mes[Timeframe.M5].close.iloc[-1]
+    # The chart keeps levels the 4-ATR signal filter drops (e.g. a 4H+1H support 8 ATR below).
+    atr = float(compute_atr(mes[Timeframe.H1].iloc[-500:]).iloc[-1])
+    dist = [abs(z["price"] - payload["price"]) / atr for z in payload["zones"]]
+    assert max(dist) > SRZoneConfig().max_distance_atr_mult
+    assert max(dist) <= ChartPublishConfig().max_distance_atr_mult

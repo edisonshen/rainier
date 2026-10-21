@@ -197,8 +197,9 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     from rainier.viz.pine import zones_to_pine
 
     settings = ctx.obj["settings"]
-    cfg = settings.analysis.sr_zones
     pub = settings.chart_publish
+    cfg = settings.analysis.sr_zones.model_copy(
+        update={"max_distance_atr_mult": pub.max_distance_atr_mult})
     if publish_kv and not (settings.cloudflare_api_token and settings.cloudflare_account_id):
         raise click.ClickException("--publish-kv needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID")
     data = _load_mtf_csvs(Path(data_dir), symbol)

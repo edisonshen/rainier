@@ -483,7 +483,7 @@ class DatabaseConfig(BaseModel):
 
 
 def _default_chart_bars() -> dict[Timeframe, int]:
-    return {Timeframe.M5: 864, Timeframe.H1: 720, Timeframe.H4: 540, Timeframe.D1: 250}
+    return {Timeframe.M5: 2880, Timeframe.H1: 720, Timeframe.H4: 540, Timeframe.D1: 250}
 
 
 class ChartPublishConfig(BaseModel):
@@ -492,6 +492,8 @@ class ChartPublishConfig(BaseModel):
     kv_namespace_id: str = "0d0281e0d0ff49b4868a42aa2a39f4ec"  # fengshen TRADING_KV
     kv_key: str = "{symbol}:sr"  # formatted with the lower-cased symbol
     bars: dict[Timeframe, int] = Field(default_factory=_default_chart_bars)
+    # Wider than sr_zones.max_distance_atr_mult (signals): the chart shows farther levels too.
+    max_distance_atr_mult: float = 10.0
 
 
 class Settings(BaseSettings):
