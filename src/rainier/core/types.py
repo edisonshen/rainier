@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
 
+# CSVProvider returns naive timestamps as wall-clock times in this zone.
+CSV_TZ = "US/Pacific"
+
 
 class Timeframe(str, Enum):
     M1 = "1m"

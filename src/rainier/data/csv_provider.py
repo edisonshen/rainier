@@ -7,10 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from rainier.core.types import Timeframe
-
-# Loaded timestamps are naive wall-clock times in this zone.
-CSV_TZ = "US/Pacific"
+from rainier.core.types import CSV_TZ, Timeframe
 
 
 class CSVProvider:
