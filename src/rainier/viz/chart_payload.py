@@ -6,8 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from rainier.core.types import SRLevel, Timeframe
-from rainier.data.csv_provider import CSV_TZ
+from rainier.core.types import CSV_TZ, SRLevel, Timeframe
 
 
 def _utc(ts: pd.Series) -> pd.Series:
