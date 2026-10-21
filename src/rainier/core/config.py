@@ -78,6 +78,7 @@ class SRZoneConfig(BaseModel):
     tight_atr_mult: float = 0.25  # closer than this -> tuned into one line
     band_atr_mult: float = 0.75  # closer than this -> widened into a band
     max_distance_atr_mult: float = 4.0  # drop zones farther than this from price
+    keep_nearest_each_side: bool = False  # keep the closest zone above/below even if farther
 
 
 class InsideBarConfig(BaseModel):
@@ -494,6 +495,8 @@ class ChartPublishConfig(BaseModel):
     bars: dict[Timeframe, int] = Field(default_factory=_default_chart_bars)
     # Wider than sr_zones.max_distance_atr_mult (signals): the chart shows farther levels too.
     max_distance_atr_mult: float = 10.0
+    # Always show at least one level above and one below price.
+    keep_nearest_each_side: bool = True
 
 
 class Settings(BaseSettings):
