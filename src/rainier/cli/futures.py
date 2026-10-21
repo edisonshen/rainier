@@ -212,7 +212,8 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
     levels = zones_to_levels(detect_mtf_zones(htf, cfg, price), price)
     levels.sort(key=lambda lv: -lv.price)
-    payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars)
+    payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
+                               pub.vma_bars, pub.vma_offset)
     if publish_kv:
         key = pub.kv_key.format(symbol=symbol.lower())
         # Same bars + zones (daily halt, holidays) -> identical payload, so skip the write.
