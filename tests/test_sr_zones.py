@@ -173,7 +173,12 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert set(payload["candles"]) == {"5m", "1H", "4H", "1D"}
     assert len(payload["candles"]["5m"]) == 2880  # ~2 weeks of 23h sessions
     t, o, h, lo, c = payload["candles"]["5m"][-1]
-    assert lo <= min(o, c) <= max(o, c) <= h and t > 1.7e9
+    assert lo <= min(o, c) <= max(o, c) <= h
+    # The page formats times as PT itself, so the payload must carry real UTC, not the
+    # loader's naive PT wall clock (that showed "as of 04:35 PT" for an 11:35 PT bar).
+    last_bar = pd.Timestamp(mes[Timeframe.M5].timestamp.iloc[-1])
+    assert t == int(last_bar.timestamp())
+    assert pd.Timestamp(payload["asof"]) == last_bar and payload["asof"].endswith("+00:00")
     assert payload["zones"] and payload["price"] == mes[Timeframe.M5].close.iloc[-1]
     # The chart keeps levels the 4-ATR signal filter drops (e.g. a 4H+1H support 8 ATR below).
     atr = float(compute_atr(mes[Timeframe.H1].iloc[-500:]).iloc[-1])
