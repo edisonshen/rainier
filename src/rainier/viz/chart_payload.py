@@ -62,7 +62,7 @@ def sr_chart_payload(
 
 
 def _shifted(times: list[int], values: list[float], offset: int) -> list[list]:
-    if len(times) < 2:
+    if len(times) < max(2, offset + 1):
         return []
     step = times[-1] - times[-2]
     plot_t = times[offset:] + [times[-1] + step * k for k in range(1, offset + 1)]

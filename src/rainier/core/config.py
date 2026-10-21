@@ -498,8 +498,8 @@ class ChartPublishConfig(BaseModel):
     # Always show at least one level above and one below price.
     keep_nearest_each_side: bool = True
     # Rolling VWAP line (TradingView "VMA55": sum(hlc3*vol, n)/sum(vol, n), offset=2).
-    vma_bars: int = 55
-    vma_offset: int = 2
+    vma_bars: int = Field(55, ge=1)
+    vma_offset: int = Field(2, ge=0)
 
 
 class Settings(BaseSettings):

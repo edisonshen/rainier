@@ -197,3 +197,18 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert line[-3][0] == t  # the value from 2 bars back sits on the last candle
     # Bars before the chart window feed the first values, so the line spans the whole window.
     assert line[0][0] == payload["candles"]["5m"][2][0] and len(line) == 2880
+
+
+def test_chart_payload_survives_short_windows_and_rejects_empty_vma(mes) -> None:
+    from pydantic import ValidationError
+
+    from rainier.viz.chart_payload import sr_chart_payload
+
+    asof = pd.Timestamp(mes[Timeframe.M5].timestamp.iloc[-1]).to_pydatetime()
+    bars = {Timeframe.D1: 2, Timeframe.M5: 3}  # fewer (or barely more) bars than offset=2
+    p = sr_chart_payload("MES", asof, 7800.0, [], mes, bars)
+    assert len(p["candles"]["1D"]) == 2 and p["vma"]["series"]["1D"] == []
+    assert len(p["vma"]["series"]["5m"]) == 3
+    for bad in ({"vma_bars": 0}, {"vma_offset": -1}):
+        with pytest.raises(ValidationError):
+            ChartPublishConfig(**bad)
