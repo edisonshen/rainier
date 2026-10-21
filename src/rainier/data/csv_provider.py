@@ -9,6 +9,9 @@ import pandas as pd
 
 from rainier.core.types import Timeframe
 
+# Loaded timestamps are naive wall-clock times in this zone.
+CSV_TZ = "US/Pacific"
+
 
 class CSVProvider:
     """Reads OHLCV CSV files from yfinance or other sources.
@@ -88,7 +91,7 @@ class CSVProvider:
 
         df["timestamp"] = (
             pd.to_datetime(df["timestamp"], utc=True)
-            .dt.tz_convert("US/Pacific")
+            .dt.tz_convert(CSV_TZ)
             .dt.tz_localize(None)
         )
         df = df.sort_values("timestamp").reset_index(drop=True)
