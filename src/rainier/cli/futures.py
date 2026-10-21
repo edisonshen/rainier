@@ -184,15 +184,23 @@ def _load_mtf_csvs(data_path: Path, symbol: str) -> dict[Timeframe, pd.DataFrame
 @click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
 @click.option("--format", "fmt", default="text", type=click.Choice(["text", "json", "pine"]))
 @click.option("--output", "output_path", default=None, help="Write to file instead of stdout")
+@click.option("--publish-kv", is_flag=True,
+              help="Also push the JSON chart payload to Workers KV (fengshen.dev /trading/mes)")
 @click.pass_context
-def sr_levels(ctx, symbol, data_dir, fmt, output_path):
+def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     """Current multi-TF S/R zones (1D -> 4H -> 1H, consolidated) as text, JSON or Pine v5."""
     import json
 
     from rainier.analysis.sr_zones import detect_mtf_zones, zones_to_levels
+    from rainier.publish.cloudflare_kv import put_kv
+    from rainier.viz.chart_payload import sr_chart_payload
     from rainier.viz.pine import zones_to_pine
 
-    cfg = ctx.obj["settings"].analysis.sr_zones
+    settings = ctx.obj["settings"]
+    cfg = settings.analysis.sr_zones
+    pub = settings.chart_publish
+    if publish_kv and not (settings.cloudflare_api_token and settings.cloudflare_account_id):
+        raise click.ClickException("--publish-kv needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID")
     data = _load_mtf_csvs(Path(data_dir), symbol)
     htf = {tf: df for tf, df in data.items() if tf in cfg.timeframes}
     if not htf:
@@ -202,17 +210,16 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path):
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
     levels = zones_to_levels(detect_mtf_zones(htf, cfg, price), price)
     levels.sort(key=lambda lv: -lv.price)
+    payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars)
+    if publish_kv:
+        key = pub.kv_key.format(symbol=symbol.lower())
+        put_kv(settings.cloudflare_account_id, pub.kv_namespace_id, key,
+               json.dumps(payload, separators=(",", ":")), settings.cloudflare_api_token)
+        click.echo(f"Published {len(levels)} zones to KV {key}")
     if fmt == "pine":
         out = zones_to_pine(symbol, levels, asof)
     elif fmt == "json":
-        out = json.dumps({
-            "symbol": symbol, "asof": asof.isoformat(), "price": price,
-            "zones": [{
-                "price": lv.price, "low": lv.zone_low, "high": lv.zone_high,
-                "role": lv.role.value, "strength": round(lv.strength, 4),
-                "touches": lv.touches, "timeframes": [t.value for t in lv.timeframes],
-            } for lv in levels],
-        }, indent=2)
+        out = json.dumps(payload, separators=(",", ":"))
     else:
         out = "\n".join(
             f"{lv.role.value[0].upper()} {lv.price:9.2f}  [{lv.zone_low:.2f}-{lv.zone_high:.2f}]"

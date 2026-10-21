@@ -482,6 +482,18 @@ class DatabaseConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _default_chart_bars() -> dict[Timeframe, int]:
+    return {Timeframe.M5: 864, Timeframe.H1: 720, Timeframe.H4: 540, Timeframe.D1: 250}
+
+
+class ChartPublishConfig(BaseModel):
+    """S/R chart payload pushed to Workers KV for fengshen.dev /trading/mes."""
+
+    kv_namespace_id: str = "0d0281e0d0ff49b4868a42aa2a39f4ec"  # fengshen TRADING_KV
+    kv_key: str = "{symbol}:sr"  # formatted with the lower-cased symbol
+    bars: dict[Timeframe, int] = Field(default_factory=_default_chart_bars)
+
+
 class Settings(BaseSettings):
     """Root settings — .env provides secrets, YAML provides app config."""
 
@@ -513,6 +525,8 @@ class Settings(BaseSettings):
     discord_backtest_webhook_url: str = ""
     notify_urls: str = ""  # Apprise URL(s), comma-separated
     x_api_bearer_token: str = ""  # X/Twitter API v2 bearer token
+    cloudflare_api_token: str = ""  # Workers KV Storage: Edit (rainier sr-levels --publish-kv)
+    cloudflare_account_id: str = ""
 
     # App config from YAML
     app: AppConfig = AppConfig()
@@ -520,6 +534,7 @@ class Settings(BaseSettings):
 
     # Price action analysis (futures)
     analysis: AnalysisConfig = AnalysisConfig()
+    chart_publish: ChartPublishConfig = ChartPublishConfig()
     signal: SignalConfig = SignalConfig()
     strategies: StrategiesConfig = StrategiesConfig()
     risk: RiskConfig = RiskConfig()
