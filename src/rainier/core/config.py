@@ -497,6 +497,9 @@ class ChartPublishConfig(BaseModel):
     max_distance_atr_mult: float = 10.0
     # Always show at least one level above and one below price.
     keep_nearest_each_side: bool = True
+    # Rolling VWAP line (TradingView "VMA55": sum(hlc3*vol, n)/sum(vol, n), offset=2).
+    vma_bars: int = 55
+    vma_offset: int = 2
 
 
 class Settings(BaseSettings):

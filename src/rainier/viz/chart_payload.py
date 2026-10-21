@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
+from rainier.analysis.indicators import rolling_vwap
 from rainier.core.types import CSV_TZ, SRLevel, Timeframe
 
 
@@ -24,14 +25,23 @@ def sr_chart_payload(
     levels: list[SRLevel],
     data: dict[Timeframe, pd.DataFrame],
     bars: dict[Timeframe, int],
+    vma_bars: int = 55,
+    vma_offset: int = 2,
 ) -> dict:
-    """``candles[tf]`` rows are ``[unix_seconds, open, high, low, close]``; ``asof`` is UTC ISO."""
-    candles = {}
+    """``candles[tf]`` rows are ``[unix_seconds, open, high, low, close]``; ``asof`` is UTC ISO.
+
+    ``vma.series[tf]`` rows are ``[unix_seconds, value]``: the rolling VWAP drawn
+    ``vma_offset`` bars to the right like TradingView's ``offset=``, so the last points sit
+    past the last candle (times extrapolated by the last bar spacing).
+    """
+    candles, vma = {}, {}
     for tf, n in bars.items():
         if tf not in data:
             continue
         df = data[tf].tail(n)
         t = _utc(df["timestamp"]).astype("int64") // 10**9
+        vma[tf.value] = _shifted(t.tolist(), rolling_vwap(data[tf], vma_bars).tail(n).tolist(),
+                                 vma_offset)
         candles[tf.value] = [
             [int(ts), round(o, 2), round(h, 2), round(lo, 2), round(c, 2)]
             for ts, o, h, lo, c in zip(t, df["open"], df["high"], df["low"], df["close"],
@@ -47,4 +57,13 @@ def sr_chart_payload(
             "touches": lv.touches, "timeframes": [t.value for t in lv.timeframes],
         } for lv in levels],
         "candles": candles,
+        "vma": {"bars": vma_bars, "offset": vma_offset, "series": vma},
     }
+
+
+def _shifted(times: list[int], values: list[float], offset: int) -> list[list]:
+    if len(times) < 2:
+        return []
+    step = times[-1] - times[-2]
+    plot_t = times[offset:] + [times[-1] + step * k for k in range(1, offset + 1)]
+    return [[int(pt), round(v, 2)] for pt, v in zip(plot_t, values, strict=True) if v == v]
