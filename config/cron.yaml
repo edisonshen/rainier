@@ -19,6 +19,17 @@ jobs:
     log: "data/fetch.log"
     enabled: true
 
+  # yfinance keeps only 60 days of 5m (730d of 1h), so any gap longer than that
+  # is lost for good. Weekly merge into data/csv + the `candles` table keeps the
+  # 5m history continuous for S/R walk-forward validation even when fetch-mes
+  # is not installed.
+  - name: backfill-mes-weekly
+    description: "Weekly MES 1D/4H/1H/5m backfill from yfinance (merge into CSV + candles table)"
+    schedule: "0 9 * * 6"      # 09:00 PT Saturday (markets closed)
+    command: "uv run rainier fetch --symbol MES --provider yfinance"
+    log: "data/fetch.log"
+    enabled: true
+
   # Chrome stays running all day — scrape jobs just connect via CDP.
   # scripts/ensure-chrome.sh starts Chrome only if not already running.
 

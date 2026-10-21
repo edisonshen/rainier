@@ -100,3 +100,13 @@ def test_pg_write_jobs_preserved(jobs: dict[str, dict]) -> None:
     breadth = jobs["market-breadth-daily"]
     assert "backfill-ohlcv" in breadth["command"]
     assert "compute-indicators" in breadth["command"]
+
+
+def test_mes_weekly_backfill_scheduled(jobs: dict[str, dict]) -> None:
+    """yfinance keeps only 60 days of 5m, so MES must be backfilled at least weekly
+    or 5m history used for S/R validation develops permanent gaps."""
+    job = jobs["backfill-mes-weekly"]
+    assert job["enabled"] is True
+    assert "rainier fetch --symbol MES" in job["command"]
+    dow = job["schedule"].split()[4]
+    assert dow != "*"
