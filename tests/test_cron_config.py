@@ -168,3 +168,24 @@ def test_sync_installs_one_crontab_line_per_schedule(tmp_path, monkeypatch) -> N
     assert jobs_mod.sync(cfg, tmp_path)["fetch-x"] == "updated"
     assert [j["cron"] for j in jobs_mod.list_active() if j["name"] == "fetch-x"] == [
         "*/5 * * * 1-4"]
+
+
+def test_jobs_list_flags_a_missing_schedule_line(tmp_path, monkeypatch) -> None:
+    from click.testing import CliRunner
+
+    from rainier.cli import cli
+    from rainier.scheduler import jobs as jobs_mod
+
+    tab = {"text": ""}
+    monkeypatch.setattr(jobs_mod, "_read_crontab", lambda: tab["text"])
+    monkeypatch.setattr(jobs_mod, "_write_crontab", lambda t: tab.update(text=t))
+    jobs_mod.sync(project_dir=tmp_path)
+
+    def status() -> str:
+        out = CliRunner().invoke(cli, ["jobs", "list"]).output
+        return next(ln for ln in out.splitlines() if ln.strip().startswith("fetch-mes"))
+
+    assert status().endswith("ACTIVE")
+    tab["text"] = "".join(ln + "\n" for ln in tab["text"].splitlines()
+                          if not (ln.startswith("*/5 15-23 * * 0") and "fetch-mes" in ln))
+    assert status().endswith("OUT OF SYNC")
