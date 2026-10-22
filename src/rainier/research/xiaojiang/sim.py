@@ -28,7 +28,8 @@ class XJParams:
     min_conf: int = 2  # distinct sources merged into the line (confluence)
     max_touches: int = 2  # skip lines tested more often than this (doc: many touches -> break)
     k_near: int = 3  # doc: the 2-3 lines above/below price are the day's range
-    bias: str = "none"  # none | trend (inferred: 20-day mean +- 0.5 ATR decides the side)
+    bias: str = "none"  # none | one of TRENDS: uptrend -> buys only, downtrend -> sells only
+    trend_sides: str = "both"  # both | up: only an uptrend filters (no sells), downtrend trades both
     per_line: int = 1  # trades per line per session (1 = first touch only)
     confirm_bars: int = 3  # right side: bars after the touch allowed to confirm
     breakeven: bool = False  # not in the doc: her hard stop stays put; True moves it after TP1
@@ -104,20 +105,96 @@ class Market:
         nxt = self.t.shift(-1)
         self.last_before_gap = ((nxt - self.t) > GAP).to_numpy() | nxt.isna().to_numpy()
         self.book = book
-        self.bias = _trend_bias(data.get(Timeframe.D1), self.t)
+        self.trend = {name: fn(data, self.t) for name, fn in TRENDS.items()}
+
+    def bias(self, name: str, sides: str = "both") -> np.ndarray:
+        """+1 up / -1 down / 0 range per 5m bar, from higher-TF bars closed before it."""
+        if name == "none":
+            return np.zeros(len(self.t), dtype=int)
+        b = self.trend[TREND_ALIASES.get(name, name)]
+        return np.where(b > 0, 1, 0) if sides == "up" else b
 
 
-def _trend_bias(d1: pd.DataFrame | None, t: pd.Series) -> np.ndarray:
-    if d1 is None or d1.empty:
-        return np.zeros(len(t), dtype=int)
-    d = d1.reset_index(drop=True)
+def _asof(ts: pd.Series, dur: pd.Timedelta, vals: np.ndarray, t: pd.Series) -> np.ndarray:
+    """Value of the last higher-TF bar that had fully closed at each 5m bar's open."""
+    known = (ts + dur).to_numpy("datetime64[ns]")
+    k = np.searchsorted(known, t.to_numpy("datetime64[ns]"), side="right") - 1
+    return np.where(k >= 0, vals[np.clip(k, 0, None)], 0).astype(int)
+
+
+def _atr(d: pd.DataFrame, n: int = 14) -> pd.Series:
     tr = pd.concat([d.high - d.low, (d.high - d.close.shift()).abs(),
                     (d.low - d.close.shift()).abs()], axis=1).max(axis=1)
-    sma, atr = d.close.rolling(20).mean(), tr.rolling(14).mean()
+    return tr.rolling(n).mean()
+
+
+def _trend_d1(data: dict, t: pd.Series) -> np.ndarray:
+    """Daily close vs its 20-day mean, +-0.5 ATR dead band."""
+    d = data.get(Timeframe.D1)
+    if d is None or d.empty:
+        return np.zeros(len(t), dtype=int)
+    d = d.reset_index(drop=True)
+    sma, atr = d.close.rolling(20).mean(), _atr(d)
     b = np.where(d.close > sma + 0.5 * atr, 1, np.where(d.close < sma - 0.5 * atr, -1, 0))
-    known = (d.timestamp + pd.Timedelta("1D")).to_numpy("datetime64[ns]")
-    k = np.searchsorted(known, t.to_numpy("datetime64[ns]"), side="right") - 1
-    return np.where(k >= 0, b[np.clip(k, 0, None)], 0)
+    return _asof(d.timestamp, pd.Timedelta("1D"), b, t)
+
+
+def _trend_h4(data: dict, t: pd.Series) -> np.ndarray:
+    """4H close on the side of a rising / falling 50-bar EMA."""
+    d = data.get(Timeframe.H4)
+    if d is None or d.empty:
+        return np.zeros(len(t), dtype=int)
+    d = d.reset_index(drop=True)
+    ema = d.close.ewm(span=50, adjust=False, min_periods=50).mean()
+    slope = ema - ema.shift(6)
+    b = np.where((d.close > ema) & (slope > 0), 1, np.where((d.close < ema) & (slope < 0), -1, 0))
+    return _asof(d.timestamp, pd.Timedelta("4h"), b, t)
+
+
+def _trend_vwap(data: dict, t: pd.Series, tf: Timeframe, dur: pd.Timedelta,
+                slope_bars: int) -> np.ndarray:
+    """Close vs a rising / falling VMA55 (the chart's rolling hlc3 VWAP over 55 ``tf`` bars)."""
+    d = data.get(tf)
+    if d is None or d.empty:
+        return np.zeros(len(t), dtype=int)
+    d = d.reset_index(drop=True)
+    hlc3 = (d.high + d.low + d.close) / 3
+    vma = (hlc3 * d.volume).rolling(55).sum() / d.volume.rolling(55).sum().replace(0, np.nan)
+    slope = vma - vma.shift(slope_bars)
+    b = np.where((d.close > vma) & (slope > 0), 1, np.where((d.close < vma) & (slope < 0), -1, 0))
+    return _asof(d.timestamp, dur, b, t)
+
+
+def _trend_vma(data: dict, t: pd.Series) -> np.ndarray:
+    return _trend_vwap(data, t, Timeframe.H1, pd.Timedelta("1h"), 5)
+
+
+def _trend_vma5m(data: dict, t: pd.Series) -> np.ndarray:
+    return _trend_vwap(data, t, Timeframe.M5, pd.Timedelta("5min"), 12)
+
+
+def _trend_swing(data: dict, t: pd.Series, k: int = 3) -> np.ndarray:
+    """Daily structure: higher high + higher low = up, lower high + lower low = down."""
+    d = data.get(Timeframe.D1)
+    if d is None or d.empty:
+        return np.zeros(len(t), dtype=int)
+    d = d.reset_index(drop=True)
+    w = 2 * k + 1
+    is_hi = d.high == d.high.rolling(w, center=True).max()
+    is_lo = d.low == d.low.rolling(w, center=True).min()
+    # a pivot at bar j is only known once bar j+k has closed
+    hi = d.high.where(is_hi).shift(k).ffill()
+    lo = d.low.where(is_lo).shift(k).ffill()
+    prev_hi = d.high.where(is_hi).shift(k).dropna().shift().reindex(d.index).ffill()
+    prev_lo = d.low.where(is_lo).shift(k).dropna().shift().reindex(d.index).ffill()
+    b = np.where((hi > prev_hi) & (lo > prev_lo), 1,
+                 np.where((hi < prev_hi) & (lo < prev_lo), -1, 0))
+    return _asof(d.timestamp, pd.Timedelta("1D"), b, t)
+
+
+TRENDS = {"d1": _trend_d1, "h4": _trend_h4, "vma": _trend_vma, "vma5m": _trend_vma5m,
+          "swing": _trend_swing}
+TREND_ALIASES = {"trend": "d1"}
 
 
 def simulate(mkt: Market, p: XJParams, start: int = 0, end: int | None = None,
@@ -135,6 +212,7 @@ def simulate(mkt: Market, p: XJParams, start: int = 0, end: int | None = None,
     armed: list[tuple[Order, int]] = []
     sess = None
     shifted: dict[int, Lines] = {}
+    bias_arr = mkt.bias(p.bias, p.trend_sides)
 
     def lines_for(i: int) -> Lines:
         ln = mkt.book.for_bar(i)
@@ -179,7 +257,7 @@ def simulate(mkt: Market, p: XJParams, start: int = 0, end: int | None = None,
         if mkt.last_before_gap[i]:
             continue
         lines = lines_for(i)
-        bias = int(mkt.bias[i]) if p.bias == "trend" else 0
+        bias = int(bias_arr[i])
         if p.entry == "right":
             for od, k in armed:
                 ok = od.direction * (c[i] - od.line) > 0 and od.direction * (c[i] - o[i]) > 0

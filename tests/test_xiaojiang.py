@@ -8,7 +8,14 @@ from click.testing import CliRunner
 
 from rainier.core.types import Timeframe
 from rainier.research.xiaojiang.lines import LineBook, Lines
-from rainier.research.xiaojiang.sim import Market, XJParams, plan_orders, simulate, targets
+from rainier.research.xiaojiang.sim import (
+    TRENDS,
+    Market,
+    XJParams,
+    plan_orders,
+    simulate,
+    targets,
+)
 from rainier.research.xiaojiang.tune import evaluate
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mes_sr_small.parquet"
@@ -107,3 +114,29 @@ def test_every_order_keeps_its_hard_stop(mkt) -> None:
     moved = simulate(mkt, XJParams(min_rank=1, min_conf=1, max_touches=99, exit="scale",
                                    breakeven=True))
     assert (moved.risk[moved.exit == "stop_after_tp"] == 0).all()
+
+
+@pytest.mark.parametrize("name", list(TRENDS))
+def test_trend_filter_trades_only_with_the_trend(mes, mkt, name) -> None:
+    """Uptrend: buys only (exit at the resistance above); downtrend: sells only; range: both."""
+    bias = mkt.bias(name)
+    assert set(bias) >= {1, -1}
+    i = int(len(mkt.c) * 0.7)  # decided only from higher-TF bars already closed
+    t = mkt.t[i]
+    cut = {tf: df[df.timestamp < t] for tf, df in mes.items()}
+    cut[Timeframe.M5] = mes[Timeframe.M5].iloc[: i + 1]
+    assert TRENDS[name](cut, cut[Timeframe.M5].timestamp)[-1] == bias[i]
+    tr = simulate(mkt, XJParams(min_rank=1, min_conf=1, max_touches=99, exit="next", bias=name))
+    side = bias[mkt.t.searchsorted(tr.t_in)]
+    assert len(tr) > 10 and ((side == 0) | (tr.dir == side)).all()
+    assert (tr.dir[side != 0] == side[side != 0]).any()
+
+
+def test_uptrend_only_filter_skips_sells_in_uptrends(mkt) -> None:
+    """trend_sides=up: an uptrend blocks sells; a downtrend or range still trades both sides."""
+    trend = mkt.bias("h4")
+    tr = simulate(mkt, XJParams(min_rank=1, min_conf=1, max_touches=99, exit="next", bias="h4",
+                                trend_sides="up"))
+    side = trend[mkt.t.searchsorted(tr.t_in)]
+    assert not ((side == 1) & (tr.dir == -1)).any()
+    assert ((side == -1) & (tr.dir == 1)).any() or ((side == 0) & (tr.dir == 1)).any()

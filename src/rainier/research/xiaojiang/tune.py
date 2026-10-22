@@ -18,7 +18,7 @@ GRID = {
     "min_conf": [1, 2],
     "max_touches": [2, 5, 99],
     "k_near": [2, 3],
-    "bias": ["none"],  # the trend filter (not in the doc) lost on the first holdout
+    "bias": ["none"],  # strict trend filters lost to "none"; trend_sides=up only matched it
     "per_line": [1, 2],
 }
 

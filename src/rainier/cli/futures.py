@@ -785,7 +785,7 @@ def _xj_params(overrides: tuple[str, ...]):
 def xj_signals(symbol, data_dir, overrides):
     """Xiaojiang plan for the next bar: buy/sell limits at the lines, stop, take-profits."""
     from rainier.research.xiaojiang.lines import LineBook
-    from rainier.research.xiaojiang.sim import Market, plan_orders, targets
+    from rainier.research.xiaojiang.sim import TRENDS, Market, plan_orders, targets
 
     p = _xj_params(overrides)
     data = _load_mtf_csvs(Path(data_dir), symbol)
@@ -794,8 +794,14 @@ def xj_signals(symbol, data_dir, overrides):
     now = m5.timestamp.iloc[-1] + pd.Timedelta("5min")
     lines = book.at(now.value, len(m5) - 1)
     price = float(m5.close.iloc[-1])
-    bias = int(Market(data, book).bias[-1]) if p.bias == "trend" else 0
+    mkt = Market(data, book)
+    trend = {name: int(mkt.bias(name)[-1]) for name in TRENDS}
+    bias = int(mkt.bias(p.bias, p.trend_sides)[-1])
     click.echo(f"{symbol} last {price:.2f} as of {now:%a %b %d %H:%M} PT  [{p.label()}]")
+    words = {1: "up", -1: "down", 0: "range"}
+    click.echo("  trend: " + "  ".join(f"{k}={words[v]}" for k, v in trend.items())
+               + (f"  -> {words[bias]}: " + {1: "buys only", -1: "sells only", 0: "both sides"}[bias]
+                  if p.bias != "none" else ""))
     orders = plan_orders(lines, price, p, bias)
     for od in sorted(orders, key=lambda x: -x.line):
         j = lines.price.index(od.line)
