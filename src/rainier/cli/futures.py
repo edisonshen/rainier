@@ -774,7 +774,7 @@ def _xj_params(overrides: tuple[str, ...]):
         key, _, val = item.partition("=")
         if key not in kinds:
             raise click.BadParameter(f"unknown param {key!r}; choose from {sorted(kinds)}")
-        kw[key] = kinds[key](val)
+        kw[key] = val.lower() in ("1", "true", "yes") if kinds[key] is bool else kinds[key](val)
     return XJParams(**kw)
 
 

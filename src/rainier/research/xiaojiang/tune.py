@@ -12,13 +12,13 @@ from rainier.research.xiaojiang.sim import Market, XJParams, metrics, simulate
 
 GRID = {
     "entry": ["left", "right"],
-    "stop_pts": [8.0, 12.0, 18.0, 24.0],
-    "exit": ["next", "next_thick", "scale", "rr1", "rr2", "rr3"],
+    "stop_pts": [5.0, 8.0, 10.0, 12.0, 15.0, 18.0, 24.0],  # fixed hard stop, MES points
+    "exit": ["next", "next_thick", "line2", "scale", "rr1", "rr2", "rr3", "rr5"],
     "min_rank": [1, 2, 3],
     "min_conf": [1, 2],
     "max_touches": [2, 5, 99],
     "k_near": [2, 3],
-    "bias": ["none", "trend"],
+    "bias": ["none"],  # the trend filter (not in the doc) lost on the first holdout
     "per_line": [1, 2],
 }
 

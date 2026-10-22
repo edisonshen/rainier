@@ -23,7 +23,7 @@ class XJParams:
 
     entry: str = "left"  # left: resting limit at the line; right: enter on rejection close
     stop_pts: float = 12.0  # doc: ES 6, doubled for MES
-    exit: str = "scale"  # next | next_thick | scale | rr1 | rr2 | rr3
+    exit: str = "scale"  # next | next_thick | line2 | scale | rr1 .. rr5
     min_rank: int = 3  # thickest source needed: 1=15m, 2=1H/prior day, 3=4H/prior week, 4=1D
     min_conf: int = 2  # distinct sources merged into the line (confluence)
     max_touches: int = 2  # skip lines tested more often than this (doc: many touches -> break)
@@ -31,6 +31,7 @@ class XJParams:
     bias: str = "none"  # none | trend (inferred: 20-day mean +- 0.5 ATR decides the side)
     per_line: int = 1  # trades per line per session (1 = first touch only)
     confirm_bars: int = 3  # right side: bars after the touch allowed to confirm
+    breakeven: bool = False  # not in the doc: her hard stop stays put; True moves it after TP1
 
     def label(self) -> str:
         return " ".join(f"{k}={v}" for k, v in asdict(self).items())
@@ -64,7 +65,7 @@ def plan_orders(lines: Lines, price: float, p: XJParams, bias: int = 0,
 
 
 def targets(lines: Lines, d: int, entry: float, stop: float, p: XJParams) -> list[float]:
-    """Take-profit prices, nearest first; ``scale`` exits half at each of the first two."""
+    """Take-profit prices (each >=1R away), nearest first; ``scale`` exits half at each of two."""
     risk = abs(entry - stop)
     if p.exit.startswith("rr"):
         return [entry + d * risk * float(p.exit[2:])]
@@ -73,6 +74,8 @@ def targets(lines: Lines, d: int, entry: float, stop: float, p: XJParams) -> lis
     ahead.sort(key=lambda x: d * x[0])
     if p.exit == "next_thick":
         ahead = [a for a in ahead if a[1] >= max(2, p.min_rank)]
+    if p.exit == "line2":  # hold through the next line to the one after
+        ahead = ahead[1:]
     tps = [a[0] for a in ahead[: 2 if p.exit == "scale" else 1]]
     return tps or [entry + d * 2 * risk]
 
@@ -164,7 +167,8 @@ def simulate(mkt: Market, p: XJParams, start: int = 0, end: int | None = None,
                     part = pos.size if not pos.tps else pos.size / 2
                     pos.pnl += pos.d * (tp - pos.entry) * part
                     pos.size -= part
-                    pos.stop = pos.entry  # protect the rest at break-even
+                    if p.breakeven:
+                        pos.stop = pos.entry
                     if pos.size <= 1e-9:
                         pos.size, pos.tps = 0.0, []
                         close(i, tp, "target")

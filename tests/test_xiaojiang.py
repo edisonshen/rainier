@@ -97,3 +97,13 @@ def test_cli_signals_and_backtest(raw, tmp_path) -> None:
     assert "holdout" in r.output and "random median" in r.output
     r = runner.invoke(cli, ["xj-signals", "--data-dir", str(tmp_path), "--param", "bogus=1"])
     assert r.exit_code != 0
+
+
+def test_every_order_keeps_its_hard_stop(mkt) -> None:
+    """Doc: each order carries a hard stop that is never moved, even after a scale-out."""
+    hard = simulate(mkt, XJParams(min_rank=1, min_conf=1, max_touches=99, exit="scale"))
+    assert (hard.exit == "stop_after_tp").any()
+    assert ((hard.risk > 0) & (hard.risk <= 12.0 + 1e-9)).all()
+    moved = simulate(mkt, XJParams(min_rank=1, min_conf=1, max_touches=99, exit="scale",
+                                   breakeven=True))
+    assert (moved.risk[moved.exit == "stop_after_tp"] == 0).all()
