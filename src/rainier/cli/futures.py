@@ -192,7 +192,7 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     import json
 
     from rainier.analysis.sr_zones import detect_mtf_zones, zones_to_levels
-    from rainier.publish.cloudflare_kv import put_kv
+    from rainier.publish.cloudflare_kv import put_kv_if_changed
     from rainier.viz.chart_payload import sr_chart_payload
     from rainier.viz.pine import zones_to_pine
 
@@ -222,9 +222,13 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
                                pub.vma_bars, pub.vma_offset, xj)
     if publish_kv:
         key = pub.kv_key.format(symbol=symbol.lower())
-        put_kv(settings.cloudflare_account_id, pub.kv_namespace_id, key,
-               json.dumps(payload, separators=(",", ":")), settings.cloudflare_api_token)
-        click.echo(f"Published {len(levels)} zones to KV {key}")
+        # Same bars + zones (daily halt, holidays) -> identical payload, so skip the write.
+        if put_kv_if_changed(settings.cloudflare_account_id, pub.kv_namespace_id, key,
+                             json.dumps(payload, separators=(",", ":")),
+                             settings.cloudflare_api_token):
+            click.echo(f"Published {len(levels)} zones to KV {key}")
+        else:
+            click.echo(f"KV {key} unchanged (no new bar), skipped write")
     if fmt == "pine":
         out = zones_to_pine(symbol, levels, asof)
     elif fmt == "json":

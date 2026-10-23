@@ -149,14 +149,23 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
 
     for tf, df in mes.items():
         df.to_csv(tmp_path / f"MES_{tf.value}.csv", index=False)
-    calls = []
+    calls, store = [], {}
 
     class _Resp:
+        def __init__(self, status_code=200, text=""):
+            self.status_code, self.text = status_code, text
+
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr(cloudflare_kv.httpx, "put",
-                        lambda url, **kw: calls.append((url, kw)) or _Resp())
+    def _put(url, **kw):
+        calls.append((url, kw))
+        store[url] = kw["content"].decode()
+        return _Resp()
+
+    monkeypatch.setattr(cloudflare_kv.httpx, "put", _put)
+    monkeypatch.setattr(cloudflare_kv.httpx, "get",
+                        lambda url, **kw: _Resp(200, store[url]) if url in store else _Resp(404))
     runner = CliRunner()
     r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
     assert r.exit_code != 0 and "CLOUDFLARE_API_TOKEN" in r.output and not calls
@@ -197,6 +206,10 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert line[-3][0] == t  # the value from 2 bars back sits on the last candle
     # Bars before the chart window feed the first values, so the line spans the whole window.
     assert line[0][0] == payload["candles"]["5m"][2][0] and len(line) == 2880
+    # Next 5-min run with no new bar (daily halt, holiday): identical payload, no KV write.
+    r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
+    assert r.exit_code == 0 and "unchanged" in r.output and len(calls) == 1
+
 
 
 def test_chart_payload_survives_short_windows_and_rejects_empty_vma(mes) -> None:
