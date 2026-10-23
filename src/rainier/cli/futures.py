@@ -212,8 +212,14 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
     levels = zones_to_levels(detect_mtf_zones(htf, cfg, price), price)
     levels.sort(key=lambda lv: -lv.price)
+    xj = None
+    if pub.xj_params is not None and Timeframe.M5 in data and Timeframe.M5 in pub.bars:
+        from rainier.research.xiaojiang.chart import chart_signals
+
+        since = data[Timeframe.M5].timestamp.tail(pub.bars[Timeframe.M5]).iloc[0]
+        xj = chart_signals(data, pub.xj_params, since)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
-                               pub.vma_bars, pub.vma_offset)
+                               pub.vma_bars, pub.vma_offset, xj)
     if publish_kv:
         key = pub.kv_key.format(symbol=symbol.lower())
         put_kv(settings.cloudflare_account_id, pub.kv_namespace_id, key,
@@ -785,24 +791,18 @@ def _xj_params(overrides: tuple[str, ...]):
 def xj_signals(symbol, data_dir, overrides):
     """Xiaojiang plan for the next bar: buy/sell limits at the lines, stop, take-profits."""
     from rainier.research.xiaojiang.lines import LineBook
-    from rainier.research.xiaojiang.sim import TRENDS, Market, plan_orders, targets
+    from rainier.research.xiaojiang.sim import TRENDS, Market, next_bar_plan, targets
 
     p = _xj_params(overrides)
     data = _load_mtf_csvs(Path(data_dir), symbol)
-    book = LineBook(data)
-    m5 = data[Timeframe.M5]
-    now = m5.timestamp.iloc[-1] + pd.Timedelta("5min")
-    lines = book.at(now.value, len(m5) - 1)
-    price = float(m5.close.iloc[-1])
-    mkt = Market(data, book)
+    mkt = Market(data, LineBook(data))
+    now, price, lines, bias, orders = next_bar_plan(mkt, p)
     trend = {name: int(mkt.bias(name)[-1]) for name in TRENDS}
-    bias = int(mkt.bias(p.bias, p.trend_sides)[-1])
     click.echo(f"{symbol} last {price:.2f} as of {now:%a %b %d %H:%M} PT  [{p.label()}]")
     words = {1: "up", -1: "down", 0: "range"}
     click.echo("  trend: " + "  ".join(f"{k}={words[v]}" for k, v in trend.items())
                + (f"  -> {words[bias]}: " + {1: "buys only", -1: "sells only", 0: "both sides"}[bias]
                   if p.bias != "none" else ""))
-    orders = plan_orders(lines, price, p, bias)
     for od in sorted(orders, key=lambda x: -x.line):
         j = lines.price.index(od.line)
         tps = " / ".join(f"{t:.2f}" for t in targets(lines, od.direction, od.line, od.stop, p))

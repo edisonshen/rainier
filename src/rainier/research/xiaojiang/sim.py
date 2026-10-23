@@ -91,6 +91,12 @@ class _Pos:
     t_in: int
     line: float
     pnl: float = 0.0  # realised points * size so far
+    stop0: float = float("nan")  # hard stop and first take-profit as placed
+    tp0: float = float("nan")
+
+    def __post_init__(self) -> None:
+        self.stop0 = self.stop
+        self.tp0 = self.tps[0] if self.tps else float("nan")
 
 
 class Market:
@@ -197,6 +203,15 @@ TRENDS = {"d1": _trend_d1, "h4": _trend_h4, "vma": _trend_vma, "vma5m": _trend_v
 TREND_ALIASES = {"trend": "d1"}
 
 
+def next_bar_plan(mkt: Market, p: XJParams) -> tuple[pd.Timestamp, float, Lines, int, list[Order]]:
+    """Orders to rest for the bar after the last 5m close: (bar time, last close, lines, bias, orders)."""
+    now = mkt.t[len(mkt.t) - 1] + pd.Timedelta("5min")
+    lines = mkt.book.at(now.value, len(mkt.c) - 1)
+    price = float(mkt.c[-1])
+    bias = int(mkt.bias(p.bias, p.trend_sides)[-1])
+    return now, price, lines, bias, plan_orders(lines, price, p, bias)
+
+
 def simulate(mkt: Market, p: XJParams, start: int = 0, end: int | None = None,
              rng: np.random.Generator | None = None, shift=(6.0, 20.0)) -> pd.DataFrame:
     """Trade the plan bar by bar (one MES position at a time). ``rng`` = random-line control.
@@ -227,7 +242,8 @@ def simulate(mkt: Market, p: XJParams, start: int = 0, end: int | None = None,
         nonlocal pos
         pts = pos.pnl + pos.d * (px - pos.entry) * pos.size
         trades.append((mkt.t[pos.t_in], mkt.t[i], pos.d, pos.line, pos.entry, why,
-                       pts, pts * POINT_USD - COMMISSION_USD, abs(pos.entry - pos.stop)))
+                       pts, pts * POINT_USD - COMMISSION_USD, abs(pos.entry - pos.stop),
+                       px, pos.stop0, pos.tp0))
         pos = None
 
     for i in range(max(start, 1), end):
@@ -296,7 +312,7 @@ def simulate(mkt: Market, p: XJParams, start: int = 0, end: int | None = None,
         elif mkt.last_before_gap[i]:
             close(i, c[i] - od.direction * SLIP_PTS, "session_end")
     return pd.DataFrame(trades, columns=["t_in", "t_out", "dir", "line", "entry", "exit",
-                                         "pts", "usd", "risk"])
+                                         "pts", "usd", "risk", "px_out", "stop", "tp"])
 
 
 def metrics(tr: pd.DataFrame) -> dict:

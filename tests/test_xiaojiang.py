@@ -140,3 +140,42 @@ def test_uptrend_only_filter_skips_sells_in_uptrends(mkt) -> None:
     side = trend[mkt.t.searchsorted(tr.t_in)]
     assert not ((side == 1) & (tr.dir == -1)).any()
     assert ((side == -1) & (tr.dir == 1)).any() or ((side == 0) & (tr.dir == 1)).any()
+
+
+def test_chart_markers_for_the_5pt_5r_setup(mes) -> None:
+    """The /trading/mes 5m markers: every trade sits on real 5m candles, keeps the 5 pt hard
+    stop and 5R take-profit it was placed with, and exits at one of them (or a session close)."""
+    import json
+
+    from rainier.core.config import ChartPublishConfig
+    from rainier.research.xiaojiang.chart import chart_signals
+    from rainier.viz.chart_payload import sr_chart_payload
+
+    params = ChartPublishConfig().xj_params | {"max_touches": 99}
+    m5 = mes[Timeframe.M5]
+    since = m5.timestamp.iloc[len(m5) // 2]
+    xj = chart_signals(mes, params, since)
+    assert len(xj["trades"]) and (xj["trades"].t_in >= since).all()
+
+    bars = {tf: len(df) for tf, df in mes.items()}
+    p = json.loads(json.dumps(sr_chart_payload("MES", m5.timestamp.iloc[-1], 0.0, [], mes, bars,
+                                               xj=xj), allow_nan=False))["xj"]
+    times = {c[0] for c in p_candles(mes)}
+    for t_in, t_out, d, entry, px, stop, tp, why, usd in p["trades"]:
+        assert t_in in times and t_out in times and t_out >= t_in and d in (1, -1)
+        risk = d * (entry - stop)
+        assert 0 < risk <= 5.0 and tp == pytest.approx(entry + d * 5 * risk)
+        if why == "stop":
+            assert d * (px - stop) <= 0 and usd < 0
+        elif why == "target":
+            assert px == pytest.approx(tp) and usd > 0
+    for d, limit, stop, tp in p["orders"]:
+        assert stop == limit - d * 5.0 and tp == pytest.approx(limit + d * 25.0)
+
+
+def p_candles(mes):
+    from rainier.viz.chart_payload import sr_chart_payload
+
+    m5 = mes[Timeframe.M5]
+    return sr_chart_payload("MES", m5.timestamp.iloc[-1], 0.0, [], {Timeframe.M5: m5},
+                            {Timeframe.M5: len(m5)})["candles"]["5m"]
