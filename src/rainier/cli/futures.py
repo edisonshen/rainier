@@ -210,14 +210,15 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     latest = data.get(Timeframe.M5, data[next(iter(htf))])
     price = float(latest["close"].iloc[-1])
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
-    levels = zones_to_levels(detect_mtf_zones(htf, cfg, price), price)
+    zones = detect_mtf_zones(htf, cfg, price)
+    levels = zones_to_levels(zones, price)
     levels.sort(key=lambda lv: -lv.price)
     xj = None
     if pub.xj_params is not None and Timeframe.M5 in data and Timeframe.M5 in pub.bars:
         from rainier.research.xiaojiang.chart import chart_signals
 
         since = data[Timeframe.M5].timestamp.tail(pub.bars[Timeframe.M5]).iloc[0]
-        xj = chart_signals(data, pub.xj_params, since)
+        xj = chart_signals(data, pub.xj_params, since, settings.analysis.sr_zones, zones)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
                                pub.vma_bars, pub.vma_offset, xj)
     if publish_kv:
@@ -792,14 +793,15 @@ def _xj_params(overrides: tuple[str, ...]):
 @click.option("--symbol", default="MES")
 @click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
 @click.option("--param", "overrides", multiple=True, help="XJParams override, e.g. stop_pts=18")
-def xj_signals(symbol, data_dir, overrides):
-    """Xiaojiang plan for the next bar: buy/sell limits at the lines, stop, take-profits."""
-    from rainier.research.xiaojiang.lines import LineBook
+@click.pass_context
+def xj_signals(ctx, symbol, data_dir, overrides):
+    """Xiaojiang plan for the next bar: buy/sell limits at the S/R zones, stop, take-profits."""
     from rainier.research.xiaojiang.sim import TRENDS, Market, next_bar_plan, targets
+    from rainier.research.xiaojiang.zones import ZoneBook
 
     p = _xj_params(overrides)
     data = _load_mtf_csvs(Path(data_dir), symbol)
-    mkt = Market(data, LineBook(data))
+    mkt = Market(data, ZoneBook(data, ctx.obj["settings"].analysis.sr_zones))
     now, price, lines, bias, orders = next_bar_plan(mkt, p)
     trend = {name: int(mkt.bias(name)[-1]) for name in TRENDS}
     click.echo(f"{symbol} last {price:.2f} as of {now:%a %b %d %H:%M} PT  [{p.label()}]")
@@ -812,10 +814,10 @@ def xj_signals(symbol, data_dir, overrides):
         tps = " / ".join(f"{t:.2f}" for t in targets(lines, od.direction, od.line, od.stop, p))
         side = "BUY " if od.direction > 0 else "SELL"
         click.echo(f"  {side} LIMIT {od.line:9.2f}  stop {od.stop:9.2f}  take-profit {tps}"
-                   f"  (rank {lines.rank[j]}, {lines.nconf[j]} sources, "
+                   f"  (rank {lines.rank[j]}, {lines.nconf[j]} timeframes, "
                    f"{lines.touches[j]} touches)")
     if not orders:
-        click.echo("  no eligible line within the day's range")
+        click.echo("  no eligible zone within the day's range")
 
 
 @cli.command("xj-backtest")
@@ -828,16 +830,18 @@ def xj_signals(symbol, data_dir, overrides):
 @click.option("--grid", "do_grid", is_flag=True, help="also tune the parameter grid on --train")
 @click.option("--min-trades", default=80, show_default=True)
 @click.option("--top", default=10, show_default=True)
-def xj_backtest(symbol, data_dir, train, holdout, overrides, seeds, do_grid, min_trades, top):
-    """Walk-forward 5m backtest of the Xiaojiang signal vs the same rules on random lines."""
-    from rainier.research.xiaojiang.lines import LineBook
+@click.pass_context
+def xj_backtest(ctx, symbol, data_dir, train, holdout, overrides, seeds, do_grid, min_trades,
+                top):
+    """Walk-forward 5m backtest of the Xiaojiang signal vs the same rules on random zones."""
     from rainier.research.xiaojiang.sim import Market
     from rainier.research.xiaojiang.tune import GRID, evaluate, grid, random_control, run_grid
+    from rainier.research.xiaojiang.zones import ZoneBook
 
     periods = {"train": tuple(pd.Timestamp(x) for x in train),
                "holdout": tuple(pd.Timestamp(x) for x in holdout)}
     data = _load_mtf_csvs(Path(data_dir), symbol)
-    mkt = Market(data, LineBook(data))
+    mkt = Market(data, ZoneBook(data, ctx.obj["settings"].analysis.sr_zones))
     p = _xj_params(overrides)
     real, ctrl = evaluate(mkt, p, periods), random_control(mkt, p, periods, seeds)
     click.echo(f"[{p.label()}]")

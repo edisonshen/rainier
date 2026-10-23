@@ -1,4 +1,4 @@
-"""Spec tests for the Xiaojiang line signal on real MES bars (fixture: Sep-Oct 2026)."""
+"""Spec tests for the Xiaojiang rules on the chart's S/R zones, real MES bars (Sep-Oct 2026)."""
 
 from pathlib import Path
 
@@ -6,8 +6,9 @@ import pandas as pd
 import pytest
 from click.testing import CliRunner
 
+from rainier.analysis.sr_zones import detect_mtf_zones
+from rainier.core.config import SRZoneConfig
 from rainier.core.types import Timeframe
-from rainier.research.xiaojiang.lines import LineBook, Lines
 from rainier.research.xiaojiang.sim import (
     TRENDS,
     Market,
@@ -17,6 +18,7 @@ from rainier.research.xiaojiang.sim import (
     targets,
 )
 from rainier.research.xiaojiang.tune import evaluate
+from rainier.research.xiaojiang.zones import Lines, ZoneBook
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mes_sr_small.parquet"
 LOOSE = XJParams(min_rank=1, min_conf=1, max_touches=99, exit="next")
@@ -41,18 +43,24 @@ def mes(raw) -> dict[Timeframe, pd.DataFrame]:
 
 @pytest.fixture(scope="module")
 def mkt(mes) -> Market:
-    return Market(mes, LineBook(mes))
+    return Market(mes, ZoneBook(mes))
 
 
-def test_lines_are_point_in_time(mes, mkt) -> None:
-    """The lines an hour starts with are identical whether or not later bars exist."""
+def test_zones_are_point_in_time(mes, mkt) -> None:
+    """The zones an hour starts with are identical whether or not later bars exist, and are
+    exactly what the chart's zone finder draws from the bars closed by then."""
     i = int(len(mkt.c) * 0.7)
     t = mkt.t[i].floor("h")
     i = int(mkt.t.searchsorted(t))
     cut = {tf: df[df.timestamp < t] for tf, df in mes.items()}
     cut[Timeframe.M5] = mes[Timeframe.M5].iloc[: i + 1]
-    assert LineBook(cut).at(t.value, i) == mkt.book.for_bar(i)
-    assert len(mkt.book.for_bar(i).price) > 4
+    lines = mkt.book.for_bar(i)
+    assert ZoneBook(cut).at(t.value) == lines and len(lines.price) > 4
+    dur = {Timeframe.H1: "1h", Timeframe.H4: "4h", Timeframe.D1: "1D"}
+    closed = {tf: df[df.timestamp + pd.Timedelta(dur[tf]) <= t] for tf, df in mes.items()
+              if tf in dur}
+    zones = detect_mtf_zones(closed, SRZoneConfig())
+    assert lines.price == sorted(z.price for z in zones)
 
 
 def test_plan_buys_support_sells_resistance() -> None:
@@ -60,7 +68,7 @@ def test_plan_buys_support_sells_resistance() -> None:
                   [2, 2, 2, 2, 2, 1], [1, 1, 1, 1, 9, 1])
     p = XJParams(k_near=3, stop_pts=12.0)
     got = {(o.direction, o.line, o.stop) for o in plan_orders(lines, 125.0, p)}
-    # 120 is a thin (15m) line, 140 was tested 9 times, 150 has no confluence.
+    # 120 is a thin (1H-only) zone, 140 was tested 9 times, 150 has no confluence.
     assert got == {(1, 110.0, 98.0), (1, 100.0, 88.0), (-1, 130.0, 142.0)}
     assert {o.direction for o in plan_orders(lines, 125.0, p, bias=-1)} == {-1}
     assert [o.line for o in plan_orders(lines, 125.0, p, used=[110.5])] == [100.0, 130.0]
@@ -80,7 +88,7 @@ def test_backtest_trades_follow_the_rules(mkt) -> None:
     assert tr.t_out[tr.exit == "session_end"].isin(gaps).all()
 
 
-def test_random_lines_control_trades_elsewhere(mkt) -> None:
+def test_random_zones_control_trades_elsewhere(mkt) -> None:
     periods = {"all": (mkt.t.iloc[0], mkt.t.iloc[-1] + pd.Timedelta("1min"))}
     real, rand = evaluate(mkt, LOOSE, periods), evaluate(mkt, LOOSE, periods, seed=1)
     assert real["all"]["trades"] > 0 and rand["all"]["trades"] > 0
@@ -171,6 +179,28 @@ def test_chart_markers_for_the_5pt_5r_setup(mes) -> None:
             assert px == pytest.approx(tp) and usd > 0
     for d, limit, stop, tp in p["orders"]:
         assert stop == limit - d * 5.0 and tp == pytest.approx(limit + d * 25.0)
+
+
+def test_chart_orders_and_trades_sit_on_chart_zones(mes, mkt) -> None:
+    """The 7687 bug: a resting order at a level the chart never drew. Every resting order must
+    be at a zone the chart shows, and every past trade at a zone known when it was entered."""
+    from rainier.core.config import ChartPublishConfig
+    from rainier.research.xiaojiang.chart import chart_signals
+
+    params = ChartPublishConfig().xj_params | {"min_rank": 1, "min_conf": 1, "max_touches": 99}
+    m5 = mes[Timeframe.M5]
+    price = float(m5.close.iloc[-1])
+    zones = detect_mtf_zones({tf: df for tf, df in mes.items() if tf != Timeframe.M5},
+                             SRZoneConfig(), price)
+    xj = chart_signals(mes, params, m5.timestamp.iloc[len(m5) // 2], zones=zones)
+    shown = {round(z.price * 4) / 4 for z in zones}
+    assert xj["orders"] and {o[1] for o in xj["orders"]} <= shown
+    for d, limit, stop, _ in xj["orders"]:
+        assert stop == limit - d * params["stop_pts"]
+    tr = xj["trades"]
+    assert len(tr)
+    for t_in, line in zip(tr.t_in, tr.line, strict=True):
+        assert line in mkt.book.for_bar(int(mkt.t.searchsorted(t_in))).price
 
 
 def p_candles(mes):

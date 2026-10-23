@@ -1,8 +1,8 @@
-"""Xiaojiang S/R line system, rebuilt from her trading notes (research only).
+"""Xiaojiang trading rules on the chart's S/R zones (research only).
 
-Rules taken from the doc:
-- Lines are horizontal S/R from 5m/15m up to 1D; big-timeframe ("thick") lines matter most and
-  multi-timeframe confluence makes a line stronger. Boxes (ranges) are lines too.
+The levels are the zones drawn on /trading/mes (``analysis.sr_zones``, 1D/4H/1H); Xiaojiang
+decides when and how to buy or sell there, the hard stop and the exit. Rules from her doc:
+- Thick (higher-timeframe) levels matter most; multi-timeframe confluence makes one stronger.
 - Contrarian, left side: resting limits at the line, buy support, short resistance. Right side
   variant: enter after price touches the line and rejects (e.g. "on the 3rd 5m candle").
 - The day's range is the 2-3 lines above and below price.

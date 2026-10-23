@@ -488,7 +488,7 @@ def _default_chart_bars() -> dict[Timeframe, int]:
 
 
 def _default_xj_chart_params() -> dict[str, Any]:
-    # The 5 pt stop / 5R setup from the Xiaojiang walk-forward (PR #193), no trend filter.
+    # Xiaojiang 5 pt stop / 5R rules on the chart's S/R zones, no trend filter (not re-tuned).
     return {"entry": "left", "stop_pts": 5.0, "exit": "rr5", "min_rank": 3, "min_conf": 2,
             "max_touches": 5, "k_near": 3}
 

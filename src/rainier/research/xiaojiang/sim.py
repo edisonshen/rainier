@@ -1,4 +1,4 @@
-"""Buy/exit signals from the line book and a 5m bar-by-bar MES simulation of them."""
+"""Buy/exit signals at the chart's S/R zones and a 5m bar-by-bar MES simulation of them."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from rainier.core.types import Timeframe
-from rainier.research.xiaojiang.lines import SESSION_SHIFT, LineBook, Lines
+from rainier.research.xiaojiang.zones import SESSION_SHIFT, Lines, ZoneBook
 
 POINT_USD = 5.0  # MES
 COMMISSION_USD = 1.24  # round trip, assumed
@@ -24,8 +24,8 @@ class XJParams:
     entry: str = "left"  # left: resting limit at the line; right: enter on rejection close
     stop_pts: float = 12.0  # doc: ES 6, doubled for MES
     exit: str = "scale"  # next | next_thick | line2 | scale | rr1 .. rr5
-    min_rank: int = 3  # thickest source needed: 1=15m, 2=1H/prior day, 3=4H/prior week, 4=1D
-    min_conf: int = 2  # distinct sources merged into the line (confluence)
+    min_rank: int = 3  # zone's thickest timeframe: 2=1H, 3=4H, 4=1D
+    min_conf: int = 2  # timeframes that drew the zone (confluence)
     max_touches: int = 2  # skip lines tested more often than this (doc: many touches -> break)
     k_near: int = 3  # doc: the 2-3 lines above/below price are the day's range
     bias: str = "none"  # none | one of TRENDS: uptrend -> buys only, downtrend -> sells only
@@ -102,7 +102,7 @@ class _Pos:
 class Market:
     """5m bars plus everything the simulation needs per bar (precomputed once)."""
 
-    def __init__(self, data: dict[Timeframe, pd.DataFrame], book: LineBook):
+    def __init__(self, data: dict[Timeframe, pd.DataFrame], book: ZoneBook):
         m5 = data[Timeframe.M5].reset_index(drop=True)
         self.t = m5["timestamp"]
         self.o, self.h, self.l, self.c = (m5[k].to_numpy(float) for k in
@@ -203,10 +203,13 @@ TRENDS = {"d1": _trend_d1, "h4": _trend_h4, "vma": _trend_vma, "vma5m": _trend_v
 TREND_ALIASES = {"trend": "d1"}
 
 
-def next_bar_plan(mkt: Market, p: XJParams) -> tuple[pd.Timestamp, float, Lines, int, list[Order]]:
-    """Orders to rest for the bar after the last 5m close: (bar time, last close, lines, bias, orders)."""
+def next_bar_plan(mkt: Market, p: XJParams, lines: Lines | None = None,
+                  ) -> tuple[pd.Timestamp, float, Lines, int, list[Order]]:
+    """Orders to rest for the bar after the last 5m close: (bar time, last close, lines, bias, orders).
+
+    ``lines`` overrides the book's zones (e.g. the exact zones the chart shows)."""
     now = mkt.t[len(mkt.t) - 1] + pd.Timedelta("5min")
-    lines = mkt.book.at(now.value, len(mkt.c) - 1)
+    lines = mkt.book.at(now.value) if lines is None else lines
     price = float(mkt.c[-1])
     bias = int(mkt.bias(p.bias, p.trend_sides)[-1])
     return now, price, lines, bias, plan_orders(lines, price, p, bias)
