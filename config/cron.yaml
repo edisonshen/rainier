@@ -13,7 +13,7 @@ discord_on_failure: true
 
 jobs:
   - name: fetch-mes
-    description: "Fetch MES data from yfinance and regenerate daytrade chart"
+    description: "Fetch MES data from yfinance and publish the /trading/mes S/R chart"
     # PT. MES trades Sun 15:00 -> Fri 14:00 (daily 14:00-15:00 halt), so nothing runs over
     # the weekend. sr-levels skips the KV write when nothing changed (halt, holidays).
     # Fri 14:00-14:25 still runs: yfinance delivers the last bars ~10-15 min late.
@@ -22,7 +22,7 @@ jobs:
       - "*/5 0-13 * * 5"    # Fri until the close
       - "0-25/5 14 * * 5"   # Fri close catch-up
       - "*/5 15-23 * * 0"   # Sun from the open
-    command: "uv run rainier fetch --symbol MES && uv run rainier daytrade --symbol MES --data-dir data/csv && uv run rainier sr-levels --symbol MES --format text --publish-kv"
+    command: "uv run rainier fetch --symbol MES && uv run rainier sr-levels --symbol MES --format text --publish-kv"
     log: "data/fetch.log"
     enabled: true
 
