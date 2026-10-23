@@ -21,16 +21,23 @@ def jobs():
 @jobs.command(name="list")
 def jobs_list():
     """Show all jobs from cron.yaml and their crontab status."""
-    from rainier.scheduler.jobs import list_active, load_config
+    from rainier.scheduler.jobs import list_active, load_config, schedules
 
     config_jobs = load_config()
-    active = {j["name"] for j in list_active()}
+    active: dict[str, list[str]] = {}
+    for j in list_active():
+        active.setdefault(j["name"], []).append(j["cron"])
 
     for job in config_jobs:
         name = job["name"]
         enabled = job.get("enabled", True)
-        status = "ACTIVE" if name in active else ("DISABLED" if not enabled else "NOT SYNCED")
-        click.echo(f"  {name:20s} {job['schedule']:20s} {status}")
+        if name not in active:
+            status = "DISABLED" if not enabled else "NOT SYNCED"
+        elif sorted(active[name]) != sorted(schedules(job)):
+            status = "OUT OF SYNC"  # a schedule line is missing or stale; run `jobs sync`
+        else:
+            status = "ACTIVE"
+        click.echo(f"  {name:20s} {' | '.join(schedules(job)):20s} {status}")
         click.echo(f"    {job.get('description', '')}")
         click.echo(f"    cmd: {job['command']}")
         click.echo()
