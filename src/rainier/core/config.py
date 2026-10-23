@@ -487,12 +487,6 @@ def _default_chart_bars() -> dict[Timeframe, int]:
     return {Timeframe.M5: 2880, Timeframe.H1: 720, Timeframe.H4: 540, Timeframe.D1: 250}
 
 
-def _default_xj_chart_params() -> dict[str, Any]:
-    # The 5 pt stop / 5R setup from the Xiaojiang walk-forward (PR #193), no trend filter.
-    return {"entry": "left", "stop_pts": 5.0, "exit": "rr5", "min_rank": 3, "min_conf": 2,
-            "max_touches": 5, "k_near": 3}
-
-
 class ChartPublishConfig(BaseModel):
     """S/R chart payload pushed to Workers KV for fengshen.dev /trading/mes."""
 
@@ -506,8 +500,6 @@ class ChartPublishConfig(BaseModel):
     # Rolling VWAP line (TradingView "VMA55": sum(hlc3*vol, n)/sum(vol, n), offset=2).
     vma_bars: int = Field(55, ge=1)
     vma_offset: int = Field(2, ge=0)
-    # Xiaojiang buy/sell markers (XJParams overrides) on the 5m tab; None = off.
-    xj_params: dict[str, Any] | None = Field(default_factory=_default_xj_chart_params)
 
 
 class Settings(BaseSettings):

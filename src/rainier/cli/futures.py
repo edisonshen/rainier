@@ -212,14 +212,8 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
     levels = zones_to_levels(detect_mtf_zones(htf, cfg, price), price)
     levels.sort(key=lambda lv: -lv.price)
-    xj = None
-    if pub.xj_params is not None and Timeframe.M5 in data and Timeframe.M5 in pub.bars:
-        from rainier.research.xiaojiang.chart import chart_signals
-
-        since = data[Timeframe.M5].timestamp.tail(pub.bars[Timeframe.M5]).iloc[0]
-        xj = chart_signals(data, pub.xj_params, since)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
-                               pub.vma_bars, pub.vma_offset, xj)
+                               pub.vma_bars, pub.vma_offset)
     if publish_kv:
         key = pub.kv_key.format(symbol=symbol.lower())
         # Same bars + zones (daily halt, holidays) -> identical payload, so skip the write.
@@ -770,89 +764,3 @@ def cache_clean(yes: bool) -> None:
     removed = clean_cache()
     click.echo(f"Removed {len(removed)} item(s) from {CACHE_DIR}.")
 
-
-
-def _xj_params(overrides: tuple[str, ...]):
-    """``XJParams`` from ``key=value`` overrides, cast to each field's default type."""
-    from dataclasses import fields
-
-    from rainier.research.xiaojiang.sim import XJParams
-
-    kinds = {f.name: type(f.default) for f in fields(XJParams)}
-    kw = {}
-    for item in overrides:
-        key, _, val = item.partition("=")
-        if key not in kinds:
-            raise click.BadParameter(f"unknown param {key!r}; choose from {sorted(kinds)}")
-        kw[key] = val.lower() in ("1", "true", "yes") if kinds[key] is bool else kinds[key](val)
-    return XJParams(**kw)
-
-
-@cli.command("xj-signals")
-@click.option("--symbol", default="MES")
-@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
-@click.option("--param", "overrides", multiple=True, help="XJParams override, e.g. stop_pts=18")
-def xj_signals(symbol, data_dir, overrides):
-    """Xiaojiang plan for the next bar: buy/sell limits at the lines, stop, take-profits."""
-    from rainier.research.xiaojiang.lines import LineBook
-    from rainier.research.xiaojiang.sim import TRENDS, Market, next_bar_plan, targets
-
-    p = _xj_params(overrides)
-    data = _load_mtf_csvs(Path(data_dir), symbol)
-    mkt = Market(data, LineBook(data))
-    now, price, lines, bias, orders = next_bar_plan(mkt, p)
-    trend = {name: int(mkt.bias(name)[-1]) for name in TRENDS}
-    click.echo(f"{symbol} last {price:.2f} as of {now:%a %b %d %H:%M} PT  [{p.label()}]")
-    words = {1: "up", -1: "down", 0: "range"}
-    click.echo("  trend: " + "  ".join(f"{k}={words[v]}" for k, v in trend.items())
-               + (f"  -> {words[bias]}: " + {1: "buys only", -1: "sells only", 0: "both sides"}[bias]
-                  if p.bias != "none" else ""))
-    for od in sorted(orders, key=lambda x: -x.line):
-        j = lines.price.index(od.line)
-        tps = " / ".join(f"{t:.2f}" for t in targets(lines, od.direction, od.line, od.stop, p))
-        side = "BUY " if od.direction > 0 else "SELL"
-        click.echo(f"  {side} LIMIT {od.line:9.2f}  stop {od.stop:9.2f}  take-profit {tps}"
-                   f"  (rank {lines.rank[j]}, {lines.nconf[j]} sources, "
-                   f"{lines.touches[j]} touches)")
-    if not orders:
-        click.echo("  no eligible line within the day's range")
-
-
-@cli.command("xj-backtest")
-@click.option("--symbol", default="MES")
-@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
-@click.option("--train", nargs=2, required=True, help="START END (PT dates), tuning window")
-@click.option("--holdout", nargs=2, required=True, help="START END (PT dates), judged after")
-@click.option("--param", "overrides", multiple=True, help="XJParams override, e.g. stop_pts=18")
-@click.option("--seeds", default=30, show_default=True, help="random-line control runs")
-@click.option("--grid", "do_grid", is_flag=True, help="also tune the parameter grid on --train")
-@click.option("--min-trades", default=80, show_default=True)
-@click.option("--top", default=10, show_default=True)
-def xj_backtest(symbol, data_dir, train, holdout, overrides, seeds, do_grid, min_trades, top):
-    """Walk-forward 5m backtest of the Xiaojiang signal vs the same rules on random lines."""
-    from rainier.research.xiaojiang.lines import LineBook
-    from rainier.research.xiaojiang.sim import Market
-    from rainier.research.xiaojiang.tune import GRID, evaluate, grid, random_control, run_grid
-
-    periods = {"train": tuple(pd.Timestamp(x) for x in train),
-               "holdout": tuple(pd.Timestamp(x) for x in holdout)}
-    data = _load_mtf_csvs(Path(data_dir), symbol)
-    mkt = Market(data, LineBook(data))
-    p = _xj_params(overrides)
-    real, ctrl = evaluate(mkt, p, periods), random_control(mkt, p, periods, seeds)
-    click.echo(f"[{p.label()}]")
-    for per, m in real.items():
-        rand = ctrl[f"{per}_avg_usd"].dropna()
-        beat = (rand < m["avg_usd"]).mean() if len(rand) else float("nan")
-        click.echo(f"  {per:8s} trades {m['trades']:4d}  win {m['win']:.0%}  "
-                   f"$/trade {m['avg_usd']:7.2f}  PF {m['pf']:.2f}  total ${m['total_usd']:9.2f}  "
-                   f"maxDD ${m['max_dd_usd']:8.2f}  months+ {m['months_pos']}  "
-                   f"random median $/trade {rand.median():7.2f}, beaten {beat:.0%}")
-    if do_grid:
-        df = run_grid(mkt, grid(), periods)
-        best = df[df.train_trades >= min_trades].sort_values("train_avg_usd", ascending=False)
-        cols = [*GRID, "train_trades", "train_avg_usd", "train_months_pos", "holdout_trades",
-                "holdout_avg_usd", "holdout_months_pos"]
-        click.echo(f"\n{len(df)} configs; holdout $/trade > 0 in "
-                   f"{(df.holdout_avg_usd > 0).mean():.0%}. Top {top} on train:")
-        click.echo(best[cols].head(top).round(2).to_string(index=False))

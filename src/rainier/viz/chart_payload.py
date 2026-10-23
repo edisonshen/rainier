@@ -27,17 +27,12 @@ def sr_chart_payload(
     bars: dict[Timeframe, int],
     vma_bars: int = 55,
     vma_offset: int = 2,
-    xj: dict | None = None,
 ) -> dict:
     """``candles[tf]`` rows are ``[unix_seconds, open, high, low, close]``; ``asof`` is UTC ISO.
 
     ``vma.series[tf]`` rows are ``[unix_seconds, value]``: the rolling VWAP drawn
     ``vma_offset`` bars to the right like TradingView's ``offset=``, so the last points sit
     past the last candle (times extrapolated by the last bar spacing).
-
-    ``xj`` (``research.xiaojiang.chart.chart_signals``) adds ``xj.trades`` rows
-    ``[t_in, t_out, dir, entry, exit_px, stop, tp, reason, usd]`` (times = 5m bar opens, UTC
-    seconds) and ``xj.orders`` rows ``[dir, limit, stop, tp]``.
     """
     candles, vma = {}, {}
     for tf, n in bars.items():
@@ -52,7 +47,7 @@ def sr_chart_payload(
             for ts, o, h, lo, c in zip(t, df["open"], df["high"], df["low"], df["close"],
                                        strict=True)
         ]
-    out = {
+    return {
         "symbol": symbol,
         "asof": _utc(pd.Series([asof])).iloc[0].isoformat(),
         "price": price,
@@ -63,26 +58,6 @@ def sr_chart_payload(
         } for lv in levels],
         "candles": candles,
         "vma": {"bars": vma_bars, "offset": vma_offset, "series": vma},
-    }
-    if xj is not None:
-        out["xj"] = _xj(xj)
-    return out
-
-
-def _px(v: float) -> float | None:
-    return round(float(v), 2) if v == v else None  # NaN isn't valid JSON
-
-
-def _xj(xj: dict) -> dict:
-    tr = xj["trades"]
-    t_in = (_utc(tr["t_in"]).astype("int64") // 10**9).tolist() if len(tr) else []
-    t_out = (_utc(tr["t_out"]).astype("int64") // 10**9).tolist() if len(tr) else []
-    return {
-        "label": xj["label"],
-        "trades": [[int(a), int(b), int(r.dir), _px(r.entry), _px(r.px_out), _px(r.stop),
-                    _px(r.tp), r.exit, round(float(r.usd), 2)]
-                   for a, b, r in zip(t_in, t_out, tr.itertuples(), strict=True)],
-        "orders": [[int(d), _px(line), _px(stop), _px(tp)] for d, line, stop, tp in xj["orders"]],
     }
 
 
