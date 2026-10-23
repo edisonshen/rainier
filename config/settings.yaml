@@ -208,7 +208,7 @@ llm_thesis:
   # 1024x640 chart (was 60 bars at 1280x800). This
   # runtime value is what builds the Tier-1 cache key (not prompt.PROMPT_VERSION)
   # — keep it == the module constant.
-  prompt_version: "v5"
+  prompt_version: "v6"
   # Budget: one LLM scan a day (12:45 PT afternoon); close posts only the
   # rule-based top-20.
   enabled_sessions:
@@ -261,6 +261,11 @@ llm_thesis:
       enabled: true
       params:
         days: 10
+      weight: 1.0
+    fear_greed:
+      enabled: true
+      params:
+        lookback_days: 45
       weight: 1.0
     fundamentals:
       enabled: true
