@@ -25,10 +25,10 @@ Trading analysis platform — futures price action (小酱 pin bar methodology) 
 uv sync
 
 # fetch latest futures data from yfinance
-uv run rainier fetch --symbol MES --plot
+uv run rainier fetch --symbol MES
 
-# multi-TF day trading analysis
-uv run rainier daytrade --symbol MES --data-dir data/csv
+# multi-TF S/R zones for /trading/mes
+uv run rainier sr-levels --symbol MES --data-dir data/csv
 
 # scrape QuantUnicorn QU100 rankings
 uv run rainier scrape qu --session morning --headed
@@ -92,7 +92,6 @@ rainier/
 │   ├── scrapers/                  # QuantUnicorn web scraper (Playwright)
 │   ├── notifications/             # Apprise multi-channel notifications
 │   ├── alerts/                    # Discord webhooks
-│   ├── reports/                   # Daily review + next-day outlook
 │   ├── scheduler/                 # Crontab manager + APScheduler service
 │   └── trader/                    # (Phase 3) IB TWS execution
 ├── docker-compose.yaml            # TimescaleDB

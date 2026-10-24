@@ -11,16 +11,16 @@ src/rainier/
 ├── core/           types.py (shared dataclasses), protocols.py (boundary contracts),
 │                   config.py (unified Pydantic), models.py (19 ORM tables), database.py (singleton + TimescaleDB)
 ├── data/           provider.py (protocol), csv_provider.py, yfinance_provider.py
-├── analysis/       analyzer.py (orchestrator), pivots.py, pinbar.py, sr_horizontal.py, sr_diagonal.py, bias.py, inside_bar.py
+├── analysis/       sr_zones.py (the S/R finder for the chart), pivots.py;
+│                   analyzer.py + pinbar/sr_horizontal/sr_diagonal/bias/inside_bar (old pin-bar, ML features only)
 ├── features/       extractor.py (AnalysisResult→ML features), labels.py (TradeRecord→training labels)
 ├── signals/        generator.py (entry/SL/TP), scorer.py (weighted confidence), emitter.py (SignalEmitter adapters)
-├── backtest/       engine.py (event-driven, protocol-based), sweep.py (parameter optimization),
+├── backtest/       engine.py (event-driven, protocol-based),
 │                   export.py (CSV/Parquet), report.py (text + Plotly)
-├── viz/            charts.py (Plotly interactive)
+├── viz/            charts.py (static stock chart for LLM thesis)
 ├── scrapers/       base.py (BaseScraper ABC), browser.py (Playwright), qu/ (QuantUnicorn scraper)
 ├── notifications/  notifier.py (Apprise multi-channel)
 ├── alerts/         discord.py (webhook notifications)
-├── reports/        daily.py (daily review + next-day outlook)
 ├── scheduler/      jobs.py (cron.yaml → system crontab), service.py (APScheduler for scraping),
 │                   recovery.py (post-restart service checks + missed-scrape re-runs)
 ├── pipeline/       post_scrape.py (shared screen→persist→LLM thesis→Discord, used by cron CLI + scheduler)
@@ -42,17 +42,9 @@ uv run pytest tests/ -v
 uv run ruff check src/ tests/
 
 # Futures data + analysis
-uv run rainier fetch --symbol MES --plot
-uv run rainier scan --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
-uv run rainier daytrade --symbol MES --data-dir data/csv
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --trades
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --export trades.csv
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --export trades.parquet
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --sweep
-uv run rainier backtest --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv --slippage 0.001 --commission 5.0
-uv run rainier chart --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
-uv run rainier report --symbol MES --timeframe 1H --csv data/csv/MES_1H.csv
+uv run rainier fetch --symbol MES
+uv run rainier sr-levels --symbol MES --data-dir data/csv           # S/R zones for /trading/mes
+uv run rainier sr-validate --symbol MES --holdout-start 2026-08-17
 
 # QU100 backtesting
 uv run rainier backtest-qu100                              # default: rank 1-50, 5d hold
@@ -138,7 +130,7 @@ LIVE TRADING (future, Phase 3):
 
 1. Create a new class implementing the `SignalEmitter` protocol (just needs `emit()` method)
 2. Wire it in `cli/` or wherever the composition happens
-3. The backtest engine, sweep runner, and export all work automatically — zero changes needed
+3. The backtest engine and export work automatically — zero changes needed
 
 ## Key Conventions
 

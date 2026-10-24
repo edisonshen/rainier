@@ -6,9 +6,7 @@ import numpy as np
 import pandas as pd
 
 from rainier.analysis.regime import RegimeDetector, compute_adx
-from rainier.core.protocols import SignalEmitter
-from rainier.core.types import Direction, MarketRegime, Signal, Timeframe
-from rainier.signals.regime_filter import RegimeFilter
+from rainier.core.types import MarketRegime, Timeframe
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -97,30 +95,6 @@ def _make_high_volatility(n: int = 200) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-class FakeEmitter:
-    """Always emits one signal."""
-
-    def emit(self, df: pd.DataFrame, symbol: str, timeframe: Timeframe) -> list[Signal]:
-        last_bar = df.iloc[-1]
-        return [
-            Signal(
-                symbol=symbol,
-                timeframe=timeframe,
-                direction=Direction.LONG,
-                entry_price=float(last_bar["close"]),
-                stop_loss=float(last_bar["close"]) - 5.0,
-                take_profit=float(last_bar["close"]) + 5.0,
-                confidence=0.8,
-                timestamp=pd.Timestamp(last_bar["timestamp"]).to_pydatetime(),
-            ),
-        ]
-
-
-# ---------------------------------------------------------------------------
-# ADX computation
-# ---------------------------------------------------------------------------
-
-
 class TestADX:
     def test_adx_returns_series(self):
         df = _make_trending_up(100)
@@ -196,62 +170,6 @@ class TestRegimeDetector:
 
 # ---------------------------------------------------------------------------
 # Regime filter
-# ---------------------------------------------------------------------------
-
-
-class TestRegimeFilter:
-    def test_satisfies_signal_emitter_protocol(self):
-        inner = FakeEmitter()
-        detector = RegimeDetector()
-        filt = RegimeFilter(inner, detector, {MarketRegime.TRENDING_UP})
-        assert isinstance(filt, SignalEmitter)
-
-    def test_passes_signals_in_allowed_regime(self):
-        df = _make_trending_up(200)
-        inner = FakeEmitter()
-        detector = RegimeDetector()
-        # Allow all regimes — should pass through
-        filt = RegimeFilter(
-            inner, detector,
-            {r for r in MarketRegime},
-        )
-        signals = filt.emit(df, "TEST", Timeframe.H1)
-        assert len(signals) == 1
-
-    def test_blocks_signals_in_disallowed_regime(self):
-        df = _make_trending_up(200)
-        inner = FakeEmitter()
-        detector = RegimeDetector()
-        # Only allow range_bound — trending up data should be blocked
-        filt = RegimeFilter(
-            inner, detector,
-            {MarketRegime.RANGE_BOUND},
-        )
-        signals = filt.emit(df, "TEST", Timeframe.H1)
-        assert len(signals) == 0
-
-    def test_filter_wraps_inner_emitter(self):
-        """Verify inner emitter is called when regime matches."""
-        call_count = 0
-
-        class TrackingEmitter:
-            def emit(self, df, symbol, timeframe) -> list[Signal]:
-                nonlocal call_count
-                call_count += 1
-                return []
-
-        df = _make_trending_up(200)
-        detector = RegimeDetector()
-        filt = RegimeFilter(
-            TrackingEmitter(), detector,
-            {r for r in MarketRegime},  # allow all
-        )
-        filt.emit(df, "TEST", Timeframe.H1)
-        assert call_count == 1
-
-
-# ---------------------------------------------------------------------------
-# Feature extraction (regime features)
 # ---------------------------------------------------------------------------
 
 
