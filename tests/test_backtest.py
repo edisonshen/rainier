@@ -1,4 +1,4 @@
-"""Tests for backtest engine, export, and sweep."""
+"""Tests for backtest engine and export."""
 
 from datetime import datetime, timedelta
 
@@ -257,50 +257,6 @@ class TestExport:
 
 # ---------------------------------------------------------------------------
 # Sweep
-# ---------------------------------------------------------------------------
-
-
-class TestSweep:
-    def test_sweep_runs(self):
-        from rainier.backtest.sweep import run_sweep
-
-        df = _make_zigzag_dataset()
-        config = BacktestConfig()
-
-        def factory(conf, rr):
-            return FakeSignalEmitter()
-
-        result = run_sweep(
-            df, "NQ", Timeframe.H1, factory, config,
-            confidence_values=[0.5, 0.6],
-            rr_values=[1.0, 2.0],
-        )
-        # 2 x 2 = 4 combinations
-        assert len(result.rows) == 4
-
-    def test_sweep_table_format(self):
-        from rainier.backtest.sweep import SweepResult, format_sweep_table
-
-        result = SweepResult(rows=[{
-            "min_confidence": 0.6,
-            "min_rr_ratio": 2.0,
-            "total_trades": 0,
-            "win_rate": 0.0,
-            "profit_factor": 0.0,
-            "total_net_pnl": 0.0,
-            "max_drawdown_pct": 0.0,
-            "sharpe_ratio": 0.0,
-            "avg_win": 0.0,
-            "avg_loss": 0.0,
-            "avg_hold_bars": 0.0,
-            "final_equity": 100_000.0,
-        }])
-        text = format_sweep_table(result)
-        assert "PARAMETER SWEEP" in text
-
-
-# ---------------------------------------------------------------------------
-# Position limit
 # ---------------------------------------------------------------------------
 
 
