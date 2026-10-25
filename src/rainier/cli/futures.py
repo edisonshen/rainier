@@ -78,6 +78,7 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
 
     from rainier.analysis.sr_zones import detect_mtf_zones, zones_to_levels
     from rainier.publish.cloudflare_kv import put_kv_if_changed
+    from rainier.research.xiaojiang.chart import chart_setups
     from rainier.viz.chart_payload import sr_chart_payload
     from rainier.viz.pine import zones_to_pine
 
@@ -95,10 +96,15 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     latest = data.get(Timeframe.M5, data[next(iter(htf))])
     price = float(latest["close"].iloc[-1])
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
-    levels = zones_to_levels(detect_mtf_zones(htf, cfg, price), price)
+    zones = detect_mtf_zones(htf, cfg, price)
+    levels = zones_to_levels(zones, price)
     levels.sort(key=lambda lv: -lv.price)
+    xj = []
+    if pub.xj_setups and Timeframe.M5 in data and Timeframe.M5 in pub.bars:
+        since = data[Timeframe.M5]["timestamp"].tail(pub.bars[Timeframe.M5]).iloc[0]
+        xj = chart_setups(data, pub.xj_setups, zones, since, settings.analysis.sr_zones)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
-                               pub.vma_bars, pub.vma_offset)
+                               pub.vma_bars, pub.vma_offset, xj)
     if publish_kv:
         key = pub.kv_key.format(symbol=symbol.lower())
         # Same bars + zones (daily halt, holidays) -> identical payload, so skip the write.
@@ -122,6 +128,46 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
         click.echo(f"Wrote {len(levels)} zones to {output_path}")
     else:
         click.echo(out)
+
+
+@cli.command("xj-backtest")
+@click.option("--symbol", default="MES")
+@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
+@click.option("--holdout-start", required=True, help="First holdout date (YYYY-MM-DD), PT")
+@click.option("--setup", "keys", multiple=True,
+              help="Key in chart_publish.xj_setups (repeatable; default: all)")
+@click.option("--random", "n_random", default=20, show_default=True,
+              help="Randomly shifted-zone controls")
+@click.pass_context
+def xj_backtest(ctx, symbol, data_dir, holdout_start, keys, n_random):
+    """Xiaojiang setups on the chart's point-in-time zones, train vs holdout vs random zones."""
+    from rainier.research.xiaojiang.sim import Market, metrics, simulate
+    from rainier.research.xiaojiang.zones import ZoneBook
+
+    settings = ctx.obj["settings"]
+    setups = settings.chart_publish.xj_setups
+    unknown = set(keys) - set(setups)
+    if unknown:
+        raise click.ClickException(f"unknown setup(s) {sorted(unknown)}; have {sorted(setups)}")
+    data = _load_mtf_csvs(Path(data_dir), symbol)
+    if Timeframe.M5 not in data:
+        raise click.ClickException(f"{symbol}_5m.csv required")
+    book = ZoneBook(data, settings.analysis.sr_zones)
+    mkt = Market(data, book)
+    controls = [Market(data, book.shifted(seed)) for seed in range(n_random)]
+    hs = pd.Timestamp(holdout_start)
+    rows = []
+    for key in keys or setups:
+        p = setups[key]
+        real = simulate(mkt, p).trades
+        rand = [simulate(m, p).trades for m in controls]
+        for name, pick in (("train", lambda t: t[t.t_in < hs]),
+                           ("holdout", lambda t: t[t.t_in >= hs])):
+            m = metrics(pick(real))
+            beat = [m["avg_usd"] > metrics(pick(r))["avg_usd"] for r in rand]
+            rows.append({"setup": key, "period": name, **m,
+                         "beats_random": sum(beat) / len(beat) if beat else float("nan")})
+    click.echo(pd.DataFrame(rows).round(3).to_string(index=False))
 
 
 @cli.command("sr-validate")
