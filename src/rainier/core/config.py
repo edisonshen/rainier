@@ -338,6 +338,7 @@ def _default_thesis_signals() -> dict[str, ThesisSignalConfig]:
         "rank_trajectory": ThesisSignalConfig(params={"days": 10}),
         "capital_flow_streak": ThesisSignalConfig(params={"days": 10}),
         "sector_momentum": ThesisSignalConfig(params={"days": 10}),
+        "fear_greed": ThesisSignalConfig(params={"lookback_days": 45}),
         "fundamentals": ThesisSignalConfig(params={}),
     }
 
@@ -383,7 +384,7 @@ class LLMThesisConfig(BaseModel):
     # prompt.PROMPT_VERSION — the module constant alone never busts the cache.
     # Keep the two (plus settings.yaml) in lockstep
     # (test_prompt_version_config_tracks_module guards the invariant).
-    prompt_version: str = "v5"
+    prompt_version: str = "v6"
     enabled_sessions: list[str] = Field(
         default_factory=lambda: ["afternoon", "close"]
     )
