@@ -180,3 +180,18 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
         assert len(before) > 0
         pd.testing.assert_frame_equal(before, b["trades"][b["trades"].t_out < cut]
                                       .reset_index(drop=True))
+
+
+def test_sr_levels_without_daily_bars_still_publishes_zones_and_setups(mes, tmp_path):
+    """Setup B's daily trend filter turns off instead of blocking the chart."""
+    from rainier.cli import cli
+
+    for tf, df in mes.items():
+        if tf != Timeframe.D1:
+            df.to_csv(tmp_path / f"MES_{tf.value}.csv", index=False)
+    out = tmp_path / "payload.json"
+    r = CliRunner().invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--format", "json",
+                                 "--output", str(out)])
+    assert r.exit_code == 0, r.output
+    payload = json.loads(out.read_text())
+    assert payload["zones"] and [s["key"] for s in payload["xj"]["setups"]] == ["A", "B"]

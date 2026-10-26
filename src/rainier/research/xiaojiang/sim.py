@@ -127,9 +127,9 @@ class Market:
         if name == "none":
             return np.zeros(len(self.t), dtype=int)
         if name not in self._bias:
-            if self._d1 is None or self._d1.empty:
-                raise ValueError("bias='d1' needs 1D bars")
-            self._bias[name] = _trend_d1(self._d1, self.t)
+            no_d1 = self._d1 is None or self._d1.empty
+            self._bias[name] = (np.zeros(len(self.t), dtype=int) if no_d1
+                                else _trend_d1(self._d1, self.t))
         return self._bias[name]
 
 
