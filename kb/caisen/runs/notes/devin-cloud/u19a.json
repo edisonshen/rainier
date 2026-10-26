@@ -1,0 +1,485 @@
+{
+  "unit_id": "u19a",
+  "model": "devin-cloud",
+  "pages_read": [
+    231,
+    232,
+    233,
+    234,
+    235,
+    236,
+    237
+  ],
+  "summary": "Mainland-edition appendix (written 2016-07) reviewing the 2014 A-share call and restating method: wait for patterns to complete (等待是一种艺术), read volume-price changes to infer the main player. It then shows A-share chart examples with measured-move targets: time-wave symmetry turning points (上证 9 weeks / 12 days), flag and triangle continuation targets (亚夏股份, 上证50), and top patterns with measured drops (山东黄金 三尊头, 中金黄金 M头, 中航三鑫 M头, 天津信息 头肩顶, 宁波东力 头肩顶, 长江电力 收敛三角形头部), plus 乐普医疗 flag and W bottom.",
+  "patterns": [
+    {
+      "name_zh": "时间波对称变盘",
+      "name_en": "Symmetric time-wave turning point",
+      "direction": "neutral",
+      "structure": "Count bars of the prior swing; a turn (变盘) is expected when the following swing reaches the same bar count (上证周线 9周/9周; 上证日线 12天/12天, 第12天变盘).",
+      "entry": "At the symmetric bar count, watch for the turn; book: upward turn completing the bottom while support 2822-2922 holds.",
+      "stop": "Do not break the important support zone (上证 2822-2922).",
+      "target": {
+        "formula": "Not a price target (time projection)",
+        "worked_example": "上证周线: 9 weeks down from 3684.57 to 2638.30 area, then 9th week turning point at 2016-07-07.",
+        "pages": [
+          232,
+          233
+        ]
+      },
+      "confirmation": [
+        "Price confirms by breaking out in the direction of the turn."
+      ],
+      "invalidation": [
+        "Break of the support zone 2822-2922."
+      ],
+      "timeframes": [
+        "weekly",
+        "daily"
+      ],
+      "pages": [
+        232,
+        233
+      ]
+    },
+    {
+      "name_zh": "旗形整理（涨幅满足）",
+      "name_en": "Flag continuation with measured-move target",
+      "direction": "long",
+      "structure": "Leg from a low to the flag high; flag/consolidation pulls back to a flag low; target = flag low + (flag high - leg low).",
+      "entry": "Breakout of the flag (implied by charts).",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "target = flag_low + (flag_high - leg_low)",
+        "worked_example": "亚夏股份: 24.59 - 11.95 = 12.64; 19.58 + 12.64 = 32.22. 乐普医疗: 39.46 - 22.51 = 16.95; 33.1 + 16.95 = 50.05 (then 假突破 at the top).",
+        "pages": [
+          232,
+          236
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [
+        "假突破 after reaching the target (乐普医疗)."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        232,
+        236
+      ]
+    },
+    {
+      "name_zh": "收敛三角形整理（续涨）",
+      "name_en": "Symmetrical-triangle continuation with prior-leg target",
+      "direction": "long",
+      "structure": "Prior up-leg from low to high, then a converging triangle; target = triangle low + prior leg height.",
+      "entry": "Breakout of the triangle (implied).",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "target = triangle_low + (leg_high - leg_low)",
+        "worked_example": "上证50日线: 2692 - 1556 = 1136; 2303 + 1136 = 3439 (high 3494).",
+        "pages": [
+          233
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        233
+      ]
+    },
+    {
+      "name_zh": "三尊头 / 头肩顶",
+      "name_en": "Triple top / head-and-shoulders top",
+      "direction": "short",
+      "structure": "Three peaks over a neckline; head-and-shoulders top is a triple top whose middle peak is highest; triple top need not be H&S. Measure from the head (highest) high to the neckline.",
+      "entry": "Break of the neckline (break point labelled on charts, e.g., 44, 35.3, 13.6).",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "target = breakdown_point - (head_high - neckline)",
+        "worked_example": "山东黄金周线: 67.22 - 40.2 = 27.02; 44 - 27.02 = 16.98 (low 15.02). 天津信息: 51.7 - 33.2 = 18.5; 35.3 - 18.5 = 16.8. 宁波东力: 20.75 - 12.6 = 8.15; 13.6 - 8.15 = 5.45.",
+        "pages": [
+          234,
+          235,
+          237
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [],
+      "timeframes": [
+        "weekly",
+        "daily"
+      ],
+      "pages": [
+        234,
+        235,
+        237
+      ]
+    },
+    {
+      "name_zh": "M头",
+      "name_en": "M top (double top)",
+      "direction": "short",
+      "structure": "Two peaks over a neckline; measure top-to-neckline and project from the breakdown point.",
+      "entry": "Break of the neckline.",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "target = breakdown_point - (top - neckline)",
+        "worked_example": "中金黄金: 17 - 9.7 = 7.3; 10.5 - 7.3 = 3.2 (low 3.14). 中航三鑫: 15.4 - 11.4 = 4; 11.7 - 4 = 7.7.",
+        "pages": [
+          234,
+          235
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        234,
+        235
+      ]
+    },
+    {
+      "name_zh": "收敛三角形头部",
+      "name_en": "Converging-triangle top",
+      "direction": "short",
+      "structure": "Triangle at a top; measure high to triangle low and project from breakdown.",
+      "entry": "Breakdown of the lower triangle line.",
+      "stop": "Not stated.",
+      "target": {
+        "formula": "target = breakdown_point - (triangle_high - triangle_low)",
+        "worked_example": "长江电力: 14.7 - 12.7 = 2; 13.4 - 2 = 11.4; then 破底翻 at 11.13.",
+        "pages": [
+          237
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [
+        "破底翻 near the target marks the end of the decline (长江电力)."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        237
+      ]
+    },
+    {
+      "name_zh": "W底",
+      "name_en": "W bottom",
+      "direction": "long",
+      "structure": "Two lows (27.3) under a neckline (35).",
+      "entry": "Neckline breakout.",
+      "stop": "Not stated; later 破线 (trendline break) marked as exit.",
+      "target": {
+        "formula": "target = neckline + (neckline - low)",
+        "worked_example": "乐普医疗: 35 - 27.3 = 7.7; 35 + 7.7 = 42.7.",
+        "pages": [
+          236
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [
+        "破线 of the rising line after the target."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        236
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Long-term: the 6124 high should be revisited or exceeded within 10 years; 2016 is year 9 so low-level accumulation has limited risk (contrarian entry).",
+      "kind": "time",
+      "quote_zh": "就长线的结构来看，6124的高点十年内会再来一次甚至突破，今年2016年已是第九年，因此A股低档布局风险有限，又一次人弃我取的进场时机",
+      "pages": [
+        231
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Used the wave measured-move (波段涨幅满足) to exit near the top after April 2015.",
+      "kind": "target",
+      "quote_zh": "2015年四月以后也利用波段涨幅满足掌握高点成功逃顶",
+      "pages": [
+        231
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Don't trade what you can't read; wait for the pattern to complete — big swings are waited for; volume and price changes signal the entry because the main player trades real money.",
+      "kind": "psychology",
+      "quote_zh": "所谓看不懂不做，行情并非随时都能看得懂，必须等待型态完成结构完整才容易做后续的判断，“等待是一种艺术”，大波段行情都是等出来的，当型态完成后，量与价的变化会告诉你进场时机",
+      "pages": [
+        231
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Reading volume-price structure reveals the main player's direction and intent.",
+      "kind": "volume",
+      "quote_zh": "因为主力作价是真金白银的进场操作，所以量必然会有变化，量的变化就会牵动价的波动，因此研判量价变化的结构便能判读主力动向与意图",
+      "pages": [
+        231
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Symmetric time-wave (9th week) is a long-term turning point; as long as 2822-2922 support holds, downside risk is limited.",
+      "kind": "time",
+      "quote_zh": "上证正达对称时间波第九周的变盘转折，这是逾半年底型态的长线转折，往上变盘后完成底部进入主升段起涨的机率相当高，只要注意不再跌破2822点至2922点重要的支撑区即可，低档风险有限，往上空间无限",
+      "pages": [
+        232
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "H&S top = triple top, but triple top ≠ H&S (head must be the highest middle peak); measure from the head high to the neckline.",
+      "kind": "target",
+      "quote_zh": "头肩顶=三尊头 三尊头不=头肩顶（因为头在中间最高） 以头部高点至颈线的距离的方式做计算",
+      "pages": [
+        234
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "上证指数",
+      "timeframe": "weekly",
+      "period": "2015-12..2016-07",
+      "pattern": "时间波对称",
+      "levels": {
+        "high": 3684.57,
+        "low": 2638.3,
+        "support_low": 2822,
+        "support_high": 2922,
+        "bars_each_side": 9
+      },
+      "outcome": "n.a. (forecast at 2016-07-07)",
+      "pages": [
+        232
+      ]
+    },
+    {
+      "instrument": "亚夏股份",
+      "timeframe": "daily",
+      "period": "n.a.",
+      "pattern": "旗形 涨幅满足",
+      "levels": {
+        "leg_low": 11.95,
+        "flag_high": 24.59,
+        "flag_low": 19.58,
+        "target": 32.22
+      },
+      "outcome": "target reached (high slightly above)",
+      "pages": [
+        232
+      ]
+    },
+    {
+      "instrument": "上证50",
+      "timeframe": "daily",
+      "period": "2014..2015",
+      "pattern": "收敛三角形整理",
+      "levels": {
+        "leg_low": 1556,
+        "leg_high": 2692,
+        "triangle_low": 2303,
+        "target": 3439,
+        "high": 3494
+      },
+      "outcome": "hit target",
+      "pages": [
+        233
+      ]
+    },
+    {
+      "instrument": "上证指数",
+      "timeframe": "daily",
+      "period": "2016",
+      "pattern": "时间波对称 12天",
+      "levels": {
+        "low": 2638.96,
+        "bars_each_side": 12
+      },
+      "outcome": "turn on the 12th day",
+      "pages": [
+        233
+      ]
+    },
+    {
+      "instrument": "山东黄金",
+      "timeframe": "weekly",
+      "period": "2011..2014",
+      "pattern": "三尊头/头肩顶",
+      "levels": {
+        "head": 67.22,
+        "neckline": 40.2,
+        "breakdown": 44,
+        "target": 16.98,
+        "low": 15.02
+      },
+      "outcome": "hit target (low 15.02 below target)",
+      "pages": [
+        234
+      ]
+    },
+    {
+      "instrument": "中金黄金",
+      "timeframe": "daily",
+      "period": "n.a.",
+      "pattern": "M头",
+      "levels": {
+        "top": 17,
+        "neckline": 9.7,
+        "breakdown": 10.5,
+        "target": 3.2,
+        "low": 3.14
+      },
+      "outcome": "hit target",
+      "pages": [
+        234
+      ]
+    },
+    {
+      "instrument": "中航三鑫",
+      "timeframe": "daily",
+      "period": "2015",
+      "pattern": "M头",
+      "levels": {
+        "top": 15.4,
+        "neckline": 11.4,
+        "breakdown": 11.7,
+        "target": 7.7
+      },
+      "outcome": "hit target",
+      "pages": [
+        235
+      ]
+    },
+    {
+      "instrument": "天津信息",
+      "timeframe": "daily",
+      "period": "2015",
+      "pattern": "头肩顶",
+      "levels": {
+        "head": 51.7,
+        "neckline": 33.2,
+        "breakdown": 35.3,
+        "target": 16.8
+      },
+      "outcome": "hit target",
+      "pages": [
+        235
+      ]
+    },
+    {
+      "instrument": "乐普医疗",
+      "timeframe": "daily",
+      "period": "2014-11..2015-07",
+      "pattern": "旗形 + 假突破",
+      "levels": {
+        "leg_low": 22.51,
+        "flag_high": 39.46,
+        "flag_low": 33.1,
+        "target": 50.05
+      },
+      "outcome": "hit target, then 假突破 and decline",
+      "pages": [
+        236
+      ]
+    },
+    {
+      "instrument": "乐普医疗",
+      "timeframe": "daily",
+      "period": "2015-08..2015-12",
+      "pattern": "W底",
+      "levels": {
+        "low": 27.3,
+        "neckline": 35,
+        "target": 42.7
+      },
+      "outcome": "hit target, later 破线",
+      "pages": [
+        236
+      ]
+    },
+    {
+      "instrument": "宁波东力",
+      "timeframe": "daily",
+      "period": "2015",
+      "pattern": "头肩顶",
+      "levels": {
+        "head": 20.75,
+        "neckline": 12.6,
+        "breakdown_right_shoulder": 13.6,
+        "target": 5.45
+      },
+      "outcome": "hit target",
+      "pages": [
+        237
+      ]
+    },
+    {
+      "instrument": "长江电力",
+      "timeframe": "daily",
+      "period": "2015..2016",
+      "pattern": "收敛三角形头部 + 破底翻",
+      "levels": {
+        "high": 14.7,
+        "triangle_low": 12.7,
+        "breakdown": 13.4,
+        "target": 11.4,
+        "break_bottom_low": 11.13,
+        "early_low": 11.02
+      },
+      "outcome": "hit target area; 破底翻 at 11.13",
+      "pages": [
+        237
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Measured drop for tops: target = breakdown_price - (pattern_high - neckline); measured rise for flags/triangles: target = consolidation_low + (prior_leg_high - prior_leg_low).",
+    "Time symmetry: count bars of prior swing (N); flag a potential turn at bar N of the subsequent swing (±1).",
+    "Head-and-shoulders requires middle peak highest; otherwise classify as triple top; measure from the highest peak to neckline in both cases."
+  ],
+  "ambiguities": [
+    "Breakdown point used in measured drops is the neckline-break price (e.g. 44 vs neckline 40.2; 13.4 vs triangle low 12.7), not the neckline itself — the book applies the distance from the break price; the exact break price definition (close vs line value) is not stated.",
+    "M top 中金黄金 uses 17 as the top though the higher high label (~18.11) appears; which peak to measure from is not explained.",
+    "No stops are stated for any example in this appendix.",
+    "Time-wave symmetry: no rule for choosing the start bar of the count."
+  ],
+  "illegible": [
+    {
+      "page": 232,
+      "what": "亚夏股份 chart high label above 32.22 (looks like 33.7x) not fully legible."
+    },
+    {
+      "page": 233,
+      "what": "上证日线 (12天 chart) high label small, unreadable."
+    },
+    {
+      "page": 234,
+      "what": "中金黄金 top label (~18.11) and early-low label small/partially legible."
+    },
+    {
+      "page": 235,
+      "what": "中航三鑫 high and low labels (~15.9 / ~6.36) small, uncertain."
+    },
+    {
+      "page": 236,
+      "what": "乐普医疗 top label near 假突破 (~58.x) and W-bottom low label (~26.5x) small, uncertain."
+    }
+  ]
+}

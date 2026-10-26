@@ -1,0 +1,153 @@
+{
+  "unit_id": "u16",
+  "model": "devin-cloud",
+  "pages_read": [
+    223,
+    224
+  ],
+  "summary": "Appendix part 1 (book pp.208-209): recognising the structure of speculative stocks (投机股), using 普格 2012 daily. Watch price-volume and chip data (融券/margin short, 融资, main-player 库存): a short squeeze timed to shareholder-meeting forced covering, short interest rising while price fails to rise after a breakout (main player shorting), and inventory collapsing on rebounds. Strict stops and decisively exiting when price-volume goes wrong avoid the later collapse or delisting.",
+  "patterns": [
+    {
+      "name_zh": "投机股结构（轧空 / 融券异常 / 库存下降）",
+      "name_en": "Speculative-stock structure: squeeze, abnormal short interest, falling insider inventory",
+      "direction": "short",
+      "structure": "Sharp rally with rising short interest; main player forces a squeeze before the April shareholder meetings (forced covering). After a volume breakout of the range high (7/20), short interest rises fast while price doesn't rise = main player is shorting. Then a long black candle breaks the line (7/30), more than 5 limit-downs, heavy volume, quick short covering.",
+      "entry": "Exit longs (avoidance rule, not a short setup): when price breaks the short-term low after the heavy-volume crash (17.35) without regaining the volume-day high (20.35).",
+      "stop": "For longs: the low after a heavy-volume decline must not be broken; breaking it is the last stop chance.",
+      "target": {
+        "formula": "n.a.",
+        "worked_example": "n.a.",
+        "pages": [
+          223,
+          224
+        ]
+      },
+      "confirmation": [
+        "融券余额 above the average daily volume but price falls instead of squeezing",
+        "Heavy-volume line break of the rebound head (12/26) plus two days of abnormal drops in inventory"
+      ],
+      "invalidation": [],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        223,
+        224
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Watching price-volume structure avoids most speculative-stock risk; strict stops and decisive exit when price-volume goes wrong avoid later problems up to delisting.",
+      "kind": "risk",
+      "quote_zh": "注意量价结构大多可以避开投机股的风险，我操作股票以来，难以避免也接触过投机股，但都因为坚持严设停损而能避开风险。……认识投机的结构后当量价出现问题时毅然退出，便能避开该股票随后发生的问题，甚至是退市。",
+      "pages": [
+        223
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Stocks that fall back to the launch point after a squeeze are mostly speculative.",
+      "kind": "filter",
+      "quote_zh": "通常轧完空后会跌回起涨点的股票大多属投机性质。",
+      "pages": [
+        223
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Short interest rising fast (above average daily volume) while price fails to rise after a breakout is abnormal — the main player is shorting.",
+      "kind": "volume",
+      "quote_zh": "融券快速增加但价却不涨的异常现象，融券余额已超过日均量，具备轧空条件，但价不涨反跌便是异常，属主力放空现象。",
+      "pages": [
+        224
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Rising price + rising short interest: the main player usually squeezes retail shorts; falling price + rising short interest: usually the main player is shorting.",
+      "kind": "volume",
+      "quote_zh": "（价涨券增通常主力轧散户空，价跌券增通常是主力做空）",
+      "pages": [
+        224
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "The low after a heavy-volume decline should not be broken; if the rebound fails below the volume-day high and price breaks that low, it is the last stop for longs — exit decisively.",
+      "kind": "stop",
+      "quote_zh": "当回跌再破17.35元低点的时候，便是多头最后的停损机会（通常下跌大量后的低点不能再破）",
+      "pages": [
+        224
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "A heavy-volume line break of the rebound confirms a head; that day's high becomes resistance. Abnormal drops in inventory usually mean the company or major holders are selling.",
+      "kind": "volume",
+      "quote_zh": "12月26日爆量破线头部确立，当日高点6.95元成为反弹结束后的反压，重点是当时连续两日的库存余额异常大减，通常都是公司派或大股东积极出脱持股",
+      "pages": [
+        224
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Insiders know first (春江冷暖鸭先知): persistent falling inventory after a crash means doubts are growing, not fading.",
+      "kind": "psychology",
+      "quote_zh": "“春江冷暖鸭先知”，可见此股长期疑虑在股价崩跌后仍不减反增。",
+      "pages": [
+        224
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "普格 (3071)",
+      "timeframe": "daily",
+      "period": "2012-03..2013-03",
+      "pattern": "投机股结构：轧空 → 融券异常 → 跌停崩跌 → 库存下降",
+      "levels": {
+        "rally_start": 13.0,
+        "squeeze_high": 31.3,
+        "pullback_low": 19.6,
+        "range_breakout_date": "2012-07-20",
+        "range_highs": "27.40 / 28.10",
+        "trendline_low": 24.2,
+        "crash_volume_high": 20.35,
+        "short_term_low": 17.35,
+        "rebound_high": 17.65,
+        "other_low": 16.4,
+        "fraud_impact": "4.6亿 on 5.79亿 capital, up to 7.9 EPS loss",
+        "limit_downs": "~20",
+        "low_2012_11_20": 3.73,
+        "rebound_high_7_58": 7.58,
+        "head_high_2012_12_26": 6.95,
+        "later_high": 6.74,
+        "later_low": 4.41
+      },
+      "outcome": "Squeeze in April around shareholder meetings; after 7/20 short interest rose while price fell; 7/30 crash with >5 limit-downs; October fraud news → ~20 limit-downs to 3.73 with margin longs force-liquidated; 12/26 head at 6.95 never retaken; 2013-03-04 another limit-down collapse.",
+      "pages": [
+        223,
+        224
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Abnormal short interest: short balance > average daily volume AND close lower N days after a range breakout → avoid/exit.",
+    "Post-crash stop: after a heavy-volume decline, record the next swing low L and the volume-day high H; if a rebound fails below H and close < L → exit.",
+    "Squeeze-reversal speculative tag: price returns to the rally's launch level after a squeeze.",
+    "Insider-selling alert: main-player inventory drops abnormally on two consecutive days, then trends down."
+  ],
+  "ambiguities": [
+    "'Abnormal' inventory drop and 'rapid' short-interest increase are not quantified.",
+    "The appendix is about avoiding speculative stocks; no explicit short-entry rule is given.",
+    "Chip data (融券, 融资, 库存余额) is Taiwan-specific; how to map it to US data is not addressed."
+  ],
+  "illegible": [
+    {
+      "page": 223,
+      "what": "price labels at the far-left start (13.00 is readable; others small) and the y-axis indicator values on the 普格 chart; the low box near 3.73 is small but matches the text"
+    }
+  ]
+}
