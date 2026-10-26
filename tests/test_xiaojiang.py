@@ -195,3 +195,19 @@ def test_sr_levels_without_daily_bars_still_publishes_zones_and_setups(mes, tmp_
     assert r.exit_code == 0, r.output
     payload = json.loads(out.read_text())
     assert payload["zones"] and [s["key"] for s in payload["xj"]["setups"]] == ["A", "B"]
+
+
+def test_xiaojiang_is_mes_only(mes, tmp_path):
+    """Stops, point value and costs are MES: other contracts get no A/B, not MES dollars."""
+    from rainier.cli import cli
+
+    for tf, df in mes.items():
+        df.to_csv(tmp_path / f"ES_{tf.value}.csv", index=False)
+    out = tmp_path / "payload.json"
+    r = CliRunner().invoke(cli, ["sr-levels", "--symbol", "ES", "--data-dir", str(tmp_path),
+                                 "--format", "json", "--output", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "xj" not in json.loads(out.read_text())
+    r = CliRunner().invoke(cli, ["xj-backtest", "--symbol", "ES", "--data-dir", str(tmp_path),
+                                 "--holdout-start", "2026-10-01"])
+    assert r.exit_code != 0 and "MES" in r.output

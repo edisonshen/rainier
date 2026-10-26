@@ -100,7 +100,9 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     levels = zones_to_levels(zones, price)
     levels.sort(key=lambda lv: -lv.price)
     xj = []
-    if pub.xj_setups and Timeframe.M5 in data and Timeframe.M5 in pub.bars:
+    # The Xiaojiang simulator's stops and costs are MES points/dollars.
+    if (pub.xj_setups and symbol.upper() == "MES" and Timeframe.M5 in data
+            and Timeframe.M5 in pub.bars):
         since = data[Timeframe.M5]["timestamp"].tail(pub.bars[Timeframe.M5]).iloc[0]
         xj = chart_setups(data, pub.xj_setups, zones, since, settings.analysis.sr_zones)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
@@ -131,7 +133,8 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
 
 
 @cli.command("xj-backtest")
-@click.option("--symbol", default="MES")
+@click.option("--symbol", default="MES", type=click.Choice(["MES"]),
+              help="MES only: stops, point value and costs are MES")
 @click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
 @click.option("--holdout-start", required=True, help="First holdout date (YYYY-MM-DD), PT")
 @click.option("--setup", "keys", multiple=True,
