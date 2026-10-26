@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rainier.core.types import Timeframe
@@ -487,6 +487,43 @@ def _default_chart_bars() -> dict[Timeframe, int]:
     return {Timeframe.M5: 2880, Timeframe.H1: 720, Timeframe.H4: 540, Timeframe.D1: 250}
 
 
+class XJSetupConfig(BaseModel):
+    """One Xiaojiang transaction setup on the chart's S/R zones (research only, no orders).
+
+    ``entry``: left = limit resting at the zone, right = enter on a rejection close after the
+    touch. ``level``: the zone's near edge or its center. ``exit``: next = near edge of the next
+    zone, rrN = fixed N x risk. ``min_rank``: 2 = 1H, 3 = 4H, 4 = 1D zone. ``max_tests``: trade
+    touches 1..N within ``test_days`` sessions. ``bias``: d1 = daily trend picks the side.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str = ""
+    entry: Literal["left", "right"] = "left"
+    level: Literal["edge", "center"] = "edge"
+    stop_pts: float = Field(12.0, gt=0)
+    exit: str = Field("next", pattern=r"^(next|rr\d+(\.\d+)?)$")
+    min_rank: int = Field(3, ge=1, le=4)
+    min_conf: int = Field(1, ge=1)
+    max_tests: int = Field(3, ge=1)
+    test_days: int = Field(10, ge=1)
+    k_near: int = Field(3, ge=1)
+    bias: Literal["none", "d1"] = "none"
+    per_line: int = Field(1, ge=1)
+    confirm_bars: int = Field(3, ge=1)
+
+
+def _default_xj_setups() -> dict[str, XJSetupConfig]:
+    return {
+        "A": XJSetupConfig(label="A: rejection close at zone edge, 12 pt stop, 5R, 1st touch",
+                           entry="right", level="edge", stop_pts=12, exit="rr5", min_rank=2,
+                           min_conf=1, max_tests=1),
+        "B": XJSetupConfig(label="B: limit at 4H+ zone center, 5 pt stop, next zone, daily trend",
+                           entry="left", level="center", stop_pts=5, exit="next", min_rank=3,
+                           min_conf=2, max_tests=3, bias="d1"),
+    }
+
+
 class ChartPublishConfig(BaseModel):
     """S/R chart payload pushed to Workers KV for fengshen.dev /trading/mes."""
 
@@ -500,6 +537,8 @@ class ChartPublishConfig(BaseModel):
     # Rolling VWAP line (TradingView "VMA55": sum(hlc3*vol, n)/sum(vol, n), offset=2).
     vma_bars: int = Field(55, ge=1)
     vma_offset: int = Field(2, ge=0)
+    # Xiaojiang setups backtested on the 5m window (A/B toggle on the page); {} = off.
+    xj_setups: dict[str, XJSetupConfig] = Field(default_factory=_default_xj_setups)
 
 
 class Settings(BaseSettings):

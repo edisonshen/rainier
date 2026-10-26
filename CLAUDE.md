@@ -13,6 +13,7 @@ src/rainier/
 ├── data/           provider.py (protocol), csv_provider.py, yfinance_provider.py
 ├── analysis/       sr_zones.py (the S/R finder for the chart), pivots.py;
 │                   analyzer.py + pinbar/sr_horizontal/sr_diagonal/bias/inside_bar (old pin-bar, ML features only)
+├── research/       xiaojiang/ (A/B transaction rules on sr_zones zones: zones.py, sim.py, chart.py)
 ├── features/       extractor.py (AnalysisResult→ML features), labels.py (TradeRecord→training labels)
 ├── signals/        generator.py (entry/SL/TP), scorer.py (weighted confidence), emitter.py (SignalEmitter adapters)
 ├── backtest/       engine.py (event-driven, protocol-based),
@@ -45,6 +46,7 @@ uv run ruff check src/ tests/
 uv run rainier fetch --symbol MES
 uv run rainier sr-levels --symbol MES --data-dir data/csv           # S/R zones for /trading/mes
 uv run rainier sr-validate --symbol MES --holdout-start 2026-08-17
+uv run rainier xj-backtest --symbol MES --holdout-start 2026-08-17  # Xiaojiang A/B on the chart zones vs random
 
 # QU100 backtesting
 uv run rainier backtest-qu100                              # default: rank 1-50, 5d hold
