@@ -25,7 +25,7 @@ from rainier.research.xiaojiang.sim import (
     next_orders,
     simulate,
 )
-from rainier.research.xiaojiang.zones import Lines
+from rainier.research.xiaojiang.zones import Lines, ZoneBook
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mes_sr_small.parquet"
 SUPPORT = Lines(price=[100.0], lo=[99.0], hi=[101.0], rank=[3], nconf=[2], touches=[2])
@@ -211,3 +211,20 @@ def test_xiaojiang_is_mes_only(mes, tmp_path):
     r = CliRunner().invoke(cli, ["xj-backtest", "--symbol", "ES", "--data-dir", str(tmp_path),
                                  "--holdout-start", "2026-10-01"])
     assert r.exit_code != 0 and "MES" in r.output
+
+
+def test_random_control_moves_each_zone_once_for_all_hours():
+    """A shifted zone stays put while it exists, so its touch history is consistent."""
+
+    def lines(zones: list[tuple[float, int]]) -> Lines:
+        return Lines([z for z, _ in zones], [z - 1 for z, _ in zones], [z + 1 for z, _ in zones],
+                     [r for _, r in zones], [1] * len(zones), [2] * len(zones))
+
+    h1 = lines([(100.0, 1), (200.0, 2)])
+    h2 = lines([(100.0, 1), (150.0, 3), (200.0, 2)])
+    book = object.__new__(ZoneBook)
+    book.snapshots = [h1, h2, h1]
+    for seed in range(5):
+        moved = [dict(zip(s.rank, s.price, strict=True)) for s in book.shifted(seed).snapshots]
+        assert moved[0] == moved[2] and all(moved[1][r] == moved[0][r] for r in (1, 2))
+        assert all(6 <= abs(moved[1][r] - z) <= 20 for r, z in ((1, 100), (2, 200), (3, 150)))
