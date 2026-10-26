@@ -786,6 +786,494 @@ def _extract_symbol_ohlcv(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class BacktestUniverse:
+    """The ranked cohort the simulation iterates over."""
+
+    top100: pd.DataFrame  # filtered rankings (top100, Long in, rank <= 20)
+    dates: list[date]
+    symbols: list[str]
+
+    @property
+    def start_date(self) -> date:
+        return self.dates[0]
+
+    @property
+    def end_date(self) -> date:
+        return self.dates[-1]
+
+
+@dataclass
+class PriceLookups:
+    """Date-indexed per-field price frames plus the raw price data."""
+
+    price_data: pd.DataFrame
+    open: pd.DataFrame
+    high: pd.DataFrame
+    low: pd.DataFrame
+    close: pd.DataFrame
+    price_dates: list[date]
+    date_to_idx: dict[date, int]
+
+
+@dataclass
+class StrategyParams:
+    """Immutable strategy knobs threaded through the simulation."""
+
+    max_positions: int = 5
+    top_n: int = 2
+    max_hold_days: int = 0
+    hard_stop_pct: float = 0.0
+    use_close_price: bool = False
+    use_stop_limit: bool = False
+
+
+@dataclass
+class PortfolioState:
+    """Mutable portfolio state evolved day by day."""
+
+    cash: float
+    positions: list[Position] = field(default_factory=list)
+    closed_trades: list[ClosedTrade] = field(default_factory=list)
+    equity_curve: list[float] = field(default_factory=list)
+    equity_dates: list[date] = field(default_factory=list)
+    # Pending entries: signal on day T → buy at day T+1 open
+    pending_entries: list[dict] = field(default_factory=list)
+
+
+def build_cohorts(
+    rankings: pd.DataFrame, start_date_str: str | None = None,
+) -> BacktestUniverse:
+    """Filter rankings to the entry universe: top100, Long in, rank <= 20."""
+    top100 = rankings[rankings["ranking_type"] == "top100"]
+    top100 = top100[top100["long_short"] == "Long in"]
+    top100 = top100[top100["rank"] <= 20]
+
+    all_dates = sorted(top100["data_date"].unique())
+    all_symbols = sorted(top100["symbol"].unique())
+
+    if start_date_str:
+        from datetime import datetime as dt
+        start_dt = dt.strptime(start_date_str, "%Y-%m-%d").date()
+        all_dates = [d for d in all_dates if d >= start_dt]
+
+    if len(all_dates) < 2:
+        raise ValueError(f"Need at least 2 dates, got {len(all_dates)}")
+
+    return BacktestUniverse(top100=top100, dates=all_dates, symbols=all_symbols)
+
+
+def build_price_lookups(
+    price_data: pd.DataFrame, all_symbols: list[str],
+) -> PriceLookups:
+    """Split price data into per-field frames with a date → row-index map."""
+    if isinstance(price_data.columns, pd.MultiIndex):
+        open_prices = price_data["Open"]
+        high_prices = price_data["High"]
+        low_prices = price_data["Low"]
+        close_prices = price_data["Close"]
+    else:
+        sym = all_symbols[0]
+        open_prices = price_data[["Open"]].rename(columns={"Open": sym})
+        high_prices = price_data[["High"]].rename(columns={"High": sym})
+        low_prices = price_data[["Low"]].rename(columns={"Low": sym})
+        close_prices = price_data[["Close"]].rename(columns={"Close": sym})
+
+    price_dates = [d.date() for d in open_prices.index]
+    date_to_idx = {d: i for i, d in enumerate(price_dates)}
+    return PriceLookups(
+        price_data=price_data,
+        open=open_prices, high=high_prices, low=low_prices, close=close_prices,
+        price_dates=price_dates, date_to_idx=date_to_idx,
+    )
+
+
+def compute_allocation(cash: float, positions_value: float, max_positions: int) -> float:
+    """Per-position allocation: equal slice of portfolio value, capped by cash."""
+    alloc = (cash + positions_value) / max_positions
+    return min(alloc, cash)
+
+
+def make_position(
+    entry: dict,
+    entry_price: float,
+    entry_date: date,
+    alloc: float,
+    hard_stop_pct: float,
+) -> Position:
+    """Build a Position from an entry signal at the given fill price."""
+    sl = entry_price * (1 - hard_stop_pct) if hard_stop_pct > 0 else entry["stop_loss"]
+    return Position(
+        symbol=entry["symbol"], pattern_type=entry["pattern_type"],
+        entry_date=entry_date, entry_price=entry_price,
+        shares=alloc / entry_price, allocated_amount=alloc,
+        stop_loss=sl, target_price=entry["target_price"],
+        confidence=entry["confidence"], qu100_rank=entry["qu100_rank"],
+    )
+
+
+def close_position(
+    pos: Position, exit_price: float, exit_reason: str, exit_date: date,
+) -> ClosedTrade:
+    """Build a ClosedTrade for a position exiting at the given price."""
+    ret = (exit_price - pos.entry_price) / pos.entry_price
+    return ClosedTrade(
+        symbol=pos.symbol,
+        pattern_type=pos.pattern_type,
+        entry_date=pos.entry_date,
+        entry_price=pos.entry_price,
+        exit_date=exit_date,
+        exit_price=exit_price,
+        shares=pos.shares,
+        allocated_amount=pos.allocated_amount,
+        stop_loss=pos.stop_loss,
+        target_price=pos.target_price,
+        confidence=pos.confidence,
+        exit_reason=exit_reason,
+        return_pct=ret,
+        pnl=pos.shares * (exit_price - pos.entry_price),
+        qu100_rank=pos.qu100_rank,
+    )
+
+
+def evaluate_price_exit(
+    pos: Position,
+    day_low: float,
+    day_high: float,
+    day_close: float,
+    days_held: int,
+    params: StrategyParams,
+) -> tuple[float, str] | None:
+    """Price-based exit decision (stop loss / target / max hold), if any.
+
+    Pattern invalidation is decided separately (it needs the detector).
+    """
+    exit_price = None
+    exit_reason = None
+
+    if params.use_close_price:
+        if params.use_stop_limit and params.hard_stop_pct > 0 and day_low <= pos.stop_loss:
+            # Stop-limit order: triggers intraday at exact stop price
+            exit_price = pos.stop_loss
+            exit_reason = "stop_loss"
+        elif not params.use_stop_limit and params.hard_stop_pct > 0:
+            # Close-only: check close price against hard stop
+            close_ret = (day_close - pos.entry_price) / pos.entry_price
+            if close_ret <= -params.hard_stop_pct:
+                exit_price = day_close
+                exit_reason = "stop_loss"
+        if exit_price is None and day_close >= pos.target_price:
+            exit_price = day_close
+            exit_reason = "target_hit"
+    else:
+        # Intraday mode: SL on low, TP on high
+        if day_low <= pos.stop_loss:
+            exit_price = pos.stop_loss
+            exit_reason = "stop_loss"
+        elif day_high >= pos.target_price:
+            exit_price = pos.target_price
+            exit_reason = "target_hit"
+
+    if exit_price is None and params.max_hold_days > 0 and days_held >= params.max_hold_days:
+        exit_price = day_close
+        exit_reason = "max_hold"
+
+    if exit_price is None or exit_reason is None:
+        return None
+    return exit_price, exit_reason
+
+
+def is_pattern_invalidated(
+    pos: Position,
+    price_data: pd.DataFrame,
+    end_ts: pd.Timestamp,
+    detect_patterns_fn,
+    config,
+) -> bool:
+    """Re-run detection on data up to end_ts; True if the pattern is gone."""
+    sym_df = _extract_symbol_ohlcv(price_data, pos.symbol, end_date=end_ts)
+    if sym_df is None or len(sym_df) < config.min_pattern_bars:
+        return False
+    detected = detect_patterns_fn(
+        pos.symbol, sym_df, config,
+        pattern_filter=ALLOWED_PATTERNS,
+    )
+    return not any(p.pattern_type == pos.pattern_type for p in detected)
+
+
+def find_entry_candidates(
+    day_stocks: pd.DataFrame,
+    price_data: pd.DataFrame,
+    end_ts: pd.Timestamp,
+    detect_patterns_fn,
+    config,
+) -> list[dict]:
+    """Run pattern detection on today's cohort; candidates by confidence desc.
+
+    Scans the 50 best-ranked stocks; each symbol contributes its single best
+    detected pattern.
+    """
+    candidates: list[dict] = []
+    for _, row in day_stocks.nsmallest(50, "rank").iterrows():
+        sym = row["symbol"]
+        sym_df = _extract_symbol_ohlcv(price_data, sym, end_date=end_ts)
+        if sym_df is None or len(sym_df) < config.min_pattern_bars:
+            continue
+
+        detected = detect_patterns_fn(
+            sym, sym_df, config,
+            pattern_filter=ALLOWED_PATTERNS,
+        )
+        if not detected:
+            continue
+
+        best = detected[0]
+        candidates.append({
+            "symbol": sym,
+            "pattern_type": best.pattern_type,
+            "confidence": best.confidence,
+            "stop_loss": best.stop_loss,
+            "target_price": best.target_wave1,
+            "qu100_rank": int(row["rank"]),
+        })
+
+    candidates.sort(key=lambda c: c["confidence"], reverse=True)
+    return candidates
+
+
+def execute_pending_entries(
+    state: PortfolioState,
+    lookups: PriceLookups,
+    idx: int,
+    current_date: date,
+    params: StrategyParams,
+) -> None:
+    """Fill pending entry signals at today's open (normal mode)."""
+    for entry in state.pending_entries:
+        sym = entry["symbol"]
+        if sym not in lookups.open.columns:
+            continue
+        entry_price = lookups.open.iloc[idx].get(sym)
+        if pd.isna(entry_price) or entry_price <= 0:
+            continue
+        if entry["target_price"] <= entry_price:
+            continue
+        if entry["stop_loss"] >= entry_price:
+            continue
+        if len(state.positions) >= params.max_positions:
+            break
+        alloc = compute_allocation(
+            state.cash,
+            _positions_value(state.positions, lookups.close, idx),
+            params.max_positions,
+        )
+        if alloc <= 0:
+            continue
+        state.positions.append(make_position(
+            entry, entry_price, current_date, alloc, params.hard_stop_pct,
+        ))
+        state.cash -= alloc
+    state.pending_entries = []
+
+
+def apply_exits(
+    state: PortfolioState,
+    lookups: PriceLookups,
+    idx: int,
+    current_date: date,
+    params: StrategyParams,
+    detect_patterns_fn,
+    config,
+) -> None:
+    """Close positions that hit an exit today (skips same-day entries)."""
+    exits_today: list[int] = []  # indices to remove
+    for pos_i, pos in enumerate(state.positions):
+        if pos.entry_date == current_date:
+            continue  # Don't exit on entry day
+        if pos.symbol not in lookups.close.columns:
+            continue
+
+        day_low = lookups.low.iloc[idx].get(pos.symbol)
+        day_high = lookups.high.iloc[idx].get(pos.symbol)
+        day_close = lookups.close.iloc[idx].get(pos.symbol)
+
+        if pd.isna(day_low) or pd.isna(day_high) or pd.isna(day_close):
+            continue
+
+        days_held = idx - lookups.date_to_idx.get(pos.entry_date, 0)
+        exit_decision = evaluate_price_exit(
+            pos, day_low, day_high, day_close, days_held, params,
+        )
+
+        if exit_decision is None and is_pattern_invalidated(
+            pos, lookups.price_data, lookups.open.index[idx],
+            detect_patterns_fn, config,
+        ):
+            exit_decision = (day_close, "pattern_invalidated")
+
+        if exit_decision is not None:
+            exit_price, exit_reason = exit_decision
+            trade = close_position(pos, exit_price, exit_reason, current_date)
+            state.closed_trades.append(trade)
+            state.cash += pos.shares * exit_price
+            exits_today.append(pos_i)
+
+            log.debug(
+                "position_closed",
+                symbol=pos.symbol,
+                date=str(current_date),
+                reason=exit_reason,
+                return_pct=f"{trade.return_pct:.2%}",
+                pnl=f"{trade.pnl:.2f}",
+            )
+
+    # Remove exited positions (reverse order to preserve indices)
+    for i in sorted(exits_today, reverse=True):
+        state.positions.pop(i)
+
+
+def open_new_entries(
+    state: PortfolioState,
+    universe: BacktestUniverse,
+    lookups: PriceLookups,
+    idx: int,
+    current_date: date,
+    params: StrategyParams,
+    detect_patterns_fn,
+    config,
+) -> None:
+    """Scan today's cohort for entry signals; buy at close or queue for open."""
+    open_slots = (
+        params.max_positions - len(state.positions) - len(state.pending_entries)
+    )
+    if open_slots <= 0:
+        return
+
+    day_stocks = universe.top100[
+        universe.top100["data_date"] == current_date
+    ].copy()
+    if day_stocks.empty:
+        return
+
+    # Exclude stocks we already hold
+    held_symbols = {p.symbol for p in state.positions}
+    pending_symbols = {e["symbol"] for e in state.pending_entries}
+    day_stocks = day_stocks[
+        ~day_stocks["symbol"].isin(held_symbols | pending_symbols)
+    ]
+
+    candidates = find_entry_candidates(
+        day_stocks, lookups.price_data, lookups.open.index[idx],
+        detect_patterns_fn, config,
+    )
+
+    for entry in candidates[:min(params.top_n, open_slots)]:
+        if params.use_close_price:
+            # Buy at today's close immediately
+            ep = lookups.close.iloc[idx].get(entry["symbol"])
+            if pd.isna(ep) or ep <= 0:
+                continue
+            if entry["target_price"] <= ep:
+                continue
+            if len(state.positions) >= params.max_positions:
+                break
+            alloc = compute_allocation(
+                state.cash,
+                _positions_value(state.positions, lookups.close, idx),
+                params.max_positions,
+            )
+            if alloc <= 0:
+                continue
+            state.positions.append(make_position(
+                entry, ep, current_date, alloc, params.hard_stop_pct,
+            ))
+            state.cash -= alloc
+        else:
+            state.pending_entries.append(entry)
+        log.debug(
+            "entry_signal",
+            symbol=entry["symbol"],
+            date=str(current_date),
+            pattern=entry["pattern_type"],
+            confidence=f"{entry['confidence']:.2f}",
+            rank=entry["qu100_rank"],
+        )
+
+
+def simulate_day(
+    state: PortfolioState,
+    current_date: date,
+    universe: BacktestUniverse,
+    lookups: PriceLookups,
+    params: StrategyParams,
+    detect_patterns_fn,
+    config,
+) -> None:
+    """Advance the portfolio one day: fills, exits, new entries, equity mark."""
+    idx = lookups.date_to_idx.get(current_date)
+    if idx is None:
+        # Not a trading day in price data, skip
+        state.equity_curve.append(state.equity_curve[-1])
+        state.equity_dates.append(current_date)
+        return
+
+    if not params.use_close_price:
+        execute_pending_entries(state, lookups, idx, current_date, params)
+
+    apply_exits(
+        state, lookups, idx, current_date, params, detect_patterns_fn, config,
+    )
+    open_new_entries(
+        state, universe, lookups, idx, current_date, params,
+        detect_patterns_fn, config,
+    )
+
+    portfolio_value = state.cash + _positions_value(
+        state.positions, lookups.close, idx,
+    )
+    state.equity_curve.append(portfolio_value)
+    state.equity_dates.append(current_date)
+
+
+def close_remaining_positions(
+    state: PortfolioState,
+    universe: BacktestUniverse,
+    lookups: PriceLookups,
+) -> None:
+    """Mark all still-open positions closed at the last session's close."""
+    last_idx = lookups.date_to_idx.get(universe.end_date)
+    if last_idx is None:
+        return
+    for pos in state.positions:
+        if pos.symbol not in lookups.close.columns:
+            continue
+        last_close = lookups.close.iloc[last_idx].get(pos.symbol)
+        if pd.isna(last_close):
+            continue
+        state.closed_trades.append(
+            close_position(pos, last_close, "end_of_backtest", universe.end_date)
+        )
+        state.cash += pos.shares * last_close
+    state.positions.clear()
+
+
+def compute_benchmark_return_pct(
+    lookups: PriceLookups, start_date: date, end_date: date,
+) -> float | None:
+    """SPY buy-and-hold return over the backtest window, if computable."""
+    if "SPY" not in lookups.open.columns:
+        return None
+    spy_start_idx = lookups.date_to_idx.get(start_date)
+    if spy_start_idx is None:
+        return None
+    spy_start = lookups.open["SPY"].iloc[spy_start_idx]
+    spy_end_idx = lookups.date_to_idx.get(end_date, len(lookups.price_dates) - 1)
+    spy_end = lookups.close["SPY"].iloc[spy_end_idx]
+    if pd.isna(spy_start) or spy_start <= 0:
+        return None
+    return float((spy_end - spy_start) / spy_start * 100)
+
+
 def run_qu100_portfolio_backtest(
     detect_patterns_fn,
     start_capital: float = 100.0,
@@ -817,350 +1305,58 @@ def run_qu100_portfolio_backtest(
     """
     from rainier.core.config import StockScreenerConfig
     config = StockScreenerConfig()
+    params = StrategyParams(
+        max_positions=max_positions,
+        top_n=top_n,
+        max_hold_days=max_hold_days,
+        hard_stop_pct=hard_stop_pct,
+        use_close_price=use_close_price,
+        use_stop_limit=use_stop_limit,
+    )
 
-    # Load QU100 rankings
     rankings = load_rankings_from_db()
-    top100 = rankings[rankings["ranking_type"] == "top100"]
-    top100 = top100[top100["long_short"] == "Long in"]
-
-    # Pre-filter: only keep stocks that were ever in top 20 (candidates for entry)
-    top100 = top100[top100["rank"] <= 20]
-
-    all_dates = sorted(top100["data_date"].unique())
-    all_symbols = sorted(top100["symbol"].unique())
-
-    if start_date_str:
-        from datetime import datetime as dt
-        start_dt = dt.strptime(start_date_str, "%Y-%m-%d").date()
-        all_dates = [d for d in all_dates if d >= start_dt]
-
-    if len(all_dates) < 2:
-        raise ValueError(f"Need at least 2 dates, got {len(all_dates)}")
-
-    start_date = all_dates[0]
-    end_date = all_dates[-1]
+    universe = build_cohorts(rankings, start_date_str)
 
     log.info(
         "portfolio_backtest_setup",
-        dates=len(all_dates),
-        symbols=len(all_symbols),
-        start=str(start_date),
-        end=str(end_date),
+        dates=len(universe.dates),
+        symbols=len(universe.symbols),
+        start=str(universe.start_date),
+        end=str(universe.end_date),
         capital=start_capital,
         max_positions=max_positions,
     )
 
     # Fetch prices for all symbols + SPY (with extra history for pattern detection)
-    symbols_with_bench = list(set(all_symbols + ["SPY"]))
-    price_start = start_date - timedelta(days=180)
-    price_data = fetch_all_prices(symbols_with_bench, price_start, end_date)
+    symbols_with_bench = list(set(universe.symbols + ["SPY"]))
+    price_start = universe.start_date - timedelta(days=180)
+    price_data = fetch_all_prices(symbols_with_bench, price_start, universe.end_date)
+    lookups = build_price_lookups(price_data, universe.symbols)
 
-    # Build date-indexed price lookups
-    if isinstance(price_data.columns, pd.MultiIndex):
-        open_prices = price_data["Open"]
-        high_prices = price_data["High"]
-        low_prices = price_data["Low"]
-        close_prices = price_data["Close"]
-    else:
-        sym = all_symbols[0]
-        open_prices = price_data[["Open"]].rename(columns={"Open": sym})
-        high_prices = price_data[["High"]].rename(columns={"High": sym})
-        low_prices = price_data[["Low"]].rename(columns={"Low": sym})
-        close_prices = price_data[["Close"]].rename(columns={"Close": sym})
+    state = PortfolioState(cash=start_capital, equity_curve=[start_capital])
 
-    price_dates = [d.date() for d in open_prices.index]
-    date_to_idx = {d: i for i, d in enumerate(price_dates)}
+    log.info("starting_simulation", trading_days=len(universe.dates))
 
-    # State
-    cash = start_capital
-    positions: list[Position] = []
-    closed_trades: list[ClosedTrade] = []
-    equity_curve = [start_capital]
-    equity_dates: list[date] = []
-
-    # Pending entries: signal on day T → buy at day T+1 open
-    pending_entries: list[dict] = []
-
-    log.info("starting_simulation", trading_days=len(all_dates))
-
-    for day_i, current_date in enumerate(all_dates):
-        idx = date_to_idx.get(current_date)
-        if idx is None:
-            # Not a trading day in price data, skip
-            equity_curve.append(equity_curve[-1])
-            equity_dates.append(current_date)
-            continue
-
-        # --- EXECUTE PENDING ENTRIES (normal mode: buy at today's open) ---
-        if not use_close_price:
-            for entry in pending_entries:
-                sym = entry["symbol"]
-                if sym not in open_prices.columns:
-                    continue
-                entry_price = open_prices.iloc[idx].get(sym)
-                if pd.isna(entry_price) or entry_price <= 0:
-                    continue
-                if entry["target_price"] <= entry_price:
-                    continue
-                if entry["stop_loss"] >= entry_price:
-                    continue
-                if len(positions) >= max_positions:
-                    break
-                portfolio_value = cash + _positions_value(positions, close_prices, idx)
-                alloc = portfolio_value / max_positions
-                if alloc > cash:
-                    alloc = cash
-                if alloc <= 0:
-                    continue
-                shares = alloc / entry_price
-                sl = entry_price * (1 - hard_stop_pct) if hard_stop_pct > 0 else entry["stop_loss"]
-                positions.append(Position(
-                    symbol=sym, pattern_type=entry["pattern_type"],
-                    entry_date=current_date, entry_price=entry_price,
-                    shares=shares, allocated_amount=alloc,
-                    stop_loss=sl, target_price=entry["target_price"],
-                    confidence=entry["confidence"], qu100_rank=entry["qu100_rank"],
-                ))
-                cash -= alloc
-            pending_entries = []
-
-        # --- CHECK EXITS for open positions (skip same-day entries) ---
-        exits_today: list[int] = []  # indices to remove
-        for pos_i, pos in enumerate(positions):
-            if pos.entry_date == current_date:
-                continue  # Don't exit on entry day
-            if pos.symbol not in close_prices.columns:
-                continue
-
-            day_low = low_prices.iloc[idx].get(pos.symbol)
-            day_high = high_prices.iloc[idx].get(pos.symbol)
-            day_close = close_prices.iloc[idx].get(pos.symbol)
-
-            if pd.isna(day_low) or pd.isna(day_high) or pd.isna(day_close):
-                continue
-
-            exit_price = None
-            exit_reason = None
-
-            if use_close_price:
-                if use_stop_limit and hard_stop_pct > 0 and day_low <= pos.stop_loss:
-                    # Stop-limit order: triggers intraday at exact stop price
-                    exit_price = pos.stop_loss
-                    exit_reason = "stop_loss"
-                elif not use_stop_limit and hard_stop_pct > 0:
-                    # Close-only: check close price against hard stop
-                    close_ret = (day_close - pos.entry_price) / pos.entry_price
-                    if close_ret <= -hard_stop_pct:
-                        exit_price = day_close
-                        exit_reason = "stop_loss"
-                if exit_price is None and day_close >= pos.target_price:
-                    exit_price = day_close
-                    exit_reason = "target_hit"
-            else:
-                # Intraday mode: SL on low, TP on high
-                if day_low <= pos.stop_loss:
-                    exit_price = pos.stop_loss
-                    exit_reason = "stop_loss"
-                elif day_high >= pos.target_price:
-                    exit_price = pos.target_price
-                    exit_reason = "target_hit"
-
-            # Check max hold period
-            if exit_price is None and max_hold_days > 0:
-                entry_idx = date_to_idx.get(pos.entry_date, 0)
-                days_held = idx - entry_idx
-                if days_held >= max_hold_days:
-                    exit_price = day_close
-                    exit_reason = "max_hold"
-
-            if exit_price is None:
-                # Check pattern invalidation: re-run detection on recent data
-                sym_df = _extract_symbol_ohlcv(
-                    price_data, pos.symbol,
-                    end_date=open_prices.index[idx],
-                )
-                if sym_df is not None and len(sym_df) >= config.min_pattern_bars:
-                    detected = detect_patterns_fn(
-                        pos.symbol, sym_df, config,
-                        pattern_filter=ALLOWED_PATTERNS,
-                    )
-                    still_valid = any(
-                        p.pattern_type == pos.pattern_type for p in detected
-                    )
-                    if not still_valid:
-                        exit_price = day_close
-                        exit_reason = "pattern_invalidated"
-
-            if exit_price is not None and exit_reason is not None:
-                ret = (exit_price - pos.entry_price) / pos.entry_price
-                pnl = pos.shares * (exit_price - pos.entry_price)
-
-                closed_trades.append(ClosedTrade(
-                    symbol=pos.symbol,
-                    pattern_type=pos.pattern_type,
-                    entry_date=pos.entry_date,
-                    entry_price=pos.entry_price,
-                    exit_date=current_date,
-                    exit_price=exit_price,
-                    shares=pos.shares,
-                    allocated_amount=pos.allocated_amount,
-                    stop_loss=pos.stop_loss,
-                    target_price=pos.target_price,
-                    confidence=pos.confidence,
-                    exit_reason=exit_reason,
-                    return_pct=ret,
-                    pnl=pnl,
-                    qu100_rank=pos.qu100_rank,
-                ))
-                cash += pos.shares * exit_price
-                exits_today.append(pos_i)
-
-                log.debug(
-                    "position_closed",
-                    symbol=pos.symbol,
-                    date=str(current_date),
-                    reason=exit_reason,
-                    return_pct=f"{ret:.2%}",
-                    pnl=f"{pnl:.2f}",
-                )
-
-        # Remove exited positions (reverse order to preserve indices)
-        for i in sorted(exits_today, reverse=True):
-            positions.pop(i)
-
-        # --- CHECK ENTRIES (if we have room) ---
-        open_slots = max_positions - len(positions) - len(pending_entries)
-        if open_slots > 0:
-            # Get today's QU100 top100 Long in stocks
-            day_stocks = top100[top100["data_date"] == current_date].copy()
-            if not day_stocks.empty:
-                # Exclude stocks we already hold
-                held_symbols = {p.symbol for p in positions}
-                pending_symbols = {e["symbol"] for e in pending_entries}
-                day_stocks = day_stocks[
-                    ~day_stocks["symbol"].isin(held_symbols | pending_symbols)
-                ]
-
-                # Run pattern detection on candidates (sorted by rank, top candidates first)
-                candidates: list[dict] = []
-                for _, row in day_stocks.nsmallest(50, "rank").iterrows():
-                    sym = row["symbol"]
-                    sym_df = _extract_symbol_ohlcv(
-                        price_data, sym,
-                        end_date=open_prices.index[idx],
-                    )
-                    if sym_df is None or len(sym_df) < config.min_pattern_bars:
-                        continue
-
-                    detected = detect_patterns_fn(
-                        sym, sym_df, config,
-                        pattern_filter=ALLOWED_PATTERNS,
-                    )
-                    if not detected:
-                        continue
-
-                    # Take the best pattern for this symbol
-                    best = detected[0]
-                    candidates.append({
-                        "symbol": sym,
-                        "pattern_type": best.pattern_type,
-                        "confidence": best.confidence,
-                        "stop_loss": best.stop_loss,
-                        "target_price": best.target_wave1,
-                        "qu100_rank": int(row["rank"]),
-                    })
-
-                # Rank by confidence, take top_n
-                candidates.sort(key=lambda c: c["confidence"], reverse=True)
-                for entry in candidates[:min(top_n, open_slots)]:
-                    if use_close_price:
-                        # Buy at today's close immediately
-                        sym = entry["symbol"]
-                        ep = close_prices.iloc[idx].get(sym)
-                        if pd.isna(ep) or ep <= 0:
-                            continue
-                        if entry["target_price"] <= ep:
-                            continue
-                        if len(positions) >= max_positions:
-                            break
-                        pv = cash + _positions_value(positions, close_prices, idx)
-                        alloc = pv / max_positions
-                        if alloc > cash:
-                            alloc = cash
-                        if alloc <= 0:
-                            continue
-                        shares = alloc / ep
-                        sl = ep * (1 - hard_stop_pct) if hard_stop_pct > 0 else entry["stop_loss"]
-                        positions.append(Position(
-                            symbol=sym, pattern_type=entry["pattern_type"],
-                            entry_date=current_date, entry_price=ep,
-                            shares=shares, allocated_amount=alloc,
-                            stop_loss=sl, target_price=entry["target_price"],
-                            confidence=entry["confidence"],
-                            qu100_rank=entry["qu100_rank"],
-                        ))
-                        cash -= alloc
-                    else:
-                        pending_entries.append(entry)
-                    log.debug(
-                        "entry_signal",
-                        symbol=entry["symbol"],
-                        date=str(current_date),
-                        pattern=entry["pattern_type"],
-                        confidence=f"{entry['confidence']:.2f}",
-                        rank=entry["qu100_rank"],
-                    )
-
-        # --- UPDATE EQUITY ---
-        portfolio_value = cash + _positions_value(positions, close_prices, idx)
-        equity_curve.append(portfolio_value)
-        equity_dates.append(current_date)
-
-        if day_i % 100 == 0:
+    for day_i, current_date in enumerate(universe.dates):
+        simulate_day(
+            state, current_date, universe, lookups, params,
+            detect_patterns_fn, config,
+        )
+        if day_i % 100 == 0 and lookups.date_to_idx.get(current_date) is not None:
             log.info(
                 "simulation_progress",
                 day=day_i,
-                total=len(all_dates),
-                portfolio=f"${portfolio_value:.2f}",
-                positions=len(positions),
-                trades=len(closed_trades),
+                total=len(universe.dates),
+                portfolio=f"${state.equity_curve[-1]:.2f}",
+                positions=len(state.positions),
+                trades=len(state.closed_trades),
             )
 
-    # Close any remaining positions at last close
-    last_idx = date_to_idx.get(all_dates[-1])
-    if last_idx is not None:
-        for pos in positions:
-            if pos.symbol not in close_prices.columns:
-                continue
-            last_close = close_prices.iloc[last_idx].get(pos.symbol)
-            if pd.isna(last_close):
-                continue
-            ret = (last_close - pos.entry_price) / pos.entry_price
-            pnl = pos.shares * (last_close - pos.entry_price)
-            closed_trades.append(ClosedTrade(
-                symbol=pos.symbol,
-                pattern_type=pos.pattern_type,
-                entry_date=pos.entry_date,
-                entry_price=pos.entry_price,
-                exit_date=all_dates[-1],
-                exit_price=last_close,
-                shares=pos.shares,
-                allocated_amount=pos.allocated_amount,
-                stop_loss=pos.stop_loss,
-                target_price=pos.target_price,
-                confidence=pos.confidence,
-                exit_reason="end_of_backtest",
-                return_pct=ret,
-                pnl=pnl,
-                qu100_rank=pos.qu100_rank,
-            ))
-            cash += pos.shares * last_close
-        positions.clear()
+    close_remaining_positions(state, universe, lookups)
 
-    # Compute metrics
     result = _compute_result(
-        closed_trades, equity_curve, equity_dates,
-        start_capital, start_date, end_date,
+        state.closed_trades, state.equity_curve, state.equity_dates,
+        start_capital, universe.start_date, universe.end_date,
         max_positions, top_n,
     )
     result.max_hold_days = max_hold_days
@@ -1168,16 +1364,12 @@ def run_qu100_portfolio_backtest(
     result.use_close_price = use_close_price
     result.use_stop_limit = use_stop_limit
 
-    # SPY benchmark
-    if "SPY" in open_prices.columns:
-        spy_start_idx = date_to_idx.get(start_date)
-        if spy_start_idx is not None:
-            spy_start = open_prices["SPY"].iloc[spy_start_idx]
-            spy_end_idx = date_to_idx.get(end_date, len(price_dates) - 1)
-            spy_end = close_prices["SPY"].iloc[spy_end_idx]
-            if not pd.isna(spy_start) and spy_start > 0:
-                result.benchmark_return_pct = float((spy_end - spy_start) / spy_start * 100)
-                result.alpha_pct = result.total_return_pct - result.benchmark_return_pct
+    benchmark = compute_benchmark_return_pct(
+        lookups, universe.start_date, universe.end_date,
+    )
+    if benchmark is not None:
+        result.benchmark_return_pct = benchmark
+        result.alpha_pct = result.total_return_pct - result.benchmark_return_pct
 
     return result
 
