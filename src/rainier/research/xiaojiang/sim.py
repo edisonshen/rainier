@@ -275,16 +275,27 @@ def next_orders(mkt: Market, res: SimResult, p: XJSetupConfig, lines: Lines) -> 
     """What the setup is waiting for on the next bar, on ``lines`` (the zones the chart draws).
 
     Nothing while a position is open (one at a time) or after the week's last bar. Left side:
-    resting limits with stop and take-profit. Right side: zones where a rejection close enters
-    (the take-profit depends on that close, so it is ``None``).
+    resting limits with stop and take-profit. Right side: zones already touched and waiting for
+    the rejection close, then zones where a touch would arm one (the take-profit depends on that
+    close, so it is ``None``).
     """
     if res.open is not None or mkt.last_before_gap[-1]:
         return []
     n = len(mkt.c)
     ids = mkt.ids_for(lines)
     out: list[dict] = []
+    pending = [od for od, _ in res.armed] if p.entry == "right" else []
+    for od in pending:
+        k = next((k for k in range(len(lines.price))
+                  if lines.lo[k] - TICK <= od.line <= lines.hi[k] + TICK), None)
+        if k is not None:
+            out.append({"dir": od.direction, "price": od.line, "stop": od.stop, "tp": None,
+                        "kind": "rejection", "zone_lo": lines.lo[k], "zone_hi": lines.hi[k]})
+    seen = {(o["dir"], o["zone_lo"]) for o in out}
     for od in plan_orders(mkt, n, lines, ids, float(mkt.c[-1]), p, int(mkt.bias(p.bias)[-1]),
                           res.used):
+        if (od.direction, od.lo) in seen:
+            continue
         tp = (target(lines, ids, od.direction, od.line, od.stop, od.zone, p)
               if p.entry == "left" else None)
         out.append({"dir": od.direction, "price": od.line, "stop": od.stop, "tp": tp,

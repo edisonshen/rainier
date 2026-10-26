@@ -106,6 +106,10 @@ def test_right_side_enters_on_the_rejection_close_with_the_stop_beyond_the_zone(
     ]
     p = XJSetupConfig(entry="right", level="edge", stop_pts=12, exit="rr2", min_rank=2,
                       max_tests=1)
+    touched = _market(bars[:3])
+    assert next_orders(touched, simulate(touched, p), p, SUPPORT) == [
+        {"dir": 1, "price": 101.0, "stop": 89.0, "tp": None, "kind": "rejection",
+         "zone_lo": 99.0, "zone_hi": 101.0}]  # touched: still waiting for the rejection close
     mkt = _market(bars)
     res = simulate(mkt, p)
     assert res.trades.empty and res.open is not None
@@ -166,7 +170,9 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
             assert s["open"] is None
             assert any(abs(zlo - lo) <= 0.125 and abs(zhi - hi) <= 0.125 for lo, hi in bands)
             assert kind == ("limit" if p.entry == "left" else "rejection")
-            assert price - d * p.stop_pts == stop and d * (payload["price"] - price) > 0
+            assert price - d * p.stop_pts == stop
+            if kind == "limit":
+                assert d * (payload["price"] - price) > 0
 
     # No look-ahead: cut the data at T and every trade decided and closed before T is unchanged.
     data = _load_mtf_csvs(tmp_path, "MES")
