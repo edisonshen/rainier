@@ -11,7 +11,8 @@ src/rainier/
 ├── core/           types.py (shared dataclasses), protocols.py (boundary contracts),
 │                   config.py (unified Pydantic), models.py (19 ORM tables), database.py (singleton + TimescaleDB)
 ├── data/           provider.py (protocol), csv_provider.py, yfinance_provider.py
-├── analysis/       sr_zones.py (the S/R finder for the chart), pivots.py;
+├── analysis/       sr_zones.py (the S/R finder for the chart), pivots.py,
+│                   trend_channels.py (4H/1D channels + trend lines, chart overlay only);
 │                   analyzer.py + pinbar/sr_horizontal/sr_diagonal/bias/inside_bar (old pin-bar, ML features only)
 ├── research/       xiaojiang/ (A/B transaction rules on sr_zones zones: zones.py, sim.py, chart.py)
 ├── features/       extractor.py (AnalysisResult→ML features), labels.py (TradeRecord→training labels)
