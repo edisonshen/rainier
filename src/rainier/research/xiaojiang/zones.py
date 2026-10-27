@@ -38,9 +38,8 @@ class Lines:
     def below(self, x: float) -> int:
         return bisect_left(self.price, x)
 
-    def shifted(self, rng: np.random.Generator, a: float, b: float) -> Lines:
-        n = len(self.price)
-        d = rng.uniform(a, b, n) * rng.choice([-1.0, 1.0], n)
+    def shifted(self, offsets: list[float]) -> Lines:
+        d = np.asarray(offsets, dtype=float)
         o = np.argsort(np.asarray(self.price) + d)
 
         def q(v: list[float]) -> list[float]:
@@ -85,8 +84,18 @@ class ZoneBook:
         return self._cache[counts]
 
     def shifted(self, seed: int, a: float = 6.0, b: float = 20.0) -> ZoneBook:
-        """Random-zone control: every snapshot's zones moved by +-[a, b] points."""
+        """Random-zone control: each zone moved by its own fixed +-[a, b] points in every hour."""
         rng = np.random.default_rng(seed)
+        offset: dict[float, float] = {}
+        moved: dict[int, Lines] = {}
+
+        def move(s: Lines) -> Lines:
+            for z in s.price:
+                if z not in offset:
+                    offset[z] = float(rng.uniform(a, b) * rng.choice([-1.0, 1.0]))
+            return s.shifted([offset[z] for z in s.price])
+
         out = copy.copy(self)
-        out.snapshots = [s.shifted(rng, a, b) for s in self.snapshots]
+        out.snapshots = [moved[id(s)] if id(s) in moved else moved.setdefault(id(s), move(s))
+                         for s in self.snapshots]
         return out

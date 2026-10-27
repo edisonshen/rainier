@@ -25,7 +25,7 @@ from rainier.research.xiaojiang.sim import (
     next_orders,
     simulate,
 )
-from rainier.research.xiaojiang.zones import Lines
+from rainier.research.xiaojiang.zones import Lines, ZoneBook
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mes_sr_small.parquet"
 SUPPORT = Lines(price=[100.0], lo=[99.0], hi=[101.0], rank=[3], nconf=[2], touches=[2])
@@ -106,6 +106,10 @@ def test_right_side_enters_on_the_rejection_close_with_the_stop_beyond_the_zone(
     ]
     p = XJSetupConfig(entry="right", level="edge", stop_pts=12, exit="rr2", min_rank=2,
                       max_tests=1)
+    touched = _market(bars[:3])
+    assert next_orders(touched, simulate(touched, p), p, SUPPORT) == [
+        {"dir": 1, "price": 101.0, "stop": 89.0, "tp": None, "kind": "rejection",
+         "zone_lo": 99.0, "zone_hi": 101.0}]  # touched: still waiting for the rejection close
     mkt = _market(bars)
     res = simulate(mkt, p)
     assert res.trades.empty and res.open is not None
@@ -166,7 +170,9 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
             assert s["open"] is None
             assert any(abs(zlo - lo) <= 0.125 and abs(zhi - hi) <= 0.125 for lo, hi in bands)
             assert kind == ("limit" if p.entry == "left" else "rejection")
-            assert price - d * p.stop_pts == stop and d * (payload["price"] - price) > 0
+            assert price - d * p.stop_pts == stop
+            if kind == "limit":
+                assert d * (payload["price"] - price) > 0
 
     # No look-ahead: cut the data at T and every trade decided and closed before T is unchanged.
     data = _load_mtf_csvs(tmp_path, "MES")
@@ -180,3 +186,51 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
         assert len(before) > 0
         pd.testing.assert_frame_equal(before, b["trades"][b["trades"].t_out < cut]
                                       .reset_index(drop=True))
+
+
+def test_sr_levels_without_daily_bars_still_publishes_zones_and_setups(mes, tmp_path):
+    """Setup B's daily trend filter turns off instead of blocking the chart."""
+    from rainier.cli import cli
+
+    for tf, df in mes.items():
+        if tf != Timeframe.D1:
+            df.to_csv(tmp_path / f"MES_{tf.value}.csv", index=False)
+    out = tmp_path / "payload.json"
+    r = CliRunner().invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--format", "json",
+                                 "--output", str(out)])
+    assert r.exit_code == 0, r.output
+    payload = json.loads(out.read_text())
+    assert payload["zones"] and [s["key"] for s in payload["xj"]["setups"]] == ["A", "B"]
+
+
+def test_xiaojiang_is_mes_only(mes, tmp_path):
+    """Stops, point value and costs are MES: other contracts get no A/B, not MES dollars."""
+    from rainier.cli import cli
+
+    for tf, df in mes.items():
+        df.to_csv(tmp_path / f"ES_{tf.value}.csv", index=False)
+    out = tmp_path / "payload.json"
+    r = CliRunner().invoke(cli, ["sr-levels", "--symbol", "ES", "--data-dir", str(tmp_path),
+                                 "--format", "json", "--output", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "xj" not in json.loads(out.read_text())
+    r = CliRunner().invoke(cli, ["xj-backtest", "--symbol", "ES", "--data-dir", str(tmp_path),
+                                 "--holdout-start", "2026-10-01"])
+    assert r.exit_code != 0 and "MES" in r.output
+
+
+def test_random_control_moves_each_zone_once_for_all_hours():
+    """A shifted zone stays put while it exists, so its touch history is consistent."""
+
+    def lines(zones: list[tuple[float, int]]) -> Lines:
+        return Lines([z for z, _ in zones], [z - 1 for z, _ in zones], [z + 1 for z, _ in zones],
+                     [r for _, r in zones], [1] * len(zones), [2] * len(zones))
+
+    h1 = lines([(100.0, 1), (200.0, 2)])
+    h2 = lines([(100.0, 1), (150.0, 3), (200.0, 2)])
+    book = object.__new__(ZoneBook)
+    book.snapshots = [h1, h2, h1]
+    for seed in range(5):
+        moved = [dict(zip(s.rank, s.price, strict=True)) for s in book.shifted(seed).snapshots]
+        assert moved[0] == moved[2] and all(moved[1][r] == moved[0][r] for r in (1, 2))
+        assert all(6 <= abs(moved[1][r] - z) <= 20 for r, z in ((1, 100), (2, 200), (3, 150)))
