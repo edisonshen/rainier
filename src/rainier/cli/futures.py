@@ -77,6 +77,7 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     import json
 
     from rainier.analysis.sr_zones import detect_mtf_zones, zones_to_levels
+    from rainier.analysis.trend_channels import trend_overlays
     from rainier.publish.cloudflare_kv import put_kv_if_changed
     from rainier.research.xiaojiang.chart import chart_setups
     from rainier.viz.chart_payload import sr_chart_payload
@@ -106,7 +107,8 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
         since = data[Timeframe.M5]["timestamp"].tail(pub.bars[Timeframe.M5]).iloc[0]
         xj = chart_setups(data, pub.xj_setups, zones, since, settings.analysis.sr_zones)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
-                               pub.vma_bars, pub.vma_offset, xj)
+                               pub.vma_bars, pub.vma_offset, xj,
+                               trend_overlays(data, pub.trend, asof), pub.trend_extend_bars)
     if publish_kv:
         key = pub.kv_key.format(symbol=symbol.lower())
         # Same bars + zones (daily halt, holidays) -> identical payload, so skip the write.

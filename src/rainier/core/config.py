@@ -524,6 +524,39 @@ def _default_xj_setups() -> dict[str, XJSetupConfig]:
     }
 
 
+class TrendTimeframeConfig(BaseModel):
+    """Trend channels + trend lines on one timeframe (``analysis/trend_channels.py``).
+
+    Channels: zigzag legs of ``leg_atr`` x ATR, major swings are the extreme of
+    ``swing_bars`` bars each side, touches of ``touch_bars``; ``tol_atr``/``break_atr`` x ATR
+    for touches and breaks; the last ``legs`` channels starting within ``lookback`` bars.
+    Lines: the last ``line_swings`` swings of ``line_swing_bars`` within ``line_lookback`` bars.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    leg_atr: float = Field(6.0, gt=0)
+    swing_bars: int = Field(6, ge=1)
+    touch_bars: int = Field(3, ge=1)
+    tol_atr: float = Field(1.0, gt=0)
+    break_atr: float = Field(1.0, gt=0)
+    legs: int = Field(4, ge=1)
+    lookback: int = Field(400, ge=1)
+    line_lookback: int = Field(150, ge=3)
+    line_swings: int = Field(10, ge=2)
+    line_swing_bars: int = Field(2, ge=1)
+    line_tol_pts: float = Field(2.0, gt=0)
+    line_min_tests: int = Field(3, ge=2)
+
+
+def _default_trend() -> dict[Timeframe, TrendTimeframeConfig]:
+    return {
+        Timeframe.H4: TrendTimeframeConfig(),
+        Timeframe.D1: TrendTimeframeConfig(leg_atr=4.0, swing_bars=10, line_lookback=120,
+                                           line_swings=8),
+    }
+
+
 class ChartPublishConfig(BaseModel):
     """S/R chart payload pushed to Workers KV for fengshen.dev /trading/mes."""
 
@@ -539,6 +572,10 @@ class ChartPublishConfig(BaseModel):
     vma_offset: int = Field(2, ge=0)
     # Xiaojiang setups backtested on the 5m window (A/B toggle on the page); {} = off.
     xj_setups: dict[str, XJSetupConfig] = Field(default_factory=_default_xj_setups)
+    # Trend channels + trend lines per timeframe, from closed bars; {} = off.
+    trend: dict[Timeframe, TrendTimeframeConfig] = Field(default_factory=_default_trend)
+    # Bars past the last candle the unbroken channels and lines are projected.
+    trend_extend_bars: int = Field(10, ge=0)
 
 
 class Settings(BaseSettings):
