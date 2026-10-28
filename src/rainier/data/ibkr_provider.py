@@ -174,7 +174,7 @@ class IBKRProvider:
 
         Unlike CONTFUT (whose requests can't set ``endDateTime``), single contracts can be
         paged back in time. IBKR serves expired futures for ~2 years past expiration.
-        Expired contracts are cached in ``cache_dir`` and fetched only once.
+        Expired contracts are cached whole in ``cache_dir`` and fetched only once.
         """
         from ib_insync import Future
 
@@ -202,13 +202,14 @@ class IBKRProvider:
                 if cache and cache.exists() and expires + timedelta(days=1) < now:
                     frames[expiry] = self._normalize(pd.read_csv(cache))
                     continue
-                df = self._page_back(ib, contract, timeframe, max(start, since), now)
+                df = self._page_back(ib, contract, timeframe, start, now)
                 if cache and not df.empty:
                     cache.parent.mkdir(parents=True, exist_ok=True)
                     df.to_csv(cache, index=False)
                 frames[expiry] = df
                 log.info("ibkr_contract_bars", expiry=expiry, rows=len(df))
-        return frames
+        return {exp: df[df["timestamp"] >= since].reset_index(drop=True)
+                for exp, df in frames.items()}
 
     def _page_back(self, ib, contract, timeframe: Timeframe, start: datetime, now: datetime):
         from ib_insync import util
