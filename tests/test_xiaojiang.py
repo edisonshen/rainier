@@ -2,7 +2,7 @@
 
 Hand-drawn zone scenarios pin each rule (fill, hard stop, target, touch count, one position at
 a time, open position at the data end); the real-MES ``sr-levels`` run checks that the chart's
-A/B trades sit on point-in-time ``sr_zones`` and never use bars after the decision.
+A/C/C2 trades sit on point-in-time ``sr_zones`` and never use bars after the decision.
 """
 
 from __future__ import annotations
@@ -126,9 +126,9 @@ def test_friday_close_flattens_the_position():
     assert tr.exit.tolist() == ["session_end"] and tr.px_out.iloc[0] == 104.25
 
 
-def _c_every_touch(pub: ChartPublishConfig) -> XJSetupConfig:
+def _c_every_touch(pub: ChartPublishConfig, key: str = "C") -> XJSetupConfig:
     """C trades ~2x a month; on the fixture's month run its overlap + far stop on every touch."""
-    return pub.xj_setups["C"].model_copy(update={"max_tests": 9, "bias": "none",
+    return pub.xj_setups[key].model_copy(update={"max_tests": 9, "bias": "none",
                                                  "bias_at_open": False})
 
 
@@ -152,7 +152,7 @@ def mes() -> dict[Timeframe, pd.DataFrame]:
 
 
 def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
-    """`sr-levels` (what the cron publishes) carries A, B and C for the page's toggle."""
+    """`sr-levels` (what the cron publishes) carries A, C and C2 for the page's toggle."""
     from rainier.cli import cli
     from rainier.cli.futures import _load_mtf_csvs
 
@@ -166,7 +166,7 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
     setups = {s["key"]: s for s in payload["xj"]["setups"]}
     pub = ChartPublishConfig()
     cfg = pub.xj_setups
-    assert list(setups) == ["A", "B", "C"]
+    assert list(setups) == ["A", "C", "C2"]
     candle_t = {c[0] for c in payload["candles"]["5m"]}
     for key, s in setups.items():
         p = cfg[key]
@@ -194,7 +194,7 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
     # No look-ahead: cut the data at T and every trade decided and closed before T is unchanged.
     data = _load_mtf_csvs(tmp_path, "MES")
     since = data[Timeframe.M5].timestamp.tail(2880).iloc[0]
-    cfg = {**cfg, "C": _c_every_touch(pub)}
+    cfg = {**cfg, **{k: _c_every_touch(pub, k) for k in ("C", "C2")}}
     full = chart_setups(data, cfg, [], since, SRZoneConfig(), pub.trend)
     cut = pd.Timestamp("2026-10-14 06:00")
     past = chart_setups({tf: df[df.timestamp < cut] for tf, df in data.items()}, cfg, [], since,
@@ -207,7 +207,7 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
 
 
 def test_sr_levels_without_daily_bars_still_publishes_zones_and_setups(mes, tmp_path):
-    """Setup B's daily trend filter turns off instead of blocking the chart."""
+    """C/C2's 4H+1D trend filter turns off instead of blocking the chart."""
     from rainier.cli import cli
 
     for tf, df in mes.items():
@@ -218,11 +218,11 @@ def test_sr_levels_without_daily_bars_still_publishes_zones_and_setups(mes, tmp_
                                  "--output", str(out)])
     assert r.exit_code == 0, r.output
     payload = json.loads(out.read_text())
-    assert payload["zones"] and [s["key"] for s in payload["xj"]["setups"]] == ["A", "B", "C"]
+    assert payload["zones"] and [s["key"] for s in payload["xj"]["setups"]] == ["A", "C", "C2"]
 
 
 def test_xiaojiang_is_mes_only(mes, tmp_path):
-    """Stops, point value and costs are MES: other contracts get no A/B, not MES dollars."""
+    """Stops, point value and costs are MES: other contracts get no setups, not MES dollars."""
     from rainier.cli import cli
 
     for tf, df in mes.items():
@@ -254,16 +254,18 @@ def test_random_control_moves_each_zone_once_for_all_hours():
         assert all(6 <= abs(moved[1][r] - z) <= 20 for r, z in ((1, 100), (2, 200), (3, 150)))
 
 
-def test_c_trades_only_where_a_closed_bar_channel_or_trend_line_meets_the_zone(mes):
-    """Setup C (Xiaojiang doc 2): her channel/trend line crossing the S/R zone is the entry
-    spot. Every C entry has a 4H/1D channel boundary or trend line, drawn only from bars closed
-    before the entry bar, within 3 pts of the zone, and a stop past the zone's far edge."""
+@pytest.mark.parametrize("key", ["C", "C2"])
+def test_c_trades_only_where_a_closed_bar_channel_or_trend_line_meets_the_zone(mes, key):
+    """Setups C/C2 (Xiaojiang doc 2): her channel/trend line crossing the S/R zone is the entry
+    spot. Every entry has a 4H/1D channel boundary or trend line, drawn only from bars closed
+    before the entry bar, within overlap_pts (C 3, C2 8) of the zone, and a stop past the zone's
+    far edge. C2 also takes the 1H and single-timeframe zones C skips."""
     from rainier.analysis.trend_channels import BAR_DURATION, trend_overlays
 
     pub = ChartPublishConfig()
-    p = _c_every_touch(pub)
+    p = _c_every_touch(pub, key)
     since = mes[Timeframe.M5].timestamp.iloc[0] + pd.Timedelta(days=16)
-    (c,) = chart_setups(mes, {"C": p}, [], since, SRZoneConfig(), pub.trend)
+    (c,) = chart_setups(mes, {key: p}, [], since, SRZoneConfig(), pub.trend)
     tr = c["trades"]
     assert len(tr) > 0
     for t in tr.itertuples():
@@ -275,5 +277,5 @@ def test_c_trades_only_where_a_closed_bar_channel_or_trend_line_meets_the_zone(m
             x = k + min((t.t_in - ts[k]) / BAR_DURATION[tf], 1.0)
             vals += [f(x) for ch in chans if ch.broken is None for f in (ch.base, ch.parallel)]
             vals += [ln.value(x) for ln in lines]
-        assert any(t.zone_lo - 3 <= v <= t.zone_hi + 3 for v in vals), t
+        assert any(t.zone_lo - p.overlap_pts <= v <= t.zone_hi + p.overlap_pts for v in vals), t
         _assert_hard_stop(p, t.dir, t.line, t.stop, t.zone_lo, t.zone_hi)
