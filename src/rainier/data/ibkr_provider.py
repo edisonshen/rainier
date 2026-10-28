@@ -199,7 +199,7 @@ class IBKRProvider:
                 cache = (
                     cache_dir / f"{symbol}_{expiry}_{timeframe.value}.csv" if cache_dir else None
                 )
-                if cache and cache.exists() and expires < now:
+                if cache and cache.exists() and expires + timedelta(days=1) < now:
                     frames[expiry] = self._normalize(pd.read_csv(cache))
                     continue
                 df = self._page_back(ib, contract, timeframe, max(start, since), now)
