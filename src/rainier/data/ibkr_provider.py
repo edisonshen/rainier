@@ -36,7 +36,7 @@ TF_TO_IB_DURATION: dict[Timeframe, str] = {
 CONTRACT_PAGE = timedelta(days=10)
 # A contract becomes front month around its predecessor's expiry; start a little earlier so
 # the roll session has both contracts. The oldest contract gets one quarter plus margin.
-ROLL_LEAD = timedelta(days=10)
+ROLL_LEAD = timedelta(days=30)
 FIRST_CONTRACT_SPAN = timedelta(days=100)
 
 EMPTY_DF = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
