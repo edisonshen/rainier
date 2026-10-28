@@ -85,6 +85,7 @@ def backfill_ibkr(symbol, tf_value, years, data_dir, raw_dir, port):
         click.echo(f"  {symbol} {expiry}: {len(df)} bars ({span})")
 
     stitched = stitch_front_month(frames)
+    stitched = stitched[stitched["timestamp"] >= since].reset_index(drop=True)
     if stitched.empty:
         click.echo("No bars from IBKR; nothing to merge.")
         return

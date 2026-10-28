@@ -208,8 +208,7 @@ class IBKRProvider:
                     df.to_csv(cache, index=False)
                 frames[expiry] = df
                 log.info("ibkr_contract_bars", expiry=expiry, rows=len(df))
-        return {exp: df[df["timestamp"] >= since].reset_index(drop=True)
-                for exp, df in frames.items()}
+        return frames
 
     def _page_back(self, ib, contract, timeframe: Timeframe, start: datetime, now: datetime):
         from ib_insync import util
