@@ -1,4 +1,4 @@
-"""A/B setups on the chart's 5m window: past trades, the open position, next-bar orders."""
+"""Xiaojiang setups on the chart's 5m window: past trades, the open position, next-bar orders."""
 
 from __future__ import annotations
 
