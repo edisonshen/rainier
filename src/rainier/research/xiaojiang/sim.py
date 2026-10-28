@@ -3,8 +3,9 @@
 Levels come only from ``analysis.sr_zones`` (via ``ZoneBook``). Rules from the doc:
 - buy support below price, sell resistance above;
 - left side: a limit rests at the zone; right side: enter on a rejection close after the touch;
-- fixed hard stop in points, never moved;
+- hard stop never moved: fixed points, or just past the zone's far edge within a budget;
 - trade the 1st..Nth touch of a zone, skip later ones; the trend can pick the side;
+- optionally only where a 4H/1D channel boundary or trend line meets the zone;
 - take profit at the next zone or at a fixed R.
 
 Fills are conservative: a limit needs one tick through, a bar touching both stop and target is
@@ -33,6 +34,8 @@ SLIP_PTS = 0.25
 TICK = 0.25
 GAP = pd.Timedelta("3h")
 ZONE_TOL = 3.0  # same zone across hourly snapshots if its center moved <= this
+FAR_PAD = 2.0  # far stop: this far past the zone's far edge
+MIN_RISK = 3.0  # far stop: skip zones too thin for a real stop
 AWAY_PTS = 10.0  # price must leave a zone by this much before the next touch counts
 COLS = ["t_in", "t_out", "dir", "line", "entry", "exit", "px_out", "pts", "usd", "risk",
         "stop", "tp", "zone_lo", "zone_hi", "touch", "bias"]
@@ -56,19 +59,22 @@ class Order:
 class Market:
     """5m bars + point-in-time zones + per-zone touch history, precomputed once per book."""
 
-    def __init__(self, data: dict[Timeframe, pd.DataFrame], book: ZoneBook):
+    def __init__(self, data: dict[Timeframe, pd.DataFrame], book: ZoneBook,
+                 levels: np.ndarray | None = None):
         m5 = data[Timeframe.M5].reset_index(drop=True)
         self.t = m5["timestamp"]
         self.o, self.hi, self.lo, self.c = (m5[k].to_numpy(float) for k in
                                             ("open", "high", "low", "close"))
         self.session = (self.t + SESSION_SHIFT).dt.normalize().to_numpy()
-        self.sess_idx = np.unique(self.session, return_inverse=True)[1]
+        _, first, self.sess_idx = np.unique(self.session, return_index=True, return_inverse=True)
+        self._sess_first = first[self.sess_idx]
         gap = ((self.t.shift(-1) - self.t) > GAP).to_numpy()
         gap[-1] = _week_close(self.t.iloc[-1])  # data end mid-week: the position stays open
         self.last_before_gap = gap
         self.book = book
-        self._d1 = data.get(Timeframe.D1)
-        self._bias: dict[str, np.ndarray] = {}
+        self._htf = {tf: data.get(tf) for tf in (Timeframe.H4, Timeframe.D1)}
+        self._bias: dict[tuple[str, bool], np.ndarray] = {}
+        self.levels = levels  # per bar: trend_channels.overlay_levels
         self._centers: list[float] = []
         self._center_ids: list[int] = []
         self.snap_ids = [self.ids_for(ln, add=True) for ln in book.snapshots]
@@ -123,24 +129,45 @@ class Market:
         now = self.sess_idx[min(i, len(self.sess_idx) - 1)]
         return int((self.sess_idx[v[:n]] > now - days).sum())
 
-    def bias(self, name: str) -> np.ndarray:
-        if name == "none":
-            return np.zeros(len(self.t), dtype=int)
-        if name not in self._bias:
-            no_d1 = self._d1 is None or self._d1.empty
-            self._bias[name] = (np.zeros(len(self.t), dtype=int) if no_d1
-                                else _trend_d1(self._d1, self.t))
-        return self._bias[name]
+    def bias(self, name: str, at_open: bool = False) -> np.ndarray:
+        if (name, at_open) not in self._bias:
+            if at_open:
+                b = self.bias(name)[self._sess_first]
+            elif name == "none" or any(self._htf[tf] is None or self._htf[tf].empty
+                                       for tf in _BIAS_TFS[name]):
+                b = np.zeros(len(self.t), dtype=int)
+            else:
+                d1 = _trend(self._htf[Timeframe.D1], self.t, pd.Timedelta("1D"))
+                b = d1 if name == "d1" else np.where(
+                    _trend(self._htf[Timeframe.H4], self.t, pd.Timedelta("4h")) == d1, d1, 0)
+            self._bias[(name, at_open)] = b
+        return self._bias[(name, at_open)]
+
+    def near_overlay(self, i: int, lo: float, hi: float, pts: float) -> bool:
+        if self.levels is None:
+            raise ValueError("overlap_pts needs Market(levels=overlay_levels(...))")
+        v = self.levels[min(i, len(self.levels) - 1)]
+        return bool(np.any((v >= lo - pts) & (v <= hi + pts)))
 
 
-def _trend_d1(d1: pd.DataFrame, t: pd.Series) -> np.ndarray:
-    """Daily close vs its 20-day mean with a +-0.5 ATR dead band (range), as of each 5m bar."""
-    d = d1.reset_index(drop=True)
+_BIAS_TFS = {"none": (), "d1": (Timeframe.D1,), "h4d1": (Timeframe.H4, Timeframe.D1)}
+
+
+def _trend(df: pd.DataFrame, t: pd.Series, dur: pd.Timedelta) -> np.ndarray:
+    """Close vs its 20-bar mean with a +-0.5 ATR dead band (range), as of each 5m bar."""
+    d = df.reset_index(drop=True)
     sma, atr = d.close.rolling(20).mean(), compute_atr(d)
     b = np.where(d.close > sma + 0.5 * atr, 1, np.where(d.close < sma - 0.5 * atr, -1, 0))
-    known = (d.timestamp + pd.Timedelta("1D")).to_numpy("datetime64[ns]")
+    known = (d.timestamp + dur).to_numpy("datetime64[ns]")
     k = np.searchsorted(known, t.to_numpy("datetime64[ns]"), side="right") - 1
     return np.where(k >= 0, b[np.clip(k, 0, None)], 0).astype(int)
+
+
+def _stop(p: XJSetupConfig, d: int, px: float, lo: float, hi: float) -> float | None:
+    if p.stop == "fixed":
+        return px - d * p.stop_pts
+    st = lo - FAR_PAD if d > 0 else hi + FAR_PAD
+    return st if MIN_RISK <= d * (px - st) <= p.stop_pts else None
 
 
 def plan_orders(mkt: Market, i: int, lines: Lines, ids: list[int], price: float,
@@ -160,7 +187,11 @@ def plan_orders(mkt: Market, i: int, lines: Lines, ids: list[int], price: float,
                 continue
             if mkt.prior_touches(ids[j], i, p.test_days) >= p.max_tests:
                 continue
-            out.append(Order(d, px, px - d * p.stop_pts, ids[j], lines.lo[j], lines.hi[j]))
+            stop = _stop(p, d, px, lines.lo[j], lines.hi[j])
+            if stop is None or (p.overlap_pts and
+                                not mkt.near_overlay(i, lines.lo[j], lines.hi[j], p.overlap_pts)):
+                continue
+            out.append(Order(d, px, stop, ids[j], lines.lo[j], lines.hi[j]))
     return out
 
 
@@ -202,7 +233,7 @@ def simulate(mkt: Market, p: XJSetupConfig, start: int = 0, end: int | None = No
     used: dict[int, int] = {}
     armed: list[tuple[Order, int]] = []
     sess = None
-    bias_arr = mkt.bias(p.bias)
+    bias_arr = mkt.bias(p.bias, p.bias_at_open)
 
     def close(i: int, px: float, why: str) -> None:
         nonlocal pos
@@ -238,8 +269,11 @@ def simulate(mkt: Market, p: XJSetupConfig, start: int = 0, end: int | None = No
         if p.entry == "right":
             for od, j in armed:
                 ok = od.direction * (c[i] - od.line) > 0 and od.direction * (c[i] - o[i]) > 0
+                entry = c[i] + od.direction * SLIP_PTS
+                if p.stop == "far" and abs(entry - od.stop) > p.stop_pts:
+                    continue
                 if 0 < i - j <= p.confirm_bars and ok:
-                    open_(i, od, c[i] + od.direction * SLIP_PTS, lines, ids, bias)
+                    open_(i, od, entry, lines, ids, bias)
                     break
             armed = [(od, j) for od, j in armed if i - j < p.confirm_bars and
                      od.direction * (od.stop - (lo[i] if od.direction > 0 else h[i])) < 0]
@@ -292,8 +326,8 @@ def next_orders(mkt: Market, res: SimResult, p: XJSetupConfig, lines: Lines) -> 
             out.append({"dir": od.direction, "price": od.line, "stop": od.stop, "tp": None,
                         "kind": "rejection", "zone_lo": lines.lo[k], "zone_hi": lines.hi[k]})
     seen = {(o["dir"], o["zone_lo"]) for o in out}
-    for od in plan_orders(mkt, n, lines, ids, float(mkt.c[-1]), p, int(mkt.bias(p.bias)[-1]),
-                          res.used):
+    bias = int(mkt.bias(p.bias, p.bias_at_open)[-1])
+    for od in plan_orders(mkt, n, lines, ids, float(mkt.c[-1]), p, bias, res.used):
         if (od.direction, od.lo) in seen:
             continue
         tp = (target(lines, ids, od.direction, od.line, od.stop, od.zone, p)

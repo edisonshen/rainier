@@ -105,7 +105,8 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     if (pub.xj_setups and symbol.upper() == "MES" and Timeframe.M5 in data
             and Timeframe.M5 in pub.bars):
         since = data[Timeframe.M5]["timestamp"].tail(pub.bars[Timeframe.M5]).iloc[0]
-        xj = chart_setups(data, pub.xj_setups, zones, since, settings.analysis.sr_zones)
+        xj = chart_setups(data, pub.xj_setups, zones, since, settings.analysis.sr_zones,
+                          pub.trend)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
                                pub.vma_bars, pub.vma_offset, xj,
                                trend_overlays(data, pub.trend, asof), pub.trend_extend_bars)
@@ -146,6 +147,7 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
 @click.pass_context
 def xj_backtest(ctx, symbol, data_dir, holdout_start, keys, n_random):
     """Xiaojiang setups on the chart's point-in-time zones, train vs holdout vs random zones."""
+    from rainier.analysis.trend_channels import overlay_levels
     from rainier.research.xiaojiang.sim import Market, metrics, simulate
     from rainier.research.xiaojiang.zones import ZoneBook
 
@@ -158,8 +160,10 @@ def xj_backtest(ctx, symbol, data_dir, holdout_start, keys, n_random):
     if Timeframe.M5 not in data:
         raise click.ClickException(f"{symbol}_5m.csv required")
     book = ZoneBook(data, settings.analysis.sr_zones)
-    mkt = Market(data, book)
-    controls = [Market(data, book.shifted(seed)) for seed in range(n_random)]
+    levels = (overlay_levels(data, settings.chart_publish.trend, data[Timeframe.M5].timestamp)
+              if any(setups[k].overlap_pts for k in keys or setups) else None)
+    mkt = Market(data, book, levels)
+    controls = [Market(data, book.shifted(seed), levels) for seed in range(n_random)]
     hs = pd.Timestamp(holdout_start)
     rows = []
     for key in keys or setups:

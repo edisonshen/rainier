@@ -126,6 +126,22 @@ def test_friday_close_flattens_the_position():
     assert tr.exit.tolist() == ["session_end"] and tr.px_out.iloc[0] == 104.25
 
 
+def _c_every_touch(pub: ChartPublishConfig) -> XJSetupConfig:
+    """C trades ~2x a month; on the fixture's month run its overlap + far stop on every touch."""
+    return pub.xj_setups["C"].model_copy(update={"max_tests": 9, "bias": "none",
+                                                 "bias_at_open": False})
+
+
+def _assert_hard_stop(p: XJSetupConfig, d: int, level: float, stop: float, zlo: float,
+                      zhi: float) -> None:
+    """Never moved: fixed points from the entry, or 2 pts past the zone's far edge (3..budget)."""
+    if p.stop == "fixed":
+        assert level - d * p.stop_pts == stop
+    else:
+        assert stop == pytest.approx(zlo - 2 if d > 0 else zhi + 2, abs=0.01)
+        assert 3 <= d * (level - stop) <= p.stop_pts
+
+
 @pytest.fixture(scope="module")
 def mes() -> dict[Timeframe, pd.DataFrame]:
     df = pd.read_parquet(FIXTURE)
@@ -136,7 +152,7 @@ def mes() -> dict[Timeframe, pd.DataFrame]:
 
 
 def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
-    """`sr-levels` (what the cron publishes) carries A and B for the page's toggle."""
+    """`sr-levels` (what the cron publishes) carries A, B and C for the page's toggle."""
     from rainier.cli import cli
     from rainier.cli.futures import _load_mtf_csvs
 
@@ -148,18 +164,19 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
     assert r.exit_code == 0, r.output
     payload = json.loads(out.read_text())
     setups = {s["key"]: s for s in payload["xj"]["setups"]}
-    cfg = ChartPublishConfig().xj_setups
-    assert list(setups) == ["A", "B"]
+    pub = ChartPublishConfig()
+    cfg = pub.xj_setups
+    assert list(setups) == ["A", "B", "C"]
     candle_t = {c[0] for c in payload["candles"]["5m"]}
     for key, s in setups.items():
         p = cfg[key]
-        assert s["label"] == p.label and s["trades"], key
+        assert s["label"] == p.label and (s["trades"] or key == "C"), key  # C: ~2 trades/month
         prev_out = 0
         for t_in, t_out, d, level, entry, px, stop, tp, why, usd, zlo, zhi in s["trades"]:
             assert t_in in candle_t and t_out in candle_t and t_in > prev_out  # one at a time
             prev_out = t_out
             assert zlo <= level <= zhi  # every order sits on a chart zone (edge or center)
-            assert level - d * p.stop_pts == stop  # fixed-point hard stop, never moved
+            _assert_hard_stop(p, d, level, stop, zlo, zhi)
             assert why in {"stop", "target", "session_end"}
             assert usd == pytest.approx(d * (px - entry) * POINT_USD - COMMISSION_USD, abs=0.01)
             if p.exit.startswith("rr"):
@@ -170,17 +187,18 @@ def test_chart_ab_trades_sit_on_point_in_time_chart_zones(mes, tmp_path):
             assert s["open"] is None
             assert any(abs(zlo - lo) <= 0.125 and abs(zhi - hi) <= 0.125 for lo, hi in bands)
             assert kind == ("limit" if p.entry == "left" else "rejection")
-            assert price - d * p.stop_pts == stop
+            _assert_hard_stop(p, d, price, stop, zlo, zhi)
             if kind == "limit":
                 assert d * (payload["price"] - price) > 0
 
     # No look-ahead: cut the data at T and every trade decided and closed before T is unchanged.
     data = _load_mtf_csvs(tmp_path, "MES")
     since = data[Timeframe.M5].timestamp.tail(2880).iloc[0]
-    full = chart_setups(data, cfg, [], since, SRZoneConfig())
+    cfg = {**cfg, "C": _c_every_touch(pub)}
+    full = chart_setups(data, cfg, [], since, SRZoneConfig(), pub.trend)
     cut = pd.Timestamp("2026-10-14 06:00")
     past = chart_setups({tf: df[df.timestamp < cut] for tf, df in data.items()}, cfg, [], since,
-                        SRZoneConfig())
+                        SRZoneConfig(), pub.trend)
     for a, b in zip(full, past, strict=True):
         before = a["trades"][a["trades"].t_out < cut].reset_index(drop=True)
         assert len(before) > 0
@@ -200,7 +218,7 @@ def test_sr_levels_without_daily_bars_still_publishes_zones_and_setups(mes, tmp_
                                  "--output", str(out)])
     assert r.exit_code == 0, r.output
     payload = json.loads(out.read_text())
-    assert payload["zones"] and [s["key"] for s in payload["xj"]["setups"]] == ["A", "B"]
+    assert payload["zones"] and [s["key"] for s in payload["xj"]["setups"]] == ["A", "B", "C"]
 
 
 def test_xiaojiang_is_mes_only(mes, tmp_path):
@@ -234,3 +252,28 @@ def test_random_control_moves_each_zone_once_for_all_hours():
         moved = [dict(zip(s.rank, s.price, strict=True)) for s in book.shifted(seed).snapshots]
         assert moved[0] == moved[2] and all(moved[1][r] == moved[0][r] for r in (1, 2))
         assert all(6 <= abs(moved[1][r] - z) <= 20 for r, z in ((1, 100), (2, 200), (3, 150)))
+
+
+def test_c_trades_only_where_a_closed_bar_channel_or_trend_line_meets_the_zone(mes):
+    """Setup C (Xiaojiang doc 2): her channel/trend line crossing the S/R zone is the entry
+    spot. Every C entry has a 4H/1D channel boundary or trend line, drawn only from bars closed
+    before the entry bar, within 3 pts of the zone, and a stop past the zone's far edge."""
+    from rainier.analysis.trend_channels import BAR_DURATION, trend_overlays
+
+    pub = ChartPublishConfig()
+    p = _c_every_touch(pub)
+    since = mes[Timeframe.M5].timestamp.iloc[0] + pd.Timedelta(days=16)
+    (c,) = chart_setups(mes, {"C": p}, [], since, SRZoneConfig(), pub.trend)
+    tr = c["trades"]
+    assert len(tr) > 0
+    for t in tr.itertuples():
+        ov = trend_overlays(mes, pub.trend, t.t_in - BAR_DURATION[Timeframe.M5])
+        vals = []
+        for tf, (chans, lines) in ov.items():
+            ts = pd.to_datetime(mes[tf].timestamp)
+            k = int(ts.searchsorted(t.t_in, side="right")) - 1
+            x = k + min((t.t_in - ts[k]) / BAR_DURATION[tf], 1.0)
+            vals += [f(x) for ch in chans if ch.broken is None for f in (ch.base, ch.parallel)]
+            vals += [ln.value(x) for ln in lines]
+        assert any(t.zone_lo - 3 <= v <= t.zone_hi + 3 for v in vals), t
+        _assert_hard_stop(p, t.dir, t.line, t.stop, t.zone_lo, t.zone_hi)
