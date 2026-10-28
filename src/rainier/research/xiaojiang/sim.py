@@ -74,7 +74,7 @@ class Market:
         self.book = book
         self._htf = {tf: data.get(tf) for tf in (Timeframe.H4, Timeframe.D1)}
         self._bias: dict[tuple[str, bool], np.ndarray] = {}
-        self.levels = levels  # per bar: trend_channels.overlay_levels
+        self.levels = levels  # per bar (+1 for the next bar): trend_channels.overlay_levels
         self._centers: list[float] = []
         self._center_ids: list[int] = []
         self.snap_ids = [self.ids_for(ln, add=True) for ln in book.snapshots]
