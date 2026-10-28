@@ -47,7 +47,7 @@ uv run ruff check src/ tests/
 uv run rainier fetch --symbol MES
 uv run rainier sr-levels --symbol MES --data-dir data/csv           # S/R zones for /trading/mes
 uv run rainier sr-validate --symbol MES --holdout-start 2026-08-17
-uv run rainier xj-backtest --symbol MES --holdout-start 2026-08-17  # Xiaojiang A/B/C on the chart zones vs random
+uv run rainier xj-backtest --symbol MES --holdout-start 2026-08-17  # Xiaojiang A/C/C2 on the chart zones vs random
 
 # QU100 backtesting
 uv run rainier backtest-qu100                              # default: rank 1-50, 5d hold

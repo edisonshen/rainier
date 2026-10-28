@@ -526,14 +526,16 @@ def _default_xj_setups() -> dict[str, XJSetupConfig]:
         "A": XJSetupConfig(label="A: rejection close at zone edge, 12 pt stop, 5R, 1st touch",
                            entry="right", level="edge", stop_pts=12, exit="rr5", min_rank=2,
                            min_conf=1, max_tests=1),
-        "B": XJSetupConfig(label="B: limit at 4H+ zone center, 5 pt stop, next zone, daily trend",
-                           entry="left", level="center", stop_pts=5, exit="next", min_rank=3,
-                           min_conf=2, max_tests=3, bias="d1"),
-        "C": XJSetupConfig(label="C: B's zones, stop past the zone (<=12 pt), 4H+1D trend at the "
-                                 "open, channel/trend line on the zone",
+        "C": XJSetupConfig(label="C: limit at 4H+ zone center, stop past the zone (<=12 pt), 4H+1D "
+                                 "trend at the open, channel/trend line on the zone",
                            entry="left", level="center", stop="far", stop_pts=12, exit="next",
                            min_rank=3, min_conf=2, max_tests=3, bias="h4d1", bias_at_open=True,
                            overlap_pts=3),
+        "C2": XJSetupConfig(label="C2: C on 1H and single-timeframe zones too, channel/trend line "
+                                  "within 8 pts (~4x C's trades)",
+                            entry="left", level="center", stop="far", stop_pts=12, exit="next",
+                            min_rank=2, min_conf=1, max_tests=3, bias="h4d1", bias_at_open=True,
+                            overlap_pts=8),
     }
 
 
