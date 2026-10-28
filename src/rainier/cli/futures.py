@@ -47,6 +47,58 @@ def fetch(ctx, symbol, data_dir, provider_type):
             click.echo(f"  {tf.value}: ERROR - {e}")
 
 
+@cli.command("backfill-ibkr")
+@click.option("--symbol", default="MES")
+@click.option("--timeframe", "tf_value", default="5m", type=click.Choice(["5m", "1H", "4H", "1D"]))
+@click.option("--years", default=2.0, show_default=True,
+              help="How far back (IBKR serves expired futures ~2 years past expiration)")
+@click.option("--data-dir", default="data/csv", help="CSV directory to merge into")
+@click.option("--raw-dir", default="data/ibkr_raw",
+              help="Per-contract cache; expired contracts are fetched only once")
+@click.option("--port", type=int, default=None,
+              help="TWS/Gateway API port (default: settings ibkr.port; TWS live = 7496)")
+def backfill_ibkr(symbol, tf_value, years, data_dir, raw_dir, port):
+    """Backfill futures history from IBKR: per-contract bars stitched into the front month.
+
+    Fills only bars missing from the CSV + candles table (existing bars are kept), so
+    yfinance's 60-day 5m window stops limiting how much intraday history we keep.
+    Needs TWS or IB Gateway running and logged in, with the API enabled.
+    """
+    from datetime import UTC, timedelta
+
+    from rainier.core.config import get_settings
+    from rainier.data.futures_roll import stitch_front_month
+    from rainier.data.ibkr_provider import IBKRProvider
+    from rainier.data.persistence import save_candles
+
+    tf = Timeframe(tf_value)
+    config = get_settings().ibkr
+    if port is not None:
+        config = config.model_copy(update={"port": port})
+    since = datetime.now(UTC) - timedelta(days=365 * years)
+
+    frames = IBKRProvider(config=config).get_contract_bars(
+        symbol, tf, since=since, cache_dir=Path(raw_dir),
+    )
+    for expiry, df in sorted(frames.items()):
+        span = f"{df['timestamp'].min()} -> {df['timestamp'].max()}" if len(df) else "no bars"
+        click.echo(f"  {symbol} {expiry}: {len(df)} bars ({span})")
+
+    stitched = stitch_front_month(frames)
+    stitched = stitched[stitched["timestamp"] >= since].reset_index(drop=True)
+    if stitched.empty:
+        click.echo("No bars from IBKR; nothing to merge.")
+        return
+    csv_path = Path(data_dir) / f"{symbol}_{tf.value}.csv"
+    before = sum(1 for _ in csv_path.open()) - 1 if csv_path.exists() else 0
+    total = save_candles(stitched, symbol, tf, Path(data_dir), prefer_existing=True)
+    click.echo(
+        f"{symbol} {tf.value}: {len(stitched)} front-month bars "
+        f"({stitched['timestamp'].min()} -> {stitched['timestamp'].max()}), "
+        f"{total - before} new, {total} total in {csv_path}"
+    )
+
+
 MTF_TIMEFRAMES = (Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M5)
 
 
