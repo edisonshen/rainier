@@ -180,7 +180,10 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert kw["headers"]["Authorization"] == "Bearer tok"
     payload = json.loads(kw["content"])
     assert set(payload["candles"]) == {"5m", "1H", "4H", "1D"}
-    assert len(payload["candles"]["5m"]) == 2880  # ~2 weeks of 23h sessions
+    # All the 5m we have up to ~60 days (yfinance's limit), and ~1 year of 1D.
+    assert len(payload["candles"]["5m"]) == len(mes[Timeframe.M5])  # fixture < 60 days
+    d1 = payload["candles"]["1D"]
+    assert len(d1) == 370 < len(mes[Timeframe.D1]) and d1[-1][0] - d1[0][0] >= 360 * 86400
     t, o, h, lo, c = payload["candles"]["5m"][-1]
     assert lo <= min(o, c) <= max(o, c) <= h
     # The page formats times as PT itself, so the payload must carry real UTC, not the
@@ -205,7 +208,7 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert line[-1][0] == t + 2 * step and line[-1][1] == pytest.approx(expected, abs=0.01)
     assert line[-3][0] == t  # the value from 2 bars back sits on the last candle
     # Bars before the chart window feed the first values, so the line spans the whole window.
-    assert line[0][0] == payload["candles"]["5m"][2][0] and len(line) == 2880
+    assert vma["series"]["1D"][0][0] == d1[2][0] and len(vma["series"]["1D"]) == len(d1)
     # Next 5-min run with no new bar (daily halt, holiday): identical payload, no KV write.
     r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
     assert r.exit_code == 0 and "unchanged" in r.output and len(calls) == 1

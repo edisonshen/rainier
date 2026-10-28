@@ -484,7 +484,8 @@ class DatabaseConfig(BaseModel):
 
 
 def _default_chart_bars() -> dict[Timeframe, int]:
-    return {Timeframe.M5: 2880, Timeframe.H1: 720, Timeframe.H4: 540, Timeframe.D1: 250}
+    # ~60 days of 5m (all yfinance keeps), ~1 year of 1H/4H/1D.
+    return {Timeframe.M5: 11800, Timeframe.H1: 5800, Timeframe.H4: 2000, Timeframe.D1: 370}
 
 
 class XJSetupConfig(BaseModel):
