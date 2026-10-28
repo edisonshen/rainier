@@ -17,23 +17,33 @@ def save_candles(
     symbol: str,
     timeframe: Timeframe,
     data_dir: Path,
+    *,
+    prefer_existing: bool = False,
 ) -> int:
-    """Save candles to CSV (merging with existing) and DB. Returns total row count."""
+    """Save candles to CSV (merging with existing) and DB. Returns total row count.
+
+    With ``prefer_existing`` the new bars only fill timestamps the CSV doesn't have yet.
+    """
     data_dir.mkdir(parents=True, exist_ok=True)
     csv_path = data_dir / f"{symbol}_{timeframe.value}.csv"
-    df = merge_with_existing(df, csv_path)
+    df = merge_with_existing(df, csv_path, keep="first" if prefer_existing else "last")
     df.to_csv(csv_path, index=False)
     persist_to_db(df, symbol, timeframe)
     return len(df)
 
 
-def merge_with_existing(new_df: pd.DataFrame, csv_path: Path) -> pd.DataFrame:
-    """Merge new data with existing CSV, dedup on timestamp."""
+def merge_with_existing(
+    new_df: pd.DataFrame, csv_path: Path, keep: str = "last",
+) -> pd.DataFrame:
+    """Merge new data with existing CSV, dedup on timestamp.
+
+    ``keep="last"`` lets new bars overwrite existing ones; ``"first"`` keeps existing ones.
+    """
     if csv_path.exists():
         existing = pd.read_csv(csv_path)
         existing["timestamp"] = pd.to_datetime(existing["timestamp"], utc=True)
         combined = pd.concat([existing, new_df], ignore_index=True)
-        combined = combined.drop_duplicates(subset="timestamp", keep="last")
+        combined = combined.drop_duplicates(subset="timestamp", keep=keep)
         combined = combined.sort_values("timestamp").reset_index(drop=True)
         return combined
     return new_df
