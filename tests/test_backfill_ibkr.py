@@ -68,12 +68,39 @@ def _run(tmp_path, tws):
     def connection(self):
         yield tws
 
-    with patch.object(IBKRProvider, "_connection", connection), \
-            patch("rainier.data.persistence.persist_to_db"):
+    with patch.object(IBKRProvider, "_connection", connection):
         return CliRunner().invoke(cli, [
             "backfill-ibkr", "--symbol", "MES", "--port", "7496",
             "--data-dir", str(tmp_path / "csv"), "--raw-dir", str(tmp_path / "raw"),
         ])
+
+
+@pytest.fixture(autouse=True)
+def candles_db(tmp_path):
+    """A real `candles` table (SQLite) behind `get_session`, as `persist_to_db` sees it."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from rainier.core.models import CandleRecord
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'candles.db'}")
+    CandleRecord.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+
+    @contextmanager
+    def get_session():
+        with factory() as session, session.begin():
+            yield session
+
+    with patch("rainier.core.database.get_session", get_session):
+        yield engine
+
+
+def _db_candles(engine) -> pd.DataFrame:
+    df = pd.read_sql("SELECT timestamp, close FROM candles WHERE symbol='MES' AND timeframe='5m'"
+                     " ORDER BY timestamp", engine)
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize("UTC")
+    return df
 
 
 @pytest.fixture
@@ -87,7 +114,8 @@ def existing_csv(tmp_path):
     return df
 
 
-def test_backfill_stitches_front_month_and_keeps_existing_bars(tmp_path, existing_csv):
+def test_backfill_stitches_front_month_and_keeps_existing_bars(tmp_path, existing_csv,
+                                                               candles_db):
     result = _run(tmp_path, FakeTWS())
     assert result.exit_code == 0, result.output
 
@@ -107,8 +135,12 @@ def test_backfill_stitches_front_month_and_keeps_existing_bars(tmp_path, existin
     assert (ib["volume"] == 1000).all(), "no back-month bars"
     assert "new" in result.output
 
+    db = _db_candles(candles_db)
+    assert db["timestamp"].tolist() == out["timestamp"].tolist(), "candles 5m mirrors the CSV"
+    assert db["close"].tolist() == out["close"].tolist()
 
-def test_second_run_reads_expired_contracts_from_cache(tmp_path, existing_csv):
+
+def test_second_run_reads_expired_contracts_from_cache(tmp_path, existing_csv, candles_db):
     assert _run(tmp_path, FakeTWS()).exit_code == 0
     first = pd.read_csv(tmp_path / "csv" / "MES_5m.csv")
 
@@ -117,3 +149,4 @@ def test_second_run_reads_expired_contracts_from_cache(tmp_path, existing_csv):
     assert result.exit_code == 0, result.output
     assert tws.requests == [], "both contracts expired, so no new IBKR requests"
     assert pd.read_csv(tmp_path / "csv" / "MES_5m.csv").equals(first)
+    assert len(_db_candles(candles_db)) == len(first), "re-run upserts, no duplicate rows"

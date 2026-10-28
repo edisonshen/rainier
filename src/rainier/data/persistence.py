@@ -49,42 +49,36 @@ def merge_with_existing(
     return new_df
 
 
-def persist_to_db(df: pd.DataFrame, symbol: str, tf: Timeframe) -> None:
-    """Upsert candle data into the CandleRecord table."""
-    try:
-        from sqlalchemy import select
+_UPSERT_CHUNK = 2000  # rows per INSERT; keeps bind params under SQLite's 32k limit
+_OHLCV = ("open", "high", "low", "close", "volume")
 
+
+def persist_to_db(df: pd.DataFrame, symbol: str, tf: Timeframe) -> None:
+    """Upsert candle data into the CandleRecord table (bulk ON CONFLICT, naive-UTC timestamps)."""
+    try:
         from rainier.core.database import get_session
         from rainier.core.models import CandleRecord
 
-        with get_session() as db:
-            for _, row in df.iterrows():
-                ts = row["timestamp"].to_pydatetime().replace(tzinfo=None)
-                existing = db.execute(
-                    select(CandleRecord).where(
-                        CandleRecord.symbol == symbol,
-                        CandleRecord.timeframe == tf.value,
-                        CandleRecord.timestamp == ts,
-                    )
-                ).scalar_one_or_none()
+        ts = pd.to_datetime(df["timestamp"])
+        if ts.dt.tz is not None:
+            ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+        rows = [
+            {"symbol": symbol, "timeframe": tf.value, "timestamp": t.to_pydatetime(),
+             **{c: float(v) for c, v in zip(_OHLCV, vals, strict=True)}}
+            for t, vals in zip(ts, df[list(_OHLCV)].itertuples(index=False), strict=True)
+        ]
 
-                if existing:
-                    existing.open = float(row["open"])
-                    existing.high = float(row["high"])
-                    existing.low = float(row["low"])
-                    existing.close = float(row["close"])
-                    existing.volume = float(row["volume"])
-                else:
-                    db.add(CandleRecord(
-                        symbol=symbol,
-                        timeframe=tf.value,
-                        timestamp=ts,
-                        open=float(row["open"]),
-                        high=float(row["high"]),
-                        low=float(row["low"]),
-                        close=float(row["close"]),
-                        volume=float(row["volume"]),
-                    ))
+        with get_session() as db:
+            if db.get_bind().dialect.name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert
+            else:
+                from sqlalchemy.dialects.sqlite import insert
+            for i in range(0, len(rows), _UPSERT_CHUNK):
+                stmt = insert(CandleRecord).values(rows[i:i + _UPSERT_CHUNK])
+                db.execute(stmt.on_conflict_do_update(
+                    index_elements=["symbol", "timeframe", "timestamp"],
+                    set_={c: stmt.excluded[c] for c in _OHLCV},
+                ))
 
         log.info("db_persisted", symbol=symbol, timeframe=tf.value, rows=len(df))
     except Exception as exc:
