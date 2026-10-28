@@ -227,3 +227,36 @@ def trend_overlays(
         closed = closed.reset_index(drop=True)
         out[tf] = (find_channels(closed, tf_cfg), find_trend_lines(closed, tf_cfg))
     return out
+
+
+def overlay_levels(
+    data: dict[Timeframe, pd.DataFrame], cfg: dict[Timeframe, TrendTimeframeConfig],
+    times: pd.Series,
+) -> np.ndarray:
+    """Per 5m bar starting at ``times``: each unbroken channel boundary and trend line drawn from
+    the bars closed by then, valued at that time (one column per line, NaN-padded)."""
+    tv = pd.to_datetime(times).to_numpy("datetime64[ns]")
+    blocks = []
+    for tf, tf_cfg in cfg.items():
+        if tf not in data or data[tf].empty:
+            continue
+        df = data[tf].reset_index(drop=True)
+        src = pd.to_datetime(df["timestamp"]).to_numpy("datetime64[ns]")
+        dur = np.timedelta64(BAR_DURATION[tf])
+        closed = np.searchsorted(src + dur, tv, side="right")
+        k = np.clip(np.searchsorted(src, tv, side="right") - 1, 0, None)
+        pos = k + np.minimum((tv - src[k]) / dur, 1.0)
+        found = {}
+        for n in np.unique(closed):
+            past = df.iloc[:n]
+            found[n] = [] if n < 2 else [
+                *(f for ch in find_channels(past, tf_cfg) if ch.broken is None
+                  for f in (ch.base, ch.parallel)),
+                *(ln.value for ln in find_trend_lines(past, tf_cfg))]
+        out = np.full((len(tv), max(map(len, found.values()), default=0)), np.nan)
+        for n, fs in found.items():
+            rows = np.flatnonzero(closed == n)
+            for j, f in enumerate(fs):
+                out[rows, j] = f(pos[rows])
+        blocks.append(out)
+    return np.hstack(blocks) if blocks else np.empty((len(tv), 0))

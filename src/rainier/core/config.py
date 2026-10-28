@@ -493,7 +493,11 @@ class XJSetupConfig(BaseModel):
     ``entry``: left = limit resting at the zone, right = enter on a rejection close after the
     touch. ``level``: the zone's near edge or its center. ``exit``: next = near edge of the next
     zone, rrN = fixed N x risk. ``min_rank``: 2 = 1H, 3 = 4H, 4 = 1D zone. ``max_tests``: trade
-    touches 1..N within ``test_days`` sessions. ``bias``: d1 = daily trend picks the side.
+    touches 1..N within ``test_days`` sessions. ``bias``: d1 = daily trend picks the side,
+    h4d1 = only when the 4H and daily trends agree; ``bias_at_open`` holds the session-open side
+    all session. ``stop``: fixed = ``stop_pts`` from the entry; far = just past the zone's far
+    edge, skipped when that risks more than ``stop_pts``. ``overlap_pts``: trade a zone only when
+    a 4H/1D channel boundary or trend line runs within this many points of it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -501,6 +505,7 @@ class XJSetupConfig(BaseModel):
     label: str = ""
     entry: Literal["left", "right"] = "left"
     level: Literal["edge", "center"] = "edge"
+    stop: Literal["fixed", "far"] = "fixed"
     stop_pts: float = Field(12.0, gt=0)
     exit: str = Field("next", pattern=r"^(next|rr\d+(\.\d+)?)$")
     min_rank: int = Field(3, ge=1, le=4)
@@ -508,7 +513,9 @@ class XJSetupConfig(BaseModel):
     max_tests: int = Field(3, ge=1)
     test_days: int = Field(10, ge=1)
     k_near: int = Field(3, ge=1)
-    bias: Literal["none", "d1"] = "none"
+    bias: Literal["none", "d1", "h4d1"] = "none"
+    bias_at_open: bool = False
+    overlap_pts: float | None = Field(None, gt=0)
     per_line: int = Field(1, ge=1)
     confirm_bars: int = Field(3, ge=1)
 
@@ -521,6 +528,11 @@ def _default_xj_setups() -> dict[str, XJSetupConfig]:
         "B": XJSetupConfig(label="B: limit at 4H+ zone center, 5 pt stop, next zone, daily trend",
                            entry="left", level="center", stop_pts=5, exit="next", min_rank=3,
                            min_conf=2, max_tests=3, bias="d1"),
+        "C": XJSetupConfig(label="C: B's zones, stop past the zone (<=12 pt), 4H+1D trend at the "
+                                 "open, channel/trend line on the zone",
+                           entry="left", level="center", stop="far", stop_pts=12, exit="next",
+                           min_rank=3, min_conf=2, max_tests=3, bias="h4d1", bias_at_open=True,
+                           overlap_pts=3),
     }
 
 
