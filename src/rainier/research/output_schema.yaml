@@ -62,6 +62,55 @@ schemas:
         type: str
         nullable: true
 
+  # A/B substrate — candidate-agnostic base scorecard, per
+  # DESIGN-qu100-ab-testing.md §10.5. Every evaluator (screener replay, LLM
+  # backtest) emits this core; candidate-specific fields live in extension
+  # schemas composed via output_schema.validate_composed().
+  base_scorecard:
+    fields:
+      candidate_id:
+        type: str
+      candidate_type:
+        type: str
+      window:
+        type: str
+      n_selection_days:
+        type: int
+      corpus_hash:
+        type: str
+      # Reward values keyed by role: {primary: {...}, guardrails: {...},
+      # secondary: {...}} — reward keys are opaque strings here (§10.3).
+      rewards:
+        type: dict
+      # Per-regime reward slices (regime tag -> reward values), §4.4.
+      regime_scores:
+        type: dict
+      # ALWAYS null until the §11-task-6 DSR spec lands — never a naively
+      # computed number (design §4.4).
+      deflated_sharpe:
+        type: float
+        nullable: true
+      evaluator_sha:
+        type: str
+
+  # A/B substrate — optional LLM extension composed on top of base_scorecard
+  # (§10.5). Not required of the screener evaluator; the LLM-shaped
+  # `backtest` entry below stays untouched for its existing consumer.
+  llm_extension:
+    fields:
+      valid_thesis_rate:
+        type: float
+      cost_usd:
+        type: float
+      filled_R:
+        type: float
+      filled_rate:
+        type: float
+      tqqq_bh_R:
+        type: float
+      skill_yaml_sha:
+        type: str
+
   # Slice 1+ — L3 backtest summary, per [D-031] in DESIGN-qu100-llm-backtest.md.
   # Declared here so subsequent slices don't drift on shape; not exercised
   # in Slice 0 tests beyond shape parity.

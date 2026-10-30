@@ -8,6 +8,7 @@ new verb adds a block (not by inventing fields ad-hoc in CLI code).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,8 +43,13 @@ class _FieldSpec:
 def load(path: str | Path | None = None) -> dict[str, Any]:
     """Read the schema YAML; returned dict is the raw shape (schemas: {...})."""
     p = Path(path) if path is not None else SCHEMA_PATH
-    with p.open("r") as fh:
-        data = yaml.safe_load(fh)
+    try:
+        with p.open("r") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        # Consumers catch SchemaError (the module contract) — a raw
+        # ParserError from a broken schema file must not bypass them.
+        raise SchemaError(f"{p}: invalid YAML — {exc}") from exc
     if not isinstance(data, dict) or "schemas" not in data:
         raise SchemaError(f"{p} has no top-level `schemas:` key")
     return data
@@ -69,18 +75,8 @@ def _coerce_fields(schema: dict[str, Any]) -> list[_FieldSpec]:
     return out
 
 
-def validate(name: str, payload: dict[str, Any], strict: bool = True) -> None:
-    """Validate ``payload`` against the schema named ``name``.
-
-    Strict mode (default) rejects any extra field not declared in the schema.
-    Non-strict mode tolerates forward-compatible extras — used at runtime so
-    a new field added in a future commit doesn't blow up an older CLI.
-    """
-    data = load()
-    schemas = data["schemas"]
-    if name not in schemas:
-        raise SchemaError(f"unknown schema {name!r}; known: {sorted(schemas)}")
-    specs = _coerce_fields(schemas[name])
+def _check_payload(specs: list[_FieldSpec], payload: dict[str, Any], strict: bool) -> None:
+    """Shared field checks: presence, strict extras, types, enums."""
     declared = {spec.name for spec in specs}
 
     missing = declared - payload.keys()
@@ -96,6 +92,14 @@ def validate(name: str, payload: dict[str, Any], strict: bool = True) -> None:
         val = payload[spec.name]
         if val is None and spec.nullable:
             continue
+        allowed = spec.py_type if isinstance(spec.py_type, tuple) else (spec.py_type,)
+        if isinstance(val, bool) and bool not in allowed:
+            # bool is a subclass of int: `n_selection_days: true` would
+            # otherwise pass the int/float check and land as 1/1.0 in
+            # promotion artifacts — silent type corruption.
+            raise SchemaError(
+                f"field {spec.name!r}: expected {spec.py_type}, got bool ({val!r})"
+            )
         if not isinstance(val, spec.py_type):  # type: ignore[arg-type]
             raise SchemaError(
                 f"field {spec.name!r}: expected {spec.py_type}, got "
@@ -105,6 +109,60 @@ def validate(name: str, payload: dict[str, Any], strict: bool = True) -> None:
             raise SchemaError(
                 f"field {spec.name!r}: value {val!r} not in enum {spec.enum}"
             )
+
+
+def validate(name: str, payload: dict[str, Any], strict: bool = True) -> None:
+    """Validate ``payload`` against the schema named ``name``.
+
+    Strict mode (default) rejects any extra field not declared in the schema.
+    Non-strict mode tolerates forward-compatible extras — used at runtime so
+    a new field added in a future commit doesn't blow up an older CLI.
+    """
+    data = load()
+    schemas = data["schemas"]
+    if name not in schemas:
+        raise SchemaError(f"unknown schema {name!r}; known: {sorted(schemas)}")
+    _check_payload(_coerce_fields(schemas[name]), payload, strict)
+
+
+def validate_composed(
+    base: str,
+    payload: dict[str, Any],
+    extensions: Sequence[str] = (),
+    strict: bool = True,
+) -> None:
+    """Validate ``payload`` against a base schema plus optional extensions.
+
+    A/B-substrate scorecards (design §10.5) compose a candidate-agnostic
+    ``base_scorecard`` with optional per-candidate-type extensions (e.g.
+    ``llm_extension``). The composed field set is the union of the named
+    schemas: every field of the base AND every named extension is required;
+    extras beyond the union fail strict mode. An extension payload alone
+    fails on the missing base fields — the extension is never standalone.
+    """
+    if isinstance(extensions, str):
+        # str is itself a Sequence[str]; a bare 'llm_extension' would iterate
+        # per-character and fail with a baffling "unknown schema 'l'".
+        raise SchemaError(
+            f"extensions must be a sequence of schema names, "
+            f"got bare string {extensions!r} — wrap it in a list"
+        )
+    data = load()
+    schemas = data["schemas"]
+    specs: list[_FieldSpec] = []
+    seen: set[str] = set()
+    for name in (base, *extensions):
+        if name not in schemas:
+            raise SchemaError(f"unknown schema {name!r}; known: {sorted(schemas)}")
+        for spec in _coerce_fields(schemas[name]):
+            if spec.name in seen:
+                raise SchemaError(
+                    f"field {spec.name!r} declared by more than one of "
+                    f"{[base, *extensions]}"
+                )
+            seen.add(spec.name)
+            specs.append(spec)
+    _check_payload(specs, payload, strict)
 
 
 def format_block(name: str, payload: dict[str, Any]) -> str:
@@ -136,6 +194,35 @@ def format_block(name: str, payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_block_composed(
+    base: str,
+    payload: dict[str, Any],
+    extensions: Sequence[str] = (),
+) -> str:
+    """Render a composed (base + extensions) payload as a fenced YAML block.
+
+    Mirrors :func:`format_block` for the composed-scorecard case (§10.5) —
+    without this, an evaluator emitting ``base_scorecard + llm_extension``
+    would have no serializer (plain ``format_block`` rejects the extension
+    fields as extras). Field order is base-schema declaration order, then
+    each extension's declaration order, so byte-identical inputs produce
+    byte-identical output. ``parse_block`` is the shared inverse.
+    """
+    validate_composed(base, payload, extensions=extensions, strict=True)
+    data = load()
+    lines = ["---"]
+    for name in (base, *extensions):
+        for spec in _coerce_fields(data["schemas"][name]):
+            val = payload[spec.name]
+            dumped = yaml.safe_dump(val, default_flow_style=True).strip()
+            if dumped.endswith("\n..."):
+                dumped = dumped[: -len("\n...")]
+            lines.append(f"{spec.name}: {dumped}")
+    lines.append("---")
+    lines.append("")  # trailing newline
+    return "\n".join(lines)
+
+
 def parse_block(text: str) -> dict[str, Any]:
     """Inverse of ``format_block`` — extract a single fenced YAML block.
 
@@ -147,7 +234,12 @@ def parse_block(text: str) -> dict[str, Any]:
         raise SchemaError("block is not `---` fenced")
     # Drop the fences.
     inner = stripped[3:-3].strip()
-    parsed = yaml.safe_load(inner)
+    try:
+        parsed = yaml.safe_load(inner)
+    except yaml.YAMLError as exc:
+        # A truncated block (process killed mid-write) must surface as the
+        # module contract exception, not a raw yaml ParserError.
+        raise SchemaError(f"block is not valid YAML — {exc}") from exc
     if not isinstance(parsed, dict):
         raise SchemaError(f"block must parse to a dict; got {type(parsed).__name__}")
     return parsed
