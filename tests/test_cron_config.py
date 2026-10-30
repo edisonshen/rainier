@@ -102,12 +102,13 @@ def test_pg_write_jobs_preserved(jobs: dict[str, dict]) -> None:
     assert "compute-indicators" in breadth["command"]
 
 
-def test_mes_weekly_backfill_scheduled(jobs: dict[str, dict]) -> None:
-    """yfinance keeps only 60 days of 5m, so MES must be backfilled at least weekly
-    or 5m history used for S/R validation develops permanent gaps."""
-    job = jobs["backfill-mes-weekly"]
+@pytest.mark.parametrize("symbol", ["MES", "MNQ"])
+def test_weekly_backfill_scheduled(jobs: dict[str, dict], symbol: str) -> None:
+    """yfinance keeps only 60 days of 5m, so each charted symbol must be backfilled at
+    least weekly or its 5m history develops permanent gaps."""
+    job = jobs[f"backfill-{symbol.lower()}-weekly"]
     assert job["enabled"] is True
-    assert "rainier fetch --symbol MES" in job["command"]
+    assert f"rainier fetch --symbol {symbol}" in job["command"]
     dow = job["schedule"].split()[4]
     assert dow != "*"
 
@@ -128,12 +129,19 @@ def _fires(expr: str) -> set[tuple[int, int, int]]:
             for mm in field(m, 0, 59)}
 
 
-def test_fetch_mes_runs_only_while_mes_trades(jobs: dict[str, dict]) -> None:
-    """MES trades Sun 15:00 -> Fri 14:00 PT; the chart needs no pushes over the weekend
+@pytest.mark.parametrize("symbol", ["MES", "MNQ"])
+def test_chart_fetch_runs_only_while_cme_equity_futures_trade(
+    jobs: dict[str, dict], symbol: str,
+) -> None:
+    """MES/MNQ trade Sun 15:00 -> Fri 14:00 PT; the chart needs no pushes over the weekend
     (user request), but must catch Friday's last bars, which arrive ~10-15 min late."""
     from rainier.scheduler.jobs import schedules
 
-    slots = set().union(*(_fires(s) for s in schedules(jobs["fetch-mes"])))
+    job = jobs[f"fetch-{symbol.lower()}"]
+    assert job["enabled"] is True
+    assert (f"rainier fetch --symbol {symbol} && uv run rainier sr-levels --symbol {symbol}"
+            in job["command"]) and "--publish-kv" in job["command"]
+    slots = set().union(*(_fires(s) for s in schedules(job)))
     sun, fri, sat = 0, 5, 6
     assert not any(d == sat for d, _, _ in slots)
     assert not any(d == fri and (h, m) > (14, 25) for d, h, m in slots)
