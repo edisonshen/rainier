@@ -122,7 +122,7 @@ def _load_mtf_csvs(data_path: Path, symbol: str) -> dict[Timeframe, pd.DataFrame
 @click.option("--format", "fmt", default="text", type=click.Choice(["text", "json", "pine"]))
 @click.option("--output", "output_path", default=None, help="Write to file instead of stdout")
 @click.option("--publish-kv", is_flag=True,
-              help="Also push the JSON chart payload to Workers KV (fengshen.dev /trading/mes)")
+              help="Also push the JSON chart payload to Workers KV (fengshen.dev /trading/<symbol>)")
 @click.pass_context
 def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     """Current multi-TF S/R zones (1D -> 4H -> 1H, consolidated) as text, JSON or Pine v5."""

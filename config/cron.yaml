@@ -17,13 +17,21 @@ jobs:
     # PT. MES trades Sun 15:00 -> Fri 14:00 (daily 14:00-15:00 halt), so nothing runs over
     # the weekend. sr-levels skips the KV write when nothing changed (halt, holidays).
     # Fri 14:00-14:25 still runs: yfinance delivers the last bars ~10-15 min late.
-    schedule:
+    schedule: &cme_equity_hours
       - "*/5 * * * 1-4"     # Mon-Thu
       - "*/5 0-13 * * 5"    # Fri until the close
       - "0-25/5 14 * * 5"   # Fri close catch-up
       - "*/5 15-23 * * 0"   # Sun from the open
     command: "uv run rainier fetch --symbol MES && uv run rainier sr-levels --symbol MES --format text --publish-kv"
     log: "data/fetch.log"
+    enabled: true
+
+  # MNQ (Micro Nasdaq-100) trades the same CME equity-index hours -> /trading/mnq.
+  - name: fetch-mnq
+    description: "Fetch MNQ data from yfinance and publish the /trading/mnq S/R chart"
+    schedule: *cme_equity_hours
+    command: "uv run rainier fetch --symbol MNQ && uv run rainier sr-levels --symbol MNQ --format text --publish-kv"
+    log: "data/fetch-mnq.log"
     enabled: true
 
   # yfinance keeps only 60 days of 5m (730d of 1h), so any gap longer than that
@@ -35,6 +43,13 @@ jobs:
     schedule: "0 9 * * 6"      # 09:00 PT Saturday (markets closed)
     command: "uv run rainier fetch --symbol MES --provider yfinance"
     log: "data/fetch.log"
+    enabled: true
+
+  - name: backfill-mnq-weekly
+    description: "Weekly MNQ 1D/4H/1H/5m backfill from yfinance (merge into CSV + candles table)"
+    schedule: "5 9 * * 6"      # 09:05 PT Saturday, after the MES backfill
+    command: "uv run rainier fetch --symbol MNQ --provider yfinance"
+    log: "data/fetch-mnq.log"
     enabled: true
 
   # Chrome stays running all day — scrape jobs just connect via CDP.

@@ -573,7 +573,7 @@ def _default_trend() -> dict[Timeframe, TrendTimeframeConfig]:
 
 
 class ChartPublishConfig(BaseModel):
-    """S/R chart payload pushed to Workers KV for fengshen.dev /trading/mes."""
+    """S/R chart payload pushed to Workers KV for fengshen.dev /trading/<symbol> (mes, mnq)."""
 
     kv_namespace_id: str = "0d0281e0d0ff49b4868a42aa2a39f4ec"  # fengshen TRADING_KV
     kv_key: str = "{symbol}:sr"  # formatted with the lower-cased symbol
