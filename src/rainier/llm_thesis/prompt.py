@@ -23,7 +23,7 @@ from __future__ import annotations
 # A model switch (e.g. Sonnet 4.6 -> Opus 5.5) needs no bump: the Tier-1 key
 # already includes llm_model.
 # v5: the chart grew from 60 to 200 daily bars on a 1024x640 canvas.
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 
 OUTPUT_SCHEMA = """{
   "verdict": "setup_long" | "watch" | "no_setup",
