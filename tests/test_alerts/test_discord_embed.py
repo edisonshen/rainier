@@ -1,11 +1,28 @@
 """Tests for the PR5 Discord embed renderer.
 
-These cover the pure-function ``format_thesis_embed`` and its helpers — no
-HTTP, no DB. Multipart attachment + DB chart-load happens in
+Table-driven coverage of the pure-function ``format_thesis_embed`` and its
+helpers — no HTTP, no DB. Multipart attachment + DB chart-load happens in
 ``test_discord_attachment.py``.
+
+Organized around the renderer's core contracts (one parametrized test per
+contract, new scenario = new row):
+
+  1. ``_truncate_at_word``  — the shared word-boundary truncation primitive.
+  2. embed color + title    — verdict → color bar, ``verdict · symbol · score``.
+  3. chip line              — decision-critical chips (pattern/rank/vol), 200-cap.
+  4. LEVELS block           — monospace Entry/Stop/Target/Now with %deltas + R/R.
+  5. RISKS                  — top-3, ≤80 chars, word-safe, empties dropped.
+  6. WATCH                  — first item only, ≤120 chars, None when empty.
+  7. LLM-noticed            — optional observation, ≤200, present/omitted in embed.
+  8. WHY bullets            — sentence bullets, ``_WHY_BULLET_MAX`` cap, field cap.
+  9. LLM-text scrub         — @everyone/@here/backticks neutralized on every path.
+ 10. dashboard deep-link    — title URL only when base_url AND thesis_id set.
+ 11. footer + image         — setup_quality/signals footer, attachment:// image.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from rainier.alerts.discord import (
     _EMBED_FIELD_VALUE_MAX,
@@ -91,431 +108,379 @@ def _thesis(**overrides) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# _truncate_at_word
+# 1. _truncate_at_word — the shared word-boundary truncation primitive
 # ---------------------------------------------------------------------------
 
 
-class TestTruncateAtWord:
+@pytest.mark.parametrize(
+    "text, cap, expected",
+    [
+        ("hello world", 50, "hello world"),   # under cap → unchanged
+        ("", 10, ""),                          # empty input → empty
+        (None, 10, ""),                        # None input → empty (defensive)
+        ("anything", 0, ""),                   # zero cap → empty
+        ("anything", -5, ""),                  # negative cap → empty
+    ],
+)
+def test_truncate_at_word_exact_outputs(text, cap, expected):
+    assert _truncate_at_word(text, cap) == expected  # type: ignore[arg-type]
 
-    def test_returns_input_when_under_cap(self):
-        assert _truncate_at_word("hello world", 50) == "hello world"
 
-    def test_appends_ellipsis_when_truncated(self):
-        out = _truncate_at_word("hello world this is a long sentence", 16)
-        assert out.endswith("…")
-        assert len(out) <= 16
-
-    def test_never_breaks_mid_word(self):
-        # The naive cut would put us mid-word; the function must back up.
-        text = "breaking thru extended upper wick area"
-        out = _truncate_at_word(text, 20)
-        # No word should be cut in half — the body before the ellipsis ends
-        # at a real word boundary.
-        assert out.endswith("…")
-        body = out[:-1]
-        assert not body.endswith("ext")  # would-be naive cut
-        # Last char before ellipsis should be alphanumeric or end of word.
-        assert body.rstrip()[-1].isalpha()
-
-    def test_zero_or_negative_cap_returns_empty(self):
-        assert _truncate_at_word("anything", 0) == ""
-        assert _truncate_at_word("anything", -5) == ""
-
-    def test_empty_input_returns_empty(self):
-        assert _truncate_at_word("", 10) == ""
-        assert _truncate_at_word(None, 10) == ""  # type: ignore[arg-type]
+def test_truncate_at_word_backs_off_to_word_boundary():
+    # Over the cap → single trailing ellipsis, within the cap, and the cut
+    # lands on a real word boundary (never mid-word like "ext...").
+    text = "breaking thru extended upper wick area"
+    out = _truncate_at_word(text, 20)
+    assert out.endswith("…")
+    assert len(out) <= 20
+    body = out[:-1].rstrip()
+    assert not body.endswith("ext")   # the would-be naive mid-word cut
+    assert body[-1].isalpha()         # ends flush with a whole word
 
 
 # ---------------------------------------------------------------------------
-# format_thesis_embed — title + colors
+# 2. format_thesis_embed — verdict color bar + title
 # ---------------------------------------------------------------------------
 
 
-class TestEmbedTitleAndColor:
+@pytest.mark.parametrize(
+    "verdict, expected_color",
+    [
+        ("setup_long", 0x2ECC71),                       # green
+        ("watch", 0xF1C40F),                            # yellow
+        ("no_setup", 0x95A5A6),                         # gray
+        ("???", _VERDICT_COLORS["no_setup"]),           # unknown → gray fallback
+    ],
+)
+def test_embed_verdict_color(verdict, expected_color):
+    embed = format_thesis_embed(_thesis(verdict=verdict), _candidate())
+    assert embed["color"] == expected_color
 
-    def test_setup_long_is_green(self):
-        embed = format_thesis_embed(
-            _thesis(verdict="setup_long", llm_confidence=8), _candidate()
-        )
-        assert embed["color"] == _VERDICT_COLORS["setup_long"] == 0x2ECC71
 
-    def test_watch_is_yellow(self):
-        embed = format_thesis_embed(_thesis(verdict="watch"), _candidate())
-        assert embed["color"] == _VERDICT_COLORS["watch"] == 0xF1C40F
-
-    def test_no_setup_is_gray(self):
-        embed = format_thesis_embed(
-            _thesis(verdict="no_setup", llm_confidence=2), _candidate()
-        )
-        assert embed["color"] == _VERDICT_COLORS["no_setup"] == 0x95A5A6
-
-    def test_unknown_verdict_falls_back_to_no_setup_color(self):
-        embed = format_thesis_embed(_thesis(verdict="???"), _candidate())
-        assert embed["color"] == _VERDICT_COLORS["no_setup"]
-
-    def test_title_format_is_verdict_symbol_score(self):
-        embed = format_thesis_embed(
-            _thesis(verdict="watch", llm_confidence=6),
-            _candidate(symbol="CRWD"),
-        )
-        assert embed["title"] == "watch · CRWD · 6/10"
+def test_embed_title_is_verdict_symbol_score():
+    embed = format_thesis_embed(
+        _thesis(verdict="watch", llm_confidence=6), _candidate(symbol="CRWD")
+    )
+    assert embed["title"] == "watch · CRWD · 6/10"
 
 
 # ---------------------------------------------------------------------------
-# Chip line
+# 3. _build_chip_line — decision-critical chip line (pattern / rank / vol)
 # ---------------------------------------------------------------------------
 
 
-class TestChipLine:
-
-    def test_chip_line_under_200_chars(self):
-        line = _build_chip_line(_candidate(), _thesis(), "w_bottom")
-        assert len(line) <= 200
-
-    def test_chip_line_includes_pattern(self):
-        line = _build_chip_line(_candidate(), _thesis(), "w_bottom")
-        assert "w_bottom" in line
-
-    def test_chip_line_includes_volume_check_when_confirmed(self):
-        line = _build_chip_line(
-            _candidate(volume_confirmed=True), _thesis(), "w_bottom"
-        )
-        assert "vol" in line
-
-    def test_chip_line_omits_volume_when_not_confirmed(self):
-        line = _build_chip_line(
-            _candidate(volume_confirmed=False), _thesis(), "w_bottom"
-        )
-        assert "vol" not in line
-
-    def test_chip_line_renders_rank_trajectory(self):
-        line = _build_chip_line(_candidate(), _thesis(), "w_bottom")
-        assert "rank #85" in line
-        assert "#14" in line
-
-    def test_chip_line_falls_back_to_rank_change_when_no_signal(self):
-        line = _build_chip_line(
-            _candidate(rank_change=3),
+@pytest.mark.parametrize(
+    "candidate_kwargs, thesis, present, absent",
+    [
+        # Full default: pattern + rank-trajectory (from signals payload) + vol✓.
+        (
+            {"volume_confirmed": True},
+            None,
+            ["w_bottom", "rank #85", "#14", "vol"],
+            [],
+        ),
+        # Volume not confirmed → the vol✓ chip is dropped.
+        (
+            {"volume_confirmed": False},
+            None,
+            ["w_bottom"],
+            ["vol"],
+        ),
+        # No rank_trajectory signal → falls back to candidate.rank_change.
+        (
+            {"rank_change": 3},
             {"signals": {}},
-            "w_bottom",
-        )
-        # No signal payload → uses rank_change
-        assert "rank +3" in line
+            ["rank +3"],
+            [],
+        ),
+    ],
+)
+def test_chip_line_content_and_cap(candidate_kwargs, thesis, present, absent):
+    line = _build_chip_line(
+        _candidate(**candidate_kwargs),
+        _thesis() if thesis is None else thesis,
+        "w_bottom",
+    )
+    assert len(line) <= 200          # _CHIP_LINE_MAX — scannable in one glance
+    for sub in present:
+        assert sub in line
+    for sub in absent:
+        assert sub not in line
 
 
 # ---------------------------------------------------------------------------
-# LEVELS field
+# 4. _levels_block — monospace Entry/Stop/Target/Now with %deltas + R/R
 # ---------------------------------------------------------------------------
 
 
-class TestLevelsField:
+def test_levels_block_full_candidate():
+    # entry=486.55, stop=476.82 (~-2.0%), target=528.79 (~+8.7%, 4.3R),
+    # now=505.72 (~+3.9%). Rendered as a fenced monospace block.
+    block = _levels_block(_candidate())
+    assert block.startswith("```") and block.endswith("```")
+    for label in ("Entry", "Stop", "Target", "Now"):
+        assert label in block
+    assert "-2.0%" in block
+    assert "+8.7%" in block
+    assert "4.3R" in block
+    assert "+3.9%" in block or "+4.0%" in block  # rounding tolerance
 
-    def test_levels_block_has_all_four_lines(self):
-        block = _levels_block(_candidate())
-        assert "Entry" in block
-        assert "Stop" in block
-        assert "Target" in block
-        assert "Now" in block
 
-    def test_levels_block_is_monospace(self):
-        block = _levels_block(_candidate())
-        assert block.startswith("```")
-        assert block.endswith("```")
-
-    def test_levels_renders_stop_pct(self):
-        # entry=486.55, stop=476.82 -> ~-2.0%
-        block = _levels_block(_candidate())
-        assert "-2.0%" in block
-
-    def test_levels_renders_target_pct_and_rr(self):
-        # entry=486.55, target=528.79 -> ~+8.7%, R/R=4.3
-        block = _levels_block(_candidate())
-        assert "+8.7%" in block
-        assert "4.3R" in block
-
-    def test_levels_renders_now_pct(self):
-        # entry=486.55, now=505.72 -> ~+3.94%
-        block = _levels_block(_candidate())
-        assert "+3.9%" in block or "+4.0%" in block  # rounding tolerance
-
-    def test_levels_handles_missing_fields(self):
-        c = _candidate(stop_loss=None, target_price=None, current_price=None)
-        block = _levels_block(c)
-        # Should still render Entry; missing rows show "-".
-        assert "Entry" in block
+def test_levels_block_tolerates_missing_fields():
+    block = _levels_block(
+        _candidate(stop_loss=None, target_price=None, current_price=None)
+    )
+    assert "Entry" in block   # still renders; absent rows collapse to "-"
 
 
 # ---------------------------------------------------------------------------
-# RISKS field
+# 5. _risks_lines — top-3, ≤80 chars each, word-safe, empties dropped
 # ---------------------------------------------------------------------------
 
 
-class TestRisksField:
+@pytest.mark.parametrize(
+    "risks, expected",
+    [
+        (["a", "b", "c", "d", "e"], ["a", "b", "c"]),           # capped at 3
+        (["", "  ", "real risk"], ["real risk"]),               # empties dropped
+    ],
+)
+def test_risks_selection(risks, expected):
+    assert _risks_lines(_thesis(risks=risks)) == expected
 
-    def test_risks_truncates_to_three(self):
-        risks = _risks_lines(
-            _thesis(risks=["a", "b", "c", "d", "e"])
-        )
-        assert len(risks) == 3
 
-    def test_risks_under_80_chars_each(self):
-        long = "x " * 200
-        risks = _risks_lines(_thesis(risks=[long, long, long]))
-        for r in risks:
-            assert len(r) <= 80
-
-    def test_risks_is_word_boundary_safe(self):
-        long = "earnings risk extended position with major catalyst nearby"
-        risks = _risks_lines(_thesis(risks=[long]))
-        # Either the original (if under cap) or word-bounded with ellipsis.
-        assert risks[0] == long or risks[0].endswith("…")
-
-    def test_risks_skips_empty_strings(self):
-        risks = _risks_lines(_thesis(risks=["", "  ", "real risk"]))
-        assert risks == ["real risk"]
+def test_risks_each_truncated_word_safe_under_80():
+    long = "x " * 200
+    out = _risks_lines(_thesis(risks=[long, long, long]))
+    assert len(out) == 3
+    for r in out:
+        assert len(r) <= 80
+    # A single mid-length risk is either returned whole or word-bounded + "…".
+    mid = "earnings risk extended position with major catalyst nearby"
+    got = _risks_lines(_thesis(risks=[mid]))
+    assert got[0] == mid or got[0].endswith("…")
 
 
 # ---------------------------------------------------------------------------
-# WATCH field
+# 6. _watch_line — first item only, ≤120 chars, None when empty
 # ---------------------------------------------------------------------------
 
 
-class TestWatchField:
+def test_watch_line_first_item_only():
+    assert _watch_line(_thesis(watch_items=["item one", "item two"])) == "item one"
 
-    def test_watch_renders_first_item_only(self):
-        out = _watch_line(_thesis(watch_items=["item one", "item two", "item three"]))
-        assert out == "item one"
 
-    def test_watch_truncates_at_120_word_boundary(self):
-        long = "watch for pullback to entry zone with low volume " * 5
-        out = _watch_line(_thesis(watch_items=[long]))
-        assert out is not None
-        assert len(out) <= 120
-        if len(long) > 120:
-            assert out.endswith("…")
+def test_watch_line_truncates_at_120_word_boundary():
+    long = "watch for pullback to entry zone with low volume " * 5
+    out = _watch_line(_thesis(watch_items=[long]))
+    assert out is not None
+    assert len(out) <= 120
+    assert out.endswith("…")
 
-    def test_watch_returns_none_when_empty(self):
-        assert _watch_line(_thesis(watch_items=[])) is None
-        assert _watch_line(_thesis(watch_items=["", "  "])) is None
+
+@pytest.mark.parametrize("items", [[], ["", "  "]])
+def test_watch_line_none_when_no_actionable_item(items):
+    assert _watch_line(_thesis(watch_items=items)) is None
 
 
 # ---------------------------------------------------------------------------
-# LLM noticed field
+# 7. _llm_noticed — optional observation, ≤200, present/omitted in embed
 # ---------------------------------------------------------------------------
 
 
-class TestLLMNoticedField:
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("none", None),                                    # sentinel string
+        ([], None),                                        # degraded empty list
+        (["narrowing volume profile"], "narrowing volume profile"),  # short passthrough
+    ],
+)
+def test_llm_noticed_value(raw, expected):
+    assert _llm_noticed({"patterns_in_chart_not_in_indicators": raw}) == expected
 
-    def test_llm_noticed_omitted_when_none_string(self):
-        out = _llm_noticed(_thesis(patterns_in_chart_not_in_indicators="none"))
-        assert out is None
 
-    def test_llm_noticed_omitted_when_empty_list_yields_falsy_field(self):
-        # The Pydantic schema rejects empty lists, but the renderer
-        # defends in case a degraded payload sneaks through.
-        out = _llm_noticed({"patterns_in_chart_not_in_indicators": []})
-        assert out is None
+def test_llm_noticed_truncates_at_200_word_boundary():
+    long = "very long observation about an unusual chart pattern " * 10
+    out = _llm_noticed(_thesis(patterns_in_chart_not_in_indicators=[long]))
+    assert out is not None
+    assert len(out) <= 200
+    assert out.endswith("…")
+    assert out[:-1].rstrip()[-1].isalpha()   # no mid-word cut
 
-    def test_llm_noticed_renders_short_observation(self):
-        out = _llm_noticed(
-            _thesis(patterns_in_chart_not_in_indicators=["narrowing volume profile"])
-        )
-        assert out == "narrowing volume profile"
 
-    def test_llm_noticed_truncates_at_200_word_boundary(self):
-        long = "very long observation about an unusual chart pattern " * 10
-        out = _llm_noticed(_thesis(patterns_in_chart_not_in_indicators=[long]))
-        assert out is not None
-        assert len(out) <= 200
-        assert out.endswith("…")
-        # Ellipsis must follow a complete word (no mid-word cut).
-        body = out[:-1].rstrip()
-        assert body[-1].isalpha()
-
-    def test_llm_noticed_field_omitted_in_embed_when_none(self):
-        embed = format_thesis_embed(
-            _thesis(patterns_in_chart_not_in_indicators="none"), _candidate(),
-        )
-        names = [f["name"] for f in embed["fields"]]
-        assert "LLM noticed" not in names
-
-    def test_llm_noticed_field_present_in_embed_when_set(self):
-        embed = format_thesis_embed(
-            _thesis(patterns_in_chart_not_in_indicators=["strong neckline"]),
-            _candidate(),
-        )
-        names = [f["name"] for f in embed["fields"]]
-        assert "LLM noticed" in names
+@pytest.mark.parametrize(
+    "raw, present",
+    [("none", False), (["strong neckline"], True)],
+)
+def test_llm_noticed_field_presence_in_embed(raw, present):
+    embed = format_thesis_embed(
+        _thesis(patterns_in_chart_not_in_indicators=raw), _candidate()
+    )
+    names = [f["name"] for f in embed["fields"]]
+    assert ("LLM noticed" in names) is present
 
 
 # ---------------------------------------------------------------------------
-# Dashboard deep-link
+# 8. _why_bullets — sentence bullets, _WHY_BULLET_MAX cap, Discord field cap
 # ---------------------------------------------------------------------------
 
 
-class TestDashboardLink:
+def test_why_bullet_full_sentence_survives_whole():
+    # Regression: real ~150-char thesis sentences used to get chopped mid-word
+    # by an old 60-char cap. A sentence under _WHY_BULLET_MAX renders intact.
+    sentence = (
+        "Entry 670.60 sits 1.07 percent below the current price 677.79 "
+        "and the stop rests just under the prior swing low which leaves "
+        "a clean measured move higher"
+    )
+    assert len(sentence) < _WHY_BULLET_MAX  # guards the fixture premise
+    bullets = _why_bullets(_thesis(paragraph_radar=sentence + "."))
+    assert bullets[0] == sentence
+    assert not bullets[0].endswith("…")
 
-    def test_no_url_when_dashboard_base_url_is_none(self):
-        embed = format_thesis_embed(_thesis(), _candidate(), dashboard_base_url=None)
-        assert "url" not in embed
 
-    def test_no_url_when_thesis_id_is_none(self):
-        embed = format_thesis_embed(
-            _thesis(),
-            _candidate(),
-            dashboard_base_url="http://localhost:8501",
-            thesis_id=None,
-        )
-        assert "url" not in embed
+def test_why_bullet_over_cap_truncated_at_word_boundary():
+    words = ["measured"] * 60  # 539 chars, well over the cap
+    sentence = " ".join(words)
+    assert len(sentence) > _WHY_BULLET_MAX
+    bullets = _why_bullets(_thesis(paragraph_radar=sentence + "."))
+    assert bullets[0].endswith("…")
+    assert len(bullets[0]) <= _WHY_BULLET_MAX
+    body = bullets[0][:-1]
+    assert body.strip() == body               # no trailing partial-word/space
+    assert all(tok == "measured" for tok in body.split())
 
-    def test_url_built_when_both_set(self):
-        embed = format_thesis_embed(
-            _thesis(),
-            _candidate(),
-            dashboard_base_url="http://x",
-            thesis_id=42,
-        )
-        assert embed["url"] == "http://x?thesis_id=42"
 
-    def test_url_appends_with_amp_when_existing_query(self):
-        embed = format_thesis_embed(
-            _thesis(),
-            _candidate(),
-            dashboard_base_url="http://x?tab=3",
-            thesis_id=42,
-        )
-        assert embed["url"] == "http://x?tab=3&thesis_id=42"
+def test_why_bullet_exact_boundary_transition():
+    # Off-by-one: exactly _WHY_BULLET_MAX chars survives whole; one char over
+    # gains the ellipsis. "aa " has period 3 so these slices never end on a
+    # space (which _why_bullets would strip), keeping the lengths exact.
+    filler = ("aa " * 100).strip()
+    at_cap = filler[:_WHY_BULLET_MAX]
+    over_cap = filler[: _WHY_BULLET_MAX + 1]
+    assert len(at_cap) == _WHY_BULLET_MAX
+    assert not at_cap.endswith(" ") and not over_cap.endswith(" ")
+
+    at = _why_bullets(_thesis(paragraph_radar=at_cap, paragraph_evidence=""))
+    assert at[0] == at_cap and not at[0].endswith("…")
+
+    over = _why_bullets(_thesis(paragraph_radar=over_cap, paragraph_evidence=""))
+    assert over[0].endswith("…") and len(over[0]) <= _WHY_BULLET_MAX
+
+
+def test_why_field_value_within_discord_field_cap():
+    # Field-cap safety: four long bullets (radar + evidence) still fit Discord's
+    # 1024-char field-value limit — the call site backstops the joined WHY value.
+    long_sentence = " ".join(["breakout"] * 40)  # ~319 chars, over the bullet cap
+    embed = format_thesis_embed(
+        _thesis(
+            paragraph_radar=f"{long_sentence}. {long_sentence}.",
+            paragraph_evidence=f"{long_sentence}. {long_sentence}.",
+        ),
+        _candidate(),
+    )
+    why = next(f for f in embed["fields"] if f["name"] == "WHY")
+    assert len(why["value"]) <= _EMBED_FIELD_VALUE_MAX
 
 
 # ---------------------------------------------------------------------------
-# Footer + image
+# 9. LLM-text scrub — @everyone / @here / backticks neutralized on EVERY path
 # ---------------------------------------------------------------------------
+#
+# LLM-generated prose flows into Discord text; an adversarial completion must
+# not be able to trigger a mass-mention or break the embed's code-block
+# formatting. Each renderer helper independently scrubs, so each path is a row.
 
 
-class TestLLMTextScrubbing:
-    """PR5 review iter-1 regression — LLM-generated text fields must NOT
-    leak ``@everyone`` / ``@here`` / backticks into Discord because an
-    adversarial completion could trigger a server-wide mention or break
-    the surrounding embed formatting. Mirrors the existing scrub on the
-    eval/research renderers (PR3 review iter-1 [P2]).
-    """
-
-    def test_risks_scrub_at_everyone(self):
-        risks = _risks_lines(_thesis(risks=["@everyone bad risk"]))
-        assert risks
-        assert "@everyone" not in risks[0]
-        # FULLWIDTH @ sign replacement — visible to the user, not a mention.
-        assert "＠" in risks[0]
-
-    def test_watch_scrub_at_here(self):
-        out = _watch_line(_thesis(watch_items=["@here pullback to 100"]))
-        assert out is not None
-        assert "@here" not in out
-        assert "＠" in out
-
-    def test_llm_noticed_scrub_backticks(self):
-        out = _llm_noticed(
-            _thesis(
-                patterns_in_chart_not_in_indicators=["pattern with ``code`` block"]
-            )
-        )
-        assert out is not None
-        # Backticks would break the surrounding embed code-block formatting.
-        assert "`" not in out
-
-    def test_why_bullets_scrub_paragraph_radar(self):
-        bullets = _why_bullets(
-            _thesis(
-                paragraph_radar="@everyone strong setup. Volume confirms."
-            )
-        )
-        for b in bullets:
-            assert "@everyone" not in b
-
-    def test_why_bullet_full_sentence_survives_whole(self):
-        # Regression: the operator saw real ~150-char thesis sentences chopped
-        # mid-word by the old 60-char cap ("...pattern_type is…"). A full
-        # sentence shorter than _WHY_BULLET_MAX must render intact — no ellipsis.
-        sentence = (
-            "Entry 670.60 sits 1.07 percent below the current price 677.79 "
-            "and the stop rests just under the prior swing low which leaves "
-            "a clean measured move higher"
-        )
-        assert len(sentence) < _WHY_BULLET_MAX  # guards the fixture premise
-        bullets = _why_bullets(_thesis(paragraph_radar=sentence + "."))
-        assert bullets[0] == sentence
-        assert not bullets[0].endswith("…")
-
-    def test_why_bullet_over_cap_truncated_at_word_boundary(self):
-        # Boundary: a sentence longer than _WHY_BULLET_MAX is still truncated,
-        # now at the higher cap, and lands on a word break with the ellipsis.
-        words = ["measured"] * 60  # 60 * 9 - 1 = 539 chars, well over the cap
-        sentence = " ".join(words)
-        assert len(sentence) > _WHY_BULLET_MAX  # guards the fixture premise
-        bullets = _why_bullets(_thesis(paragraph_radar=sentence + "."))
-        assert bullets[0].endswith("…")
-        assert len(bullets[0]) <= _WHY_BULLET_MAX
-        # Word-boundary safe: dropping the ellipsis leaves whole words only.
-        assert bullets[0][:-1].strip() == bullets[0][:-1]
-        for token in bullets[0][:-1].split():
-            assert token == "measured"
-
-    def test_why_bullet_exact_boundary_transition(self):
-        # Off-by-one: a bullet of exactly _WHY_BULLET_MAX chars survives whole;
-        # one char over gains the ellipsis. Guards the constant's transition.
-        # "aa " repeats with period 3; slicing to these lengths never lands on
-        # a trailing space (which _why_bullets would strip), so the fixture
-        # lengths are exact.
-        filler = ("aa " * 100).strip()
-        at_cap = filler[:_WHY_BULLET_MAX]
-        over_cap = filler[: _WHY_BULLET_MAX + 1]
-        assert len(at_cap) == _WHY_BULLET_MAX
-        assert not at_cap.endswith(" ") and not over_cap.endswith(" ")
-
-        at = _why_bullets(_thesis(paragraph_radar=at_cap, paragraph_evidence=""))
-        assert at[0] == at_cap
-        assert not at[0].endswith("…")
-
-        over = _why_bullets(_thesis(paragraph_radar=over_cap, paragraph_evidence=""))
-        assert over[0].endswith("…")
-        assert len(over[0]) <= _WHY_BULLET_MAX
-
-    def test_why_field_value_within_discord_field_cap(self):
-        # Field-cap safety: four long bullets (2 sentences each in radar +
-        # evidence) still fit Discord's 1024-char field-value limit because the
-        # call site backstops the joined WHY value at _EMBED_FIELD_VALUE_MAX.
-        long_sentence = " ".join(["breakout"] * 40)  # ~319 chars, over the cap
-        embed = format_thesis_embed(
-            _thesis(
-                paragraph_radar=f"{long_sentence}. {long_sentence}.",
-                paragraph_evidence=f"{long_sentence}. {long_sentence}.",
+@pytest.mark.parametrize(
+    "render, forbidden, expect_fullwidth_at",
+    [
+        (
+            lambda: _risks_lines(_thesis(risks=["@everyone bad risk"]))[0],
+            "@everyone",
+            True,
+        ),
+        (
+            lambda: _watch_line(_thesis(watch_items=["@here pullback to 100"])),
+            "@here",
+            True,
+        ),
+        (
+            lambda: _llm_noticed(
+                _thesis(patterns_in_chart_not_in_indicators=["pattern ``code`` block"])
             ),
-            _candidate(),
-        )
-        why = next(f for f in embed["fields"] if f["name"] == "WHY")
-        assert len(why["value"]) <= _EMBED_FIELD_VALUE_MAX
+            "`",
+            False,
+        ),
+        (
+            lambda: " ".join(
+                _why_bullets(_thesis(paragraph_radar="@everyone strong setup. Ok."))
+            ),
+            "@everyone",
+            True,
+        ),
+    ],
+)
+def test_llm_text_is_scrubbed(render, forbidden, expect_fullwidth_at):
+    out = render()
+    assert out is not None
+    assert forbidden not in out
+    if expect_fullwidth_at:
+        assert "＠" in out   # FULLWIDTH @ — visible, not a mention
 
 
-class TestFooterAndImage:
+# ---------------------------------------------------------------------------
+# 10. Dashboard deep-link — title URL only when base_url AND thesis_id set
+# ---------------------------------------------------------------------------
 
-    def test_footer_renders_setup_quality_and_signals(self):
-        embed = format_thesis_embed(
-            _thesis(setup_quality=8, signals_used=["rank_trajectory", "sector_momentum"]),
-            _candidate(),
-        )
-        footer = embed.get("footer", {}).get("text", "")
-        assert "setup_quality 8/10" in footer
-        assert "rank_trajectory" in footer
 
-    def test_image_attachment_url_reflects_filename(self):
-        embed = format_thesis_embed(
-            _thesis(), _candidate(symbol="CRWD"),
-            chart_filename="chart_CRWD.png",
-        )
-        assert embed["image"]["url"] == "attachment://chart_CRWD.png"
+@pytest.mark.parametrize(
+    "base_url, thesis_id, expected",
+    [
+        (None, 42, None),                                   # no base → no link
+        ("http://localhost:8501", None, None),              # no id → no link
+        ("http://x", 42, "http://x?thesis_id=42"),          # both → link
+        ("http://x?tab=3", 42, "http://x?tab=3&thesis_id=42"),  # append with &
+    ],
+)
+def test_dashboard_deeplink(base_url, thesis_id, expected):
+    embed = format_thesis_embed(
+        _thesis(), _candidate(), dashboard_base_url=base_url, thesis_id=thesis_id
+    )
+    if expected is None:
+        assert "url" not in embed   # key omitted entirely, not set to None
+    else:
+        assert embed["url"] == expected
 
-    def test_image_omitted_when_no_chart_filename(self):
-        embed = format_thesis_embed(
-            _thesis(), _candidate(symbol="CRWD"), chart_filename=None,
-        )
+
+# ---------------------------------------------------------------------------
+# 11. Footer + image attachment
+# ---------------------------------------------------------------------------
+
+
+def test_footer_renders_setup_quality_and_signals():
+    embed = format_thesis_embed(
+        _thesis(setup_quality=8, signals_used=["rank_trajectory", "sector_momentum"]),
+        _candidate(),
+    )
+    footer = embed.get("footer", {}).get("text", "")
+    assert "setup_quality 8/10" in footer
+    assert "rank_trajectory" in footer
+
+
+@pytest.mark.parametrize(
+    "chart_filename, expected_url",
+    [
+        ("chart_CRWD.png", "attachment://chart_CRWD.png"),  # image references file
+        (None, None),                                        # no file → no image
+    ],
+)
+def test_image_attachment(chart_filename, expected_url):
+    embed = format_thesis_embed(
+        _thesis(), _candidate(symbol="CRWD"), chart_filename=chart_filename
+    )
+    if expected_url is None:
         assert "image" not in embed
+    else:
+        assert embed["image"]["url"] == expected_url
