@@ -1,0 +1,336 @@
+{
+  "unit_id": "u18",
+  "model": "devin-cloud",
+  "pages_read": [
+    227,
+    228,
+    229,
+    230
+  ],
+  "summary": "Long-term commentary (written ~early 2014) arguing China's A-share market (上证) is building a multi-year bottom: the 2011-12 monthly break of the primary uptrend line, the 2012-12 monthly high-volume 破底翻, a heavy-volume support zone 1949-2269/2070, and a weekly heavy-volume high at 2270 whose breakout would start a bull leg. It argues emerging markets' early speculative highs are usually re-taken within ~10 years and compares the setup to Taiwan's 1995-96 triple bottom that was 'tested by bad news' (复征证所税) before running to 10256. Bottoms are made by bad-news tests; suits cash accumulation and periodic buying.",
+  "patterns": [
+    {
+      "name_zh": "带量破底翻（月线）",
+      "name_en": "High-volume break-bottom reversal on the monthly chart",
+      "direction": "long",
+      "structure": "After breaking the primary uptrend line, the index breaks a prior low and the month closes red (up) on heavy volume, reclaiming the level (上证 2012-12-31 month, low 1949.46).",
+      "entry": "Long-term stabilisation signal on the reversal month; bottom confirmed when the monthly neckline ~2330 is broken, especially the prior high 2444 (底部确立信号).",
+      "stop": "All conditional on not breaking the bottom support (技术面不破底部支撑); support zone 1949-2269 (monthly), 1949-2070 (daily).",
+      "target": {
+        "formula": "Not given numerically; long-term expectation that the 6124 speculative high is revisited/broken within ~10 years",
+        "worked_example": "Taiwan analogue: 12682 (1990-02) -> 2485 -> 10256 (1997-08), 7+ years later.",
+        "pages": [
+          227,
+          228
+        ]
+      },
+      "confirmation": [
+        "Heavy volume on the reversal month.",
+        "Break of monthly neckline ~2330 and prior high 2444.80.",
+        "Weekly: break of heavy-volume high 2270."
+      ],
+      "invalidation": [
+        "Breaking the bottom support (1949)."
+      ],
+      "timeframes": [
+        "monthly",
+        "weekly",
+        "daily"
+      ],
+      "pages": [
+        227,
+        228,
+        229
+      ]
+    },
+    {
+      "name_zh": "大量区高点突破（爆量高点）",
+      "name_en": "Breakout above the latest heavy-volume high",
+      "direction": "long",
+      "structure": "Volume-price structure: rising above the high made on heavy volume starts a bull leg; a top formed after heavy volume following a big rise starts a bear leg. Latest heavy-volume week: 2013-09-14 high 2270.",
+      "entry": "If support holds and price breaks above the heavy-volume high (2270 weekly / 2270.27 daily 天量区高点), a bull leg begins.",
+      "stop": "Support zone below (double-bottom support 1849.65/1949.46; daily support 1949-2070).",
+      "target": {
+        "formula": "Not given",
+        "worked_example": "2006-01-07 week breakout of the 2004-09..2005-12 base (low 998.23) -> rally to 6124.04.",
+        "pages": [
+          228
+        ]
+      },
+      "confirmation": [
+        "Daily: a marginal breakout of the neckline on 2013-12 failed because it did not clear the heavy-volume high 2270 and fell back below in 5 trading days (假突破)."
+      ],
+      "invalidation": [
+        "Falling back below the neckline after a marginal break (as in Dec 2013)."
+      ],
+      "timeframes": [
+        "weekly",
+        "daily"
+      ],
+      "pages": [
+        228,
+        229
+      ]
+    },
+    {
+      "name_zh": "三重底（利空测试扩底）",
+      "name_en": "Triple bottom extended by a bad-news test (Taiwan 1995-96)",
+      "direction": "long",
+      "structure": "An expected double bottom (预估的双底, ~5 months) is pushed down by bad news (复征证所税, gap down) into a ~3-month extension, forming a ~8-month triple bottom (lows 4474.32, 4530.96, 4672.67/4675.36) that does not break the low.",
+      "entry": "带量长红突破颈线 — long high-volume red candle breaking the neckline (6191.16 label) = bottom complete, bull signal.",
+      "stop": "Not stated explicitly; implied the low 4474 must not break.",
+      "target": {
+        "formula": "Not given",
+        "worked_example": "Bull run of 1+ year to 10256.",
+        "pages": [
+          230
+        ]
+      },
+      "confirmation": [
+        "High-volume long red candle on the neckline break."
+      ],
+      "invalidation": [
+        "Breaking the bottom low."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        229,
+        230
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "A national index breaking its primary (original) uptrend line on the monthly chart is rare and leads to a long slump.",
+      "kind": "filter",
+      "quote_zh": "上证指数月线2011年12月31日当月跌破原始上升趋势线，这对于一个国家的指数来说是相当罕见的现象，也因此进入长期的低迷。",
+      "pages": [
+        227
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "A monthly red, high-volume break-bottom reversal is a long-term stabilisation signal; the heavy-volume range becomes long-term support.",
+      "kind": "entry",
+      "quote_zh": "2012年12月31日当月翻红带量破底翻为技术面长线企稳信号，股价也进入一年多来的打底，大量区间1949点至2269点为月线的长线支撑区。",
+      "pages": [
+        227
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "An emerging market's early speculative high is usually re-broken within 10 years (speculation first, then fundamental growth).",
+      "kind": "time",
+      "quote_zh": "重点在一个新兴国家初期的投机高点大多会在10年内再度突破，主要是因为先走投机，再走基本面高成长的循环",
+      "pages": [
+        227
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Bottom confirmation on the monthly: neckline break near 2330, especially breaking prior high 2444; all conditional on not breaking bottom support.",
+      "kind": "entry",
+      "quote_zh": "当然这一切都必须在技术面不破底部支撑的前提之下，月线的颈线在2330点附近突破，尤其是前高2444点突破为底部确立信号",
+      "pages": [
+        228
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Volume-price structure: a new high after heavy volume is a bull leg; a topping process after heavy volume following a big rise is a bear leg. Breaking the latest heavy-volume high with support intact starts a bull leg.",
+      "kind": "volume",
+      "quote_zh": "注意量价结构上大量后的过高都是一波多头行情，反之涨多爆量后的盘头都是一波盘跌空头行情，最近一次的爆量是2013年9月14日当周的高点2270点，表示未来若支撑不破而突破2270点就是一波多头的开始",
+      "pages": [
+        228
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "A marginal neckline break that fails to clear the heavy-volume high and falls back below the line within 5 trading days is not confirmed.",
+      "kind": "filter",
+      "quote_zh": "上证日线曾在2013年12月14日微幅突破颈线，可惜未突破大量区高点2270点做确立，且在五个交易日后跌落线下",
+      "pages": [
+        229
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Daily support zone is drawn from the major low and the relative consolidation range (1949-2070); if support holds and neckline breaks, the market becomes very tradeable.",
+      "kind": "stop",
+      "quote_zh": "由这个支撑及2013年7月低档震荡的相对整理区间，得以画出1949点至2070点为日线支撑区，一旦支撑不破而突破颈线，则中国大陆股市将是各路英雄大显身手的地方。",
+      "pages": [
+        229
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Bottoms are tested out by bad news; same bad news has different effects depending on structure (crash after a big rise vs. bottoming after a long decline).",
+      "kind": "psychology",
+      "quote_zh": "底部都是利空测试出来的",
+      "pages": [
+        230
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "For A-shares at this structure, buying with cash at the bottom and holding long-term, then periodic fixed-amount buying until the eventual blow-off, is suitable whether or not it breaks lower again.",
+      "kind": "risk",
+      "quote_zh": "无论是否会再破底，非常适合现金在底部买入长期持有，再定期定额续买至未来喷出为止",
+      "pages": [
+        230
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "A weekly base breakout (2006-01-07 week) gave the technical buy signal for a multi-fold speculative run.",
+      "kind": "entry",
+      "quote_zh": "上证周线2004年9月至2005年12月约一年多的底部，在2006年1月7日当周突破出现技术面的买进信号，随后盘涨至喷出进入数倍的投机行情",
+      "pages": [
+        228
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "上证指数",
+      "timeframe": "monthly",
+      "period": "1990s..2014-01",
+      "pattern": "跌破原始上升趋势线 + 带量破底翻",
+      "levels": {
+        "low_early": 1352.45,
+        "low_2005": 998.23,
+        "high_2007_10": 6124.04,
+        "low_2008": 1664.92,
+        "high_2009": 3478.01,
+        "high_2010": 3186.72,
+        "label_2319_74": 2319.74,
+        "label_2132_63": 2132.63,
+        "prior_high": 2444.8,
+        "low_1949": 1949.46,
+        "low_1849": 1849.65,
+        "low_1984": 1984.82,
+        "monthly_neckline_approx": 2330,
+        "support_zone_low": 1949,
+        "support_zone_high": 2269
+      },
+      "outcome": "n.a. (forecast at time of writing); 2011-12 trendline break, 2012-12 high-volume 破底翻.",
+      "pages": [
+        227,
+        228
+      ]
+    },
+    {
+      "instrument": "上证指数",
+      "timeframe": "weekly",
+      "period": "2004-09..2013-09",
+      "pattern": "底部突破 / 大量区高点",
+      "levels": {
+        "base_high_2004": 1496.21,
+        "base_low": 998.23,
+        "breakout_week": "2006-01-07",
+        "high": 6124.04,
+        "heavy_volume_high_2013_09_14": 2270
+      },
+      "outcome": "2006 breakout led to multi-fold rally to 6124; 2270 breakout pending at writing.",
+      "pages": [
+        228
+      ]
+    },
+    {
+      "instrument": "上证指数",
+      "timeframe": "daily",
+      "period": "2013-03..2014-02",
+      "pattern": "假突破 / 破底翻 / 支撑区",
+      "levels": {
+        "false_breakout_high": 2444.8,
+        "label_2334": 2334.33,
+        "label_2161": 2161.14,
+        "support_top": 2070,
+        "support_bottom": 1949,
+        "low": 1849.65,
+        "label_1949_46": 1949.46,
+        "label_2092": 2092.87,
+        "label_2198": 2198.85,
+        "heavy_volume_high": 2270.27,
+        "dec4_high": 2260.87,
+        "label_2078": 2078.99,
+        "label_2120": 2120,
+        "break_bottom_reversal_low_2014_02": 1984.82
+      },
+      "outcome": "Dec-2013 marginal neckline break failed within 5 days (钱荒); 2/10 破底翻 above 1984.82.",
+      "pages": [
+        229
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "1995..1996",
+      "pattern": "三重底 (利空测试)",
+      "levels": {
+        "high_before": 5670.5,
+        "low_1": 4474.32,
+        "label_5221": 5221.89,
+        "label_5265": 5265.59,
+        "low_2": 4530.96,
+        "label_5209": 5209.51,
+        "tax_gap_down": 4734.55,
+        "label_5073": 5073.52,
+        "label_4883": 4883.84,
+        "low_3a": 4672.67,
+        "low_3b": 4675.36,
+        "breakout_label": 6191.16
+      },
+      "outcome": "High-volume long red candle broke the neckline, bottom complete; ran 1+ year to 10256.",
+      "pages": [
+        230
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "long-term",
+      "period": "1988..1997",
+      "pattern": "投机高点10年内再突破 analogue",
+      "levels": {
+        "low_1988": 2241,
+        "high_1988": 8813,
+        "high_1990_02": 12682,
+        "low_after": 2485,
+        "high_1997_08": 10256,
+        "high_before_1995_bottom": 7180
+      },
+      "outcome": "1988 tax news: 19-day volume-less crash after big rally; 1996 tax news: only 1 day down, low not broken.",
+      "pages": [
+        229,
+        230
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Monthly trendline break: close below a trendline through the major monthly lows of a multi-year uptrend -> long-term bearish regime.",
+    "Monthly 破底翻: monthly bar makes a new low below prior swing low, closes up (red) with volume above N-month average -> long-term stabilisation flag.",
+    "Heavy-volume-high breakout: find the highest-volume week in the last N; breakout above that week's high while above support zone -> bull leg start.",
+    "Failed marginal breakout: close above neckline but below heavy-volume high, then close back below neckline within 5 bars -> invalid (false breakout).",
+    "Support zone = [major low, upper edge of nearby consolidation] (e.g., 1949-2070)."
+  ],
+  "ambiguities": [
+    "Monthly support zone is 1949-2269 on p227 but heavy-volume high is cited as 2270 (weekly) and 2270.27 (daily); daily support zone given as 1949-2070 — different timeframes give different zones.",
+    "Monthly neckline 'near 2330' is not drawn with a printed label; 2334.33 appears on the daily chart.",
+    "Text date '2013年12月14日' for the daily marginal breakout vs chart marker '12/4' (2260.87); possibly a typo or different events.",
+    "'10年内再度突破' vs '再来一次甚至突破' (u19a) — revisit vs. break is loose.",
+    "No mechanical stop or target; much is macro/policy narrative (钱荒, 证所税)."
+  ],
+  "illegible": [
+    {
+      "page": 227,
+      "what": "Monthly chart header OHLC line (2007/11/30 bar) and some partially overlapped labels (2319.74, 1949.46 read with partial occlusion)."
+    },
+    {
+      "page": 229,
+      "what": "Label near 2136 (~'2136.4x') partially unreadable."
+    }
+  ]
+}

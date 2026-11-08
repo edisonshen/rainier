@@ -1,0 +1,54 @@
+{
+  "unit_id": "u01",
+  "model": "devin-cloud",
+  "pages_read": [17, 18],
+  "summary": "Defines the W double bottom (W底/双底) bullish signal and the book's core target arithmetic: measured move (等幅) = distance from bottom to neckline, projected from the neckline breakout, with a second wave target one more measured move above the first. Entry on neckline breakout, stop on falling back below the neckline; this is the book's 'big wins, small losses' (大赚小赔) swing method.",
+  "patterns": [
+    {
+      "name_zh": "W底（双底）",
+      "name_en": "W bottom (double bottom)",
+      "direction": "long",
+      "structure": "Two lows (example 15 and 13) with an intervening high (19) that defines a neckline (颈线) drawn from the prior high (20) through the middle high (19), sloping slightly down; the W is confirmed when price breaks the neckline (example at ~18).",
+      "entry": "Go long when price breaks above the neckline; example: neckline break at 18, buy near 18.2.",
+      "stop": "Stop when price falls back below the neckline; the book frames it as within 5%-7% and also as 'below the neckline' (跌落颈线之下).",
+      "target": {
+        "formula": "first target = neckline value at breakout + (neckline value at middle high - value of the double bottom midpoint); second target = first target + same distance",
+        "worked_example": "neckline middle ≈19, double-bottom middle ≈14 → distance 19-14 = 5; breakout at ≈18 → 18+5 = 23 (first 涨幅满足); 23+5 = 28 (second wave 涨幅满足). Taking profit at targets ≈ +26% to +53% from 18.2.",
+        "pages": [17, 18]
+      },
+      "confirmation": [
+        "Neckline breakout must hold: after breaking, price must not fall back below the neckline (颈线突破，便不能再跌破颈线之下).",
+        "Second-wave target applies only if, after consolidating near the first target, the bull structure is strong enough to make a new swing high (再创波段新高)."
+      ],
+      "invalidation": ["Price falls back below the neckline after the breakout → exit (stop)."],
+      "timeframes": ["not specified in this unit (generic schematic)"],
+      "pages": [17, 18]
+    }
+  ],
+  "rules": [
+    {"id": "R1", "rule": "A W double bottom is confirmed when price breaks above the neckline; only then can the upside target (涨幅满足) be computed.", "kind": "entry", "quote_zh": "当突破18颈线位置后，确立W双底的型态，便可计算涨幅满足。", "pages": [17]},
+    {"id": "R2", "rule": "Enter long on the neckline breakout; place the stop at a fall back below the neckline. If the neckline holds, hold toward the target.", "kind": "stop", "quote_zh": "突破颈线多单进场，停损设在跌破颈线时，反之，颈线不破，看涨幅满足附近。", "pages": [17]},
+    {"id": "R3", "rule": "Measured move: the distance from the bottom to the neckline equals the distance projected above the breakout point.", "kind": "target", "quote_zh": "底部至颈线的距离＝突破颈线后的等幅距离。", "pages": [18]},
+    {"id": "R4", "rule": "Measure at the middle: neckline value at the middle high minus the value midway between the two bottoms; small measurement error is acceptable if lines are drawn precisely.", "kind": "target", "quote_zh": "颈线中间的值约19，双底中间的值约14（中间值会有点误差但只要线画得精准些差异不大），19-14＝距离5。", "pages": [18]},
+    {"id": "R5", "rule": "Price usually consolidates near the first target; if the bull structure is strong and makes a new swing high after the consolidation, compute a second-wave target = first target + one more measured distance.", "kind": "target", "quote_zh": "通常到达涨幅满足附近大多会进入整理，然后再看当时的情况，若多头结构较强，则在整理过后再创波段新高时，再计算第二波涨幅满足。", "pages": [18]},
+    {"id": "R6", "rule": "Stop sizing in the example: stop within 5%-7%, which coincides with falling below the neckline.", "kind": "risk", "quote_zh": "停损设5%～7%以内，也是跌落颈线之下时", "pages": [18]},
+    {"id": "R7", "rule": "For both bottom and top patterns, most traders take profit when the second-wave target is reached.", "kind": "target", "quote_zh": "通常无论底部或头部型态，达两波段满足大多会做获利了结的动作。", "pages": [18]},
+    {"id": "R8", "rule": "Swing trading where the profit exceeds the stop risk is the 'big wins, small losses' method.", "kind": "psychology", "quote_zh": "这就是波段操作获利大于停损风险的大赚小赔方式。", "pages": [17]}
+  ],
+  "worked_examples": [
+    {"instrument": "schematic", "timeframe": "n.a.", "period": "n.a.", "pattern": "W底", "levels": {"prior_high": 20, "neckline_middle": 19, "bottom_1": 15, "bottom_2": 13, "bottom_middle": 14, "breakout": 18, "entry": 18.2, "target_1": 23, "target_2": 28}, "outcome": "n.a. (illustration); profit at targets ≈ 26%-53%", "pages": [17, 18]}
+  ],
+  "quantifiable": [
+    "W bottom: two swing lows separated by a swing high; neckline = line through the preceding swing high and the middle swing high; signal = close above the neckline value on the current bar.",
+    "Measured distance d = neckline(at middle high) - midpoint(bottom_1, bottom_2); target_1 = neckline(at breakout bar) + d; target_2 = target_1 + d.",
+    "Stop = close back below the neckline (≈5-7% below entry in the example).",
+    "Second target only activated after consolidation near target_1 followed by a new swing high."
+  ],
+  "ambiguities": [
+    "'双底中间的值约14' — the book uses roughly the midpoint of the two bottoms (15 and 13), not the lower low; whether to use the lower bottom or the midpoint in code is a choice (book: midpoint, approximate).",
+    "The stop is given both as 'below the neckline' and as '5%-7%'; the book does not say which wins if they differ.",
+    "The quoted profit '26%-53%' does not exactly equal (23-18.2)/18.2 = 26.4% and (28-18.2)/18.2 = 53.8%; consistent within rounding.",
+    "Neckline slope: the schematic neckline slopes down from 20 to 18; the book measures the distance at the middle (19) but projects from the breakout value (18)."
+  ],
+  "illegible": []
+}

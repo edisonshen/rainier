@@ -1,0 +1,90 @@
+{
+  "unit_id": "u20",
+  "model": "devin-cloud",
+  "pages_read": [
+    245,
+    246
+  ],
+  "summary": "Afterword: the author's background (retired at 40, returned 2-3 years as a star analyst, retired again), his blog since 2007 (蔡森-随势而为-技术分析) and TV/teaching work, entry into A-shares in 2014, and how he turned his stock-picking logic into screening software in 2001 because there were too many stocks to review by hand — software pre-screens long/short candidates, but experience is needed for the final judgement. The book has two parts: 12 long/short judgement methods, and their extension into practical application and trading strategy. The back cover (p246) summarises the selling points: swing trading with the trend, strict stops, 12 methods, stop-loss/take-profit planning, and using only volume-price with patterns rather than indicators.",
+  "patterns": [],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Use software to pre-screen long/short candidates, then refine manually; experience is still needed for correct judgement.",
+      "kind": "filter",
+      "quote_zh": "让我可以利用程式中先作一次多空选股后，再作精选。虽然经过软件程式的帮助确实省却相当多的时间，但还是要靠自己的经验才能做出较正确的判断",
+      "pages": [
+        245
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Book structure: part 1 = 12 long/short judgement methods; part 2 = extension incl. practical application and trading strategy.",
+      "kind": "filter",
+      "quote_zh": "第一部分讲解12招的多空判断方法，第二部分，则是第一部分12招多空判断方法的延伸，包括实战运用及操作策略的说明。",
+      "pages": [
+        245
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Swing trading following the trend with strict stop-loss, so you don't need to watch the screen.",
+      "kind": "risk",
+      "quote_zh": "波段随势操作，严守停损→操作不需盯盘",
+      "pages": [
+        246
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "No difficult indicators or complex rules — judge only with volume-price relationship combined with patterns.",
+      "kind": "filter",
+      "quote_zh": "不教困难的指标，更不使用复杂的交易法则，仅用量价关系配合型态做判断",
+      "pages": [
+        246
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Correct concepts and timing let you lose small and win big, accumulating considerable profit.",
+      "kind": "risk",
+      "quote_zh": "建立正确的观念，以及准确掌握时机，才能在实战中小赔大赚，累积出可观获利。",
+      "pages": [
+        246
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Stop-loss and take-profit planning is a core part of the method.",
+      "kind": "stop",
+      "quote_zh": "停损停利的规划解释→获利诀窍大公开",
+      "pages": [
+        246
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "n.a.",
+      "period": "1996..2001",
+      "pattern": "n.a. (anecdote)",
+      "levels": {
+        "bottom_1996": 4474
+      },
+      "outcome": "After the 4474 bottom the bull run twice exceeded 10000; stock count grew, prompting screening software in 2001.",
+      "pages": [
+        245
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Two-stage pipeline: mechanical long/short screen over the full universe, then discretionary/rule-based refinement — maps to QU100 screener + thesis.",
+    "Use only price/volume + pattern features (no oscillators) in detectors faithful to the book."
+  ],
+  "ambiguities": [
+    "Afterword gives no trading parameters; back-cover claims (e.g. '29年的投资经验') are marketing text.",
+    "Page 245 is book page 230; p246 is the back cover (ISBN 978-7-5454-4764-4, 定价 68.00元)."
+  ],
+  "illegible": []
+}

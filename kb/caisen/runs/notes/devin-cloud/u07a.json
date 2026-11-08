@@ -1,0 +1,596 @@
+{
+  "unit_id": "u07a",
+  "model": "devin-cloud",
+  "pages_read": [
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64
+  ],
+  "summary": "A false upside breakout after an advance is the bearish inverse of 破底翻: price clears the upper boundary of a high-level consolidation but subsequently falls back below it, giving a long-exit/short-entry signal; a later lower-boundary or main-neckline break is an add-on opportunity (PDF pp.55–56,59–60,63–64). Price/volume divergence and violations of the low of an important high-volume bullish candle help distinguish a genuine advance from the book's interpreted distribution/trap pattern (pp.57–58,61,63). Daily 中纤, daily 苹果, weekly 运输类指数, and daily 日月光 illustrate different confirmation bars, stops, and target methods: completed decline-wave projection or an M-top measured move, not an automatic target equal to every false-breakout box (pp.57–64). Early shorts can require a longer wait while the top/right shoulder develops, and structurally distant stops may need a tighter percentage risk limit (pp.63–64).",
+  "patterns": [
+    {
+      "name_zh": "假突破",
+      "name_en": "False upside breakout after high-level consolidation",
+      "direction": "short",
+      "structure": "Following a substantial advance, price consolidates near the highs, crosses the upper boundary/neckline, then falls back beneath that boundary. Schematic: range 70–80, breakout above 80 to 86, then fall below 80 confirms 假突破; a later break below 70 is the main range breakdown (pp.55–56). The author interprets this as a strong-looking rally used for high-level distribution, not proof of intent obtainable from price alone (pp.55–56,61).",
+      "entry": "Sell existing swing longs and enter a short when the failed breakout is confirmed by falling back below the upper boundary. 中纤 first shorts near 12.2 on 2007-11-08; 苹果 shorts near USD 189 on the high-volume long black bar of 2008-01-04. After confirmation, 日月光 allows shorting rebounds into resistance. Add on a subsequent lower-boundary/main-neckline breakdown, not merely on the initial new high (pp.56–58,62–64).",
+      "stop": "The failed upper neckline becomes resistance; stop on regaining/standing above it, optionally with a slightly higher allowance. Generic instruction is 5%–7%; schematic add-on stop is also on reclaiming the broken lower boundary, within 5%–7%. Case-specific stops differ: 中纤 12.9 or 10.54 (latter risk about 8%), 苹果 USD 198, 日月光 high 20.3 is too distant from entry 18.3 so the author permits a direct 7% stop instead (pp.56,58,62,64).",
+      "target": {
+        "formula": "No independent numerical target formula is given for the 70–80 false-breakout schematic. Cover near the downside target computed from the actual bearish head/swing structure; subsequent examples use either decline-wave projection or an M-top measured move.",
+        "worked_example": "中纤: (14.51 − 9.78) = 4.73 projected from rebound high 11.47 gives 6.74; an alternative smaller swing gives 10.29 − (11.47 − 8.27) = 7.09 (pp.57–58). 苹果 uses its M-head to obtain about USD 118 (pp.61–62). 日月光's exact target is referred to a different chart on printed book p.62, not reproduced in assigned PDF pp.55–64 (p.64).",
+        "pages": [
+          56,
+          57,
+          58,
+          61,
+          62,
+          64
+        ]
+      },
+      "confirmation": [
+        "Falling back beneath the previously broken upper neckline establishes the failure, rather than a breakout alone being bearish (pp.55–56).",
+        "An important high-volume bullish candle's low must hold. 中纤's failure also breaks the heavy-volume bullish candle low; 日月光's 1997-09-02 low 17.3 breaks the 1997-08-21 high-volume bullish candle low 17.86 (pp.57–58,63).",
+        "Price rising to a new high on shrinking volume (价涨量缩/量价背离) warns that the late breakout is weak; 中纤 and 苹果 illustrate this (pp.57,61).",
+        "苹果 confirms after six trading days with a high-volume long black bar falling back into the consolidation; 中纤 uses a bearish reversal/bar break. These are example confirmations, not a universal six-day rule (pp.57–58,61–62).",
+        "Breaking the lower boundary or main neckline implies stronger downside acceleration and is a short add-on opportunity (pp.56,60,64)."
+      ],
+      "invalidation": [
+        "Regaining the failed breakout neckline/resistance stops the initial short; regaining the lower boundary stops the add-on and realizes profit on the earlier short (p.56).",
+        "If a prior head high is too far away to be an acceptable stop, do not automatically accept the whole head-high risk: use the stated smaller percentage risk alternative in the 日月光 example (p.64).",
+        "Strong fundamentals do not by themselves cancel a technical sell signal; the book says even an eventual recovery generally requires a period of consolidation rather than an immediate reversal (pp.61–62)."
+      ],
+      "timeframes": [
+        "Generic schematic (pp.55–56)",
+        "Daily: 中纤, 苹果, 日月光 (pp.57–58,61–64)",
+        "Weekly: 运输类指数 (pp.59–60)"
+      ],
+      "pages": [
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64
+      ]
+    },
+    {
+      "name_zh": "假突破结合M头破颈线",
+      "name_en": "Early false-breakout short followed by M-top neckline-break add-on",
+      "direction": "short",
+      "structure": "The false breakout occurs near the second high of a broader M top; the small high-level consolidation's upper boundary and the larger M's lower neckline are distinct. 运输类指数 shows the early false breakout on 2008-05-24 near the second head, followed by the larger rising-neckline breakdown on 2008-07-19; 苹果 likewise falls back into the high-level range before breaking the larger M neckline (pp.59–62).",
+      "entry": "Enter an initial short on the failed small-range breakout, then add when the main M neckline breaks. Hypothetical tradable 运输类指数: short near 136 on 2008-05-24 and add near 104 on 2008-07-19 (pp.59–60).",
+      "stop": "运输类指数 initial stop is resistance near 142, about 4.5%; the add-on stop is the long black weekly breakdown bar high 107.17, about 3%. 苹果 entry near USD 189 uses USD 198 on regaining the failed breakout line, about 5% risk. The broken main neckline must not be reclaimed (pp.60,62).",
+      "target": {
+        "formula": "M-head target: D = head-middle reference − neckline at measurement location; target = neckline at main breakdown − D. A second target subtracts D again only if the result is reasonable.",
+        "worked_example": "运输类指数: 146 − 100.5 = 45.5; 104.5 − 45.5 = target 59. A second 59 − 45.5 = 13.5 is explicitly rejected as unreasonable for this sector index (pp.59–60). 苹果 chart annotations give D = 196 − 156 = 40; main-neckline breakdown 158 − 40 = 118, consistent with the prose's approximate USD 118 target (pp.61–62).",
+        "pages": [
+          59,
+          60,
+          61,
+          62
+        ]
+      },
+      "confirmation": [
+        "A failed breakout first generates an exit/short signal; the later long black main-neckline breakdown separately confirms the M top (pp.59–60).",
+        "If the broken neckline remains resistance, hold toward the applicable one-wave target; the book explicitly labels the 运输类指数 trade as hypothetical, assuming the product can be traded (p.60)."
+      ],
+      "invalidation": [
+        "A rebound above the relevant resistance/neckline triggers the initial or add-on stop (p.60).",
+        "The second transport-index target 13.5 is not actionable in the author's judgement; it is nearly impossible for this type of index, unlike an excessively speculative individual stock (p.60)."
+      ],
+      "timeframes": [
+        "Weekly: 运输类指数 (pp.59–60)",
+        "Daily: 苹果 (pp.61–62)"
+      ],
+      "pages": [
+        59,
+        60,
+        61,
+        62
+      ]
+    },
+    {
+      "name_zh": "反弹再破底后的跌幅满足",
+      "name_en": "Completed-decline projection after a rebound and renewed breakdown",
+      "direction": "short",
+      "structure": "After a false breakout, price declines from high A to low L, rebounds to high H, then breaks the preceding low again. Project the completed A-to-L decline downward from H. The book also compares a smaller nested decline/rebound and later a larger peak-to-bottom decline (pp.57–58).",
+      "entry": "This is primarily a target-calculation rule: the first 中纤 short is already signaled by the false breakout; calculation becomes appropriate when the rebound ends and price again breaks the prior low. For the later false breakout, confirmation is on 2008-05-26, while the large measured target is calculated when the decline again breaks the previous swing low 6.93 (pp.57–58).",
+      "stop": "For the underlying 中纤 false-breakout trades, stop initial short near 12.2 at 12.9 and later short near 9.7 at 10.54. This submethod does not introduce a separate universal stop formula (p.58).",
+      "target": {
+        "formula": "D = prior swing high A − subsequent swing low L; downside target = rebound high H − D. The author allows nested swings to supply nearby target estimates; these are different swing measurements, not necessarily equal consecutive M-target waves.",
+        "worked_example": "First 中纤 estimate: 14.51 − 9.78 = 4.73; 11.47 − 4.73 = 6.74 (p.57). Nested estimate: 11.47 − 8.27 = 3.2; 10.29 − 3.2 = 7.09 (p.58). Later large swing: 14.51 − 6.93 = 7.58; 11.13 − 7.58 = 3.55 (p.58).",
+        "pages": [
+          57,
+          58
+        ]
+      },
+      "confirmation": [
+        "Price rebounds then again breaks the preceding swing low before this continuation-target calculation is used (pp.57–58).",
+        "Two nearby estimates 6.74 and 7.09 are presented as broadly consistent; actual first bottom is 6.93, not an exact touch of either computed target (pp.57–58)."
+      ],
+      "invalidation": [
+        "Regaining the relevant neckline/resistance triggers the short stop. The unit does not prescribe a separate target invalidation/recalculation algorithm if an intermediate swing changes (p.58)."
+      ],
+      "timeframes": [
+        "Daily: 中纤 (pp.57–58)"
+      ],
+      "pages": [
+        57,
+        58
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "False breakout is the inverse of 破底翻: after a rising phase and consolidation, price breaks the upper boundary and then falls below it, confirming weakness/short timing.",
+      "kind": "entry",
+      "quote_zh": "假突破是破底翻的反向关系，股价在盘涨一段进入整理的过程中，出现突破整理区上缘颈线，随后又跌落颈线之下是属于假突破的结构",
+      "pages": [
+        55
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "The author characterizes false breakouts as traps used to induce breakout chasing during high-level distribution; treat this as the book's explanatory model, not independently established participant intent.",
+      "kind": "psychology",
+      "quote_zh": "假突破就是一种骗线，制造转强的假象，诱使多头追价，以达其积极出货目的",
+      "pages": [
+        55
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "In the 70–80 schematic, falling back below 80 after the breakout is the short signal; 80 then serves as resistance/stop, optionally a little higher.",
+      "kind": "stop",
+      "quote_zh": "假突破后80颈线仍是反压，也是空单停损点（可稍设高些）",
+      "pages": [
+        56
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "A subsequent break below the range's lower boundary 70 is a short add-on opportunity, associated by the author with nearing completion of distribution and accelerated decline.",
+      "kind": "entry",
+      "quote_zh": "再跌破整理区下缘颈线70，表示主力已出货完毕或接近尾声，通常都会开始加速下跌为加码做空时机。",
+      "pages": [
+        56
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "The lower boundary becomes resistance after breakdown. On regaining it, stop the add-on and take profit on the earlier false-breakout short; otherwise keep the short.",
+      "kind": "stop",
+      "quote_zh": "颈线70跌破支撑变反压，空头看反压，站回反压加码的空单停损及假突破布空的空单停利，反之则空单续抱波段",
+      "pages": [
+        56
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "The schematic trade rule uses a 5%–7% stop on the initial short and also within 5%–7% on the lower-boundary add-on, associated with regaining the relevant neckline.",
+      "kind": "risk",
+      "quote_zh": "跌落颈线之下，假突破确立波段多单卖出信号，空单进场，停损设5%～7%，也是站稳颈线之时",
+      "pages": [
+        56
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "After a large-volume day the chart often still makes a higher high; the subsequent new high on diminishing volume creates price/volume divergence rather than proving a healthy advance.",
+      "kind": "volume",
+      "quote_zh": "技术面大量后大多还会有高点，量价结构上再创新高时，已明显价涨量缩出现量价背离",
+      "pages": [
+        57
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "中纤's 2007-11-08 bearish reversal breaking the low of the prior huge-volume bullish candle confirms a false breakout and bearish decline.",
+      "kind": "entry",
+      "quote_zh": "11月8日翻黑破线且跌破爆量红K低点，假突破确立，翻空盘跌。",
+      "pages": [
+        57
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "After an initial decline and rebound, a new break of the previous reaction low permits downside measured-move calculation.",
+      "kind": "target",
+      "quote_zh": "股价跌深反弹后，再破反弹低点9.78元时，便可计算跌幅满足。",
+      "pages": [
+        57
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "The first 中纤 target projects the 14.51-to-9.78 decline of 4.73 downward from rebound high 11.47 to 6.74.",
+      "kind": "target",
+      "quote_zh": "自11.47元高点-4.73元＝等幅计算的跌幅满足6.74元。",
+      "pages": [
+        57
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "A smaller decline/rebound in the same 中纤 move provides a nearby alternative target 7.09; the two estimates are described as similar, not identical.",
+      "kind": "target",
+      "quote_zh": "自10.29元高点-3.2元＝等幅计算的跌幅满足7.09元。",
+      "pages": [
+        58
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "A later false-breakout failure uses a larger original-peak-to-bottom decline as the measurement: 14.51 to 6.93 equals 7.58, projected from 11.13 to 3.55.",
+      "kind": "target",
+      "quote_zh": "自11.13元高点-7.58元＝等幅计算的大波段跌幅满足3.55元。",
+      "pages": [
+        58
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "The later 中纤 short near 9.7 uses resistance high 10.54 as the stop and about 8% risk, an example-specific exception to the schematic 5%–7% wording.",
+      "kind": "risk",
+      "quote_zh": "站上突破前的整理区高点10.54元反压停损，风险约8%",
+      "pages": [
+        58
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "运输类指数 gives a false-breakout sell signal on 2008-05-24, then confirms its larger M top on the 2008-07-19 long black neckline-break week.",
+      "kind": "entry",
+      "quote_zh": "7月19日当周长黑掼破颈线，M头确立，便能计算跌幅满足。",
+      "pages": [
+        59
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "For the transport-index M, subtract the height 45.5 measured from 146 to 100.5 from the breakdown neckline 104.5, yielding target 59.",
+      "kind": "target",
+      "quote_zh": "跌破颈线的位置约在104.5点-45.5点＝等幅计算的跌幅满足59点。",
+      "pages": [
+        59
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "The transport example is explicitly conditional on a tradable product: initial short near 136, stop 142/about 4.5%; add-on near 104, stop breakdown-week high 107.17/about 3%, and cover near target.",
+      "kind": "risk",
+      "quote_zh": "停损点设在当周长黑高点107.17点，风险约3%",
+      "pages": [
+        60
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "Reject a mechanical second transport-index target at 13.5 as unreasonable; the author only uses one measured wave here.",
+      "kind": "filter",
+      "quote_zh": "第二波跌幅满足59点-45.5点＝13.5点，这对类指数来说，几乎是不可能的点，除非是一只炒过头的投机股。",
+      "pages": [
+        60
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "A high-level false breakout with confirming price/volume behavior is a particularly strong technical sell signal in the author's view; a later recovery with strong fundamentals may first require a period of consolidation.",
+      "kind": "volume",
+      "quote_zh": "假突破属于技术面卖出信号，尤其是股价处于高档出现量价配合的假突破，更是强烈的卖出信号",
+      "pages": [
+        61
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "苹果's 2007-12-24 new-high breakout occurred on shrinking volume; six trading days later, the 2008-01-04 high-volume long black bar fell back into the range and confirmed the false breakout.",
+      "kind": "entry",
+      "quote_zh": "六个交易日后也就是2008年1月4日出现带量长黑，跌回整理区，此时便能判断属高档假突破，确立为强烈的波段卖出信号",
+      "pages": [
+        61
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "苹果 short near USD 189 has stop USD 198/about 5%, and target near USD 118 from its M head and prior launch-area support, for author-quoted short profit near 37%.",
+      "kind": "target",
+      "quote_zh": "回补点可以192美元及202美元两个高点形成的双头（M头）计算跌幅满足，约在118美元附近，也是前波起涨附近的较大支撑区",
+      "pages": [
+        62
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "An important high-volume bullish breakout candle's low should not be broken. 日月光's 1997-09-02 low 17.3 violating the 1997-08-21 bullish candle low 17.86 confirms a failed attack/false breakout.",
+      "kind": "entry",
+      "quote_zh": "因此9月2日低点17.3元跌破红K低点17.86元，便能判断这是假突破的骗线动作",
+      "pages": [
+        63
+      ]
+    },
+    {
+      "id": "R22",
+      "rule": "After 日月光's false breakout, rebounds are shorting opportunities; high 20.3 may be the structural stop, but if that is too distant a 5%–7% stop is permitted to control risk.",
+      "kind": "risk",
+      "quote_zh": "高点20.3元为反压就是空单停损点（高点若太高为了掌控风险，停损可设约5%～7%以内）",
+      "pages": [
+        64
+      ]
+    },
+    {
+      "id": "R23",
+      "rule": "Early high-level false-breakout shorts can have more profit room but a longer wait while the remaining top/right shoulder forms. The main neckline breakdown is the preferred add-on, with a typically faster decline afterward.",
+      "kind": "time",
+      "quote_zh": "通常假突破高档布空利润较大，但等待期较长，因为主力仍需要时间盘头",
+      "pages": [
+        64
+      ]
+    },
+    {
+      "id": "R24",
+      "rule": "On the main neckline break, use the neckline reclaim as the stop and hold toward the calculated downside target if it remains resistance.",
+      "kind": "stop",
+      "quote_zh": "因此跌破颈线空单停损便设在站回颈线时，颈线站不回则看跌幅满足附近，这是大赚小赔的波段操作方式。",
+      "pages": [
+        64
+      ]
+    },
+    {
+      "id": "R25",
+      "rule": "In 日月光's proposed rebound short near 18.3, a stop at 20.3 implies about 11%, which the author calls too high; a direct 7% stop can better control risk.",
+      "kind": "risk",
+      "quote_zh": "风险约11%太高，可直接设一根停板的7%，便可有效控制风险",
+      "pages": [
+        64
+      ]
+    },
+    {
+      "id": "R26",
+      "rule": "Even 苹果's past recoveries to new highs are no guarantee for each future decline; selling large-wave tops technically can also avoid an industry-cycle peak reversal.",
+      "kind": "risk",
+      "quote_zh": "产业总有循环，从技术面判断每个大波段的买卖点，除了能掌握买点外，还能避开产业自高峰反转的风险。",
+      "pages": [
+        62
+      ]
+    },
+    {
+      "id": "R27",
+      "rule": "The quoted aphorism distinguishes planned, analytically based speculation from gambling; it describes analysis, planning and selection as a rational process.",
+      "kind": "psychology",
+      "quote_zh": "投机可以经分析做基础，制订计划，选择项目，这是一整套理性的过程。",
+      "pages": [
+        62
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "Schematic",
+      "timeframe": "not specified",
+      "period": "n.a.",
+      "pattern": "假突破 → lower-range breakdown",
+      "levels": {
+        "range_low": 70,
+        "range_high": 80,
+        "false_breakout_high": 86,
+        "initial_confirmation_boundary": 80,
+        "addon_boundary": 70,
+        "initial_stop_risk_pct": "5–7",
+        "addon_stop_risk_pct": "within 5–7",
+        "numerical_target": null
+      },
+      "outcome": "Illustration: falling below 80 confirms the failed breakout, breaking 70 adds to the short, and a rebound back above 70 stops the add-on/takes profit on the initial short. The schematic gives no numerical downside target.",
+      "pages": [
+        55,
+        56
+      ]
+    },
+    {
+      "instrument": "中纤 (1718)",
+      "timeframe": "daily",
+      "period": "2007-10-08 high-volume day; first false-breakout confirmation 2007-11-08; first bottom late January 2008",
+      "pattern": "Price/volume divergence + 假突破 + rebound/lower-low measured move",
+      "levels": {
+        "peak": 14.51,
+        "first_decline_low": 9.78,
+        "first_rebound_high": 11.47,
+        "decline_distance": 4.73,
+        "target_estimate_1": 6.74,
+        "nested_decline_high": 11.47,
+        "nested_decline_low": 8.27,
+        "nested_distance": 3.2,
+        "nested_rebound_high": 10.29,
+        "target_estimate_2": 7.09,
+        "actual_first_bottom": 6.93,
+        "entry": 12.2,
+        "stop_black_candle_high": 12.9,
+        "author_risk_pct": 5,
+        "author_short_profit_pct": 40
+      },
+      "outcome": "After the October volume spike, a new high occurs with lower volume. On November 8 the bearish bar breaks the neckline and large-volume bullish candle low. The decline/rebound then breaks 9.78; both target estimates cluster around the January low 6.93, after which price rebounds.",
+      "pages": [
+        57,
+        58
+      ]
+    },
+    {
+      "instrument": "中纤 (1718)",
+      "timeframe": "daily",
+      "period": "2008-05-14 reference bullish bar; later false-breakout confirmation 2008-05-26; final low mid-September 2008",
+      "pattern": "Second 假突破 + large-swing decline projection",
+      "levels": {
+        "original_peak": 14.51,
+        "prior_bottom": 6.93,
+        "large_distance": 7.58,
+        "rebound_high": 11.13,
+        "nearby_chart_range_high_1": 10.54,
+        "nearby_chart_range_high_2": 10.5,
+        "target": 3.55,
+        "actual_later_low": 3.26,
+        "entry": 9.7,
+        "stop_prebreakout_range_high": 10.54,
+        "author_risk_pct": 8,
+        "author_short_profit_pct": 60,
+        "later_chart_rebound_high": 5.15
+      },
+      "outcome": "May 26 breaks the line and May 14 long bullish candle low, ending the rebound and confirming another false breakout. On the renewed decline to/below prior bottom 6.93, the author computes the 3.55 large-wave target. Reached target vicinity at 3.26 in mid-September, then formed a bottom and rose substantially about half a year later.",
+      "pages": [
+        57,
+        58
+      ]
+    },
+    {
+      "instrument": "运输类指数 (2600 in chart header)",
+      "timeframe": "weekly",
+      "period": "2007–2008; false-breakout sell signal 2008-05-24; M neckline breakdown 2008-07-19",
+      "pattern": "假突破 near second M head → neckline-break add-on",
+      "levels": {
+        "chart_head_high_1": 145.62,
+        "chart_head_high_2": 146,
+        "head_measurement_author": 146,
+        "neckline_measurement": 100.5,
+        "distance": 45.5,
+        "neckline_breakdown": 104.5,
+        "target_1": 59,
+        "rejected_target_2": 13.5,
+        "initial_entry": 136,
+        "initial_stop": 142,
+        "author_initial_risk_pct": 4.5,
+        "addon_entry": 104,
+        "addon_stop_breakdown_week_high": 107.17,
+        "author_addon_risk_pct": 3,
+        "author_short_profit_pct_initial": 56,
+        "author_short_profit_pct_addon": 43,
+        "chart_later_low": 49.34,
+        "chart_later_secondary_low": 56.87,
+        "other_chart_pivots": [
+          81.13,
+          73.28,
+          103.89,
+          98.14,
+          100.08,
+          73.04
+        ]
+      },
+      "outcome": "Book explicitly assumes a tradable product for its trade illustration. Price enters bottom consolidation/recovery near the first calculated target; the chart also shows a later 49.34 low, so target vicinity is not the ultimate minimum. The proposed short/add-on is covered near 59, and a second target 13.5 is rejected as unreasonable for this index.",
+      "pages": [
+        59,
+        60
+      ]
+    },
+    {
+      "instrument": "苹果 (AAPL)",
+      "timeframe": "daily",
+      "period": "2007–2008; weak-volume breakout 2007-12-24; confirmation 2008-01-04, six trading days later",
+      "pattern": "Price/volume divergence + 假突破 → M-head breakdown",
+      "levels": {
+        "prose_high_1_approx_usd": 192,
+        "prose_high_2_approx_usd": 202,
+        "chart_high_1_usd": 192.68,
+        "chart_high_2_usd": 202.96,
+        "chart_head_measurement_usd": 196,
+        "chart_neckline_measurement_usd": 156,
+        "chart_neckline_breakdown_usd": 158,
+        "chart_implied_distance_usd": 40,
+        "target_usd": 118,
+        "entry_usd": 189,
+        "stop_usd": 198,
+        "author_risk_pct": 5,
+        "author_short_profit_pct": 37,
+        "author_decline_from_high_pct": 43,
+        "other_legible_chart_pivots_usd": [
+          95.3,
+          127.61,
+          148.92,
+          145.84,
+          132.2
+        ]
+      },
+      "outcome": "The December 24 new high has shrinking volume. On January 4 a high-volume long black candle falls back into the consolidation, confirming the false breakout; later neckline breakdown sends price toward the prior rally-launch support area. The author quotes about 43% high-to-low correction and about 37% short profit covering near 118. Faint auxiliary chart low labels are not guessed.",
+      "pages": [
+        61,
+        62
+      ]
+    },
+    {
+      "instrument": "日月光 (2311)",
+      "timeframe": "daily",
+      "period": "1997; high-volume bullish breakout 1997-08-21; failure 1997-09-02; further low break 1997-09-09; main-neckline break 1997-10-17",
+      "pattern": "High-level 假突破 within a head-and-shoulders top → later neckline-break add-on",
+      "levels": {
+        "bullish_breakout_candle_low": 17.86,
+        "failure_day_low": 17.3,
+        "false_breakout_peak": 20.3,
+        "rebound_short_entry": 18.3,
+        "structural_stop": 20.3,
+        "author_structural_risk_pct": 11,
+        "permitted_tighter_stop_risk_pct": 7,
+        "author_general_tighter_stop_risk_pct": "5–7",
+        "author_short_profit_pct": 39,
+        "chart_later_low": 10.9,
+        "other_chart_pivots": [
+          11.29,
+          9.27,
+          13.66,
+          13.91,
+          11.91,
+          17.3,
+          13.79,
+          18.3,
+          16.29,
+          17.86,
+          16.04,
+          15.79
+        ],
+        "numerical_target_in_assigned_unit": null
+      },
+      "outcome": "September 2 low 17.3 breaks the August 21 high-volume bullish candle low 17.86, confirming the failed attack. September 9 further breaks the low; August 21–September 8 is identified as the false-breakout block. The right shoulder takes time before the October 17 main-neckline breakdown, described as the best add-on short point. Author proposes a rebound short around 18.3 with a direct 7% stop rather than accepting the about-11% structural risk; target calculation is referred to the separate 1996–1997 日月光 chart on printed book p.62.",
+      "pages": [
+        63,
+        64
+      ]
+    }
+  ],
+  "quantifiable": [
+    "[pp.55–56] Candidate failed-breakout detector: mark an established high-level range [L,U], an upside crossing above U, and a later return below U; only the return is the bearish entry/long-exit signal. The schematic is L=70, U=80, peak=86; range identification and maximum permitted delay are implementation choices.",
+    "[pp.56,60,64] Keep initial-short and add-on states distinct: initial short after false breakout; add after a lower-range or main-head-neckline breakdown; reclaim of the broken lower boundary stops the add-on and takes profit on the initial short.",
+    "[pp.57,61] Compare volume at a later new high with volume during the preceding high-volume advance to flag 价涨量缩. How much lower volume must be, which bars to aggregate, and a required divergence duration are not defined.",
+    "[pp.57–58,63] Register important high-volume bullish breakout candle low K_low as a protected reference; later low below K_low supports failed-breakout confirmation. 日月光's exact test is 17.3 < 17.86. 'Important/high-volume' thresholds must be supplied externally.",
+    "[pp.57–58] After a decline A→L and rebound to H, renewed breaking of L activates target H−(A−L). Apply separately to 14.51→9.78/H=11.47, 11.47→8.27/H=10.29, and 14.51→6.93/H=11.13 rather than confusing them with equal sequential waves.",
+    "[pp.59–62] For the larger M-head target, distinguish neckline under the head measurement from neckline at breakdown: transport 104.5−(146−100.5)=59; Apple chart 158−(196−156)=118.",
+    "[p.64] Compare stop distance to entry before using the whole head high: (20.3−18.3)/18.3≈10.93%, printed as about 11% and judged excessive; a direct 7% stop is the author's allowed alternative.",
+    "[pp.60,64] A detector should record target reasonableness and formation/wait duration as inputs rather than automatically generate another wave or assume a false-breakout short must decline immediately."
+  ],
+  "ambiguities": [
+    "[pp.55–56,61,63] False-breakout confirmation is not defined universally as an intrabar cross, closing-price cross, or multiple-bar hold; '站稳' appears in the schematic stop instruction without a specified persistence count.",
+    "[pp.55–56,59,61–64] '颈线' can refer to the upper small-consolidation boundary, lower boundary, or a larger M/head-and-shoulders neckline. These must be separate references; the transport 142 stop is not the M neckline 104.5.",
+    "[pp.56,58,64] Generic 5%–7% risk is not a universal invariant: the later 中纤 example uses about 8%, while 日月光 explicitly substitutes a 7% stop for a distant 20.3 structural stop. No universal priority rule reconciles every structural and percentage stop.",
+    "[pp.55,61,64] Claims about 主力 distribution, deliberate traps, near-completion of selling, and faster future decline are the author's interpretation of chart structure; orderflow intent and conditional win rates are not established by these retrospective illustrations.",
+    "[pp.57–58] The 中纤 large-wave calculation is conditional on the renewed decline breaking prior low 6.93, not necessarily immediately available as a confirmed target on the May 26 short-entry day. The book does not specify whether this break must be an intrabar or closing-price event.",
+    "[pp.57–58,61–64] Swing selection, volume thresholds, range duration, long-black candle thresholds, and 'high-level' definitions are not specified. Apple's six trading days are a historical observation, not a prescribed maximum failure window.",
+    "[pp.58–60] Target satisfaction means nearby, not necessarily an exact touch or ultimate trough: 中纤 first low 6.93 lies between estimates 6.74/7.09, later low 3.26 is below 3.55; transport chart later reaches 49.34 despite the intended cover target 59.",
+    "[pp.61–62] Apple prose uses approximate highs 192/202, while chart labels are 192.68/202.96 and the head reference is annotated 196. Preserve those separate quantities; do not silently force a literal average of the exact highs.",
+    "[p.64] 日月光's numerical target and full measurement are not in the assigned pages; the text points to printed book p.62 (a different 1996–1997 chart). The chart low 10.90 must not be substituted for that unprovided target.",
+    "[pp.60,62,64] 'Reasonable valuation', 'every rebound is a short point', and whether to look for one or more target waves need judgement; there is no quantified valuation floor or precise rebound-entry trigger. The transport-index trade is hypothetical, not evidence of actual index execution.",
+    "[pp.58,60,62,64] Reported profits/risks are approximate historical illustrations, not fee/slippage-aware backtest results; examples use different risk percentages and target-vicinity exits."
+  ],
+  "illegible": [
+    {
+      "page": 61,
+      "what": "Several faint auxiliary chart low-price labels (the pre-M low, intervening M trough, and later low near the chart's right side) cannot be transcribed confidently from the scan, even after enlarging. They are omitted, not guessed. The main trade/target numbers and head labels 192.68, 202.96, 196, 156, 158 and 118 are legible."
+    }
+  ]
+}

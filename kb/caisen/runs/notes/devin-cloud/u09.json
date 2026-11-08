@@ -1,0 +1,334 @@
+{
+  "unit_id": "u09",
+  "model": "devin-cloud",
+  "pages_read": [
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88
+  ],
+  "summary": "False breakout inside a head-and-shoulders top: price breaks above the high consolidation (the 'neckline' of the head zone, e.g. 90), makes the head (95), then falls back below it. That gives an earlier, higher short entry than waiting for the H&S neckline break; the neckline break (72) is then the add-on signal, and the H&S measured move gives the target. A neckline reclaim stops the add-on and takes profit on the early short. Three cases: 华邦电 daily, 大统益 daily 2008 and the 塑胶类 index daily 2011, plus notes on gap breaks, when to skip the second wave, and the escape-line retest of the neckline.",
+  "patterns": [
+    {
+      "name_zh": "假突破（头肩顶）",
+      "name_en": "False breakout forming the head of a head-and-shoulders top (early short + add-on)",
+      "direction": "short",
+      "structure": "Schematic: after a rise, a left shoulder; then a high consolidation with resistance at 90; a breakout to 95 (the head); a fall back below 90 (false breakout confirmed); a right shoulder; then a break of the rising H&S neckline (68 → 70 → 72 at the break).",
+      "entry": "Initial short when price falls back below the broken level (跌落颈线下, 假突破确立卖出信号). 华邦电: breakout to a new high 6/14, back below the line the next day → short ~82.5. 大统益: 5/27 → short ~29.6. 塑胶类: 2011-05-04 below the line and below the low (309.54) of the 4/21 heavy-volume long red breakout candle → short ~309. Add-on short when the H&S neckline breaks (schematic 72; 华邦电 9/7 gap → 55; 大统益 8/12 gap → 23.9; 塑胶类 8/2 gap → 266).",
+      "stop": "Initial short: at or slightly above the resistance zone 90 (schematic), or the false-breakout high (华邦电 85.46, 3.6%; 塑胶类 322.12, ~4%). If the high implies more than 10% risk, use ~7% instead (大统益 31.6 rather than 32.88). Add-on: a reclaim of the H&S neckline (华邦电 58.6 = the gap fill / neckline reclaim, ~6.5%; 大统益 25.5, ~6.5%; 塑胶类 282, the prior day's level, ~6%). Once the neckline breaks, the resistance for the whole position moves down from 90 to the neckline 72: a reclaim stops the add-on and takes profit on the early short.",
+      "target": {
+        "formula": "H&S measured move: distance = head high - neckline; target = neckline-break level - distance; a second wave = target - distance, only if it is reasonable.",
+        "worked_example": "华邦电: 85.46 - 56.5 = 28.96; 56.5 - 28.96 = 27.54. 大统益: 32.88 - 23.5 = 9.38; 24.35 - 9.38 = 14.97 (low 14.59); a second wave would be 14.97 - 9.38 = 5.59, rejected. 塑胶类: 322.12 - 265 = 57.12; 268.5 - 57.12 = 211.38 (low 212.55).",
+        "pages": [
+          83,
+          85,
+          86,
+          87
+        ]
+      },
+      "confirmation": [
+        "Falling back below the broken high-zone line within a day or a few days (华邦电: the next day).",
+        "Breaking the low of the heavy-volume long red breakout candle (塑胶类 309.54).",
+        "A gap down through the H&S neckline (跳空跌破颈线) confirms the top.",
+        "A rising flag (上飘旗形) / escape-line rebound that fails below the neckline."
+      ],
+      "invalidation": [
+        "Before the neckline break: a close back above the false-breakout high / resistance zone (90 or the 7% stop).",
+        "After the neckline break: a close back above the neckline."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Most traders short only after the neckline breaks; using the false-breakout structure you can judge the weakening at the top and short at a relatively higher level.",
+      "kind": "entry",
+      "quote_zh": "这是一种头肩顶的假突破结构，通常学习技术分析者大多会在跌破颈线确定头部后，才做放空动作，但是利用假突破的结构，更可进阶判断股价高档转弱而在相对高档布空。",
+      "pages": [
+        81
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "A breakout of the high-zone line (90) followed by a fall back below it confirms a false breakout (the main player's fake-out to distribute): short, stop near the 90 resistance zone (or slightly higher); the H&S neckline break (72) is the add-on signal.",
+      "kind": "entry",
+      "quote_zh": "如图示，高档整理后突破颈线90，随后又回落颈线之下，假突破确立。假突破是一种主力拉高出货的骗线动作，因此随势做空，停损设在颈线反压区90附近（或稍高些），待跌破颈线72确定头部后为空单加码信号",
+      "pages": [
+        81
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "After the neckline break, resistance drops from 90 to the neckline 72; a broken neckline must not be reclaimed. A reclaim stops the add-on and takes profit on the early short; otherwise target the swing measured move. Small losses, big wins.",
+      "kind": "stop",
+      "quote_zh": "空头看反压，此时反压自90降至头肩顶的颈线72附近，颈线跌破就不能再站回，因此站回颈线，加码的空单停损，假突破高档做空的空单停利，反之颈线未站回，看波段跌幅满足，波段操作小赔大赚。",
+      "pages": [
+        81,
+        82
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "With a flat neckline: target = neckline - (head high - neckline).",
+      "kind": "target",
+      "quote_zh": "头部高点85.46元至颈线约在56.5元，距离约28.96元。跌破颈线的位置56.5元（颈线为平行线）-28.96元=等幅计算的跌幅满足27.54元。",
+      "pages": [
+        83
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "A breakout to a new high followed by a fall below the line the very next day confirms the top: short with a stop at the high (a reclaim of the line).",
+      "kind": "stop",
+      "quote_zh": "2001年6月14日突破颈线创新高，隔日立即跌落颈线以下，假突破确立头部空单进场，约可空在82.5元附近，停损设高点85.46元，也是站回线上时，风险3.6%。",
+      "pages": [
+        84
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "On a gap neckline break, put the add-on stop at the gap fill / neckline reclaim.",
+      "kind": "stop",
+      "quote_zh": "9月7日跌破颈线空单加码，约可空在55元，停损利设在回补缺口，也是站回颈线时的58.6元，风险约6.5%",
+      "pages": [
+        84
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Chasing a gap-down neckline break is risky short-term: if unsure, open a starter short, wait for the close to confirm the break, and add the next day with a stop.",
+      "kind": "risk",
+      "quote_zh": "跳空跌破颈线追空的短线风险较高，若无把握，可先建立空单部位，收盘确定跌破，隔日再做较有把握的加码动作，设好停损点即可。",
+      "pages": [
+        84
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Skip the second-wave target if it is negative/unrealistic or a 破底翻 bottoming signal appears; do only one wave.",
+      "kind": "target",
+      "quote_zh": "华邦电日线若计算第二波跌幅满足，则数字为负值，因此不做计算，且8月出现破底翻的企稳信号，空单只做一波。",
+      "pages": [
+        84
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "If the stop at the false-breakout high implies more than 10% risk, it is too high; use about 7% instead.",
+      "kind": "risk",
+      "quote_zh": "停损若设32.88元高点，风险超过10%，太高，可设约7%，约在31.6元附近。",
+      "pages": [
+        86
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "A complete H&S top usually gives two downside waves, but skip the second when it contradicts the fundamentals or when enough time has passed (a decline of about half the top's duration: a 5-month top, 2.5 months of decline).",
+      "kind": "time",
+      "quote_zh": "通常这类型态大多会有两波段跌幅满足，但若再计算第二波跌幅满足仅剩5.59元，这严重背离了该股的基本面，再者，约五个月的头部，跌破颈线后，盘跌的时间也达约两个半月，时间已足够，所以这是技术面只做一波的主要考量。",
+      "pages": [
+        86
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "The false breakout is confirmed when price falls back under the line AND breaks the low of the heavy-volume long red candle that made the breakout; stop at the high.",
+      "kind": "entry",
+      "quote_zh": "2011年5月4日跌落颈线下，且在跌破4月21日带量长红突破颈线的低点（309.54点）时，确定假突破进场做空，约可空在309点附近，停损设高点322.12点，风险约4%。",
+      "pages": [
+        88
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "Add-on stop after a gap neckline break: the prior day's level (the cover point, 282).",
+      "kind": "stop",
+      "quote_zh": "8月2日跳空跌破颈线，头肩顶确立空单加码，约可空在266点附近，停损设前一天，也就是补空点282点，风险约6%",
+      "pages": [
+        88
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "After a neckline break completes the top, price often retests the neckline; that rebound is the escape line (逃命线).",
+      "kind": "entry",
+      "quote_zh": "跌破颈线头部完成的时候，经常会有回测颈线的动作，这个动作就叫做“逃命线”",
+      "pages": [
+        88
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "When a sector index's weakness is confirmed, short the weak stocks in that group.",
+      "kind": "filter",
+      "quote_zh": "当类股指数转弱确立时，可以这类族群中的弱势股布空为主。",
+      "pages": [
+        88
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "Master quotes: patience (Kostolany), over-trading (Soros), averaging down (O'Neil).",
+      "kind": "psychology",
+      "quote_zh": "“谁缺乏耐心，就不要靠近证券市场。”；“如果操作过量，即使对市场判断正确，仍会一败涂地。”；“摊平是一种可能造成严重亏损的业余策略。”",
+      "pages": [
+        84,
+        86,
+        88
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "假突破（头肩顶） schematic",
+      "timeframe": "n.a.",
+      "period": "n.a.",
+      "pattern": "假突破（头肩顶）",
+      "levels": {
+        "neckline_left": 68,
+        "neckline_mid": 70,
+        "neckline_break": 72,
+        "high_zone": 90,
+        "false_breakout_high": 95
+      },
+      "outcome": "Short below 90 with a stop near 90; add below 72; after the break, resistance = 72",
+      "pages": [
+        81,
+        82
+      ]
+    },
+    {
+      "instrument": "华邦电 (2344)",
+      "timeframe": "daily",
+      "period": "1999-12..2001-02 (chart axis; the text says 2001)",
+      "pattern": "假突破 + 头肩顶 + 上飘旗形 → 跌幅满足 → 破底翻",
+      "levels": {
+        "left_shoulder": 70.42,
+        "head": 85.46,
+        "right_shoulder": 72.22,
+        "neckline": 56.5,
+        "neckline_lows": "56.13 / 56.17",
+        "distance": 28.96,
+        "target": 27.54,
+        "short_entry": 82.5,
+        "stop": 85.46,
+        "risk_pct": 3.6,
+        "addon_entry": 55,
+        "addon_stop": 58.6,
+        "addon_risk_pct": 6.5,
+        "range_high_after": 32.82,
+        "low": 21.75,
+        "rebound_high": 36.67
+      },
+      "outcome": "Breakout 6/14, back below the line the next day → short; 9/7 gap below the neckline → add; reached the target; profit ≈50% (add-on) to 66% (false-breakout short); after wide swings 21.75-32.82, a 破底翻 bottom",
+      "pages": [
+        83,
+        84
+      ]
+    },
+    {
+      "instrument": "大统益 (1232)",
+      "timeframe": "daily",
+      "period": "2008",
+      "pattern": "假突破 + 头肩顶 → 跌幅满足 → 破底翻",
+      "levels": {
+        "left_shoulder": 26.52,
+        "head": 32.88,
+        "neckline": 23.5,
+        "distance": 9.38,
+        "neckline_break": 24.35,
+        "target": 14.97,
+        "short_entry": 29.6,
+        "stop": 31.6,
+        "risk_pct": 7,
+        "addon_entry": 23.9,
+        "addon_stop": 25.5,
+        "addon_risk_pct": 6.5,
+        "low": 14.59,
+        "rejected_second_target": 5.59
+      },
+      "outcome": "5/27 false breakout → short; 8/12 gap below the neckline → add; reached the target (low 14.59), then 破底翻; profit ≈37% (add-on) to 49% (false-breakout short); one wave only",
+      "pages": [
+        85,
+        86
+      ]
+    },
+    {
+      "instrument": "塑胶类指数",
+      "timeframe": "daily",
+      "period": "2010-2011",
+      "pattern": "假突破 + 头肩顶 + 逃命线 → 跌幅满足",
+      "levels": {
+        "left_shoulder": 305.46,
+        "head": 322.12,
+        "right_shoulder": 304.62,
+        "neckline": 265,
+        "distance": 57.12,
+        "neckline_break": 268.5,
+        "target": 211.38,
+        "breakout_candle_low_4_21": 309.54,
+        "short_entry": 309,
+        "stop": 322.12,
+        "risk_pct": 4,
+        "addon_entry": 266,
+        "addon_stop": 282,
+        "addon_risk_pct": 6,
+        "post_break_low": 227.15,
+        "escape_line_high": 264.03,
+        "low": 212.55
+      },
+      "outcome": "2011-05-04 false breakout → short; 8/2 gap below the neckline → add; 227.15 → 264.03 escape-line retest; reached the target (low 212.55) then bottomed; profit ≈18% (add-on) to 30% (false-breakout short)",
+      "pages": [
+        87,
+        88
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Stage 1 (early short): a high-zone resistance R (consolidation highs) is broken (close > R, new swing high Hh); within ~1-3 bars, close < R (or < the low of the heavy-volume breakout candle) → short; stop = Hh, capped at 7% (use 7% if Hh is more than 10% away).",
+    "Stage 2 (add-on): H&S neckline N through the troughs on either side of the head; close < N (often a gap) → add short; stop = a close back above N (or the gap fill / prior bar's high).",
+    "Joint exit: after Stage 2, if close > N, exit both (stop on the add-on, take profit on Stage 1).",
+    "Target: d = Hh - N(at head); target_1 = N(at break) - d; consider target_2 = target_1 - d only if target_2 > 0, it is fundamentally plausible, and the decline time is less than ~half the top's duration.",
+    "Escape line: after the break, a rebound toward N that fails (close < N) = an add-on/late-entry opportunity.",
+    "Sector filter: when a sector index confirms a top, rank its constituents by weakness for shorts."
+  ],
+  "ambiguities": [
+    "The word 颈线 is used for two different lines: the high-zone resistance that is falsely broken (90 in the schematic; 'the breakout neckline' on 5/27 for 大统益, 5/4 for 塑胶类) and the H&S neckline (72). The exact high-zone level for the real-chart cases is not printed.",
+    "华邦电 dates: the text says 2001-06-14 and 9/7, but the chart axis (1999/12 .. 2001/2, header date 2000/6/13) suggests the events were in 2000. The text says the 破底翻 was 'in August', yet on the chart the 破底翻 label sits near the end of the range (around Dec 2000-Jan 2001).",
+    "塑胶类 stated profits (18% add-on, 30% early short) are lower than the arithmetic from the entries to the target (266→211.38 ≈ 20.5%; 309→211.38 ≈ 31.6%); the book may measure to a different exit level.",
+    "Where the distance is measured to: 华邦电 measures to a flat neckline and subtracts from it; 大统益 and 塑胶类 measure to 23.5/265 but subtract from the break level 24.35/268.5 (the neckline slopes slightly).",
+    "The 'how many days' window for falling back below the broken line is not quantified (华邦电: the next day; others: unspecified).",
+    "The 塑胶类 add-on stop at 282 is described as '前一天，也就是补空点' — whether this is the prior day's high or a gap-fill level is unclear."
+  ],
+  "illegible": [
+    {
+      "page": 83,
+      "what": "华邦电 chart: the label of the second low near the 破底翻 (~24.23) and the dashed target-box text are low-resolution."
+    },
+    {
+      "page": 85,
+      "what": "大统益 chart: several small labels (right shoulder ~27.72, ~25.37, lows 19.40/19.33/16.34) are low-resolution; the exact level of the 'breakout neckline' used for the 5/27 false breakout is not labeled."
+    },
+    {
+      "page": 87,
+      "what": "塑胶类 chart: the label near the neckline (~266.35) and the low ~221.33 are low-resolution."
+    }
+  ]
+}

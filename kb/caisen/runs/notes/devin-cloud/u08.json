@@ -1,0 +1,334 @@
+{
+  "unit_id": "u08",
+  "model": "devin-cloud",
+  "pages_read": [
+    75,
+    76,
+    77,
+    78,
+    79,
+    80
+  ],
+  "summary": "Head-and-shoulders top (头肩顶), the mirror image of the head-and-shoulders bottom, used as a short-entry signal. Short on the neckline break, stop 5%-7% (a close back above the neckline), and measure the target as the neckline-break level minus the vertical distance from the head to the neckline; a second wave subtracts the same distance again. Three cases: 日月光 daily 1997 (sloped neckline), 中釉 weekly 2011 (flat neckline) and the 营建类 sector index weekly 1995-1999 (a compound top with two head highs, whose midpoint is used; it also shows an upside measured move from the earlier bottom and the post-break 'escape line' rebound).",
+  "patterns": [
+    {
+      "name_zh": "头肩顶",
+      "name_en": "Head-and-shoulders top",
+      "direction": "short",
+      "structure": "Left shoulder, a higher head, and a lower right shoulder over a common neckline through the two troughs. The neckline may be flat (schematic 70, 中釉 20.7) or sloped (日月光: rising, 15 under the head and 16.4 at the break).",
+      "entry": "Short when price breaks the neckline (破线), e.g. schematic short ~69 below the 70 neckline; 日月光 short ~16 on the 1997-10-17 heavy-volume black candle (带量翻黑) through 16.4; 中釉 ~20.5 the week it broke 20.7; 营建类 ~420 after the break at ~429.",
+      "stop": "5%-7%, i.e. a close back above the neckline (站回颈线之上). Examples: 日月光 16.8 (~5%); 中釉 21.7, the high where the fall started 2 weeks earlier (~6%); 营建类 440 (~5%).",
+      "target": {
+        "formula": "distance = head high (or the midpoint of two head highs) - neckline directly below it; target_1 = neckline-break level - distance; target_2 = target_1 - distance.",
+        "worked_example": "Schematic: 90 - 70 = 20; 70 - 20 = 50; 50 - 20 = 30. 日月光: 20.3 - 15 = 5.3; 16.4 - 5.3 = 11.1 (low 10.9). 中釉: 30.84 - 20.7 = 10.14; 20.7 - 10.14 = 10.56 (low 10.37). 营建类: 595 - 390 = 205; 429 - 205 = 224 (low 185.44).",
+        "pages": [
+          75,
+          77,
+          78,
+          80
+        ]
+      },
+      "confirmation": [
+        "A heavy-volume black candle breaking the neckline (日月光 带量翻黑破线).",
+        "Falling volume through the head and right shoulder (the 日月光 chart draws a descending volume trendline).",
+        "The pullback can't get back above the neckline (反压站不回).",
+        "A rebound after the break that fails below the neckline (escape line / rising flag as a bear continuation)."
+      ],
+      "invalidation": [
+        "A close back above the neckline after the break (the stop)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        75,
+        76,
+        77,
+        78,
+        79,
+        80
+      ]
+    },
+    {
+      "name_zh": "复合式头肩顶（合式头肩顶）",
+      "name_en": "Compound head-and-shoulders top (double-peaked head)",
+      "direction": "short",
+      "structure": "A head-and-shoulders top whose head is a double top (two near-equal highs, 营建类 595.21 / 594.05), formed over more than two years.",
+      "entry": "Short on the weekly neckline break (1998-08-01 week; short ~420).",
+      "stop": "~440, a reclaim of the neckline (~5% risk).",
+      "target": {
+        "formula": "distance = midpoint of the two head highs - neckline; target = neckline-break level - distance",
+        "worked_example": "≈595 - ≈390 = 205; ≈429 - 205 = 224",
+        "pages": [
+          80
+        ]
+      },
+      "confirmation": [
+        "The post-break rebound forms a rising flag (上飘旗形, bear continuation) that stays under the neckline (escape line)."
+      ],
+      "invalidation": [
+        "Weekly close back above the neckline (~440 stop)."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        79,
+        80
+      ]
+    },
+    {
+      "name_zh": "底部突破 → 涨幅满足（等幅计算）",
+      "name_en": "Bottom breakout with an equal-distance upside target",
+      "direction": "long",
+      "structure": "营建类 weekly: a roughly one-year bottom with a flat neckline; a breakout (1996-04-06 week), a first wave to 396.83, a pullback to 352.8, then a break above the prior high.",
+      "entry": "Go long on the neckline breakout (多单进场).",
+      "stop": "A break back below the neckline (跌破颈线停损).",
+      "target": {
+        "formula": "target = pullback low + (first-wave high - bottom low), computed once the prior high is cleared",
+        "worked_example": "396.83 - 216.84 = 179.99; 352.8 + 179.99 = 532.79",
+        "pages": [
+          79
+        ]
+      },
+      "confirmation": [
+        "Clearing the prior high after the pullback triggers the calculation."
+      ],
+      "invalidation": [
+        "Falling back below the neckline."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        79
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "The head-and-shoulders top is the mirror image of the head-and-shoulders bottom, just as the M top mirrors the W bottom.",
+      "kind": "filter",
+      "quote_zh": "如同W底与M头的反向关系，头肩顶是头肩底的反向关系。",
+      "pages": [
+        75
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "First target = neckline - (head high - neckline); second target = first target - the same distance.",
+      "kind": "target",
+      "quote_zh": "头部高点90至颈线位置70（颈线假设为平行线）距离20。跌破平行的颈线位置70-20=等幅计算的跌幅满足50。若需再计算第二波跌幅满足，第一波跌幅满足点50-20=等幅计算的跌幅满足30。",
+      "pages": [
+        75
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Short on the neckline break, stop within 5%-7% (a close back above the neckline); if the pullback can't reclaim it, take profit near the one- or two-wave target (27%-56% in the schematic).",
+      "kind": "stop",
+      "quote_zh": "跌破颈线时，空单进场，如空在69附近，停损设5%～7%以内，也是站回颈线之上时，反压站不回，看一至两波的跌幅满足附近，空单获利了结，约27%～56%。",
+      "pages": [
+        76
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "The target can be computed on the day the neckline breaks; with a sloped neckline, measure vertically from the head to the neckline and subtract from the break level.",
+      "kind": "target",
+      "quote_zh": "破线当日，便可计算跌幅满足。❶自头部高点20.3元垂直至颈线位置约在15元附近，距离约5.3元。❷跌破颈线位置约在16.4元附近-5.3元=等幅计算的跌幅满足11.1元。",
+      "pages": [
+        77
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "A heavy-volume black candle through the neckline confirms the head-and-shoulders top.",
+      "kind": "volume",
+      "quote_zh": "日月光日线1997年10月17日带量翻黑，跌破颈线头肩顶确立",
+      "pages": [
+        77
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "The stop is a close back above the neckline, which acts as resistance (~5%).",
+      "kind": "stop",
+      "quote_zh": "停损设16.8元，也就是站上颈线反压风险约5%，反压站不回，看跌幅满足附近，空单回补获利约30%。",
+      "pages": [
+        77
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Alternative stop: the high from which the fall started a few bars before the break (中釉: the high 2 weeks earlier, 21.7, ~6%).",
+      "kind": "stop",
+      "quote_zh": "约可空在20.5元附近，停损设在2周前起跌高点21.7元，风险约6%",
+      "pages": [
+        78
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "With two head highs (compound top), measure from their midpoint to the neckline.",
+      "kind": "target",
+      "quote_zh": "（头部有两个高点双头，称为复合式头肩顶。）❶自头部两个高点的中间值约595点至颈线位置约390点，距离205点。",
+      "pages": [
+        80
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Upside measured move after a bottom: once the prior high is cleared after a pullback, target = pullback low + (first-wave high - bottom low).",
+      "kind": "target",
+      "quote_zh": "大涨一波拉回整理后再过前高时，便可计算涨幅满足。",
+      "pages": [
+        79
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "When the top is much larger than the earlier bottom, price easily breaks below the bottom's low.",
+      "kind": "time",
+      "quote_zh": "技术面结构上头部的规模远大于底部的规模，因此容易跌破底部低点。",
+      "pages": [
+        80
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "The rebound after a completed top is a rising flag (bear continuation); a rebound that fails to clear the neckline is the 'escape line' (逃命线).",
+      "kind": "entry",
+      "quote_zh": "跌破颈线头部完成后的反弹形成上飘旗形（空头中继站），反弹未过颈线，便是技术面所谓的逃命线。",
+      "pages": [
+        80
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "头肩顶 schematic",
+      "timeframe": "n.a.",
+      "period": "n.a.",
+      "pattern": "头肩顶",
+      "levels": {
+        "head": 90,
+        "neckline": 70,
+        "distance": 20,
+        "short_entry": 69,
+        "target_1": 50,
+        "target_2": 30,
+        "stop_pct": "5-7"
+      },
+      "outcome": "Profit 27% (first wave) to 56% (two waves)",
+      "pages": [
+        75,
+        76
+      ]
+    },
+    {
+      "instrument": "日月光 (2311)",
+      "timeframe": "daily",
+      "period": "1996-11..1997-11",
+      "pattern": "头肩顶 (sloped neckline)",
+      "levels": {
+        "head": 20.3,
+        "right_shoulder": 18.3,
+        "neckline_under_head": 15,
+        "distance": 5.3,
+        "neckline_break": 16.4,
+        "target": 11.1,
+        "short_entry": 16,
+        "stop": 16.8,
+        "risk_pct": 5,
+        "low": 10.9
+      },
+      "outcome": "Broke 1997-10-17 on a heavy-volume black candle; target reached 1997-10-30 (low 10.9), then a V reversal; short profit ≈30%",
+      "pages": [
+        77
+      ]
+    },
+    {
+      "instrument": "中釉 (1809)",
+      "timeframe": "weekly",
+      "period": "2009..2012",
+      "pattern": "头肩顶 (flat neckline, ~1y2m)",
+      "levels": {
+        "left_shoulder": 25.41,
+        "head": 30.84,
+        "right_shoulder": 25.03,
+        "neckline": 20.7,
+        "neckline_low": 20.25,
+        "distance": 10.14,
+        "target": 10.56,
+        "short_entry": 20.5,
+        "stop": 21.7,
+        "risk_pct": 6,
+        "low": 10.37
+      },
+      "outcome": "Broke the neckline in the 2011-06-18 week; reached the target near year-end 2011 (low 10.37); short profit ≈48%",
+      "pages": [
+        78
+      ]
+    },
+    {
+      "instrument": "营建类指数",
+      "timeframe": "weekly",
+      "period": "1995-03..1999",
+      "pattern": "约一年底部 → 涨幅满足 → 逾二年复合式头肩顶 → 跌幅满足",
+      "levels": {
+        "bottom_low": 216.84,
+        "first_wave_high": 396.83,
+        "rise": 179.99,
+        "pullback_low": 352.8,
+        "upside_target": 532.79,
+        "head_highs": "595.21 / 594.05",
+        "head_mid": 595,
+        "neckline": 390,
+        "distance": 205,
+        "neckline_break": 429,
+        "downside_target": 224,
+        "short_entry": 420,
+        "stop": 440,
+        "risk_pct": 5,
+        "post_break_low": 346.57,
+        "flag_high": 429.61,
+        "low": 185.44
+      },
+      "outcome": "Bottom breakout 1996-04-06; target zone reached 1997-03; neckline broken in the 1998-08-01 week; rising-flag rebound below the neckline; target reached around 1999-02; short profit ≈46%",
+      "pages": [
+        79,
+        80
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Head-and-shoulders top detector: three swing highs with the middle one highest; the neckline is a line through the two intervening swing lows (flat or sloped); signal = close below the neckline value at that bar.",
+    "Target: d = head_high - neckline_value_at_head_bar (vertical); target_1 = neckline_value_at_break - d; target_2 = target_1 - d.",
+    "Compound head: if two head highs are within ~1% of each other, use their mean as head_high.",
+    "Stop: close back above the neckline, capped at 5%-7% from entry; alternatively the swing high a few bars before the break.",
+    "Volume confirmation (optional): the break bar is bearish with volume above average; volume declines from the left shoulder/head to the right shoulder.",
+    "Post-break rebound to the neckline that fails (逃命线 / 上飘旗形) = an add-on or late-entry short with a stop above the neckline.",
+    "Upside version: after a bottom breakout, once close > first-wave high H1: target = pullback low L2 + (H1 - bottom low L1)."
+  ],
+  "ambiguities": [
+    "Which level the distance is subtracted from varies: the schematic and 中釉 use the flat neckline; 日月光 uses the sloped neckline's level at the break (16.4) and a vertical distance to its level under the head (15); 营建类 uses the break level 429 while measuring to a neckline of 390 (the neckline rises from ~390 under the head to ~429 at the break).",
+    "Entries are 'about' a level (69, 16, 20.5, 420), slightly below the neckline; the exact fill rule (close vs. intrabar) isn't specified.",
+    "Stop rules differ: a neckline reclaim (日月光, 营建类), the high 2 weeks earlier (中釉), or a blanket 5%-7% (schematic).",
+    "When to take the second wave instead of the first isn't specified in this unit (the schematic says 'one to two waves').",
+    "营建类 overshot its target (224) to 185.44; the book still calls it 'reaching the target'.",
+    "p79 heads the pattern 合式头肩顶 while p80 calls it 复合式头肩顶; same pattern."
+  ],
+  "illegible": [
+    {
+      "page": 77,
+      "what": "日月光 chart: the earliest low (~1.54), the 5.98 label and the dashed target-box label near 11 are low-resolution."
+    },
+    {
+      "page": 79,
+      "what": "营建类 chart: the right-axis value near 311.29 and the 277.13 rebound label are partly obscured."
+    }
+  ]
+}

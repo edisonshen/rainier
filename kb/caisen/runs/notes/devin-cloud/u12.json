@@ -1,0 +1,376 @@
+{
+  "unit_id": "u12",
+  "model": "devin-cloud",
+  "pages_read": [
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114
+  ],
+  "summary": "Measured-move target for a converging (symmetrical) triangle bottom: the triangle's vertical side length (edge, measured at the triangle's widest/left end between the two trendlines) is added to the breakout point for the first target, and added again for the second target. A valid breakout must occur at 1/2-3/4 of the triangle; late breakouts near the apex fail more often. Entry is the breakout above the upper edge (neckline), stop 5-7% / falling back below the line, profit-taking at one or two waves of target (30%-60% in the schematic). Four Taiwan cases (荣化 weekly 1990-94, 联电 daily 2008-09, 中航 weekly 2009, 新兴 daily 2011-12) show the arithmetic; the tips add that 倒三角形 (flat top) is usually a bottom, 正三角形 (flat bottom) usually a top, and that triangles after a deep decline give much larger moves than those formed without a big prior drop.",
+  "patterns": [
+    {
+      "name_zh": "收敛三角形底部",
+      "name_en": "Converging (symmetrical) triangle bottom, upside breakout",
+      "direction": "long",
+      "structure": "After a decline, price oscillates between a descending upper trendline (the 'neckline' / 上缘颈线) and a rising lower trendline, converging to an apex. The 'side length' (边长) is the vertical distance between the two lines at the triangle's left (widest) end: schematic low 40 to the upper line at 55 = 15. In the case studies the edge is drawn as a vertical dashed line from the first high/low pivot to the opposite trendline, so one end can be a line value rather than an actual pivot price (联电: high 7.94 to 5.35 on the lower line while the actual low printed 5.50; 中航: 43.31 on the upper line, actual high 43.89, to 26.8 on the lower line, actual low 28.30; 荣化: low 3.17 to 10.7 on the upper line; 新兴: high 25.40 to ~22.1 on the lower line, actual low 21.94).",
+      "entry": "Buy when price breaks above the upper edge (neckline) of the triangle — bottom confirmed (突破收敛三角形上缘颈线，底部确立多单进场). Breakout should occur at 1/2-3/4 of the triangle's length. Prefer a volume breakout / long red candle; if unsure whether the breakout is valid, use the prior high inside the triangle (联电 7.39) as the trigger and buy as soon as it is cleared, or check 5-minute/hourly charts for a volume breakout.",
+      "stop": "Stop within 5%-7%, i.e. when price falls back below the line (跌落线下). Case stops: 荣化 below 5.3 (<6% risk); 联电 the breakout day's long-red low 6.94 (~6%); 中航 the breakout week's volume long-red low 40.88 (~3%); 新兴 23.4 (~2%).",
+      "target": {
+        "formula": "edge = upper_line - lower_line measured vertically at the triangle's left end; target_1 = breakout_price + edge; target_2 = target_1 + edge",
+        "worked_example": "Schematic: 55-40 = 15; 50+15 = 65; 65+15 = 80. 荣化: 10.7-3.17 = 7.53; 5.5+7.53 = 13.03. 联电: 7.94-5.35 = 2.59; 7.26+2.59 = 9.85; 9.85+2.59 = 12.44. 中航: 43.31-26.8 = 16.51; 41.9+16.51 = 58.41; 58.41+16.51 = 74.92. 新兴: 25.4-22.1 = 3.3; 23.8+3.3 = 27.1.",
+        "pages": [
+          105,
+          106,
+          107,
+          109,
+          110,
+          111,
+          112,
+          113
+        ]
+      },
+      "confirmation": [
+        "Breakout position at 1/2-3/4 of the triangle (p105).",
+        "Volume on the breakout (带量突破颈线) — 量先价行 structure (荣化 p107-108; 中航 带量长红 p112).",
+        "Long red candle breakout (联电 3/9 长红突破颈线, p109).",
+        "Clearing the prior high inside the triangle (联电 7.39) confirms the breakout; 5-min / hourly volume breakout as an intraday check (p110).",
+        "Second-wave target is computed only after the pullback from target 1 completes a continuation pattern and clears the prior high (联电: 下降楔形 then breaking past the prior high, p109)."
+      ],
+      "invalidation": [
+        "Price falls back below the upper line after the breakout (跌落线下) — stop.",
+        "Breakout late near the apex (整理至越尾端的突破) is more prone to fail and reverse (p105).",
+        "If, after target 1, consolidation lasts too long without exceeding the prior high and a trendline break forms a top, only one wave of target is counted (新兴, p113)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "A converging triangle breakout is valid only at 1/2-3/4 of the triangle; the closer to the apex, the more likely the breakout fails and reverses.",
+      "kind": "filter",
+      "quote_zh": "前面提过，收敛三角形需在1/2～3/4处突破才算有效突破，整理至越尾端的突破，越容易产生失败，出现反方向的走势。",
+      "pages": [
+        105
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "Once price breaks the upper edge (neckline) of the triangle, the measured-move target can be computed.",
+      "kind": "target",
+      "quote_zh": "如图示，突破收敛三角形上缘颈线后，便能计算涨幅满足。",
+      "pages": [
+        105
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Target method: side length = equal length after breakout; schematic edge from low 40 to 55 = 15; breakout 50 + 15 = 65 first target; 65 + 15 = 80 second target.",
+      "kind": "target",
+      "quote_zh": "❶边长＝突破后的等长。❷三角形边长以低点40做计算至55边长＝15。❸突破处50+15＝等幅计算的涨幅满足65。❹若需再计算第二波涨幅满足：第一波涨幅满足65+15＝等幅计算的第二波涨幅满足80。",
+      "pages": [
+        106
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Enter long on the breakout of the upper edge; stop within 5-7% (falling back below the line); if neckline support holds, take profit near the 1st or 2nd wave target, roughly 30-60%.",
+      "kind": "entry",
+      "quote_zh": "突破收敛三角形上缘颈线，底部确立多单进场，停损设5%～7%以内，也是跌落线下时，颈线支撑不破，则看一至两波涨幅满足附近，多单获利了结，约30%～60%。",
+      "pages": [
+        106
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Long side watches support: as long as support holds, look for the target; aim for big wins and small losses.",
+      "kind": "risk",
+      "quote_zh": "多头看支撑，支撑不破，看满足，达涨幅满足附近获利约120%，大赚小赔。",
+      "pages": [
+        108
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Besides converging triangles there are 正三角形 (◣, flat bottom with falling top) and 倒三角形 (◤, flat top with rising bottom); 正三角形 is usually a top pattern, 倒三角形 usually a bottom pattern.",
+      "kind": "filter",
+      "quote_zh": "三角形除了收敛三角外，还有正三角形◣与倒三角形◤，通常正三角形为头部型态，倒三角形为底部型态。",
+      "pages": [
+        108
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "Volume leading price overrides the shape bias: 荣化 leaned toward a 正三角形 (top-type) but the 12/4 volume breakout was upward, a 量先价行 structure, so the bull move proceeded.",
+      "kind": "volume",
+      "quote_zh": "荣化周线虽有正三角形的倾向，但12月4日的带量突破是往上突破，属量先价行的结构，量价结构配合，多头就能够顺利进行。",
+      "pages": [
+        108
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "Second-wave target is computed after the pullback from wave 1 completes a continuation pattern (下降楔形) and price clears the prior high.",
+      "kind": "target",
+      "quote_zh": "联电达第一波涨幅满足附近（最高10.42元），便拉回整理，完成下降楔形越过前高后，便可再计算第二波涨幅满足。",
+      "pages": [
+        109
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "If unsure the breakout is valid (it may leave an upper shadow and fail to close above), check whether the 5-min or hourly chart broke out with volume, or use the prior high (7.39) as the trigger and buy as soon as it is cleared; set the stop so risk is locked in.",
+      "kind": "entry",
+      "quote_zh": "3月9日突破的当时，或许没有把握是否为有效突破（有时候会留上影线收盘没过），此时除了看五分钟线或小时线是否带量突破，也可以前高7.39元为依据，突破确立立刻买进，所以在操作方式会买在7.4元附近，停损也设好风险便已锁定。",
+      "pages": [
+        110
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Stop can be set at the low of the breakout candle (联电 long-red low 6.94; 中航 breakout-week volume long-red low 40.88), which coincides with falling back below the line.",
+      "kind": "stop",
+      "quote_zh": "停损设当日长红低点6.94元，也是跌落线下时，风险约6%",
+      "pages": [
+        110,
+        112
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "A long upper shadow at target 1 without a reversal signal is just short-term volatility; continue to look for target 2.",
+      "kind": "target",
+      "quote_zh": "中航涨至涨幅满足附近（最高58.89元）周线出现长上影线，仅做短线大幅震荡，使再度盘涨，无反转迹象，续看第二波涨幅满足。",
+      "pages": [
+        111
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "A triangle leaning toward 倒三角形 (flat upper edge) is mostly a bottom: after the breakout there is no nearby overhead resistance; bottoms after a deep decline with a flat neckline usually rally substantially.",
+      "kind": "filter",
+      "quote_zh": "倒三角形大多属于底部的结构，因为上缘为平行，突破后至少近期的上档无压，多头容易进行，尤其是跌深后的底部型态颈线是平行的，突破后大多有相当大的涨幅。",
+      "pages": [
+        112
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "If after target 1 the consolidation runs too long, fails to exceed the prior high and a trendline break forms a top, only one wave of target counts.",
+      "kind": "target",
+      "quote_zh": "由于整理时间过长未过前高且破线形成头部，因此仅能计算一波涨幅满足。",
+      "pages": [
+        113
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "A sloped upper neckline still has overhead resistance after the breakout, especially the high-volume edge high (25.4) and the layered resistance of the prior decline; a triangle not preceded by a big drop has limited upside — only triangles after a big decline tend to produce large gains.",
+      "kind": "filter",
+      "quote_zh": "新兴日线收敛三角形上线颈线偏斜，突破后仍会有压，尤其边长高点，也就是大量高点25.4元为实质压，加上先前的盘跌层层压力，属于非大跌后的底部，相对涨幅便有限，也就是经过大跌后的收敛三角形，才容易有相对大的涨幅。",
+      "pages": [
+        114
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "Psychology (Kostolany quote): stick to your own ideas and rhythm; don't follow the crowd.",
+      "kind": "psychology",
+      "quote_zh": "坚持自己的想法，别人的想法只是别人的，你所能用的只有自己的节奏，所以要不随波逐流。",
+      "pages": [
+        108
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "Psychology (Livermore quote): emotional, impulsive daily trading is the main cause of losses; learn how not to lose before learning how to make money.",
+      "kind": "psychology",
+      "quote_zh": "不顾市场情况，每天以感情冲动进进出出，是华尔街很多炒手亏钱的主要原因。……当你学习怎么做才不会亏钱时，你开始学习怎么赚钱了。",
+      "pages": [
+        110
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "Psychology (Kostolany quotes): buying needs imagination, selling needs reason; long run the market cannot detach from the economy and what matters is future, not past, development.",
+      "kind": "psychology",
+      "quote_zh": "买股票时，需要想像力；卖股票时，需要理智。",
+      "pages": [
+        112,
+        114
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "Schematic",
+      "timeframe": "n.a.",
+      "period": "n.a.",
+      "pattern": "收敛三角形底部",
+      "levels": {
+        "low": 40,
+        "edge_high": 55,
+        "edge": 15,
+        "breakout": 50,
+        "target_1": 65,
+        "target_2": 80
+      },
+      "outcome": "illustrative; profit 30%-60% at 1-2 waves",
+      "pages": [
+        105,
+        106
+      ]
+    },
+    {
+      "instrument": "荣化 (1704)",
+      "timeframe": "weekly",
+      "period": "1990..1994-08",
+      "pattern": "收敛三角形底部 (leaning 正三角形)",
+      "levels": {
+        "low": 3.17,
+        "edge_high_on_upper_line": 10.7,
+        "edge": 7.53,
+        "breakout": 5.5,
+        "breakout_date": "1993-12-04 (带量突破颈线)",
+        "target_1": 13.03,
+        "entry": 5.6,
+        "stop": 5.3,
+        "post_breakout_pullback_low": 5.54,
+        "high_after": 14.62
+      },
+      "outcome": "reached target zone week of 1994-08-20, then broad topping range and large decline; profit ~120%, risk <6%",
+      "pages": [
+        107,
+        108
+      ]
+    },
+    {
+      "instrument": "联电 (2303)",
+      "timeframe": "daily",
+      "period": "2008-11..2009-06",
+      "pattern": "收敛三角形底部 + 下飘旗形 / 下降楔形 continuation",
+      "levels": {
+        "edge_high": 7.94,
+        "edge_low_on_lower_line": 5.35,
+        "actual_low": 5.5,
+        "edge": 2.59,
+        "breakout": 7.26,
+        "breakout_date": "2009-03-09 (长红突破颈线)",
+        "prior_high_trigger": 7.39,
+        "entry": 7.4,
+        "stop": 6.94,
+        "target_1": 9.85,
+        "wave1_high": 10.42,
+        "wedge_pullback_low": 9.34,
+        "target_2": 12.44,
+        "wave2_high": 12.46
+      },
+      "outcome": "hit both targets (10.42 vs 9.85; 12.46 vs 12.44), then topped and fell; profit ~68%, risk ~6%",
+      "pages": [
+        109,
+        110
+      ]
+    },
+    {
+      "instrument": "中航 (2612)",
+      "timeframe": "weekly",
+      "period": "2008-11..2009-06",
+      "pattern": "收敛三角形底部 (leaning 倒三角形)",
+      "levels": {
+        "edge_high_on_upper_line": 43.31,
+        "actual_high": 43.89,
+        "edge_low_on_lower_line": 26.8,
+        "actual_low": 28.3,
+        "edge": 16.51,
+        "breakout": 41.9,
+        "breakout_date": "week of 2009-02-07",
+        "entry": 42,
+        "stop": 40.88,
+        "target_1": 58.41,
+        "wave1_high_text": 58.89,
+        "target_2": 74.92,
+        "wave2_high": 77.44
+      },
+      "outcome": "hit both targets; long upper shadow at target 1 then continued; reached 77.44 and entered long-term top; profit ~78%, risk ~3%",
+      "pages": [
+        111,
+        112
+      ]
+    },
+    {
+      "instrument": "新兴 (2605)",
+      "timeframe": "daily",
+      "period": "2011-09..2012-06",
+      "pattern": "收敛三角形底部 (sloped neckline, no big prior drop)",
+      "levels": {
+        "edge_high": 25.4,
+        "edge_low_on_lower_line": 22.1,
+        "actual_low": 21.94,
+        "edge": 3.3,
+        "breakout": 23.8,
+        "breakout_date": "2012-01-31",
+        "entry": 23.9,
+        "stop": 23.4,
+        "target_1": 27.1,
+        "high_after": 27.61
+      },
+      "outcome": "hit target 1 (27.61), long consolidation (27.16, 27.29, 26.98) failed to exceed prior high, trendline break confirmed a top; only one wave counted; profit ~13%, risk ~2%",
+      "pages": [
+        113,
+        114
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Detect converging triangle: fit descending upper trendline through >=2 lower-highs and ascending lower trendline through >=2 higher-lows after a decline; apex = intersection.",
+    "Breakout validity: breakout bar index between 50% and 75% of the distance from the triangle's start to the apex (p105).",
+    "Entry trigger: close (or intraday clear of the last internal swing high) above the upper trendline; prefer breakout volume > recent average (带量) or a long bullish candle.",
+    "edge = upper_line(t0) - lower_line(t0) at the triangle's first pivot t0; target_1 = breakout_price + edge; target_2 = target_1 + edge.",
+    "Stop = max(breakout-candle low, line value) with risk capped at 5-7% of entry; exit if close falls back below the upper line.",
+    "Only arm target_2 after a pullback continuation pattern (flag/wedge) and a new high above the wave-1 high; if price fails to exceed the wave-1 high and breaks an up trendline, close the position at/after target_1.",
+    "Shape filter: flat upper edge (ascending/倒三角形) => bottom bias; flat lower edge (descending/正三角形) => top bias, unless an upward breakout occurs with volume.",
+    "Context filter: expect larger moves when the triangle follows a deep decline; down-weight targets when the triangle forms without a big prior drop and the upper line is sloped."
+  ],
+  "ambiguities": [
+    "Edge measurement point: the schematic uses the triangle low (40) to the upper line (55), but the cases mix actual pivots and trendline values (联电 5.35 on the line vs actual low 5.50; 中航 43.31 on the line vs actual high 43.89 and 26.8 vs actual low 28.30; 新兴 22.1 vs actual low 21.94). The rule is effectively 'vertical distance between the two trendlines at the triangle's left end', but the book never states this explicitly.",
+    "Breakout price used for the target is the trendline value at breakout (5.5, 7.26, 41.9, 23.8), not the entry price (5.6, 7.4, 42, 23.9).",
+    "'1/2-3/4处突破' does not define whether it is measured in time (bars to apex) or in triangle length; none of the cases quantify it.",
+    "中航 first-wave high: text says 最高58.89元 (p111) but the chart label near that point reads 59.89 (p111 chart). One is a typo.",
+    "Stop 5%-7% is stated as a cap, but case stops range from ~2% to ~6%, set at the breakout candle low or a nearby price; the book doesn't say which takes precedence.",
+    "Profit percentages (120%, 68%, 78%, 13%) are approximate and not reproducible exactly from entry/target arithmetic (e.g. 荣化 5.6 -> 13.03 is ~133%).",
+    "正三角形 / 倒三角形 naming uses the ◣ / ◤ glyphs; mapping to Western 'descending' / 'ascending' triangles is my interpretation from the glyph shapes and the 中航 explanation that 倒三角形 has a flat upper edge.",
+    "新兴 chart header label looks like '新典' at print resolution; the text consistently says 新兴 (code 2605)."
+  ],
+  "illegible": [
+    {
+      "page": 109,
+      "what": "label of the wedge pullback low below 10.42 is partly covered by the trendline; reads like 8.65 but last digit uncertain"
+    },
+    {
+      "page": 107,
+      "what": "chart header OHLC/volume values (top status bar) too small/blurry to read reliably"
+    }
+  ]
+}

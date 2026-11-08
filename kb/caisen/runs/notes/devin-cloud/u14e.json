@@ -1,0 +1,629 @@
+{
+  "unit_id": "u14e",
+  "model": "devin-cloud",
+  "pages_read": [
+    162,
+    163,
+    164,
+    165,
+    166,
+    167,
+    168,
+    169,
+    170,
+    171
+  ],
+  "summary": "Final part of the 大盘 (TAIEX) case studies. Finishes (二十) 2007-2009 weekly (second 跌幅满足 leg from 9309, the 'don't buy the rebound, short the neckline break' rule, and the 2009-03-14 volume-breakout triangle/W bottom), then (二十一) 2009-2010 daily (two successive 涨幅满足 targets 7714/8400, the 1/21 破线 + 1/26 trendline-break short, a high-level 破底翻 on 3/8 and time-symmetry of the 套牢区), the 小叮咛 diagrams of failed double bottom / failed triangle / failed head-and-shoulders (strict stop at the neckline), (二十二) 2009-2011 weekly (9229 measured target, M top confirmed 2011-08-06, entry 4780 stop 4688 ≈2% risk, ≈88% profit) and (二十三) 2011-2012 weekly (M-top measured moves 7555 then 6620, the 2012-02-04 W-bottom breakout judged a mere rebound because volume expanded too fast (量放过速) and the bottom was far smaller in time than the top). p171 is a blank MEMO page.",
+  "patterns": [
+    {
+      "name_zh": "跌幅满足（等幅计算，第二段）",
+      "name_en": "Measured-move downside target from a later swing high",
+      "direction": "short",
+      "structure": "Take a completed down leg (high A to low B, distance D = A - B). From a subsequent lower swing high C (the start of the next leg down) project C - D. The same downtrend can yield several targets from different highs (9859 and 9309 in 2008).",
+      "entry": "Do not buy the weak rebound after the first target; re-enter short when price breaks below the neckline of the rebound consolidation zone (9月1日跌破反弹整理区颈线).",
+      "stop": "Reclaiming (站回) the broken rebound-zone neckline.",
+      "target": {
+        "formula": "lower_high - (prior_high - prior_low)",
+        "worked_example": "9859 - 7384 = 2475; 9309 - 2475 = 6834 (actual low 6708)",
+        "pages": [
+          162
+        ]
+      },
+      "confirmation": [
+        "Neckline backtest fails to reclaim (颈线反压未突破站回) → keep the swing short to the big-swing target."
+      ],
+      "invalidation": [
+        "Price reclaims the broken neckline."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        161,
+        162
+      ]
+    },
+    {
+      "name_zh": "三角形收敛底部 / W底（带量长红突破颈线底部确立）",
+      "name_en": "Converging-triangle / double bottom confirmed by a high-volume long red breakout",
+      "direction": "long",
+      "structure": "After the downside measured target is reached, ~4 months of base-building forms a converging triangle that is also a W bottom of two lows (3955 and 4164); volume declines through the base (descending line on the volume panel, p161 chart).",
+      "entry": "Week the index breaks the neckline (triangle upper line) on a high-volume long red candle (2009-03-14 week); 'about 4780'.",
+      "stop": "Low of the volume-start bar (带量起涨低点) 4688, ≈2% risk.",
+      "target": {
+        "formula": "W/neckline measured move; later second-wave target = later swing low + first wave (3955→7084)",
+        "worked_example": "7084 - 3955 = 3129; 6100 + 3129 = 9229 (high 9220 in Feb 2011)",
+        "pages": [
+          167
+        ]
+      },
+      "confirmation": [
+        "带量 (volume expansion) on the breakout bar.",
+        "Time: base lasted about four months after the target was reached."
+      ],
+      "invalidation": [
+        "Falling back below the neckline (see 小叮咛 failed-pattern diagrams)."
+      ],
+      "timeframes": [
+        "weekly",
+        "daily"
+      ],
+      "pages": [
+        162,
+        167,
+        168
+      ]
+    },
+    {
+      "name_zh": "涨幅满足（等幅计算，波段中的小波段）",
+      "name_en": "Measured-move upside target for successive sub-waves",
+      "direction": "long",
+      "structure": "In a big bull swing, each pullback low plus the prior sub-wave's rise gives the next target; each time price clears the prior high (越过前高/再过前高) a new target is computed. Lows 6100 and 6629 form the up trendline (上升趋势线).",
+      "entry": "Not specified for this example beyond holding the swing long; new target computed when price makes a new high above the prior high.",
+      "stop": "Break of the up trendline (跌破上升趋势线) / 破线 is the first danger signal; swing longs usually sell first (先卖再说).",
+      "target": {
+        "formula": "pullback_low + (prior_wave_high - prior_wave_low)",
+        "worked_example": "7185 - 6100 = 1085; 6629 + 1085 = 7714 (high 7811); 7811 - 6629 = 1182; 7218 + 1182 = 8400 (high 8395)",
+        "pages": [
+          163,
+          164
+        ]
+      },
+      "confirmation": [
+        "Pullback holds above the up trendline (p164)."
+      ],
+      "invalidation": [
+        "破线 (break of short-term line) and break of the up trendline."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        163,
+        164
+      ]
+    },
+    {
+      "name_zh": "破线 / 跌破上升趋势线放空",
+      "name_en": "Short on line break, add on uptrend-line break",
+      "direction": "short",
+      "structure": "After the upside target is reached and price tops (盘头), a break of the short-term line (破线) confirms the short; a later break of the up trendline is an add-on.",
+      "entry": "1/21 破线短头确立: short ≈8175; 1/26 break of up trendline: add short ≈7820.",
+      "stop": "First short: above prior high 8395 (risk ≈2.7%). Add-on: break above 8015, i.e. reclaiming the line (risk ≈2.5%).",
+      "target": {
+        "formula": "not given numerically; covered when a reversal signal (高档破底翻) appears",
+        "worked_example": "Cover ≈7760 after the 3/8 high-level 破底翻",
+        "pages": [
+          165
+        ]
+      },
+      "confirmation": [
+        "Upside measured target reached and topping (盘头大幅拉回)."
+      ],
+      "invalidation": [
+        "Reclaiming the broken line / 破底翻 back above it."
+      ],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        164,
+        165
+      ]
+    },
+    {
+      "name_zh": "高档破底翻",
+      "name_en": "High-level break-bottom reversal",
+      "direction": "long",
+      "structure": "After breaking down from a high-level trapped zone, price reclaims the broken line/zone (3/8/2010 站回线上), turning the short trend.",
+      "entry": "Re-enter longs only selectively: prefer stocks that turned strong first; no entry if volume/price has not confirmed (量价不表态不介入); small size.",
+      "stop": "Not specified numerically.",
+      "target": {
+        "formula": "not given",
+        "worked_example": "Index later consolidated ~7 months in the zone before the second big bull wave",
+        "pages": [
+          164
+        ]
+      },
+      "confirmation": [
+        "Volume-price confirmation in the stocks chosen."
+      ],
+      "invalidation": [],
+      "timeframes": [
+        "daily"
+      ],
+      "pages": [
+        163,
+        164
+      ]
+    },
+    {
+      "name_zh": "M头（双头）跌幅满足",
+      "name_en": "M (double) top measured-move targets",
+      "direction": "short",
+      "structure": "Two heads (9220/9180 and 9099) over ~11 months; neckline ~8245 at the double-head line; confirmed by a weekly high-volume long black candle piercing the neckline (2011-08-06).",
+      "entry": "Breakdown through the neckline (break position ≈8490 on the chart).",
+      "stop": "Not specified in this example (failed H&S diagram p166: reclaiming the neckline is the stop).",
+      "target": {
+        "formula": "target_1 = breakdown_level - (head - neckline); target_2 = target_1 - same distance",
+        "worked_example": "9180 - 8245 ≈ 935; 8490 - 935 = 7555; 7555 - 935 = 6620 (low 6609)",
+        "pages": [
+          169,
+          170
+        ]
+      },
+      "confirmation": [
+        "带量长黑贯破颈线 (high-volume long black candle through the neckline)."
+      ],
+      "invalidation": [
+        "Reclaiming the neckline."
+      ],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        167,
+        168,
+        169,
+        170
+      ]
+    },
+    {
+      "name_zh": "量放过速的反弹（底部规模远小于头部）",
+      "name_en": "Too-fast volume expansion breakout = rebound, not a new bull",
+      "direction": "neutral",
+      "structure": "A W bottom (6877 / 6609) breaks its neckline on a weekly long red with volume expanding too fast (9114亿 spike), but the bottom took ~5.5 months versus a ~10.5-11 month head zone above 8200.",
+      "entry": "Treat as a rebound only (应以反弹视之); not a long-term bull entry.",
+      "stop": "Short-term head confirmed when the neckline breaks again (2012-04-07 week).",
+      "target": {
+        "formula": "not given; index fell back to the starting zone",
+        "worked_example": "Feb 2012 rebound to ~8170, 4/7 neckline break, back to the start zone",
+        "pages": [
+          169,
+          170
+        ]
+      },
+      "confirmation": [
+        "Bottom time-scale far smaller than the top; volume spike rather than gradual expansion."
+      ],
+      "invalidation": [],
+      "timeframes": [
+        "weekly"
+      ],
+      "pages": [
+        168,
+        169,
+        170
+      ]
+    },
+    {
+      "name_zh": "失败的双底 / 失败的收敛三角形底部 / 失败的头肩顶",
+      "name_en": "Failed double bottom / failed triangle bottom / failed head-and-shoulders top (stop rules)",
+      "direction": "neutral",
+      "structure": "Schematics: price breaks the neckline (buy/short signal), then falls back below (or reclaims above) the neckline.",
+      "entry": "Double bottom & triangle: buy on neckline breakout (突破颈线买进信号). H&S top: short on neckline break (跌破颈线放空信号).",
+      "stop": "Long: falling back below the neckline (跌落颈线下停损). Short: reclaiming the neckline (站回颈线停损).",
+      "target": {
+        "formula": "n.a.",
+        "worked_example": "n.a. (schematic)",
+        "pages": [
+          165,
+          166
+        ]
+      },
+      "confirmation": [],
+      "invalidation": [
+        "The neckline re-cross itself is the invalidation and the stop."
+      ],
+      "timeframes": [
+        "any"
+      ],
+      "pages": [
+        165,
+        166
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Within one downtrend, a downside measured target can also be computed from a later lower high (9309), not only the top.",
+      "kind": "target",
+      "quote_zh": "在9309点起跌的波段跌势中，亦可计算出跌深反弹低点附近位置。",
+      "pages": [
+        162
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "In a long-term bear structure, don't buy the weak rebound; sell short on highs. The best re-entry for shorts is the break of the rebound consolidation neckline, stopped on reclaiming the neckline; if the neckline backtest fails, hold the swing short to the big-swing target — small losses, big gains.",
+      "kind": "entry",
+      "quote_zh": "结构上属弱势反弹，因此长空的结构当中，以不抢反弹逢高空为原则，而这次反弹后的最佳布空点，“9月1日跌破反弹整理区颈线”便是空单再次进场时机，停损设在站回颈线时，颈线反压未突破站回则波段空单一路抱至大波段跌幅满足附近，这便是小赔大赚的波段操作方式。",
+      "pages": [
+        162
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "After a big market drop, only bottom-fish individual stocks you are confident in (with money management); otherwise wait for a technical bottom confirmation before actively buying swing longs.",
+      "kind": "risk",
+      "quote_zh": "在大盘大跌后，除非有把握的个股逢低承接布局多单（但需注意资金控管），否则在技术面底部确立后，才做积极介入波段多单的动作。",
+      "pages": [
+        162
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "A high-volume long red candle breaking the neckline after ~4 months of base confirms the bottom and is the swing buy point.",
+      "kind": "entry",
+      "quote_zh": "经过约四个月的打底期至2009年3月14日当周，带量长红突破颈线底部确立，为波段买进时机，结构上明显为三角形收敛型态，亦可视为3955点及4164点两个低点的双底型态，也就是所谓的W底",
+      "pages": [
+        162
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Understanding volume-price structure lets you time entries and compensates for blind spots of fundamentals.",
+      "kind": "psychology",
+      "quote_zh": "研究并深入了解技术面的量价结构，相对容易切入最佳时机的空点或买点，弥足基本面的盲点。",
+      "pages": [
+        162
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "Each new high above the prior high allows computing a new measured target; two lows (6100, 6629) define the up trendline.",
+      "kind": "target",
+      "quote_zh": "越过前高至7185点拉回后同年9月7日再创新高，便能计算涨幅满足，且6229低点确立与前低6100点，形成一条上升趋势线。",
+      "pages": [
+        163
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "The first break of the up trendline after the target is the first danger signal for the swing long: sell longs first to avoid the risk of entering a bear phase.",
+      "kind": "stop",
+      "quote_zh": "这次1月21日破线短头确立，及1月26日跌破上升趋势线，首度出现结束波段多头的危机，此时波段多单通常先卖再说，避开进入空头的风险。",
+      "pages": [
+        164
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "A 破底翻 at a high level is a stabilization signal but far riskier than a low-level one: choose stocks that turned strong first, don't enter unless volume/price confirms, small size.",
+      "kind": "risk",
+      "quote_zh": "不过在角度较高的地方做破底翻，虽然也是企稳信号，但相对低档破底翻的风险高出很多，因此在多单的重新介入除了慎选个股外（以先转强的类股为主，原则上量价不表态不介入），资金控管少量操作，尽量降低容错率。",
+      "pages": [
+        164
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Time symmetry: once a zone becomes a trapped zone (套牢区), reversing it needs at least a symmetric amount of time of sideways consolidation to digest the supply.",
+      "kind": "time",
+      "quote_zh": "理论上扭转结构也需要对称以上的时间，以盘代跌整理消化卖压。",
+      "pages": [
+        164
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Short on the 破线 confirmation with stop above the prior high; add on the trendline break with stop on reclaiming the line; cover when a high-level 破底翻 reverses the trend.",
+      "kind": "entry",
+      "quote_zh": "主要的重点在于1月21日破线短头确立空单进场，约可空在8175点附近，突破前高8395点停损，风险约2.7%。",
+      "pages": [
+        165
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "The book shows successful patterns, but strictly executing stops is the key to success.",
+      "kind": "risk",
+      "quote_zh": "本书以成功的操作型态为主，但实际的操作上严格执行停损才是成功的重要关键。",
+      "pages": [
+        165
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "Failed patterns: for double bottoms and triangle bottoms, a neckline breakout is the buy signal and falling back below the neckline is the stop; for a head-and-shoulders top, the neckline break is the short signal and reclaiming the neckline is the stop.",
+      "kind": "stop",
+      "quote_zh": "突破颈线买进信号……跌落颈线下停损……跌破颈线放空信号……站回颈线停损",
+      "pages": [
+        165,
+        166
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "Weekly neckline breakout is the buy signal; breaking back below the neckline is the stop.",
+      "kind": "stop",
+      "quote_zh": "9月18日当周突破颈线为买进信号，跌破颈线停损。",
+      "pages": [
+        167
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Compare time scales: a bottom far smaller in time than the preceding M top, plus too-fast volume expansion, means the main force is in a hurry — a short-lived rebound (escape rally), not a new bull.",
+      "kind": "time",
+      "quote_zh": "但底部的时间规模五个多月，远低于M头规模，且放量过速，如当时部落格预测主力求急不求长久，看短不看长，属于M头长空型态的反弹逃命波",
+      "pages": [
+        168
+      ]
+    },
+    {
+      "id": "R15",
+      "rule": "Long entry on the volume breakout week with stop at the volume-start low (~2% risk) captured ~88%; even if shaken out in the early-2010 chop, ~58% remained.",
+      "kind": "risk",
+      "quote_zh": "约可买在4780点附近停损设带量起涨低点4688点风险约2%，达涨幅满足附近，获利了结约88%。",
+      "pages": [
+        168
+      ]
+    },
+    {
+      "id": "R16",
+      "rule": "When the weekly pattern signals a turn, look at shorter timeframes (daily, even hourly or 5-minute volume-price) for a more timely entry.",
+      "kind": "entry",
+      "quote_zh": "日线操作较即时，因此型态上有转折机会时，可观察较短K线，甚至是小时线或五分钟线的量价结构，以求更即时积极的介入时机。",
+      "pages": [
+        168
+      ]
+    },
+    {
+      "id": "R17",
+      "rule": "Livermore: only enter when entry conditions are fully met; one who trades every day cannot have enough reasons to be rational every time.",
+      "kind": "psychology",
+      "quote_zh": "使我犯错的是我没有足够的毅力按计划做，即只有在先满足入场条件时才入场。对每天都要买卖的人来说，他不可能有足够的理由和知识，使他每天的买卖都是理性的。",
+      "pages": [
+        168
+      ]
+    },
+    {
+      "id": "R18",
+      "rule": "M top measured move: distance from the head to the neckline is subtracted from the breakdown level; the second-wave target subtracts it again.",
+      "kind": "target",
+      "quote_zh": "跌破颈线的位置约在8490点－935点＝等幅计算的跌幅满足7555点。",
+      "pages": [
+        169
+      ]
+    },
+    {
+      "id": "R19",
+      "rule": "At the second downside target, together with a daily 破底翻, flip from short to long.",
+      "kind": "entry",
+      "quote_zh": "台股达第二波跌幅满足附近（最低6609点），配合日线出现破底翻后，便应翻空为多。",
+      "pages": [
+        170
+      ]
+    },
+    {
+      "id": "R20",
+      "rule": "A ~5.5-month bottom under a ~10.5-month top above 8200 is too small; until a consolidation of comparable time scale occurs, treat the breakout as a rebound.",
+      "kind": "time",
+      "quote_zh": "大盘周线长红，突破颈线型态上约五个半月的底部成型，但相对上档8200点以上约10个半月的大头部区，规模差异仍大。因此未达相对时间规模的整理之前，应以反弹视之。",
+      "pages": [
+        170
+      ]
+    },
+    {
+      "id": "R21",
+      "rule": "Volume expanding too fast means the main force is in a hurry (insiders look short-term), unlike a big bull's gradual volume expansion; it lures retail (margin rises) and is usually followed by sector-rotation topping/consolidation so the main force can distribute while pulling up.",
+      "kind": "volume",
+      "quote_zh": "量价结构上量放过速表示主力求急，而非大多头逐步放量求长久结构，表示业内作价看短不看长，但是量放过速也表示业内成功作量吸引散户进场（融资增加）。通常都还会有一段类股轮动的盘头或盘涨期，以利其边拉边跑的动作。",
+      "pages": [
+        170
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "2007-2009",
+      "pattern": "跌幅满足 (from 9309) → 弱势反弹 → 跌破反弹整理区颈线再空",
+      "levels": {
+        "high_A": 9859,
+        "low_B": 7384,
+        "distance": 2475,
+        "lower_high": 9309,
+        "target": 6834,
+        "actual_low": 6708,
+        "rebound_high": 7376
+      },
+      "outcome": "Reached near target (low 6708), ~1-month weak rebound to 7376, 9/1 neckline break re-short to the big-swing target (4225 per p161)",
+      "pages": [
+        161,
+        162
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "2008-11..2009-03",
+      "pattern": "三角形收敛 / W底 (3955, 4164) 带量长红突破颈线",
+      "levels": {
+        "low_1": 3955,
+        "low_2": 4164,
+        "breakout_week": "2009-03-14",
+        "entry": 4780,
+        "stop": 4688,
+        "risk_pct": 2
+      },
+      "outcome": "Bottom confirmed; swing long; ≈88% profit at 涨幅满足 (p168)",
+      "pages": [
+        162,
+        168
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "daily",
+      "period": "2009-03..2010-05",
+      "pattern": "涨幅满足 ×2 → 破线/跌破上升趋势线 → 高档破底翻",
+      "levels": {
+        "wave1_low": 6100,
+        "wave1_high": 7185,
+        "wave1_rise": 1085,
+        "pullback_low_1": 6629,
+        "target_1": 7714,
+        "high_1": 7811,
+        "wave2_rise": 1182,
+        "pullback_low_2": 7218,
+        "target_2": 8400,
+        "high_2": 8395,
+        "short_entry": 8175,
+        "short_stop": 8395,
+        "short_risk_pct": 2.7,
+        "addon_short": 7820,
+        "addon_stop": 8015,
+        "addon_risk_pct": 2.5,
+        "cover": 7760,
+        "first_wave_high_chart": 7084.83,
+        "chart_low_start": 4328.05,
+        "later_high": 8190.01,
+        "post_break_low": 7080.9
+      },
+      "outcome": "Both targets reached; short from 8175/7820 covered ≈7760 after 3/8 high-level 破底翻; trapped zone consolidated ~7 months before the second bull wave continued",
+      "pages": [
+        163,
+        164,
+        165
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "2009-03..2012",
+      "pattern": "三角形收敛底 → 突破整理区颈线 → 涨幅满足 → M头",
+      "levels": {
+        "low": 3955,
+        "wave1_high": 7084,
+        "wave1_rise": 3129,
+        "pullback_low": 6100,
+        "target": 9229,
+        "high": 9220,
+        "neckline_break_week": "2009-09-18",
+        "m_top_confirm": "2011-08-06",
+        "entry": 4780,
+        "stop": 4688,
+        "profit_pct": 88,
+        "profit_if_shaken_out_pct": 58,
+        "chart_highs": [
+          8395.39,
+          8190.01,
+          9220.69,
+          9099.75,
+          8170.72
+        ],
+        "chart_lows": [
+          7080.9,
+          7032.4,
+          8070.52,
+          6609.11
+        ],
+        "chart_label_7787": 7787,
+        "volume_spike_label": 9114
+      },
+      "outcome": "Target hit Feb 2011 (9220); ~11-month M top confirmed by a high-volume long black candle 2011-08-06; 2012-02-04 too-fast-volume breakout was an escape rebound, index fell back to the start zone",
+      "pages": [
+        167,
+        168
+      ]
+    },
+    {
+      "instrument": "台股加权指数",
+      "timeframe": "weekly",
+      "period": "2010-05..2012-07",
+      "pattern": "M头跌幅满足 ×2 → 破底翻 W底 (6877, 6609) → 量放过速反弹 → 4/7 跌破颈线",
+      "levels": {
+        "head": 9180,
+        "neckline": 8245,
+        "distance": 935,
+        "breakdown": 8490,
+        "target_1": 7555,
+        "target_2": 6620,
+        "low": 6609,
+        "w_low_1": 6877,
+        "w_low_2": 6609,
+        "rebound_high_chart": 8170.72,
+        "volume_spike": "9114亿",
+        "w_breakout_week": "2012-02-04",
+        "head_confirm_week": "2012-04-07",
+        "chart_head_high": 9220.69,
+        "chart_second_head": 9099.75,
+        "chart_neckline_low": 8070.52,
+        "post_break_bar_low": 7148.76,
+        "rebound_high_1": 7743.37,
+        "later_lows": [
+          6857.35,
+          6922.73
+        ],
+        "prior_lows": [
+          7032.4,
+          7577.1,
+          8174.85
+        ]
+      },
+      "outcome": "Both downside targets reached; rebound faded as predicted; index back to the start zone",
+      "pages": [
+        169,
+        170
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Downside measured target: for any completed down leg (H1→L1), and any later lower swing high H2, target = H2 - (H1 - L1); flag when low comes within a tolerance of the target.",
+    "Upside sub-wave target: on each new close above the prior swing high, target = latest pullback low + (prior wave high - prior wave low).",
+    "M-top target: neckline = low between two heads; D = head - neckline; target_1 = breakdown_price - D; target_2 = target_1 - D.",
+    "Breakout confirmation: weekly bar closes above the neckline with volume above its recent average (带量长红) and a long-bodied red candle.",
+    "Stop for neckline breakout long: low of the breakout bar (带量起涨低点) or a close back below the neckline; for neckline short: close back above the neckline.",
+    "Rebound-vs-reversal filter: if bottom_duration / prior_top_duration < ~0.5 and the breakout bar volume is a spike (e.g. > N× average) rather than a gradual ramp, classify the breakout as a rebound (lower conviction / shorter holding).",
+    "Time-symmetry filter: after a trendline break from a top zone of duration T, expect at least ~T of sideways consolidation before a new uptrend leg.",
+    "High-level 破底翻 (reclaim of the broken line near the top) → reduce position size versus a low-level 破底翻; require volume confirmation."
+  ],
+  "ambiguities": [
+    "p162 says the index fell to the 6834 target 'in mid-November 2008 (low 6708)' and then rebounded to 7376 before the '9月1日' neckline break; on the p161 chart 6708.46 and 7376 come well before the late-2008 3955 low, so '11月中旬' appears to be a date error (the 9/1 break would then be 2008-09-01).",
+    "p163 text says '6229低点' forms the trendline with 6100, but the chart label and the 观察重点一 computation use 6629 — 6229 is likely a typo for 6629.",
+    "The 7714 target (p163) was overshot to 7811 and the 8400 target was missed by 5 points (8395); 'near the target' tolerance is never quantified.",
+    "p165 short entry 8175 with stop at the prior high 8395 — the stop is a structural level, not the 5-7% rule used elsewhere; risk was only ~2.7% because entry was close to the high.",
+    "The 'M head' heads are labeled 9220.69 on p167 chart and '9180' on the p169 chart/text; the measured distance 935 uses 9180, not the absolute high 9220.",
+    "p170 quotes the blog as '量放进速' while the rest of the text uses '量放过速' — probably the same concept (possible typo).",
+    "No numeric definition of '量放过速' (how fast is too fast) or of the bottom/top time-scale ratio that separates a rebound from a reversal.",
+    "p168: '获利了结约88%' — the exit price is not stated; 88% from 4780 implies ≈8990, i.e. below the 9229 target."
+  ],
+  "illegible": [
+    {
+      "page": 163,
+      "what": "Chart OHLC header and the tiny dashed-line target labels next to the two '涨幅满足' markers (above 7185.52 and 7811.92) are too small to read."
+    },
+    {
+      "page": 167,
+      "what": "Chart OHLC header and the tiny dashed-line target label at the '涨幅满足' marker; right-axis value between 6302.12 and 5128.77 reads like 5720.38 but is partly obscured."
+    },
+    {
+      "page": 169,
+      "what": "Chart OHLC header and the tiny dashed-line target labels near 7148.76 and at the bottom '跌幅满足' line are too small to read."
+    }
+  ]
+}

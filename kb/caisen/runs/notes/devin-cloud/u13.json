@@ -1,0 +1,339 @@
+{
+  "unit_id": "u13",
+  "model": "devin-cloud",
+  "pages_read": [
+    115,
+    116,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122
+  ],
+  "summary": "Appendix on 时间波 (time-wave symmetry), which the author presents as his own observation: after a structure turns bullish or bearish, the market usually needs about the same consolidation time as the left-side (prior) consolidation zone to digest supply, so a 变盘 (turn) often happens when the right side reaches the symmetric duration. After a bearish signal (e.g. 假突破) the symmetric window is a risk period that is 'either flat or down' (非盘即跌); after a bullish signal (e.g. 破底翻) it is a safety period that is 'either flat or up' (非盘即涨). Five cases (华邦电 2013 daily, TAIEX 2011-12 daily, CAC40 2013 daily, TAIEX 2011 weekly, 耀华 2011-12 daily) show day/week counts of 26, 19, 17, 19 weeks and 20. p121 is a blank page and p122 is the title page of Part 2 (进阶篇).",
+  "patterns": [
+    {
+      "name_zh": "时间波（左右对称变盘）",
+      "name_en": "Time wave: left/right time symmetry around a consolidation zone",
+      "direction": "neutral",
+      "structure": "Identify the consolidation zone at relative height (相对高度的整理区) before the structural change — e.g. the range before a false breakout (top) or the range before a 破底翻 (bottom). Count its length in bars (days or weeks) = N. Once the turn signal is confirmed (false breakout falls back below the line, or 破底翻 reclaims), project an equal N-bar window to the right. The turn/acceleration (变盘) tends to occur at or near bar N (cases: day 20 of 26, day 15 neckline break then day 20 of 19, day 18 after 17, week 20 after 19, day 21 after 20).",
+      "entry": "Bearish structure: short within the symmetric risk window (做空为主) on breaks (e.g. 华邦电 day-20 black candle breaking the neckline completing a 头肩顶; TAIEX 3/29 and 4/3 black candles breaking the line). Bullish structure: long on the 破底翻 (TAIEX 12/21 long red reclaiming the neckline) and/or on the volume breakout at the symmetric time (耀华 day 21 带量突破颈线). Familiarity lets you position in advance and add at the turning point together with technical signals.",
+      "stop": "Bullish: the 破底翻 low should not be broken in the safety window — breaking it means the judgement was wrong (TAIEX 6609); operational stop at the prior range low 6744 (~3% risk); 耀华 stop at the short-term range low 11.29 (<5%). Bearish: stop on reclaiming the line (站回线上停损), risk within 2% (TAIEX M top).",
+      "target": {
+        "formula": "Time wave gives timing, not price. Price targets come from the accompanying pattern's measured move (头肩顶/头肩底/M头 等幅 one or two waves).",
+        "worked_example": "华邦电 头肩顶 跌幅满足 6.56 (low 6.57); CAC 头肩顶 跌幅满足 4094 (low 4051.25). For 华邦电 the chart levels fit breakdown 8.36 - (head 10.10 - neckline 8.3) = 6.56 (my arithmetic; the book only states 6.56).",
+        "pages": [
+          116,
+          118
+        ]
+      },
+      "confirmation": [
+        "The turn signal itself must first be confirmed (假突破确立 / 破底翻确立) before counting the right side (p115, p117, p120).",
+        "Volume at the symmetric turn: TAIEX 第二十天带量翻红 (p117); 耀华 第二十一天带量突破颈线 (p120); CAC false breakout 带量上影线 (p118).",
+        "On weekly charts, counting of the right side starts only after the bearish judgement (2011/6/10 空袭警报) and when the pattern is nearly complete (p119)."
+      ],
+      "invalidation": [
+        "Bearish: if price drags well past the symmetric time without falling, there is a chance to reverse the bear (以盘代跌, 用时间换取空间) (p115).",
+        "Bullish: if price drags well past the symmetric time without rising, it may weaken again (p115).",
+        "Bullish: breaking the 破底翻 low inside the safety window = wrong judgement, stop out (p117)."
+      ],
+      "timeframes": [
+        "daily",
+        "weekly"
+      ],
+      "pages": [
+        115,
+        116,
+        117,
+        118,
+        119,
+        120
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "rule": "Time-wave rationale: when time reaches symmetry a turn often occurs, because after a structure turns good or bad it usually needs about the same consolidation time as the left-side zone to digest selling pressure, producing left/right symmetry.",
+      "kind": "time",
+      "quote_zh": "尤其是当时间到达对称时经常会出现变盘，时机非常巧合。主要原因是当结构转好或坏后，大多需要与转好或坏前，也就是左边（前面）整理区大约相同的整理时间来消化卖压，这时便会产生左右对称的结果。",
+      "pages": [
+        115
+      ]
+    },
+    {
+      "id": "R2",
+      "rule": "The time wave is computed on the consolidation zone at relative height.",
+      "kind": "time",
+      "quote_zh": "时间波的计算要在相对高度的整理区。",
+      "pages": [
+        115
+      ]
+    },
+    {
+      "id": "R3",
+      "rule": "Bearish structure (e.g. false breakout): within the symmetric time it is usually flat or down and can fall at any moment; only dragging well past the symmetric time gives a chance to reverse the bear.",
+      "kind": "time",
+      "quote_zh": "若是转空型态（如假突破），对称的时间内通常是非盘即跌。在对称的时间内随时都会跌的状况下，拖过对称的时间过久，才有扭转空头的机会。",
+      "pages": [
+        115
+      ]
+    },
+    {
+      "id": "R4",
+      "rule": "Bullish structure (e.g. 破底翻): within the symmetric time it is usually flat or up and can rise at any moment; only dragging well past the symmetric time gives a chance of weakening again.",
+      "kind": "time",
+      "quote_zh": "若是翻多型态（如破底翻），对称的时间内通常是非盘即涨。在对称的时间内随时都会涨，拖过对称的时间过久，才有再度转弱的机会。",
+      "pages": [
+        115
+      ]
+    },
+    {
+      "id": "R5",
+      "rule": "Once familiar, position in advance and add at turning points in combination with technical analysis.",
+      "kind": "entry",
+      "quote_zh": "熟悉后便能事先布局，再配合技术分析，在转折点适时加码。",
+      "pages": [
+        115
+      ]
+    },
+    {
+      "id": "R6",
+      "rule": "After a confirmed false breakout, the symmetric right-side window (26 days for 华邦电) is a high-risk period; breaking down within it is highly likely unless price drags past it (以盘代跌, trading time for space). Short during the symmetric risk window with a stop.",
+      "kind": "time",
+      "quote_zh": "就表示假突破后右边对称的26天里，属于非盘即跌的风险期，也就是大约26天或以内破线下跌的机率相当高，除非拖过26天后才有以盘代跌的机会（用时间换取空间）",
+      "pages": [
+        115,
+        116
+      ]
+    },
+    {
+      "id": "R7",
+      "rule": "During the symmetric risk period, shorting is the main stance; just set a stop.",
+      "kind": "risk",
+      "quote_zh": "因此在对称的风险期间做空为主，设好停损即可。",
+      "pages": [
+        116
+      ]
+    },
+    {
+      "id": "R8",
+      "rule": "After a 破底翻 the symmetric window is a bullish safety period; the 破底翻 low (6609) should not be broken — if it is, the judgement is wrong and the long must be stopped.",
+      "kind": "stop",
+      "quote_zh": "表示右边也应有对称约19天非盘即涨的多头安全期，也就是说破底翻后的低点6609点不应该会再破的，破了就是判断错误多单停损的时候",
+      "pages": [
+        117
+      ]
+    },
+    {
+      "id": "R9",
+      "rule": "Operation: go long on the 破底翻, stop at the prior consolidation low (6744, ~3% risk); after the neckline break confirms the bottom, compute two waves of target as a head-and-shoulders bottom, or take profit when a volume break of the line confirms weakness (3/29).",
+      "kind": "entry",
+      "quote_zh": "操作上破底翻时多单进场，停损设前波整理区低点6744点，风险仅约3%，突破颈线底部确立后，按照头肩底方式计算两波段涨幅满足，或3月29日带量破线转弱确立，波段获利了结即可。",
+      "pages": [
+        117
+      ]
+    },
+    {
+      "id": "R10",
+      "rule": "Symmetric time on a top: TAIEX 4/3 was exactly the symmetric day (20th) and broke the neckline completing an M top; short on 3/29 and 4/3 black-candle line breaks, stop on reclaiming the line, risk within 2%; target = M-top two-wave measured move, or the measured move after the 7422 rebound breaks down again.",
+      "kind": "time",
+      "quote_zh": "4月3日刚好就是左右两边对称的时间波，第二十天准时一日不差地翻黑跌破颈线，完成M头型态，向下变盘，操作上3月29日及4月3日翻黑破线皆为放空时机，站回线上停损，风险皆在2%以内",
+      "pages": [
+        118
+      ]
+    },
+    {
+      "id": "R11",
+      "rule": "CAC: after the 11/17 volume upper-shadow false breakout, the 17-day left zone implies a 17-day risk window; after 17 days on the right the next day turned — first broke the 6-day-low mini neckline at the open, then the neckline (4225) confirming a head-and-shoulders top, then reached the 4094 measured target.",
+      "kind": "time",
+      "quote_zh": "左边的整理区共17天，表示有对称17天非盘即跌的风险，右边也整理17天后隔日变盘，开盘先跌破6日低点小颈线，再破颈线头肩顶确立",
+      "pages": [
+        118
+      ]
+    },
+    {
+      "id": "R12",
+      "rule": "For the time wave, symmetry is measured on the relative-height consolidation zone (dark solid line), not the technical M-top neckline (dashed); the right-side count cannot be started immediately after the left zone — start it after the bearish judgement (2011/6/10) once the pattern is nearly complete.",
+      "kind": "time",
+      "quote_zh": "但是在计算时间波是以相对高度的整理区作对称来计算（深蓝色实线），左边的头整理时间共19周，右边也整理19周后隔周变盘，注意这左边19周整理后无法立即计算右边的对称19周，而是右边配合2011年6月10日判断转空后，在整理接近19周型态完整后才开始计算",
+      "pages": [
+        119
+      ]
+    },
+    {
+      "id": "R13",
+      "rule": "耀华: after the late-Dec 破底翻 the 20-day left zone implies a 20-day bullish safety window; on day 21 a volume breakout of the neckline turned up (also clearing a suspicious volume-without-gain high from 3 days earlier); go long then, stop at the short-term range low 11.29 (<5% risk), use the head-and-shoulders-bottom measured move as the profit reference.",
+      "kind": "entry",
+      "quote_zh": "操作上第二十一天带量突破颈线变盘时多单进场，停损设短期整理区低点11.29元风险不到5%，底部完成时，再计算头肩底的等幅涨幅满足，做为获利点参考即可。",
+      "pages": [
+        120
+      ]
+    },
+    {
+      "id": "R14",
+      "rule": "Psychology (Livermore quote): you must believe in yourself to survive; never accept others' tips or inside information.",
+      "kind": "psychology",
+      "quote_zh": "一个人必须相信自己才能在这行生存。我从不接受别人的点子或内幕消息。",
+      "pages": [
+        120
+      ]
+    }
+  ],
+  "worked_examples": [
+    {
+      "instrument": "华邦电 (2344)",
+      "timeframe": "daily",
+      "period": "2013-04..2013-08",
+      "pattern": "假突破 -> 头肩顶, time wave 26 days",
+      "levels": {
+        "left_zone_days": 26,
+        "false_breakout_high": 10.1,
+        "left_high": 9.58,
+        "neckline": 8.3,
+        "false_breakout_confirmed": "2013-06-07 跌落线下",
+        "right_shoulder_high": 9.39,
+        "breakdown": 8.36,
+        "breakdown_day": "day 20 of 26 (第二十天翻黑破线)",
+        "target": 6.56,
+        "low_after": 6.57
+      },
+      "outcome": "head-and-shoulders top completed on day 20 within the 26-day risk window; fell to 6.57 vs 6.56 target",
+      "pages": [
+        115,
+        116
+      ]
+    },
+    {
+      "instrument": "台股加权指数 (TAIEX)",
+      "timeframe": "daily",
+      "period": "2011-11..2012-06",
+      "pattern": "破底翻 -> 头肩底 bottom, then M头 top; time wave 19 days / 20th day",
+      "levels": {
+        "left_zone_days": 19,
+        "range_high": 7199.26,
+        "range_low_stop": 6744.26,
+        "po_di_fan_low": 6609.11,
+        "po_di_fan_date": "2011-12-21 长红站回颈线",
+        "neckline_break_day": "day 15",
+        "turn_day": "day 20 带量翻红",
+        "top_highs": "8170.72 / 8170.31",
+        "top_box_low": 7824.45,
+        "top_break_1": "2012-03-29 带量破线",
+        "top_break_2": "2012-04-03 (symmetric 20th day)",
+        "later_lows": "7528.03, 7422.14, 6857.35",
+        "later_rebound_highs": "7704.87, 7349.85"
+      },
+      "outcome": "bottom: broke neckline day 15, volume turn up on day 20, big rally; top: M top completed on symmetric day 20 (4/3), decline",
+      "pages": [
+        117,
+        118
+      ]
+    },
+    {
+      "instrument": "法国 CAC40",
+      "timeframe": "daily",
+      "period": "2013-09..2013-12",
+      "pattern": "假突破 -> 头肩顶, time wave 17 days",
+      "levels": {
+        "left_zone_days": 17,
+        "false_breakout_high": 4356.28,
+        "false_breakout_date": "11/17 带量上影线",
+        "range_highs": "4309.15, 4309.92, 4336.61, 4311.81",
+        "neckline": 4225,
+        "range_lows": "4211.82, 4222.31",
+        "target": 4094,
+        "low_after": 4051.25
+      },
+      "outcome": "turned the day after 17 right-side days; broke 6-day-low mini neckline then 4225; reached the 4094 target zone (low 4051.25) before stabilising",
+      "pages": [
+        118
+      ]
+    },
+    {
+      "instrument": "台股加权指数 (TAIEX)",
+      "timeframe": "weekly",
+      "period": "2010-05..2012-01",
+      "pattern": "M头, time wave 19 weeks",
+      "levels": {
+        "left_zone_weeks": 19,
+        "head_high": 9220.69,
+        "right_highs": "9099.75, 9089.47",
+        "zone_low": 8070.52,
+        "earlier_low": 7992.81,
+        "bear_signal": "2011-06-10 空袭警报 长空起始",
+        "lows_after": "7148.76, 6877.12, 6609.11",
+        "rebound_high": 7743.37
+      },
+      "outcome": "after 19 right-side weeks the following week turned down sharply",
+      "pages": [
+        119
+      ]
+    },
+    {
+      "instrument": "耀华 (2367)",
+      "timeframe": "daily",
+      "period": "2011-11..2012-02",
+      "pattern": "破底翻 -> 头肩底, time wave 20 days",
+      "levels": {
+        "left_zone_days": 20,
+        "left_zone_high": 12.32,
+        "left_zone_lows": "10.59, 10.92",
+        "po_di_fan_low": 10.12,
+        "po_di_fan_marker": "12/23",
+        "right_zone_highs": "11.95, 12.09",
+        "right_zone_lows": "11.15, 11.34, 11.29",
+        "turn_day": "day 21 带量突破颈线",
+        "stop": 11.29,
+        "highs_after": "13.50, 13.45, 14.01",
+        "pullback_low": 12.84
+      },
+      "outcome": "day-21 volume breakout turned up; left the base 3 trading days later completing 头肩底; rallied to 14.01",
+      "pages": [
+        120
+      ]
+    },
+    {
+      "instrument": "n.a. (Part 2 title page background chart)",
+      "timeframe": "n.a.",
+      "period": "1997",
+      "pattern": "decorative background labels 价涨量增 / 量价背离 / 跌幅…",
+      "levels": {},
+      "outcome": "n.a.; no teaching content",
+      "pages": [
+        122
+      ]
+    }
+  ],
+  "quantifiable": [
+    "Given a confirmed turn signal at bar t_s (false-breakout close back below the range line, or 破底翻 close back above the range low), let N = length in bars of the consolidation zone immediately left of the signal; define the symmetric window [t_s, t_s + N] (some cases count from the zone end / break bar — see ambiguities).",
+    "Bearish window: flag 'risk period' — favor shorts / suppress longs until bar ~N; if no breakdown by ~N (+ small tolerance), downgrade the bearish thesis (以盘代跌).",
+    "Bullish window: flag 'safety period' — hold longs while the 破底翻 low holds; if price breaks that low within N bars, exit; expect a volume breakout near bar N (cases at N or N+1).",
+    "Expected turn bar = left_zone_length (+0 or +1); test hit-rate of |turn_bar - N| <= 1-2 bars on daily data.",
+    "Stops: bullish = prior zone low or short-term range low (risk 3%-5%); bearish = reclaim of the broken line (risk <=2%)."
+  ],
+  "ambiguities": [
+    "Where the right-side count starts is inconsistent: 华邦电 counts 26 days after the false-breakout confirmation, but the boxes on the chart start at the false-breakout/right-zone; TAIEX daily says the 20th day after a 19-day left zone; 耀华 the 21st day after 20; weekly TAIEX says the count can't start until the pattern is nearly complete. The exact anchor bar (signal bar vs end of left zone vs start of right zone) is not defined.",
+    "How to delimit the left 'relative height consolidation zone' (start/end bars) is shown by drawn boxes only; no rule given. On the weekly TAIEX, the zone differs from the technical M-top neckline.",
+    "TAIEX 2011-12: the text says the 破底翻 low 6609 should not be broken (judgement wrong if broken) but sets the operational stop at 6744 (prior range low) — two different levels for 'wrong' vs 'stop'.",
+    "CAC40 false breakout date given as 2013-11-17, which was a Sunday; likely a date/typo issue in the book.",
+    "'拖过对称的时间过久' (dragging past too long) — how many bars beyond N is 'too long' is not quantified.",
+    "The author says he has not seen this theory elsewhere; it is empirical with 5 examples, no statistics.",
+    "华邦电 target 6.56 matches breakdown 8.36 - (10.10 - 8.3); the book does not show the calculation here, so the exact H&S formula is inferred."
+  ],
+  "illegible": [
+    {
+      "page": 118,
+      "what": "CAC chart range-low label under the neckline partly covered by the neckline: reads like 4238.03, not certain"
+    },
+    {
+      "page": 121,
+      "what": "blank page showing only bleed-through from the reverse side; no readable content"
+    },
+    {
+      "page": 117,
+      "what": "chart header OHLC/volume status bar too small to read reliably (same for other charts in this unit)"
+    }
+  ]
+}

@@ -81,3 +81,6 @@ htmlcov/
 # ruff
 .ruff_cache/
 .gstack/
+
+# 蔡森 book page renders (copyrighted scan; regenerate with kb/caisen/render_pages.py)
+kb/caisen/work/
