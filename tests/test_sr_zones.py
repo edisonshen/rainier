@@ -16,7 +16,13 @@ from click.testing import CliRunner
 from rainier.analysis.analyzer import analyze_multi_tf
 from rainier.analysis.pivots import compute_atr
 from rainier.analysis.sr_eval import closed_bars, scorecard, walk_forward
-from rainier.analysis.sr_zones import Zone, consolidate_zones, detect_mtf_zones, zones_to_levels
+from rainier.analysis.sr_zones import (
+    Zone,
+    consolidate_zones,
+    detect_mtf_zones,
+    zones_covering,
+    zones_to_levels,
+)
 from rainier.core.config import AnalysisConfig, ChartPublishConfig, SRZoneConfig
 from rainier.core.types import SRRole, Timeframe
 
@@ -75,22 +81,21 @@ def test_levels_have_role_bounds_and_timeframes(mes):
     assert any(len(set(lv.timeframes)) >= 2 for lv in levels)
 
 
-def test_chart_keeps_nearest_level_on_each_side_beyond_distance_window(mes):
-    """Chart config always shows a level above and below price; signal config does not."""
-    price = float(mes[Timeframe.M5].close.iloc[-1])
+def test_chart_zones_cover_the_whole_candle_range_plus_two_beyond_each_end(mes):
+    """A sell-off far below price (7385 on Nov 5 2026) must still have its zones drawn, and
+    the chart keeps two levels below its lowest low (and above its highest high)."""
     all_zones = detect_mtf_zones(_htf(mes), SRZoneConfig())
-    above = min((z.price for z in all_zones if z.price > price), key=lambda p: p - price)
-    below = max(z.price for z in all_zones if z.price <= price)
+    prices = sorted(z.price for z in all_zones)
+    low, high = prices[2] - 0.01, prices[-3] + 0.01  # two zones beyond each end
+    covered = sorted(z.price for z in zones_covering(all_zones, low, high, beyond=2))
+    assert covered == prices
 
-    narrow = SRZoneConfig(max_distance_atr_mult=0.01)
-    assert not detect_mtf_zones(_htf(mes), narrow, price)
-    chart = narrow.model_copy(update={"keep_nearest_each_side": True})
-    assert sorted(z.price for z in detect_mtf_zones(_htf(mes), chart, price)) == [below, above]
+    low, high = prices[3] - 0.01, prices[-4] + 0.01  # three beyond: only the nearest two kept
+    covered = sorted(z.price for z in zones_covering(all_zones, low, high, beyond=2))
+    assert covered == prices[1:-1]
 
-    # Price above every zone: only a support can be shown, and it is the closest one.
-    top = max(z.price for z in all_zones) + 500
-    (z,) = detect_mtf_zones(_htf(mes), chart, top)
-    assert z.price == max(z.price for z in all_zones)
+    # Nothing beyond the range: no padding is invented.
+    assert sorted(z.price for z in zones_covering(all_zones, -1e9, 1e9, beyond=2)) == prices
 
 
 def test_analyze_multi_tf_uses_zones_by_default_and_legacy_on_request(mes):
@@ -192,11 +197,17 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert t == int(last_bar.timestamp())
     assert pd.Timestamp(payload["asof"]) == last_bar and payload["asof"].endswith("+00:00")
     assert payload["zones"] and payload["price"] == mes[Timeframe.M5].close.iloc[-1]
-    # The chart keeps levels the 4-ATR signal filter drops (e.g. a 4H+1H support 8 ATR below).
+    # No distance-from-price cut: every zone inside any tab's candle range is drawn, plus up
+    # to two beyond the lowest low and the highest high.
+    rows = [c for tf in payload["candles"].values() for c in tf]
+    low, high = min(c[3] for c in rows), max(c[2] for c in rows)
+    drawn = sorted(z["price"] for z in payload["zones"])
+    found = sorted(z.price for z in detect_mtf_zones(_htf(mes), SRZoneConfig()))
+    assert [p for p in found if low <= p <= high] == [p for p in drawn if low <= p <= high]
+    assert [p for p in drawn if p < low] == [p for p in found if p < low][-2:]
+    assert [p for p in drawn if p > high] == [p for p in found if p > high][:2]
     atr = float(compute_atr(mes[Timeframe.H1].iloc[-500:]).iloc[-1])
-    dist = [abs(z["price"] - payload["price"]) / atr for z in payload["zones"]]
-    assert max(dist) > SRZoneConfig().max_distance_atr_mult
-    assert max(dist) <= ChartPublishConfig().max_distance_atr_mult
+    assert max(abs(p - payload["price"]) / atr for p in drawn) > 10  # the old chart cut-off
     assert {z["role"] for z in payload["zones"]} == {"support", "resistance"}
     # VMA55 (the user's TradingView script): sum(hlc3*vol, 55)/sum(vol, 55), offset=2 bars.
     vma = payload["vma"]
