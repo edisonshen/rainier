@@ -20,6 +20,7 @@ from rainier.analysis.sr_zones import (
     Zone,
     consolidate_zones,
     detect_mtf_zones,
+    full_1d_history,
     zones_covering,
     zones_to_levels,
 )
@@ -202,7 +203,16 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     rows = [c for tf in payload["candles"].values() for c in tf]
     low, high = min(c[3] for c in rows), max(c[2] for c in rows)
     drawn = sorted(z["price"] for z in payload["zones"])
-    found = sorted(z.price for z in detect_mtf_zones(_htf(mes), SRZoneConfig()))
+    # 1D zones come from every loaded 1D bar, so the 1D tab (a year) has levels below its low
+    # that the 250-bar finder can't see (this fixture's older bars hold one, 6251.25)...
+    chart_cfg = full_1d_history(SRZoneConfig(), len(mes[Timeframe.D1]), 20)
+    found = sorted(z.price for z in detect_mtf_zones(_htf(mes), chart_cfg))
+    short = sorted(z.price for z in detect_mtf_zones(_htf(mes), SRZoneConfig()))
+    d1_low = min(c[3] for c in d1)
+    assert not [p for p in short if p < d1_low] and [p for p in drawn if p < d1_low] == [6251.25]
+    # ...without moving the levels price is trading at (the ones the 250-bar finder draws).
+    m5_low = min(c[3] for c in payload["candles"]["5m"])
+    assert [p for p in drawn if p >= m5_low] == [p for p in short if p >= m5_low]
     assert [p for p in found if low <= p <= high] == [p for p in drawn if low <= p <= high]
     assert [p for p in drawn if p < low] == [p for p in found if p < low][-2:]
     assert [p for p in drawn if p > high] == [p for p in found if p > high][:2]

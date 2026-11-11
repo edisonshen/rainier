@@ -580,6 +580,9 @@ class ChartPublishConfig(BaseModel):
     # The chart draws every zone inside the published candles' price range (all tabs), plus
     # this many beyond its lowest low and highest high (no distance-from-price filter).
     zones_beyond_range: int = Field(2, ge=0)
+    # The chart's 1D zones come from every 1D bar loaded (not sr_zones' 250-bar lookback), so
+    # the 1D tab has levels below its lowest low; this many strongest 1D zones are kept.
+    zones_1d_top: int = Field(20, ge=1)
     # Rolling VWAP line (TradingView "VMA55": sum(hlc3*vol, n)/sum(vol, n), offset=2).
     vma_bars: int = Field(55, ge=1)
     vma_offset: int = Field(2, ge=0)

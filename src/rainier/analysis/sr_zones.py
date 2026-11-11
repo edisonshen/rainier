@@ -170,6 +170,15 @@ def detect_mtf_zones(
             if abs(z.price - current_price) <= cfg.max_distance_atr_mult * ref_atr]
 
 
+def full_1d_history(cfg: SRZoneConfig, d1_bars: int, top: int) -> SRZoneConfig:
+    """``cfg`` with 1D zones found over all ``d1_bars`` 1D bars, keeping the ``top`` strongest."""
+    d1 = cfg.timeframes.get(Timeframe.D1)
+    if d1 is None:
+        return cfg
+    d1 = d1.model_copy(update={"lookback": max(d1.lookback, d1_bars), "top": max(d1.top, top)})
+    return cfg.model_copy(update={"timeframes": {**cfg.timeframes, Timeframe.D1: d1}})
+
+
 def zones_covering(zones: list[Zone], low: float, high: float, beyond: int) -> list[Zone]:
     """Zones priced inside ``[low, high]`` plus the ``beyond`` nearest below and above it."""
     below = sorted((z for z in zones if z.price < low), key=lambda z: -z.price)[:beyond]
