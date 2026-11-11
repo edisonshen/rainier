@@ -166,13 +166,24 @@ def detect_mtf_zones(
     zones = consolidate_zones(zones_by_tf, ref_atr, cfg)
     if current_price is None:
         return zones
-    keep = {id(z) for z in zones
-            if abs(z.price - current_price) <= cfg.max_distance_atr_mult * ref_atr}
-    if cfg.keep_nearest_each_side:
-        above = [z for z in zones if z.price > current_price]
-        below = [z for z in zones if z.price <= current_price]
-        keep |= {id(min(side, key=lambda z: abs(z.price - current_price)))
-                 for side in (above, below) if side}
+    return [z for z in zones
+            if abs(z.price - current_price) <= cfg.max_distance_atr_mult * ref_atr]
+
+
+def full_1d_history(cfg: SRZoneConfig, d1_bars: int, top: int) -> SRZoneConfig:
+    """``cfg`` with 1D zones found over all ``d1_bars`` 1D bars, keeping the ``top`` strongest."""
+    d1 = cfg.timeframes.get(Timeframe.D1)
+    if d1 is None:
+        return cfg
+    d1 = d1.model_copy(update={"lookback": max(d1.lookback, d1_bars), "top": max(d1.top, top)})
+    return cfg.model_copy(update={"timeframes": {**cfg.timeframes, Timeframe.D1: d1}})
+
+
+def zones_covering(zones: list[Zone], low: float, high: float, beyond: int) -> list[Zone]:
+    """Zones priced inside ``[low, high]`` plus the ``beyond`` nearest below and above it."""
+    below = sorted((z for z in zones if z.price < low), key=lambda z: -z.price)[:beyond]
+    above = sorted((z for z in zones if z.price > high), key=lambda z: z.price)[:beyond]
+    keep = {id(z) for z in below + above} | {id(z) for z in zones if low <= z.price <= high}
     return [z for z in zones if id(z) in keep]
 
 

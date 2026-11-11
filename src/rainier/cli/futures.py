@@ -128,7 +128,12 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     """Current multi-TF S/R zones (1D -> 4H -> 1H, consolidated) as text, JSON or Pine v5."""
     import json
 
-    from rainier.analysis.sr_zones import detect_mtf_zones, zones_to_levels
+    from rainier.analysis.sr_zones import (
+        detect_mtf_zones,
+        full_1d_history,
+        zones_covering,
+        zones_to_levels,
+    )
     from rainier.analysis.trend_channels import trend_overlays
     from rainier.publish.cloudflare_kv import put_kv_if_changed
     from rainier.research.xiaojiang.chart import chart_setups
@@ -137,9 +142,7 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
 
     settings = ctx.obj["settings"]
     pub = settings.chart_publish
-    cfg = settings.analysis.sr_zones.model_copy(
-        update={"max_distance_atr_mult": pub.max_distance_atr_mult,
-                "keep_nearest_each_side": pub.keep_nearest_each_side})
+    cfg = settings.analysis.sr_zones
     if publish_kv and not (settings.cloudflare_api_token and settings.cloudflare_account_id):
         raise click.ClickException("--publish-kv needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID")
     data = _load_mtf_csvs(Path(data_dir), symbol)
@@ -149,7 +152,11 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     latest = data.get(Timeframe.M5, data[next(iter(htf))])
     price = float(latest["close"].iloc[-1])
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
-    zones = detect_mtf_zones(htf, cfg, price)
+    shown = [data[tf].tail(n) for tf, n in pub.bars.items() if tf in data]
+    d1_bars = len(htf.get(Timeframe.D1, ()))
+    zones = zones_covering(detect_mtf_zones(htf, full_1d_history(cfg, d1_bars, pub.zones_1d_top)),
+                           min(float(df["low"].min()) for df in shown),
+                           max(float(df["high"].max()) for df in shown), pub.zones_beyond_range)
     levels = zones_to_levels(zones, price)
     levels.sort(key=lambda lv: -lv.price)
     xj = []
