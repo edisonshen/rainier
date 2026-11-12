@@ -46,6 +46,7 @@ uv run ruff check src/ tests/
 # Futures data + analysis
 uv run rainier fetch --symbol MES
 uv run rainier sr-levels --symbol MES --data-dir data/csv           # S/R zones for /trading/mes
+uv run rainier chart-publish --fetch                                # all /trading/<symbol> charts -> KV futures:sr
 uv run rainier sr-validate --symbol MES --holdout-start 2026-08-17
 uv run rainier xj-backtest --symbol MES --holdout-start 2026-08-17  # Xiaojiang A/C/C2 on the chart zones vs random
 
@@ -66,7 +67,7 @@ uv run rainier run                                    # start APScheduler (4x da
 uv run rainier run --once morning                     # single immediate scrape
 uv run rainier jobs list                              # show cron.yaml jobs
 uv run rainier jobs sync                              # sync to system crontab
-uv run rainier jobs stop --name fetch-mes
+uv run rainier jobs stop --name fetch-futures
 
 # Recovery (after restart/power outage)
 uv run rainier recover                                # check services + re-run missed jobs

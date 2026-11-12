@@ -17,7 +17,7 @@ WEBHOOK="$1"; shift
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
-# Bound the log file size before appending. fetch-mes runs every 5 min, so its
+# Bound the log file size before appending. fetch-futures runs every 5 min, so its
 # log grows without limit (52 MB observed). Keep the most recent MAX_LOG_BYTES
 # of content (default 10 MiB) by truncating to the tail — log CONTENT is
 # unchanged, only the oldest bytes past the cap are dropped. Override the cap
