@@ -188,7 +188,7 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path):
 @cli.command("chart-publish")
 @click.option("--symbol", "symbols", multiple=True,
               help="Symbol to publish, repeatable (default: chart_publish.symbols)")
-@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
+@click.option("--data-dir", default="data/csv", help="CSV directory (--fetch creates it)")
 @click.option("--fetch/--no-fetch", "do_fetch", default=False,
               help="Fetch each symbol's latest bars before building its chart")
 @click.pass_context

@@ -252,6 +252,31 @@ def test_cli_chart_publish_writes_every_symbol_in_one_kv_value(mes, tmp_path, mo
 
 
 
+def test_chart_publish_symbols_come_from_settings_yaml(tmp_path):
+    """A new future is added by listing it under chart_publish.symbols in settings.yaml."""
+    from rainier.core.config import load_settings
+
+    cfg = tmp_path / "settings.yaml"
+    cfg.write_text("chart_publish:\n  symbols: [MES, MNQ, M2K]\n")
+    assert load_settings(cfg).chart_publish.symbols == ["MES", "MNQ", "M2K"]
+
+
+def test_cli_chart_publish_accepts_a_data_dir_fetch_has_not_created_yet(tmp_path, monkeypatch):
+    from rainier.cli import cli, futures
+    from rainier.publish import cloudflare_kv
+
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "tok")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.setattr(cloudflare_kv, "get_kv", lambda *a: None)
+    monkeypatch.setattr(cloudflare_kv, "put_kv", lambda *a: None)
+    fetched = []
+    monkeypatch.setattr(futures.fetch, "callback",
+                        lambda **kw: fetched.append(kw["symbol"]))
+    r = CliRunner().invoke(cli, ["chart-publish", "--fetch", "--symbol", "MES",
+                                 "--data-dir", str(tmp_path / "fresh")])
+    assert fetched == ["MES"] and "MES: FAILED" in r.output and r.exit_code == 1
+
+
 def test_chart_payload_survives_short_windows_and_rejects_empty_vma(mes) -> None:
     from pydantic import ValidationError
 
