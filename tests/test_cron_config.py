@@ -129,18 +129,17 @@ def _fires(expr: str) -> set[tuple[int, int, int]]:
             for mm in field(m, 0, 59)}
 
 
-@pytest.mark.parametrize("symbol", ["MES", "MNQ"])
-def test_chart_fetch_runs_only_while_cme_equity_futures_trade(
-    jobs: dict[str, dict], symbol: str,
-) -> None:
+def test_chart_fetch_runs_only_while_cme_equity_futures_trade(jobs: dict[str, dict]) -> None:
     """MES/MNQ trade Sun 15:00 -> Fri 14:00 PT; the chart needs no pushes over the weekend
-    (user request), but must catch Friday's last bars, which arrive ~10-15 min late."""
+    (user request), but must catch Friday's last bars, which arrive ~10-15 min late.
+    One job fetches and publishes every chart symbol, so KV gets one write per run."""
+    from rainier.core.config import ChartPublishConfig
     from rainier.scheduler.jobs import schedules
 
-    job = jobs[f"fetch-{symbol.lower()}"]
-    assert job["enabled"] is True
-    assert (f"rainier fetch --symbol {symbol} && uv run rainier sr-levels --symbol {symbol}"
-            in job["command"]) and "--publish-kv" in job["command"]
+    job = jobs["fetch-futures"]
+    assert job["enabled"] is True and job["command"] == "uv run rainier chart-publish --fetch"
+    assert {"MES", "MNQ"} <= set(ChartPublishConfig().symbols)
+    assert not {"fetch-mes", "fetch-mnq"} & set(jobs)
     slots = set().union(*(_fires(s) for s in schedules(job)))
     sun, fri, sat = 0, 5, 6
     assert not any(d == sat for d, _, _ in slots)
@@ -191,9 +190,9 @@ def test_jobs_list_flags_a_missing_schedule_line(tmp_path, monkeypatch) -> None:
 
     def status() -> str:
         out = CliRunner().invoke(cli, ["jobs", "list"]).output
-        return next(ln for ln in out.splitlines() if ln.strip().startswith("fetch-mes"))
+        return next(ln for ln in out.splitlines() if ln.strip().startswith("fetch-futures"))
 
     assert status().endswith("ACTIVE")
     tab["text"] = "".join(ln + "\n" for ln in tab["text"].splitlines()
-                          if not (ln.startswith("*/5 15-23 * * 0") and "fetch-mes" in ln))
+                          if not (ln.startswith("*/5 15-23 * * 0") and "fetch-futures" in ln))
     assert status().endswith("OUT OF SYNC")

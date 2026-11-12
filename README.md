@@ -47,7 +47,7 @@ Jobs are defined in `config/cron.yaml` and synced to system crontab:
 ```bash
 uv run rainier jobs list
 uv run rainier jobs sync
-uv run rainier jobs stop --name fetch-mes
+uv run rainier jobs stop --name fetch-futures
 ```
 
 ## LLM Thesis Dashboard

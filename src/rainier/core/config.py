@@ -572,10 +572,13 @@ def _default_trend() -> dict[Timeframe, TrendTimeframeConfig]:
 
 
 class ChartPublishConfig(BaseModel):
-    """S/R chart payload pushed to Workers KV for fengshen.dev /trading/<symbol> (mes, mnq)."""
+    """S/R chart payloads pushed to Workers KV for fengshen.dev /trading/<symbol>."""
 
     kv_namespace_id: str = "0d0281e0d0ff49b4868a42aa2a39f4ec"  # fengshen TRADING_KV
-    kv_key: str = "{symbol}:sr"  # formatted with the lower-cased symbol
+    # Every symbol's chart in one KV value ({"MES": payload, ...}): one write per run whatever
+    # the symbol count (the Workers KV free tier allows 1,000 writes a day).
+    kv_key: str = "futures:sr"
+    symbols: list[str] = Field(default_factory=lambda: ["MES", "MNQ"])
     bars: dict[Timeframe, int] = Field(default_factory=_default_chart_bars)
     # The chart draws every zone inside the published candles' price range (all tabs), plus
     # this many beyond its lowest low and highest high (no distance-from-price filter).
@@ -625,7 +628,7 @@ class Settings(BaseSettings):
     discord_backtest_webhook_url: str = ""
     notify_urls: str = ""  # Apprise URL(s), comma-separated
     x_api_bearer_token: str = ""  # X/Twitter API v2 bearer token
-    cloudflare_api_token: str = ""  # Workers KV Storage: Edit (rainier sr-levels --publish-kv)
+    cloudflare_api_token: str = ""  # Workers KV Storage: Edit (rainier chart-publish)
     cloudflare_account_id: str = ""
 
     # App config from YAML

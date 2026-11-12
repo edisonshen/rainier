@@ -148,13 +148,15 @@ def test_cli_sr_levels_json_and_pine(mes, tmp_path):
     assert src.startswith("//@version=5") and src.count("line.new(") == len(payload["zones"])
 
 
-def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch):
-    """fengshen.dev /trading/mes reads this KV value: candles per TF + zones."""
+def test_cli_chart_publish_writes_every_symbol_in_one_kv_value(mes, tmp_path, monkeypatch):
+    """fengshen.dev /trading/<symbol> reads KV futures:sr = {SYMBOL: candles per TF + zones}:
+    one write per run for all symbols (KV free tier: 1,000 writes/day)."""
     from rainier.cli import cli
     from rainier.publish import cloudflare_kv
 
-    for tf, df in mes.items():
-        df.to_csv(tmp_path / f"MES_{tf.value}.csv", index=False)
+    for sym in ("MES", "MNQ"):
+        for tf, df in mes.items():
+            df.to_csv(tmp_path / f"{sym}_{tf.value}.csv", index=False)
     calls, store = [], {}
 
     class _Resp:
@@ -173,18 +175,35 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     monkeypatch.setattr(cloudflare_kv.httpx, "get",
                         lambda url, **kw: _Resp(200, store[url]) if url in store else _Resp(404))
     runner = CliRunner()
-    r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
+    publish = ["chart-publish", "--data-dir", str(tmp_path)]
+    r = runner.invoke(cli, publish)
     assert r.exit_code != 0 and "CLOUDFLARE_API_TOKEN" in r.output and not calls
 
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "tok")
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
-    r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
+    r = runner.invoke(cli, publish)
     assert r.exit_code == 0, r.output
     (url, kw), = calls
     assert url.endswith("/accounts/acct/storage/kv/namespaces/"
-                        "0d0281e0d0ff49b4868a42aa2a39f4ec/values/mes%3Asr")
+                        "0d0281e0d0ff49b4868a42aa2a39f4ec/values/futures%3Asr")
     assert kw["headers"]["Authorization"] == "Bearer tok"
-    payload = json.loads(kw["content"])
+    charts = json.loads(kw["content"])
+    assert set(charts) == {"MES", "MNQ"} and charts["MNQ"]["symbol"] == "MNQ"
+    assert charts["MNQ"]["zones"] == charts["MES"]["zones"]  # same bars -> same shared finder
+    assert not charts["MNQ"].get("xj")  # Xiaojiang setups are MES points/dollars
+    # Next 5-min run with no new bar (daily halt, holiday): identical value, no KV write.
+    r = runner.invoke(cli, publish)
+    assert r.exit_code == 0 and "unchanged" in r.output and len(calls) == 1
+    # A symbol that fails keeps its last chart; the others still publish, and the run fails.
+    for f in tmp_path.glob("MNQ_*.csv"):
+        f.unlink()
+    m5 = tmp_path / "MES_5m.csv"
+    m5.write_text("".join(m5.read_text().splitlines(keepends=True)[:-1]))
+    r = runner.invoke(cli, publish)
+    assert r.exit_code != 0 and "MNQ" in r.output and len(calls) == 2
+    after = json.loads(calls[-1][1]["content"])
+    assert after["MNQ"] == charts["MNQ"] and after["MES"]["asof"] < charts["MES"]["asof"]
+    payload = charts["MES"]
     assert set(payload["candles"]) == {"5m", "1H", "4H", "1D"}
     # All the 5m we have up to ~60 days (yfinance's limit), and ~1 year of 1D.
     assert len(payload["candles"]["5m"]) == len(mes[Timeframe.M5])  # fixture < 60 days
@@ -230,9 +249,6 @@ def test_cli_sr_levels_publishes_chart_payload_to_kv(mes, tmp_path, monkeypatch)
     assert line[-3][0] == t  # the value from 2 bars back sits on the last candle
     # Bars before the chart window feed the first values, so the line spans the whole window.
     assert vma["series"]["1D"][0][0] == d1[2][0] and len(vma["series"]["1D"]) == len(d1)
-    # Next 5-min run with no new bar (daily halt, holiday): identical payload, no KV write.
-    r = runner.invoke(cli, ["sr-levels", "--data-dir", str(tmp_path), "--publish-kv"])
-    assert r.exit_code == 0 and "unchanged" in r.output and len(calls) == 1
 
 
 

@@ -116,18 +116,8 @@ def _load_mtf_csvs(data_path: Path, symbol: str) -> dict[Timeframe, pd.DataFrame
     return data
 
 
-@cli.command("sr-levels")
-@click.option("--symbol", default="MES")
-@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
-@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json", "pine"]))
-@click.option("--output", "output_path", default=None, help="Write to file instead of stdout")
-@click.option("--publish-kv", is_flag=True,
-              help="Also push the JSON chart payload to Workers KV (fengshen.dev /trading/<symbol>)")
-@click.pass_context
-def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
-    """Current multi-TF S/R zones (1D -> 4H -> 1H, consolidated) as text, JSON or Pine v5."""
-    import json
-
+def _sr_chart(settings, data_path: Path, symbol: str):
+    """``symbol``'s S/R levels and its fengshen.dev /trading/<symbol> chart payload."""
     from rainier.analysis.sr_zones import (
         detect_mtf_zones,
         full_1d_history,
@@ -135,20 +125,15 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
         zones_to_levels,
     )
     from rainier.analysis.trend_channels import trend_overlays
-    from rainier.publish.cloudflare_kv import put_kv_if_changed
     from rainier.research.xiaojiang.chart import chart_setups
     from rainier.viz.chart_payload import sr_chart_payload
-    from rainier.viz.pine import zones_to_pine
 
-    settings = ctx.obj["settings"]
     pub = settings.chart_publish
     cfg = settings.analysis.sr_zones
-    if publish_kv and not (settings.cloudflare_api_token and settings.cloudflare_account_id):
-        raise click.ClickException("--publish-kv needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID")
-    data = _load_mtf_csvs(Path(data_dir), symbol)
+    data = _load_mtf_csvs(data_path, symbol)
     htf = {tf: df for tf, df in data.items() if tf in cfg.timeframes}
     if not htf:
-        raise click.ClickException(f"no {symbol} 1D/4H/1H CSVs in {data_dir}")
+        raise click.ClickException(f"no {symbol} 1D/4H/1H CSVs in {data_path}")
     latest = data.get(Timeframe.M5, data[next(iter(htf))])
     price = float(latest["close"].iloc[-1])
     asof = pd.Timestamp(latest["timestamp"].iloc[-1]).to_pydatetime()
@@ -164,22 +149,28 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
     if (pub.xj_setups and symbol.upper() == "MES" and Timeframe.M5 in data
             and Timeframe.M5 in pub.bars):
         since = data[Timeframe.M5]["timestamp"].tail(pub.bars[Timeframe.M5]).iloc[0]
-        xj = chart_setups(data, pub.xj_setups, zones, since, settings.analysis.sr_zones,
-                          pub.trend)
+        xj = chart_setups(data, pub.xj_setups, zones, since, cfg, pub.trend)
     payload = sr_chart_payload(symbol, asof, price, levels, data, pub.bars,
                                pub.vma_bars, pub.vma_offset, xj,
                                trend_overlays(data, pub.trend, asof), pub.trend_extend_bars)
-    if publish_kv:
-        key = pub.kv_key.format(symbol=symbol.lower())
-        # Same bars + zones (daily halt, holidays) -> identical payload, so skip the write.
-        if put_kv_if_changed(settings.cloudflare_account_id, pub.kv_namespace_id, key,
-                             json.dumps(payload, separators=(",", ":")),
-                             settings.cloudflare_api_token):
-            click.echo(f"Published {len(levels)} zones to KV {key}")
-        else:
-            click.echo(f"KV {key} unchanged (no new bar), skipped write")
+    return levels, payload
+
+
+@cli.command("sr-levels")
+@click.option("--symbol", default="MES")
+@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
+@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json", "pine"]))
+@click.option("--output", "output_path", default=None, help="Write to file instead of stdout")
+@click.pass_context
+def sr_levels(ctx, symbol, data_dir, fmt, output_path):
+    """Current multi-TF S/R zones (1D -> 4H -> 1H, consolidated) as text, JSON or Pine v5."""
+    import json
+
+    from rainier.viz.pine import zones_to_pine
+
+    levels, payload = _sr_chart(ctx.obj["settings"], Path(data_dir), symbol)
     if fmt == "pine":
-        out = zones_to_pine(symbol, levels, asof)
+        out = zones_to_pine(symbol, levels, pd.Timestamp(payload["asof"]).to_pydatetime())
     elif fmt == "json":
         out = json.dumps(payload, separators=(",", ":"))
     else:
@@ -192,6 +183,55 @@ def sr_levels(ctx, symbol, data_dir, fmt, output_path, publish_kv):
         click.echo(f"Wrote {len(levels)} zones to {output_path}")
     else:
         click.echo(out)
+
+
+@cli.command("chart-publish")
+@click.option("--symbol", "symbols", multiple=True,
+              help="Symbol to publish, repeatable (default: chart_publish.symbols)")
+@click.option("--data-dir", default="data/csv", type=click.Path(exists=True))
+@click.option("--fetch/--no-fetch", "do_fetch", default=False,
+              help="Fetch each symbol's latest bars before building its chart")
+@click.pass_context
+def chart_publish(ctx, symbols, data_dir, do_fetch):
+    """Publish every futures S/R chart (fengshen.dev /trading/<symbol>) as one Workers KV value.
+
+    One write per run whatever the symbol count. A symbol that fails keeps its last published
+    chart and the command exits non-zero after writing the others.
+    """
+    import json
+
+    from rainier.publish.cloudflare_kv import get_kv, put_kv
+
+    settings = ctx.obj["settings"]
+    pub = settings.chart_publish
+    if not (settings.cloudflare_api_token and settings.cloudflare_account_id):
+        raise click.ClickException("chart-publish needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID")
+    kv = (settings.cloudflare_account_id, pub.kv_namespace_id, pub.kv_key)
+    old = get_kv(*kv, settings.cloudflare_api_token)
+    try:
+        charts = json.loads(old) if old else {}
+    except ValueError:
+        charts = {}
+    if not isinstance(charts, dict):
+        charts = {}
+    failed = []
+    for symbol in [s.upper() for s in symbols or pub.symbols]:
+        try:
+            if do_fetch:
+                ctx.invoke(fetch, symbol=symbol, data_dir=data_dir)
+            levels, charts[symbol] = _sr_chart(settings, Path(data_dir), symbol)
+            click.echo(f"{symbol}: {len(levels)} zones as of {charts[symbol]['asof']}")
+        except Exception as e:  # one symbol's bad data must not stop the others' charts
+            failed.append(symbol)
+            click.echo(f"{symbol}: FAILED, keeping its last published chart: {e}")
+    value = json.dumps(charts, separators=(",", ":"))
+    if value == old:
+        click.echo(f"KV {pub.kv_key} unchanged (no new bar), skipped write")
+    else:
+        put_kv(*kv, value, settings.cloudflare_api_token)
+        click.echo(f"Published {', '.join(sorted(charts))} to KV {pub.kv_key}")
+    if failed:
+        raise click.ClickException(f"chart-publish failed for {', '.join(failed)}")
 
 
 @cli.command("xj-backtest")
