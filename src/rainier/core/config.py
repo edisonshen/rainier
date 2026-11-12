@@ -740,6 +740,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         kwargs["paper"] = PaperConfig(**yaml_config["paper"])
     if "notify" in yaml_config:
         kwargs["notify"] = NotifyConfig(**yaml_config["notify"])
+    if "chart_publish" in yaml_config:
+        kwargs["chart_publish"] = ChartPublishConfig(**yaml_config["chart_publish"])
     # Stock screener: deep-merge code defaults ← settings.yaml ← champion.yaml
     # (champion wins per-key). The champion.yaml model-config system (WS C) is
     # the unit a later workstream A/B-tunes; seeded byte-identical to today's
