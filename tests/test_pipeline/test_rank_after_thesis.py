@@ -11,6 +11,7 @@ to screener order; the close scan runs no LLM at all.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 from rainier.llm_thesis.schemas import EvidencePack
@@ -25,13 +26,14 @@ from tests.test_pipeline.test_post_scrape import _candidates, _make_settings
 N_CANDIDATES = 40
 
 
-def _settings():
+def _settings(*, requires_pattern: bool = False):
     s = _make_settings(enabled_sessions=("afternoon",), llm_selection_enabled=True)
     s.anthropic_api_key = "k"
     cfg = s.llm_thesis
     cfg.model, cfg.max_usd_per_scan, cfg.batch_poll_seconds = MODEL, 6.0, 0
     cfg.batch_sessions = ["afternoon"]
     cfg.selection_stage, cfg.top_n, cfg.selection_pool_size = "after_thesis", 10, 100
+    cfg.thesis_requires_pattern = requires_pattern
     return s
 
 
@@ -46,10 +48,16 @@ def _ranking_reply(picks: list[str]) -> dict:
     }
 
 
-def _run_afternoon(session: str = "afternoon", *, ranking_fails: bool = False):
+def _run_afternoon(
+    session: str = "afternoon",
+    *,
+    ranking_fails: bool = False,
+    candidates=None,
+    requires_pattern: bool = False,
+):
     """Real pipeline + thesis service + batch client + Discord renderer; only the
     screener, DB, chart render and the network edges are faked."""
-    candidates = _candidates(N_CANDIDATES)
+    candidates = candidates or _candidates(N_CANDIDATES)
     ranking_calls: list[dict] = []
 
     def completion(**kwargs):
@@ -95,7 +103,9 @@ def _run_afternoon(session: str = "afternoon", *, ranking_fails: bool = False):
     ):
         from rainier.pipeline.post_scrape import run_post_scrape_pipeline
 
-        run_post_scrape_pipeline(_settings(), session, scan_date=SCAN_DATE)
+        run_post_scrape_pipeline(
+            _settings(requires_pattern=requires_pattern), session, scan_date=SCAN_DATE
+        )
 
     return {
         "api": api, "llm": llm, "ranking_calls": ranking_calls, "embeds": embeds,
@@ -141,6 +151,30 @@ def test_afternoon_theses_all_candidates_in_one_batch_and_posts_ranked_top_10():
 
     # The stock-channel top-20 summary still goes out.
     run["summary_post"].assert_called()
+
+
+def test_pattern_gate_theses_and_posts_only_names_with_a_chart_pattern():
+    # Half the "Long in" pool has a screener chart pattern (S000, S002, ...); the
+    # rest have no entry/stop/target, so a thesis on them could never trade.
+    candidates = [
+        replace(c, pattern_type="w_bottom") if i % 2 == 0 else c
+        for i, c in enumerate(_candidates(N_CANDIDATES))
+    ]
+    patterned = {c.symbol for c in candidates if c.pattern_type}
+    run = _run_afternoon(candidates=candidates, requires_pattern=True)
+
+    # Every name is still screened and persisted; only patterned ones are thesised.
+    assert len(run["persist_screened"].call_args.args[0]) == N_CANDIDATES
+    assert [len(r) for r in run["api"].submitted] == [len(patterned)]
+    assert {t["symbol"] for t in run["paper"].call_args.args[0]} == patterned
+
+    # The ranker only sees thesised names; the top 10 post from them alone.
+    table = run["ranking_calls"][0]["messages"][1]["content"]
+    assert table.count("thesis setup_long quality 7/10") == len(patterned)
+    assert "S001 |" not in table
+    posted = [_symbol(e) for e in run["embeds"]]
+    assert len(posted) == 10 and set(posted) <= patterned
+    run["failure_alert"].assert_not_called()
 
 
 def test_ranking_outage_posts_screener_top_10_and_keeps_every_thesis():
