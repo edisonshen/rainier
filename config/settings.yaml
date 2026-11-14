@@ -191,7 +191,7 @@ llm_thesis:
   model: "claude-opus-5-5"
   # xhigh extended thinking: thinking tokens bill as OUTPUT ($20/M on Opus 5.5),
   # Measured Opus 5.5 (effort high): ~$0.045/thesis sync, half that batched.
-  # The afternoon scan theses the whole "Long in" pool (~35-50 names, up to 100);
+  # The afternoon scan theses every "Long in" name with a chart pattern (up to 100);
   # the batched kill switch splits the cap evenly per thesis, so 6.0 leaves
   # ~$0.06 each even at 100 names: enough for the full-price sync fallback.
   max_usd_per_scan: 6.0
@@ -202,7 +202,7 @@ llm_thesis:
   thinking_budget_tokens: 24000
   # Adaptive-thinking models (claude-opus-5-5) reject the manual budget form and
   # take effort instead; thinking_budget_tokens then only sizes max_tokens.
-  thinking_effort: "high"
+  thinking_effort: "medium"
   # v2: D7a calibration block. v3: R-A last-K reflections block. v4: switch to
   # xhigh extended thinking (behavioral change busts the Tier-1 cache). v5: 200-bar
   # 1024x640 chart (was 60 bars at 1280x800). This
@@ -218,12 +218,16 @@ llm_thesis:
   # thesis, then one text-only Claude call ranks the finished theses and the
   # top_n post to Discord (all theses persist and feed paper trading). Falls
   # back to composite order on any selector failure. before_thesis = Claude
-  # picks top_n first and only those get a thesis. selection_model null = model.
+  # picks top_n first and only those get a thesis. selection_model null = model;
+  # the text-only ranking call runs on the cheaper Sonnet.
   selection_stage: after_thesis
+  # No-pattern names have no entry/stop/target, so they can't open a paper
+  # trade: skip their thesis (~60% of the pool) and keep them off the top_n.
+  thesis_requires_pattern: true
   top_n: 10
   llm_selection_enabled: true
   selection_pool_size: 100
-  selection_model: null
+  selection_model: "claude-sonnet-5-5"
   # Close reuses the afternoon thesis (no LLM call) when pattern type/status and
   # entry/stop/target are unchanged, price moved <= reuse_max_price_move_pct and
   # QU rank moved <= reuse_max_rank_move.

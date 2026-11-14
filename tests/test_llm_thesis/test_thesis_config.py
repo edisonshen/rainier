@@ -65,3 +65,17 @@ def test_committed_settings_yaml_ships_the_afternoon_batch_spend_profile():
     assert cfg.selection_stage == "after_thesis"
     assert (cfg.top_n, cfg.selection_pool_size) == (10, 100)
     assert cfg.max_usd_per_scan / cfg.selection_pool_size > 0.051  # max sync thesis seen
+
+
+def test_committed_settings_yaml_ships_the_token_saving_profile():
+    """Theses skip no-pattern names (they can never open a paper trade), think at
+    medium effort, and the text-only ranking call runs on a cheaper catalog model."""
+    import litellm
+
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg = load_settings(config_path=repo_root / "config" / "settings.yaml").llm_thesis
+    assert cfg.thesis_requires_pattern is True
+    assert cfg.thinking_effort == "medium"
+    assert cfg.selection_model in litellm.model_cost
+    ranker_out = litellm.model_cost[cfg.selection_model]["output_cost_per_token"]
+    assert ranker_out < litellm.model_cost[cfg.model]["output_cost_per_token"]

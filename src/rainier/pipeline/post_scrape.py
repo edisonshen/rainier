@@ -84,6 +84,14 @@ def _compute_or_fail(
         return ThesisBatch({}, {c.symbol: f"compute_theses crashed: {exc}" for c in targets})
 
 
+def _thesis_eligible(
+    candidates: list[StockCandidate], settings: Settings
+) -> list[StockCandidate]:
+    if not settings.llm_thesis.thesis_requires_pattern:
+        return candidates
+    return [c for c in candidates if c.pattern_type]
+
+
 def pick_and_thesis(
     scan_candidates: list[StockCandidate],
     ohlcv_by_symbol: dict,
@@ -98,6 +106,7 @@ def pick_and_thesis(
     before_thesis: the LLM picks top_n of the pool and only those get a thesis.
     after_thesis: the whole pool gets a thesis, then the LLM ranks the finished
     theses and the top_n post. Either LLM pick falls back to screener order.
+    With ``thesis_requires_pattern`` only names with a chart pattern take part.
     """
     cfg = settings.llm_thesis
     n = cfg.top_n if top_n is None else top_n
@@ -106,7 +115,7 @@ def pick_and_thesis(
     }
 
     if cfg.selection_stage == "after_thesis":
-        targets = scan_candidates[: cfg.selection_pool_size]
+        targets = _thesis_eligible(scan_candidates[: cfg.selection_pool_size], settings)
         # Reserve the ranking call's budget up front so it stays under the cap.
         batch = _compute_or_fail(
             targets,
@@ -123,10 +132,11 @@ def pick_and_thesis(
             batch.theses[symbol]["_selection_reason"] = reason
         return ThesisScan(ranking.targets, batch.theses, batch.failures, len(targets), ranking)
 
+    eligible = _thesis_eligible(scan_candidates, settings)
     try:
-        selection = select_thesis_targets(scan_candidates, settings, top_n=n)
+        selection = select_thesis_targets(eligible, settings, top_n=n)
     except Exception as exc:
-        selection = _screener_order(scan_candidates, n, exc)
+        selection = _screener_order(eligible, n, exc)
     batch = _compute_or_fail(
         selection.targets,
         ohlcv_by_symbol,

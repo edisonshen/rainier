@@ -399,6 +399,10 @@ class LLMThesisConfig(BaseModel):
     # and feed paper trading). The ranking call's estimated cost is reserved from
     # max_usd_per_scan before the theses run.
     selection_stage: Literal["before_thesis", "after_thesis"] = "before_thesis"
+    # When on, only candidates the screener found a chart pattern for get a
+    # thesis: a no-pattern name has no entry/stop/target, so its thesis can never
+    # open a paper trade and only costs tokens.
+    thesis_requires_pattern: bool = False
     # Cross-session reuse: a session listed here (key) reuses the same-day thesis
     # from the mapped earlier session (value) instead of a new LLM call when the
     # evidence is materially unchanged (service._evidence_unchanged).
