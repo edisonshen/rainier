@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from .base import SignalContext, SignalValue, ThesisSignal
 from .capital_flow_streak import CapitalFlowStreakSignal
+from .fear_greed import FearGreedSignal
 from .fundamentals import FundamentalsSignal
 from .rank_trajectory import RankTrajectorySignal
 from .sector_momentum import SectorMomentumSignal
@@ -22,6 +23,7 @@ REGISTRY: dict[str, type[ThesisSignal]] = {
     "capital_flow_streak": CapitalFlowStreakSignal,
     "sector_momentum": SectorMomentumSignal,
     "fundamentals": FundamentalsSignal,
+    "fear_greed": FearGreedSignal,
 }
 
 
@@ -34,4 +36,5 @@ __all__ = [
     "CapitalFlowStreakSignal",
     "SectorMomentumSignal",
     "FundamentalsSignal",
+    "FearGreedSignal",
 ]
