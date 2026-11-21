@@ -45,6 +45,74 @@ def fetch(ctx, symbol, data_dir, provider_type):
             click.echo(f"  {tf.value}: {count} candles")
         except Exception as e:
             click.echo(f"  {tf.value}: ERROR - {e}")
+    try:
+        _refresh_roll_gaps(symbol, data_path)
+    except Exception as e:  # stale roll gaps only delay the next roll's adjustment
+        click.echo(f"  rolls: ERROR - {e}")
+
+
+def _refresh_roll_gaps(symbol: str, data_path: Path, observed: list[dict] | None = None,
+                       force: bool = False) -> None:
+    """Keep ``{symbol}_rolls.csv`` (gaps that back-adjust its CSVs) covering every roll.
+
+    Adds ``observed`` gaps and, once a day, the live Yahoo next-minus-front spread; rolls
+    with no observation get a carry estimate. Network calls only when something changed.
+    """
+    from rainier.data.futures_roll import (
+        CARRY,
+        fill_roll_gaps,
+        load_roll_gaps,
+        quarterly_expiries,
+        save_roll_gaps,
+    )
+    from rainier.data.yfinance_provider import (
+        QUARTERLY_ROLL_SYMBOLS,
+        front_roll_spread,
+        rate_history,
+    )
+
+    d1_path = data_path / f"{symbol}_{Timeframe.D1.value}.csv"
+    if symbol not in QUARTERLY_ROLL_SYMBOLS or not d1_path.exists():
+        return
+    path = data_path / f"{symbol}_rolls.csv"
+    table = load_roll_gaps(path)
+    now = pd.Timestamp.now(tz="UTC")
+    today = now.strftime("%Y-%m-%d")
+    new = list(observed or [])
+    if not ((table["source"] == "yfinance") & (table["asof"] == today)).any():
+        live = front_roll_spread(symbol, now)
+        if live:
+            new.append(live)
+    d1 = pd.read_csv(d1_path, usecols=["timestamp", "close"])
+    d1["timestamp"] = pd.to_datetime(d1["timestamp"], utc=True)
+    expiries = quarterly_expiries(d1["timestamp"].iloc[0], now)
+
+    def near(row_expiry: str, rows: pd.DataFrame) -> pd.Series:
+        exp = pd.Timestamp(row_expiry, tz="UTC")
+        when = pd.to_datetime(rows["expiry"].astype(str), format="%Y%m%d").dt.tz_localize("UTC")
+        return (when - exp).abs() <= pd.Timedelta(days=3)
+
+    for row in new:  # IBKR per-contract bars beat a Yahoo spread, which beats an estimate
+        same = near(row["expiry"], table)
+        if row["source"] != "ibkr" and (same & (table["source"] == "ibkr")).any():
+            continue
+        keep = table[~same]
+        table = pd.concat([keep, pd.DataFrame([row])] if len(keep) else [pd.DataFrame([row])],
+                          ignore_index=True)
+    known = table[table["source"] != CARRY]
+    if not (new or force) and all(near(e.strftime("%Y%m%d"), table).any() for e in expiries):
+        return
+    rates = rate_history(d1["timestamp"].iloc[0] - pd.Timedelta(days=30))
+
+    def price_at(ts: pd.Timestamp) -> float:
+        return float(d1.loc[d1["timestamp"] <= ts, "close"].iloc[-1])
+
+    def rate_at(ts: pd.Timestamp) -> float:
+        return float(rates[rates.index <= ts].iloc[-1])
+
+    table = fill_roll_gaps(known, [e for e in expiries if e < now], price_at, rate_at)
+    save_roll_gaps(path, table)
+    click.echo(f"  rolls: {len(table)} gaps ({(table['source'] != CARRY).sum()} observed)")
 
 
 @cli.command("backfill-ibkr")
@@ -99,19 +167,48 @@ def backfill_ibkr(symbol, tf_value, years, data_dir, raw_dir, port):
     )
 
 
+@cli.command("roll-gaps")
+@click.option("--symbol", default="MES")
+@click.option("--data-dir", default="data/csv", help="CSV directory holding {symbol}_rolls.csv")
+@click.option("--raw-dir", default="data/ibkr_raw",
+              help="backfill-ibkr per-contract cache to measure past roll gaps from")
+def roll_gaps(symbol, data_dir, raw_dir):
+    """Rebuild {symbol}_rolls.csv, the per-roll gaps that back-adjust the symbol's CSVs.
+
+    Gaps come from cached IBKR contracts, then Yahoo contract quotes, else a carry estimate.
+    """
+    from rainier.data.futures_roll import contract_gaps
+
+    frames = {}
+    for f in sorted(Path(raw_dir).glob(f"{symbol}_*_5m.csv")):
+        df = pd.read_csv(f)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        frames[f.stem.split("_")[1]] = df
+    _refresh_roll_gaps(symbol, Path(data_dir), [
+        {"expiry": exp, "gap": gap, "source": "ibkr", "price": None, "rate": None, "asof": None}
+        for exp, gap in contract_gaps(frames).items()
+    ], force=True)
+    click.echo((Path(data_dir) / f"{symbol}_rolls.csv").read_text())
+
+
 MTF_TIMEFRAMES = (Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M5)
 
 
 def _load_mtf_csvs(data_path: Path, symbol: str) -> dict[Timeframe, pd.DataFrame]:
-    """Load {symbol}_{1D,4H,1H,5m}.csv from data_path (missing files are skipped)."""
+    """Load {symbol}_{1D,4H,1H,5m}.csv from data_path (missing files are skipped).
+
+    Back-adjusted with {symbol}_rolls.csv when present, so every bar is in today's contract.
+    """
     from rainier.data.csv_provider import CSVProvider
+    from rainier.data.futures_roll import back_adjust, load_roll_gaps
 
     provider = CSVProvider(data_path)
+    gaps = load_roll_gaps(data_path / f"{symbol}_rolls.csv")
     data: dict[Timeframe, pd.DataFrame] = {}
     for tf in MTF_TIMEFRAMES:
         csv_file = data_path / f"{symbol}_{tf.value}.csv"
         if csv_file.exists():
-            data[tf] = provider._read_csv(csv_file, None, None)
+            data[tf] = back_adjust(provider._read_csv(csv_file, None, None), gaps)
             click.echo(f"  Loaded {tf.value}: {len(data[tf])} candles")
     return data
 
@@ -284,8 +381,10 @@ def xj_backtest(ctx, symbol, data_dir, holdout_start, keys, n_random):
 @click.option("--holdout-start", required=True, help="First holdout date (YYYY-MM-DD), UTC")
 @click.option("--min-timeframes", default=2, show_default=True)
 @click.option("--step", default=48, show_default=True, help="5m bars between re-draws")
+@click.option("--by-age", is_flag=True,
+              help="Split zones inside vs outside the last 6 months' price range")
 @click.pass_context
-def sr_validate(ctx, symbol, data_dir, holdout_start, min_timeframes, step):
+def sr_validate(ctx, symbol, data_dir, holdout_start, min_timeframes, step, by_age):
     """Walk-forward 5m touch/reaction scorecard of S/R zones vs randomly shifted zones."""
     from rainier.analysis.sr_eval import scorecard, walk_forward
     from rainier.analysis.sr_zones import detect_mtf_zones
@@ -299,7 +398,7 @@ def sr_validate(ctx, symbol, data_dir, holdout_start, min_timeframes, step):
         htf, data[Timeframe.M5], lambda past, px: detect_mtf_zones(past, cfg, px),
         pd.Timestamp(holdout_start, tz="UTC"), reference_tf=cfg.reference_tf, step=step,
     )
-    click.echo(scorecard(outcomes, min_timeframes).round(3).to_string())
+    click.echo(scorecard(outcomes, min_timeframes, by_age).round(3).to_string())
 
 
 @cli.command(name="backtest-pattern")

@@ -118,6 +118,10 @@ def test_walk_forward_scorecard_on_5m(mes):
     assert set(card.index.get_level_values("period")) == {"tune", "holdout"}
     assert (card.touches > 10).all()
     assert card.bounce_rate.between(0, 1).all() and card.random_rate.between(0, 1).all()
+    # Zones outside the last 6 months' range (price revisiting older levels) score apart.
+    assert set(outcomes.age) <= {"recent", "old"} and "recent" in set(outcomes.age)
+    by_age = scorecard(outcomes, by_age=True)
+    assert by_age.touches.sum() == card.touches.sum()
     # Random control is seeded per step, so the scorecard is reproducible.
     again = scorecard(walk_forward(
         _htf(mes), mes[Timeframe.M5], lambda past, px: detect_mtf_zones(past, cfg, px),

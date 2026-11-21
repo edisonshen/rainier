@@ -26,24 +26,28 @@ def save_candles(
     """
     data_dir.mkdir(parents=True, exist_ok=True)
     csv_path = data_dir / f"{symbol}_{timeframe.value}.csv"
-    df = merge_with_existing(df, csv_path, keep="first" if prefer_existing else "last")
+    df = merge_with_existing(df, csv_path, keep="first" if prefer_existing else "last",
+                             daily=timeframe == Timeframe.D1)
     df.to_csv(csv_path, index=False)
     persist_to_db(df, symbol, timeframe)
     return len(df)
 
 
 def merge_with_existing(
-    new_df: pd.DataFrame, csv_path: Path, keep: str = "last",
+    new_df: pd.DataFrame, csv_path: Path, keep: str = "last", *, daily: bool = False,
 ) -> pd.DataFrame:
-    """Merge new data with existing CSV, dedup on timestamp.
+    """Merge new data with existing CSV, dedup on timestamp (``daily``: on the UTC date).
 
     ``keep="last"`` lets new bars overwrite existing ones; ``"first"`` keeps existing ones.
+    Daily bars of one session stamped differently by two sources (00:00 vs 04:00 UTC) are
+    the same bar, so only one survives.
     """
     if csv_path.exists():
         existing = pd.read_csv(csv_path)
         existing["timestamp"] = pd.to_datetime(existing["timestamp"], utc=True)
         combined = pd.concat([existing, new_df], ignore_index=True)
-        combined = combined.drop_duplicates(subset="timestamp", keep=keep)
+        key = combined["timestamp"].dt.normalize() if daily else combined["timestamp"]
+        combined = combined[~key.duplicated(keep=keep)]
         combined = combined.sort_values("timestamp").reset_index(drop=True)
         return combined
     return new_df

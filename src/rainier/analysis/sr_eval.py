@@ -94,8 +94,12 @@ def walk_forward(
     max_shift_atr: float = 4.0,
     max_gap_days: int = 4,
     warmup: int = 100,
+    recent: pd.Timedelta = pd.Timedelta(days=182),
 ) -> pd.DataFrame:
-    """One row per resolved-or-not touch: period, test, n_timeframes, control, result.
+    """One row per resolved-or-not touch: period, test, n_timeframes, control, result, age.
+
+    ``age`` is "recent" when the zone sits inside the price range traded over the last
+    ``recent`` (by reference bars), else "old": a level price is revisiting from further back.
 
     ``draw(closed_data, price)`` returns zones; the random control uses a per-step seed so
     every method evaluated on the same data sees the same shifts.
@@ -116,28 +120,36 @@ def walk_forward(
         ref_atr = float(compute_atr(past[reference_tf]).iloc[-1])
         price = float(trading["close"].iloc[t - 1])
         zones = draw(past, price)
+        ref = past[reference_tf]
+        ref = ref[_utc(ref["timestamp"]) >= now - recent]
+        lo, hi = float(ref["low"].min()), float(ref["high"].max())
+        ages = ["recent" if lo <= z.price <= hi else "old" for z in zones]
         period = "holdout" if now >= holdout_start else "tune"
         fut = trading.iloc[t - 1:end + 1].reset_index(drop=True)
         shifts = np.random.default_rng(t).uniform(
             -max_shift_atr * ref_atr, max_shift_atr * ref_atr, (n_random, len(zones)))
         for ti, test in enumerate(tests):
-            for z in zones:
+            for z, age in zip(zones, ages, strict=True):
                 ntf = len(set(z.timeframes))
                 for r in touch_outcomes([z.price], fut, float(atr_t[t - 1]), test):
-                    rows.append((period, ti, ntf, False, r))
+                    rows.append((period, ti, ntf, False, r, age))
             for s in shifts:
-                for z, d in zip(zones, s, strict=True):
+                for z, d, age in zip(zones, s, ages, strict=True):
                     ntf = len(set(z.timeframes))
                     for r in touch_outcomes([z.price + d], fut, float(atr_t[t - 1]), test):
-                        rows.append((period, ti, ntf, True, r))
-    return pd.DataFrame(rows, columns=["period", "test", "n_timeframes", "control", "result"])
+                        rows.append((period, ti, ntf, True, r, age))
+    return pd.DataFrame(
+        rows, columns=["period", "test", "n_timeframes", "control", "result", "age"])
 
 
-def scorecard(outcomes: pd.DataFrame, min_timeframes: int = 2) -> pd.DataFrame:
-    """Bounce rate real vs random per (period, test), with edge and its standard error in points."""
+def scorecard(
+    outcomes: pd.DataFrame, min_timeframes: int = 2, by_age: bool = False,
+) -> pd.DataFrame:
+    """Bounce rate real vs random per (period, test[, age]), with edge and its SE in points."""
     d = outcomes[(outcomes.result != 0) & (outcomes.n_timeframes >= min_timeframes)]
     d = d.assign(bounce=(d.result == 1).astype(float))
-    g = d.groupby(["period", "test", "control"]).bounce.agg(["mean", "size"]).unstack("control")
+    keys = ["period", "age", "test"] if by_age else ["period", "test"]
+    g = d.groupby([*keys, "control"]).bounce.agg(["mean", "size"]).unstack("control")
     out = pd.DataFrame({
         "touches": g[("size", False)], "bounce_rate": g[("mean", False)],
         "random_rate": g[("mean", True)],
