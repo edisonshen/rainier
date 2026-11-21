@@ -162,3 +162,15 @@ def test_roll_gaps_cli_builds_the_table_that_back_adjusts_loaded_csvs(tmp_path, 
     jump = loaded["close"].diff().abs()
     assert jump.max() < 5, "no roll steps left"
     assert loaded["close"].iloc[-1] == bars["close"].iloc[-1]
+
+
+def test_daily_bars_match_their_own_session_close_not_the_next_evening():
+    """A 04:00 UTC daily bar's midnight-to-midnight span also holds the next session's
+    evening trade; the match must use the bar's own session close."""
+    from rainier.data.futures_roll import _close_in_bar
+
+    t = pd.to_datetime(["2025-12-10 21:55", "2025-12-11 03:55"], utc=True)
+    c = pd.Series([6850.0, 6905.0], index=t)  # session close, then next session's evening
+    got = _close_in_bar(c, pd.Series(pd.to_datetime(["2025-12-10 05:00"], utc=True)),
+                        pd.Timedelta(days=1))
+    assert got.tolist() == [6850.0]
