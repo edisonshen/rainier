@@ -173,12 +173,21 @@ def _roll_contracts(
     keys = sorted(contracts)
     for old, new in zip(keys, keys[1:], strict=False):
         if abs(pd.Timestamp(old, tz="UTC") - exp) <= pd.Timedelta(days=3):
+            if (pd.Timestamp(new) - pd.Timestamp(old)).days > 100:
+                return None  # the next quarter isn't cached
             return contracts[old], contracts[new]
     return None
 
 
 def _close_in_bar(c: pd.Series, start: pd.Series, span: pd.Timedelta) -> np.ndarray:
-    """``c``'s last close inside each bar ``[start, start + span)``; NaN where it has none."""
+    """``c``'s last close inside each bar ``[start, start + span)``; NaN where it has none.
+
+    Daily bars take the close of their CME session: a midnight-to-midnight span would run
+    into the next session's evening trade.
+    """
+    if span >= pd.Timedelta(days=1):
+        last = c.groupby(session_date(c.index.to_series())).last()
+        return session_date(start).map(last).to_numpy(float)
     pos = c.index.searchsorted(start + span, side="left") - 1
     ok = pos >= 0
     ok[ok] = c.index[pos[ok]] >= start.to_numpy()[ok]
