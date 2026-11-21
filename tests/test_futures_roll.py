@@ -47,18 +47,36 @@ def _front_month(freq: str, switches: dict[str, list[str]]) -> pd.DataFrame:
                          "low": close - 0.5, "close": close, "volume": 1.0}), true
 
 
-@pytest.mark.parametrize("freq, switches", [
-    ("1D", {"sep": ["2025-09-22"], "dec": ["2025-12-22"]}),          # yfinance: after expiry
-    ("1h", {"sep": ["2025-09-14 22:00"], "dec": ["2025-12-14 23:00"]}),  # IBKR volume roll
+def _contracts(bars: pd.DataFrame, true: np.ndarray) -> dict[str, pd.Series]:
+    """Each contract's closes at every bar, `true` less the premium of the rolls after it."""
+    idx = pd.DatetimeIndex(bars["timestamp"])
+    return {"20250919": pd.Series(true - 55.0 - 58.5, index=idx),
+            "20251219": pd.Series(true - 58.5, index=idx),
+            "20260320": pd.Series(true, index=idx)}
+
+
+@pytest.mark.parametrize("freq, switches, cached", [
+    ("1D", {"sep": ["2025-09-22"], "dec": ["2025-12-22"]}, False),    # yfinance: after expiry
+    ("1h", {"sep": ["2025-09-14 22:00"], "dec": ["2025-12-14 23:00"]}, False),  # volume roll
     ("1h", {"sep": ["2025-09-14 22:00", "2025-09-15 03:00", "2025-09-15 07:00"],
-            "dec": ["2025-12-15 01:00"]}),                            # wavers before settling
+            "dec": ["2025-12-15 01:00"]}, True),         # wavers: needs per-contract closes
 ])
-def test_back_adjust_removes_each_roll_jump_and_keeps_latest_bars(freq, switches):
+def test_back_adjust_removes_each_roll_jump_and_keeps_latest_bars(freq, switches, cached):
     bars, true = _front_month(freq, switches)
-    adj = back_adjust(bars, GAPS)
+    adj = back_adjust(bars, GAPS, _contracts(bars, true) if cached else None)
     offset = adj["close"].to_numpy() - true
     assert np.allclose(offset, offset[-1]) and offset[-1] == 0
     assert np.allclose(adj["high"] - adj["close"], 0.5), "OHLC shift together"
+
+
+def test_contract_closes_pin_the_roll_when_a_real_move_is_as_large_as_the_gap():
+    bars, true = _front_month("1D", {"sep": ["2025-09-22"], "dec": ["2025-12-22"]})
+    rally = (bars["timestamp"] >= pd.Timestamp("2025-12-12", tz="UTC")).to_numpy()
+    for col in ("open", "high", "low", "close"):
+        bars[col] += np.where(rally, 50.0, 0.0)  # a 50-pt up day a week before the roll
+    true = true + np.where(rally, 50.0, 0.0)
+    adj = back_adjust(bars, GAPS, _contracts(bars, true))
+    assert np.allclose(adj["close"], true)
 
 
 def test_roll_still_in_progress_is_not_applied_yet():

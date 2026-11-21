@@ -104,11 +104,11 @@ def _refresh_roll_gaps(symbol: str, data_path: Path, observed: list[dict] | None
         return
     rates = rate_history(d1["timestamp"].iloc[0] - pd.Timedelta(days=30))
 
-    def price_at(ts: pd.Timestamp) -> float:
-        return float(d1.loc[d1["timestamp"] <= ts, "close"].iloc[-1])
+    def price_at(ts: pd.Timestamp) -> float:  # before the first bar: the first bar
+        return float(d1.loc[d1["timestamp"] <= max(ts, d1["timestamp"].iloc[0]), "close"].iloc[-1])
 
     def rate_at(ts: pd.Timestamp) -> float:
-        return float(rates[rates.index <= ts].iloc[-1])
+        return float(rates[rates.index <= max(ts, rates.index[0])].iloc[-1])
 
     table = fill_roll_gaps(known, [e for e in expiries if e < now], price_at, rate_at)
     save_roll_gaps(path, table)
@@ -194,21 +194,26 @@ def roll_gaps(symbol, data_dir, raw_dir):
 MTF_TIMEFRAMES = (Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M5)
 
 
-def _load_mtf_csvs(data_path: Path, symbol: str) -> dict[Timeframe, pd.DataFrame]:
+def _load_mtf_csvs(
+    data_path: Path, symbol: str, raw_dir: Path | None = None
+) -> dict[Timeframe, pd.DataFrame]:
     """Load {symbol}_{1D,4H,1H,5m}.csv from data_path (missing files are skipped).
 
-    Back-adjusted with {symbol}_rolls.csv when present, so every bar is in today's contract.
+    Back-adjusted with {symbol}_rolls.csv when present, so every bar is in today's contract;
+    the IBKR per-contract cache (``raw_dir``, default ``<data_path>/../ibkr_raw``) pins which
+    contract each bar in a roll window traded.
     """
     from rainier.data.csv_provider import CSVProvider
-    from rainier.data.futures_roll import back_adjust, load_roll_gaps
+    from rainier.data.futures_roll import back_adjust, contract_closes, load_roll_gaps
 
     provider = CSVProvider(data_path)
     gaps = load_roll_gaps(data_path / f"{symbol}_rolls.csv")
+    contracts = contract_closes(raw_dir or data_path.parent / "ibkr_raw", symbol)
     data: dict[Timeframe, pd.DataFrame] = {}
     for tf in MTF_TIMEFRAMES:
         csv_file = data_path / f"{symbol}_{tf.value}.csv"
         if csv_file.exists():
-            data[tf] = back_adjust(provider._read_csv(csv_file, None, None), gaps)
+            data[tf] = back_adjust(provider._read_csv(csv_file, None, None), gaps, contracts)
             click.echo(f"  Loaded {tf.value}: {len(data[tf])} candles")
     return data
 

@@ -7,6 +7,8 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
+from rainier.core.types import CSV_TZ
+
 # CME Globex sessions open 17:00 Chicago time; shifting by 7h maps each bar to its trade date.
 _SESSION_TZ = "America/Chicago"
 _SESSION_SHIFT = pd.Timedelta(hours=7)
@@ -75,6 +77,8 @@ def contract_gaps(frames: dict[str, pd.DataFrame], sessions: int = 5) -> dict[st
     keys = sorted(k for k, df in frames.items() if not df.empty)
     gaps: dict[str, float] = {}
     for old, new in zip(keys, keys[1:], strict=False):
+        if (pd.Timestamp(new) - pd.Timestamp(old)).days > 100:
+            continue  # a missing quarter between them: their spread spans two rolls
         both = frames[old].merge(frames[new], on="timestamp", suffixes=("_old", "_new"))
         if both.empty:
             continue
@@ -150,40 +154,98 @@ def save_roll_gaps(path, gaps: pd.DataFrame) -> None:
     gaps.sort_values("expiry")[ROLL_GAP_COLUMNS].to_csv(path, index=False)
 
 
-def _old_contract_mask(close: np.ndarray, gap: float, prev: float | None,
-                       nxt: float | None) -> np.ndarray:
-    """Which bars of a roll window still trade the expiring contract.
+def contract_closes(raw_dir, symbol: str) -> dict[str, pd.Series]:
+    """Per-contract 5m closes (UTC index) from the IBKR cache, keyed by contract expiry."""
+    from pathlib import Path
 
-    Two-state Viterbi: the labelling whose back-adjusted closes move least bar to bar, joined
-    to the already-adjusted bars just before (``prev``) and after (``nxt``) the window.
-    Handles sources that flip contracts more than once around a roll.
+    out = {}
+    for f in sorted(Path(raw_dir).glob(f"{symbol}_*_5m.csv")):
+        x = pd.read_csv(f, usecols=["timestamp", "close"])
+        idx = pd.DatetimeIndex(pd.to_datetime(x["timestamp"], utc=True))
+        out[f.stem.split("_")[1]] = pd.Series(x["close"].to_numpy(float), index=idx).sort_index()
+    return out
+
+
+def _roll_contracts(
+    contracts: dict[str, pd.Series], exp: pd.Timestamp
+) -> tuple[pd.Series, pd.Series] | None:
+    """(expiring, next) contract closes for the roll at ``exp``, if both are cached."""
+    keys = sorted(contracts)
+    for old, new in zip(keys, keys[1:], strict=False):
+        if abs(pd.Timestamp(old, tz="UTC") - exp) <= pd.Timedelta(days=3):
+            return contracts[old], contracts[new]
+    return None
+
+
+def _close_in_bar(c: pd.Series, start: pd.Series, span: pd.Timedelta) -> np.ndarray:
+    """``c``'s last close inside each bar ``[start, start + span)``; NaN where it has none."""
+    pos = c.index.searchsorted(start + span, side="left") - 1
+    ok = pos >= 0
+    ok[ok] = c.index[pos[ok]] >= start.to_numpy()[ok]
+    out = np.full(len(start), np.nan)
+    out[ok] = c.to_numpy()[pos[ok]]
+    return out
+
+
+def _matched_old(close: np.ndarray, start: pd.Series, span: pd.Timedelta, gap: float,
+                 old: pd.Series, new: pd.Series) -> np.ndarray:
+    """1 where a bar's close is the expiring contract's, 0 the next one's, NaN if neither."""
+    d_old = np.abs(close - _close_in_bar(old, start, span))
+    d_new = np.abs(close - _close_in_bar(new, start, span))
+    tol = abs(gap) / 4
+    out = np.full(len(close), np.nan)
+    out[(d_old <= tol) & ~(d_new < d_old)] = 1.0
+    out[(d_new <= tol) & ~(d_old <= d_new)] = 0.0
+    return out
+
+
+def _single_switch(close: np.ndarray, gap: float, prev: float | None,
+                   nxt: float | None) -> np.ndarray:
+    """Old-contract mask with one switch, placed where the adjusted closes move least.
+
+    A price-only guess: a real move as large as the gap can fool it, so it is the fallback
+    when no per-contract closes cover the window.
     """
-    adj = np.stack([close, close + gap])  # state 0 = new contract, 1 = old (raised by gap)
-    cost = (adj[:, 0] - prev) ** 2 if prev is not None else np.zeros(2)
-    back = np.zeros((len(close), 2), dtype=int)
-    for k in range(1, len(close)):
-        step = cost[:, None] + (adj[None, :, k] - adj[:, k - 1, None]) ** 2  # [from, to]
-        back[k] = step.argmin(axis=0)
-        cost = step.min(axis=0)
-    if nxt is not None:
-        cost = cost + (nxt - adj[:, -1]) ** 2
-    s = int(cost.argmin())
-    old = np.zeros(len(close), dtype=bool)
-    for k in range(len(close) - 1, -1, -1):
-        old[k] = s == 1
-        s = back[k, s]
-    return old
+    n = len(close)
+    head = [prev] if prev is not None else []
+    tail = [nxt] if nxt is not None else []
+    costs = [(np.diff(np.concatenate([head, close + gap * (np.arange(n) < k), tail])) ** 2).sum()
+             for k in range(n + 1)]
+    return np.arange(n) < int(np.argmin(costs))
 
 
-def back_adjust(df: pd.DataFrame, gaps: pd.DataFrame) -> pd.DataFrame:
+def _nearest_fill(labels: np.ndarray) -> np.ndarray:
+    """NaNs take the label of the nearest non-NaN position (ties: the earlier one)."""
+    known = np.flatnonzero(~np.isnan(labels))
+    pos = np.clip(np.searchsorted(known, np.arange(len(labels))), 1, len(known) - 1) \
+        if len(known) > 1 else np.zeros(len(labels), dtype=int)
+    if len(known) > 1:
+        left, right = known[pos - 1], known[pos]
+        here = np.arange(len(labels))
+        pick = np.where(here - left <= right - here, left, right)
+    else:
+        pick = np.full(len(labels), known[0])
+    return labels[pick]
+
+
+def back_adjust(df: pd.DataFrame, gaps: pd.DataFrame,
+                contracts: dict[str, pd.Series] | None = None) -> pd.DataFrame:
     """``df`` priced in its newest contract: each roll's gap added to the bars before it.
 
-    Only rolls whose whole window is in ``df`` apply, so a roll in progress never moves the
-    latest price; its gap lands once the window has passed.
+    Inside a roll window each bar is matched to the contract whose close it carries
+    (``contracts``, per-contract 5m closes), which handles sources that flip back and forth;
+    bars no contract covers take the nearest matched bar's label, and windows with no
+    contract data fall back to :func:`_single_switch`. Only rolls whose whole window is in
+    ``df`` apply, so a roll in progress never moves the latest price.
     """
     if df.empty or gaps.empty:
         return df
-    ts = pd.to_datetime(df["timestamp"], utc=True)
+    ts = pd.to_datetime(df["timestamp"])
+    if ts.dt.tz is None:  # CSVProvider bars are naive CSV_TZ
+        ts = ts.dt.tz_localize(CSV_TZ, ambiguous=np.ones(len(ts), dtype=bool),
+                               nonexistent="shift_forward")
+    ts = ts.dt.tz_convert("UTC").reset_index(drop=True)
+    span = ts.diff().median() if len(ts) > 1 else pd.Timedelta(days=1)
     close = df["close"].to_numpy(float)
     offset = np.zeros(len(df))
     lo_win, hi_win = ROLL_WINDOW
@@ -192,15 +254,22 @@ def back_adjust(df: pd.DataFrame, gaps: pd.DataFrame) -> pd.DataFrame:
         start, end = exp - lo_win, exp + hi_win
         if ts.iloc[-1] <= end or ts.iloc[0] >= end:
             continue
-        before = (ts < start).to_numpy()
-        inside = ((ts >= start) & (ts <= end)).to_numpy()
-        offset[before] += gap
-        if inside.any():
-            idx = np.flatnonzero(inside)
+        offset[(ts < start).to_numpy()] += gap
+        idx = np.flatnonzero(((ts >= start) & (ts <= end)).to_numpy())
+        if not len(idx):
+            continue
+        pair = _roll_contracts(contracts or {}, exp)
+        old = np.full(len(idx), np.nan)
+        if pair:
+            old = _matched_old(close[idx], ts.iloc[idx].reset_index(drop=True), span, gap, *pair)
+        if np.isnan(old).all():
             adj = close + offset
             prev = adj[idx[0] - 1] if idx[0] > 0 else None
             nxt = adj[idx[-1] + 1] if idx[-1] + 1 < len(df) else None
-            offset[idx[_old_contract_mask(adj[idx], gap, prev, nxt)]] += gap
+            mask = _single_switch(close[idx], gap, prev, nxt)
+        else:
+            mask = _nearest_fill(old) > 0.5
+        offset[idx[mask]] += gap
     out = df.copy()
     for col in ("open", "high", "low", "close"):
         out[col] = out[col].astype(float) + offset
