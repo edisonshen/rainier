@@ -116,3 +116,44 @@ def _resample_4h(df: pd.DataFrame) -> pd.DataFrame:
         "volume": "sum",
     }).dropna()
     return resampled.reset_index()
+
+
+# Equity-index futures roll quarterly; their CSVs are back-adjusted with {symbol}_rolls.csv.
+QUARTERLY_ROLL_SYMBOLS = ("ES", "MES", "NQ", "MNQ")
+_MONTH_CODES = {3: "H", 6: "M", 9: "U", 12: "Z"}
+
+
+def contract_ticker(symbol: str, expiry: pd.Timestamp) -> str:
+    """Yahoo ticker of one quarterly CME contract, e.g. MES Dec 2026 -> ``MESZ26.CME``."""
+    return f"{symbol}{_MONTH_CODES[expiry.month]}{expiry.year % 100:02d}.CME"
+
+
+def front_roll_spread(symbol: str, now: pd.Timestamp) -> dict | None:
+    """Next-minus-front contract close spread (median of the last 3 shared sessions).
+
+    Recorded daily until the front contract expires, so each roll's gap is observed from
+    the contracts themselves rather than estimated. None if Yahoo lacks either contract.
+    """
+    from rainier.data.futures_roll import quarterly_expiries
+
+    front, nxt = quarterly_expiries(now - pd.Timedelta(days=3), now + pd.Timedelta(days=200))[:2]
+    closes = []
+    for exp in (front, nxt):
+        raw = yf.Ticker(contract_ticker(symbol, exp)).history(period="10d", interval="1d")
+        if raw.empty:
+            return None
+        closes.append(raw["Close"].set_axis(raw.index.date).rename(len(closes)))
+    both = pd.concat(closes, axis=1, join="inner").dropna().tail(3)
+    if both.empty:
+        return None
+    return {"expiry": front.strftime("%Y%m%d"), "gap": float((both[1] - both[0]).median()),
+            "source": "yfinance", "price": float(both[0].iloc[-1]), "rate": None,
+            "asof": now.strftime("%Y-%m-%d")}
+
+
+def rate_history(start: pd.Timestamp) -> pd.Series:
+    """13-week T-bill yield (^IRX) as a fraction, indexed by UTC date: the futures carry rate."""
+    raw = yf.Ticker("^IRX").history(start=start.strftime("%Y-%m-%d"), interval="1d")
+    rates = raw["Close"] / 100
+    rates.index = pd.to_datetime(rates.index.date).tz_localize("UTC")
+    return rates
