@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
@@ -780,6 +781,7 @@ async def generate_thesis(
             cost_usd=attempt_cost,
             session_name=session_name,
             reuse_basis=reuse_basis,
+            signal_values=pack.signals,
         )
         return ThesisOutcome(thesis, cost_charged, record_id)
 
@@ -789,6 +791,17 @@ async def generate_thesis(
         last_error,
     )
     return ThesisOutcome(None, cost_charged, None, last_error or "unknown error")
+
+
+def _jsonb_safe(value: Any) -> Any:
+    """Replace non-finite floats with None: Postgres JSONB rejects NaN/Infinity."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _jsonb_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonb_safe(v) for v in value]
+    return value
 
 
 def _persist_thesis(
@@ -802,6 +815,7 @@ def _persist_thesis(
     cost_usd: float,
     session_name: str,
     reuse_basis: dict[str, Any] | None = None,
+    signal_values: dict[str, Any] | None = None,
 ) -> int | None:
     """Insert one LLMAnalysisRecord row; return its id, or None on conflict.
 
@@ -820,6 +834,10 @@ def _persist_thesis(
     # evidence is materially unchanged (_reuse_prior_session_thesis).
     if reuse_basis is not None:
         payload["_reuse_basis"] = reuse_basis
+    # The numeric signal values the prompt was built from (the LLM's own
+    # `signals_used` is only names); the dashboard's Tab 2 scatter reads these.
+    if signal_values:
+        payload["signals"] = _jsonb_safe(signal_values)
     with get_session() as session:
         rec = LLMAnalysisRecord(
             llm_provider="anthropic",
